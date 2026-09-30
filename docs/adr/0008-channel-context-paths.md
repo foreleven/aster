@@ -1,0 +1,3 @@
+# Declare Context path patterns at Channel boundaries
+
+A Channel is mounted on a Context path and declares the child Context paths it can produce. For example, `/lark/im` carries the Feishu IM Channel and its chats have paths `/lark/im/chats/{oc_xxxx}`; `/User/workspace/` carries workspace discovery, accepts user-configured folder paths, and has discovered workspace children such as `/User/workspace/{id}` without depending on Codex hooks. A Channel at `/signals` supports human-configured definitions at `/signals/{slug-name}`, with triggered records at `/signals/{slug-name}/runs/{id}`. A Context may carry both a Channel and messages. Paths give actors stable identities and route messages; the mounted Channel is not a separate owner of the Context.

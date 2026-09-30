@@ -1,0 +1,26 @@
+{
+  "name": "@aster/integrations",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js"
+  },
+  "dependencies": {
+    "@aster/agent": "workspace:*",
+    "@aster/core": "workspace:*",
+    "@aster/lark-integration": "workspace:*",
+    "@aster/memory": "workspace:*",
+    "@typesafe-ai/sdk": "^0.6.0",
+    "effect": "4.0.0-rc.117",
+    "yaml": "2.8.3"
+  }
+}

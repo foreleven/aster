@@ -1,0 +1,27 @@
+# Lark integration
+
+The package exports its public API through `src/index.ts`; the barrel contains no implementation.
+
+- `account/`: account schema, parsing, account CLI service, and root Actor.
+- `mail/`: mailbox/message models and parsers, mail-only CLI service, mailbox polling and message Actors.
+- `im/`: message search service, Beijing-date and poll-window policies, private daily storage, IM and Chat Actors, and the daily/rolling summarizer.
+- `shared/`: bounded/abortable CLI execution, response parsing and profile capture identity.
+- `config.ts`, `integration.ts`: root configuration and Effect Layer composition.
+
+`makeImClient(run)` keeps transport injectable. `recent(start, end)` pages a global message search, normalizes timestamps/content, groups by chat and filters muted chats using complete per-user setting results. `pollIm` uses a fixed end time and a one-minute overlap, bounded by today’s Beijing midnight at startup. Continuous polling can finish the previous day across midnight. The channel journals all fetched messages to `ImStorage` before advancing private daily retrieval intervals and notifying Chat Actors. `ImSearch` and `ImStorage` are injectable services; production storage defaults to `~/.aster/im`.
+
+The mute lookup follows `folio/packages/integrations/src/lark/ingest.ts`: ten chat IDs per request, strict Boolean status validation and rejection of incomplete/duplicate/unrequested results. No notification setting is guessed. Summary retries are independent of future search results. Startup restores today’s pending inboxes even for quiet chats, leaving historical backlogs untouched.
+
+Each date stores retrieval `progress.json`, a `<chat-id>.md` daily summary with YAML frontmatter, and `chats/<chat-id>.json` operational state. Both group and direct conversations use this format. Daily batches are partitioned by message date; the rolling summary remains in public `state.summary`. Both summary outputs are journaled before publication, and raw messages are removed only after both outputs are saved. Prepared commits replay after interruption, and persisted fingerprints deduplicate polling overlap across restarts.
+
+Regression coverage lives in `apps/local/test/im.test.ts` and `flow.test.ts`, including pagination, mute batching, empty windows, time normalization, cursor overlap, summary retry and existing mail flows.
+
+IM polling defaults to 15 minutes after completion, with serial one-hour catch-up windows and per-window durable progress. `parseImPolicy` validates the IM-level settings. `LarkIntegration.layer` builds `ImSummaryGate` internally from the externally supplied `SystemOneClient`; it does not use Agent permits. Deferred judgments are fingerprinted in daily storage and only rechecked on changed evidence; failures retry after 30 seconds.
+
+`ImAgentQueue` is a single IM-wide FIFO (default ten seconds between starts, two concurrent executions), with its last start persisted in `agent-admission.json`. `summary-work.ts` acquires separate daily/rolling permits and persists successful daily-stage output for recovery. The Chat Actor keeps one work cycle active, merges queued arrivals before freezing its batch, and retains raw messages until both outputs commit. End-of-day flushes bypass deferral only after successful retrieval covers the previous day's tail. Tests in `apps/local/test/im-frequency.test.ts` cover admission fairness/cancellation, restart spacing, System One outcomes, stage reuse, catch-up pacing, and day-end ordering.
+
+`LarkConfig.layer` resolves and validates its own typed `contexts./lark` configuration from ConfigProvider. `LarkIntegration.layer` builds internal clients, storage, queue and summary services, then registers a source capability. `AsterRuntime` activates its root and coordinates shutdown. Readiness subscribes before root activation and waits for this process's initial IM catch-up, ignoring persisted readiness; without IM it completes immediately. `LarkIntegration.services` exposes the internal graph for standalone Actor composition. Models and System One transport come from the host's external Layers; the integration does not start itself when imported.
+
+IM summary services and admission return Effects. The shared admission Layer owns waiting/running fibers through its Scope; a semaphore enforces FIFO concurrency, an immutable HashSet in Ref claims each chat atomically, and SynchronizedRef serializes durable start spacing using the caller's Clock. Caller cancellation releases permits after worker cleanup, and service shutdown interrupts queued and active work. Model defects reach Actor supervision; only typed summary failures enter the retry path.
+
+Summary assessment, batch freezing and daily output checkpoints return through the Chat mailbox with an acknowledgement and Behavior generation. Retired work cannot mutate a replacement Behavior. Daily/rolling outputs and pending inboxes retain their previous recovery guarantees. Private chat, retrieval and admission records are decoded through Schema before use; no additional infrastructure Layer is required from the host.

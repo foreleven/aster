@@ -1,0 +1,3 @@
+# Do not block actors on cross-actor ask
+
+An actor Command handler does not synchronously await `ask` on another actor. It sends or starts the operation asynchronously, ends the current handler, and routes the eventual typed result back to itself as a new Command, following the `pipeToSelf` pattern. External callers may use `ask`. This preserves per-Context mailbox progress and avoids cyclic ask deadlocks, at the cost of representing multi-step logic explicitly in Context state and Commands. Scenarios that require the interaction to survive process failure must persist their own delivery intent.

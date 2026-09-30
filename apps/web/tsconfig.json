@@ -1,0 +1,25 @@
+{
+  "compilerOptions": {
+    "target": "ES2024",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "skipLibCheck": true,
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "plugins": [
+      {
+        "name": "@effect/language-service"
+      }
+    ],
+    "jsx": "react-jsx",
+    "allowJs": true,
+    "checkJs": false,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
+  },
+  "include": ["src/**/*.ts", "src/**/*.tsx"]
+}

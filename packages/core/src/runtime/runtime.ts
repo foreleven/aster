@@ -1,0 +1,213 @@
+import type { RuntimeEvent, RuntimePhase } from "@aster/api-contracts";
+import { RuntimeConfigurationError } from "./errors.js";
+import { ActorSystem } from "@aster/actor";
+import { Models } from "@aster/agent";
+import {
+  Cause,
+  Clock,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Ref,
+  Scope,
+  Stream,
+} from "effect";
+import { ContextRegistry } from "../context/registry.js";
+import { ContextCaptureSink } from "../context/memory.js";
+import { GoalSettings, signalSettings } from "../config/settings.js";
+import { SignalCommands } from "../signals/commands.js";
+import { SignalDefinitions, SignalRootActor } from "../signals/actors.js";
+import { SystemOneClient } from "../decisions/system-one.js";
+import { GoalHistoryStore } from "../goals/history.js";
+import { GoalsRootActor } from "../goals/actors.js";
+import { GoalRuntime } from "../goals/runtime.js";
+import { goalRuntimeLayer } from "../goals/services.js";
+import { ExternalAgents, TaskPreparation } from "../tasks/model.js";
+import { InternalAgent, taskPreparationLayer } from "../tasks/services.js";
+import { ApprovalQueueActor } from "../approvals/actor.js";
+import { startContextReactions } from "../context/reactions.js";
+import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
+import { makeApplicationApi, type ApplicationApi } from "./api.js";
+
+type RuntimeDiagnostics = {
+  readonly phase: RuntimePhase;
+  readonly events: readonly RuntimeEvent[];
+};
+
+type ActorServices =
+  | Models
+  | ContextRegistry
+  | SignalDefinitions
+  | SystemOneClient
+  | ExternalAgents
+  | TaskPreparation
+  | GoalRuntime;
+
+const acquireRuntime = Effect.gen(function* () {
+  const registry = yield* ContextRegistry;
+  const settings = yield* GoalSettings;
+  const definitions = yield* SignalDefinitions;
+  const decisions = yield* SystemOneClient;
+  if ((settings.definitions.length || definitions.length) && decisions.configured === false)
+    return yield* Effect.fail(
+      new RuntimeConfigurationError({ message: "Signals and Goals require config.system-one" }),
+    );
+  const history = yield* GoalHistoryStore;
+  const endpoint = yield* SignalCommands;
+  const capture = yield* ContextCaptureSink;
+  const modules = (yield* RuntimeIntegrations).installed();
+  const shared = Context.pick(
+    Models,
+    ContextRegistry,
+    SignalDefinitions,
+    SystemOneClient,
+    ExternalAgents,
+    TaskPreparation,
+    GoalRuntime,
+  )(yield* Effect.context<ActorServices>());
+  // Integration environments are captured by their own Layers. Never inject an ambient Scope.
+  const actorServices = modules
+    .reduce(
+      (context, module) => Context.merge(context, module.services),
+      shared as Context.Context<any>,
+    )
+    .pipe(Context.omit(Scope.Scope), Context.add(Clock.Clock, yield* Clock.Clock));
+  const workScope = yield* Effect.acquireRelease(Scope.make(), (scope, exit) =>
+    Scope.close(scope, exit),
+  );
+  const system = yield* ActorSystem.make().pipe(
+    ActorSystem.provide(Layer.succeedContext(actorServices)),
+    Effect.provideService(Scope.Scope, workScope),
+  );
+  const handles: { phase: "source" | "consumer"; handle: IntegrationHandle }[] = [];
+  const stopIntegrations = (phase: "source" | "consumer") =>
+    Effect.suspend(() =>
+      handles
+        .filter((entry) => entry.phase === phase)
+        .reduce(
+          (remaining, { handle }) => handle.stop.pipe(Effect.ensuring(remaining)),
+          Effect.void,
+        ),
+    );
+  const running: {
+    reactions?: Fiber.Fiber<void, Error>;
+    initialization?: Fiber.Fiber<void, never>;
+  } = {};
+  // Diagnostics are shared by lifecycle/event fibers and HTTP readers, outside any Actor mailbox.
+  const diagnostics = yield* Ref.make<RuntimeDiagnostics>({ phase: "starting", events: [] });
+  const ready = yield* Deferred.make<void, Error>();
+  yield* Effect.addFinalizer((exit) =>
+    Effect.gen(function* () {
+      yield* Ref.update(diagnostics, (state): RuntimeDiagnostics => ({
+        ...state,
+        phase: "stopping",
+      }));
+      // Every phase is a finalizer: one defect must not skip later cleanup. Effect
+      // retains all failure causes while preserving source -> consumer -> storage order.
+      yield* (running.initialization ? Fiber.interrupt(running.initialization) : Effect.void).pipe(
+        // The startup Fiber may be cancelled before it begins and installs onExit.
+        Effect.ensuring(Deferred.interrupt(ready)),
+        Effect.ensuring(stopIntegrations("source")),
+        Effect.ensuring(running.reactions ? Fiber.interrupt(running.reactions) : Effect.void),
+        Effect.ensuring(stopIntegrations("consumer")),
+        Effect.ensuring(system.terminate()),
+        Effect.ensuring(capture.drain),
+      );
+    }).pipe(Effect.ensuring(Scope.close(workScope, exit))),
+  );
+  yield* Stream.runForEach(system.events, (event) =>
+    Ref.update(diagnostics, (state) => ({
+      ...state,
+      events: [...state.events.slice(-199), event],
+    })),
+  ).pipe(Effect.forkIn(workScope));
+  const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
+  const signals = yield* system.spawn("signals", SignalRootActor);
+  yield* endpoint.bind(signals);
+  const goals = settings.definitions.length
+    ? yield* system.spawn("goals", GoalsRootActor)
+    : undefined;
+  for (const module of modules.filter((module) => module.phase === "consumer")) {
+    const handle = yield* module
+      .activate(system)
+      .pipe(Effect.provideService(Scope.Scope, workScope));
+    handles.push({ phase: module.phase, handle });
+  }
+  running.reactions = yield* startContextReactions({ signals, goals }).pipe(
+    Effect.provideService(Scope.Scope, workScope),
+  );
+  for (const module of modules.filter((module) => module.phase === "source")) {
+    const handle = yield* module
+      .activate(system)
+      .pipe(Effect.provideService(Scope.Scope, workScope));
+    handles.push({ phase: module.phase, handle });
+  }
+  running.initialization = yield* Effect.gen(function* () {
+    yield* Effect.forEach(handles, ({ handle }) => handle.ready, { concurrency: "unbounded" });
+    if (goals) yield* goals.tell({ _tag: "Initialize" });
+  }).pipe(
+    // Readiness is a completion contract, including defects and cancellation;
+    // catching only typed errors strands waiters when startup never succeeds.
+    Effect.onExit((exit) =>
+      Effect.gen(function* () {
+        const settledPhase = Exit.isSuccess(exit) ? "ready" : "failed";
+        yield* Ref.update(diagnostics, (state): RuntimeDiagnostics =>
+          state.phase === "stopping" ? state : { ...state, phase: settledPhase },
+        );
+        yield* Deferred.done(ready, exit);
+      }),
+    ),
+    Effect.catchCause((cause) =>
+      Cause.hasInterruptsOnly(cause) ? Effect.void : Effect.logError(cause),
+    ),
+    Effect.forkIn(workScope),
+  );
+  const api = makeApplicationApi({
+    registry,
+    history,
+    goals,
+    approvals,
+    inspect: Effect.gen(function* () {
+      // The host owns domain metadata and the dashboard contract; actor stays domain-neutral.
+      const actors = (yield* system.inspect({ metadata: ["contextPath"] })).map(
+        ({ metadata, ...actor }) => ({
+          ...actor,
+          contextPath: typeof metadata.contextPath === "string" ? metadata.contextPath : undefined,
+        }),
+      );
+      return { actors, ...(yield* Ref.get(diagnostics)) };
+    }),
+  });
+  return { api, ready: Deferred.await(ready) };
+});
+
+export class AsterRuntime extends Context.Service<
+  AsterRuntime,
+  {
+    readonly api: ApplicationApi;
+    readonly ready: Effect.Effect<void, Error>;
+  }
+>()("runtime/Aster") {
+  static layer<const Layers extends readonly Layer.Layer<never, any, any>[]>(options: {
+    readonly integrations: Layers;
+  }) {
+    const foundation = Layer.mergeAll(
+      ContextRegistry.layer,
+      GoalSettings.layer,
+      SignalCommands.layer,
+      RuntimeIntegrations.layer,
+      Layer.effect(SignalDefinitions, signalSettings),
+    );
+    const installed = Layer.mergeAll(Layer.empty, ...options.integrations).pipe(
+      Layer.provideMerge(foundation),
+    );
+    const domain = Layer.mergeAll(
+      taskPreparationLayer.pipe(Layer.provideMerge(InternalAgent.layer)),
+      goalRuntimeLayer,
+    ).pipe(Layer.provideMerge(installed));
+    return Layer.effect(AsterRuntime, acquireRuntime).pipe(Layer.provide(domain));
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "name": "aster",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@11.15.1",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "workspace:list": "pnpm list -r --depth -1",
+    "build": "pnpm --filter @aster/api-contracts build && pnpm --filter @aster/agent build && pnpm --filter @aster/actor build && pnpm --filter @aster/core build && pnpm --filter @aster/lark-integration build && pnpm --filter @aster/memory build && pnpm --filter @aster/integrations build && pnpm --filter @aster/local build && pnpm --filter @aster/web build",
+    "typecheck": "pnpm --filter @aster/api-contracts typecheck && pnpm --filter @aster/agent typecheck && pnpm --filter @aster/actor typecheck && pnpm --filter @aster/core typecheck && pnpm --filter @aster/lark-integration typecheck && pnpm --filter @aster/memory typecheck && pnpm --filter @aster/integrations typecheck && pnpm --filter @aster/local typecheck && pnpm --filter @aster/web typecheck",
+    "test": "pnpm build && pnpm --filter @aster/agent test && pnpm --filter @aster/actor test && pnpm --filter @aster/core test && pnpm --filter @aster/memory test && pnpm --filter @aster/integrations test && pnpm --filter @aster/local test",
+    "start": "pnpm --filter @aster/local start",
+    "test:web": "pnpm build && pnpm --filter @aster/web test",
+    "aster": "node apps/local/dist/cli.js",
+    "lint": "eslint . --max-warnings 0",
+    "lint:fix": "eslint . --fix --max-warnings 0",
+    "format": "prettier . --write",
+    "format:check": "prettier . --check",
+    "check": "pnpm lint && pnpm format:check && pnpm typecheck"
+  },
+  "devDependencies": {
+    "@effect/language-service": "0.87.3",
+    "@eslint/js": "10.0.1",
+    "@types/node": "^24.13.6",
+    "eslint": "10.11.0",
+    "eslint-config-prettier": "10.1.8",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "eslint-plugin-react-refresh": "0.5.7",
+    "eslint-plugin-react-x": "5.23.1",
+    "globals": "17.12.0",
+    "prettier": "3.9.9",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.71.0"
+  }
+}

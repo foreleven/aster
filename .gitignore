@@ -1,0 +1,26 @@
+node_modules/
+dist/
+.test-dist/
+coverage/
+*.tsbuildinfo
+.DS_Store
+.env
+.env.*
+!.env.example
+aster.config.json
+aster.config.yaml
+aster.config.yml
+.aster/
+.signals/
+/data/
+/repos/
+
+# Legacy local configuration remains private.
+signals.config.json
+signals.config.yaml
+signals.config.yml
+
+# Tool and browser-test output
+.eslintcache
+playwright-report/
+test-results/

@@ -1,0 +1,3 @@
+# Map public Context paths to `/user` Actor paths
+
+Context paths such as `/lark` and `/lark/email` are stable public addresses used by configuration and Agents, while the domain-neutral ActorSystem places application actors under `/user`. The Context layer maps each public path to one runtime Actor path (`/lark` to `/user/lark`) instead of changing the ActorSystem root convention. Paths containing virtual segments may map to an encoded direct child Actor name rather than a literal `/user` prefix. This preserves the Actor module's Akka-style namespace at the cost of maintaining an explicit boundary between public Context identity and runtime Actor identity.

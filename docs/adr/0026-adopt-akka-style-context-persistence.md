@@ -1,0 +1,5 @@
+# Adopt Akka-style persistence for Context actors
+
+Each normalized Context path is the stable persistence identity of one actor. Context Commands are transient in-memory mailbox messages: a handler validates a Command against current state and persists zero or more ordered Context Messages as events. SQLite assigns a monotonically increasing sequence within that Context. Recovery loads its latest checkpoint and replays subsequent Messages; successful compaction may delete the covered prefix without resetting the sequence.
+
+The core runtime does not persist every incoming Command, store universal Command completions, or automatically replay an in-flight Command after process failure. Scenarios that require reliable actor-to-actor delivery provide and persist their own delivery identity, intent, and confirmation semantics. This follows Akka Persistence's separation between commands, persisted events, snapshots, and optional at-least-once delivery, and supersedes the global durable-inbox design.

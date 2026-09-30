@@ -1,0 +1,19 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+allowBuilds:
+  "@google/genai": false
+  esbuild: true
+  onnxruntime-node: true
+  protobufjs: true
+minimumReleaseAgeExclude:
+  - "@eslint-react/ast@5.23.1"
+  - "@eslint-react/core@5.23.1"
+  - "@eslint-react/eslint@5.23.1"
+  - "@eslint-react/jsx@5.23.1"
+  - "@eslint-react/shared@5.23.1"
+  - "@eslint-react/var@5.23.1"
+  - eslint-plugin-react-x@5.23.1
+overrides:
+  # Keep the platform transitive package on the same Effect prerelease API.
+  "@effect/platform-node-shared": "4.0.0-rc.117"

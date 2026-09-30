@@ -1,0 +1,154 @@
+import { randomUUID } from "node:crypto";
+import { Effect, Schema } from "effect";
+import type { ActorContext, ActorRef } from "@aster/actor";
+import { childActorName, spawnContextChild } from "../context/actor.js";
+import type { ContextRegistry } from "../context/registry.js";
+import type { GoalDefinition } from "../config/schema.js";
+import type { TaskPreparation, ExternalAgents } from "../tasks/model.js";
+import { SignalRunActor, type RunCommand } from "../tasks/run.js";
+import { RunState } from "../tasks/run-state.js";
+import type { GoalRuntime } from "./runtime.js";
+import type { GoalCommand } from "./actors.js";
+import type { goalWorkingState } from "./working-state.js";
+import {
+  GoalToolError,
+  activeExecution,
+  startedExecution,
+  decideTaskOperation,
+  type GoalTask,
+  type TaskToolRequest,
+} from "./tasks.js";
+
+export type GoalActorContext = ActorContext<
+  GoalCommand,
+  GoalRuntime | TaskPreparation | ExternalAgents | ContextRegistry
+>;
+
+/** Called only by the Goal mailbox. Persist a proposal before creating its Run or revoking approval. */
+export const goalTaskExecution = (
+  registry: ContextRegistry["Service"],
+  working: ReturnType<typeof goalWorkingState>,
+  goal: () => GoalDefinition,
+  path: () => string,
+) => {
+  const { state, save, current } = working;
+  const active = () => state().status === "active";
+  const taskById = (id: string) => state().tasks.find((task) => task.id === id);
+  const runState = (task: GoalTask) => {
+    const record = task.execution && registry.get(task.execution.runPath);
+    return record ? Schema.decodeUnknownSync(RunState)(record.state) : undefined;
+  };
+  const cancelPending = Effect.fn("Goal.cancelPending")(function* (context: GoalActorContext) {
+    for (const task of state().tasks) {
+      if (
+        !task.execution ||
+        !activeExecution(runState(task)?.status) ||
+        startedExecution(runState(task)?.status)
+      )
+        continue;
+      const child = yield* context.child(
+        childActorName(`runs/${task.execution.runPath.split("/").at(-1)!}`),
+      );
+      if (child)
+        yield* (child as ActorRef<RunCommand>).tell({
+          _tag: "Cancel",
+          reason: "Goal ended; revoke execution that has not started",
+        });
+    }
+  });
+  const execute = Effect.fn("Goal.taskOperation")(function* (
+    context: GoalActorContext,
+    req: TaskToolRequest,
+  ) {
+    if (!active()) return yield* Effect.fail(new GoalToolError({ message: "Goal has ended" }));
+    const prior = req.operation === "task_list" ? undefined : taskById(req.id);
+    const execution = prior && runState(prior);
+    const decision = yield* Effect.fromResult(
+      decideTaskOperation(state().tasks, req, {
+        at: new Date().toISOString(),
+        runPath: req.operation === "task_execute" ? `${path()}/runs/${randomUUID()}` : undefined,
+        execution: execution && {
+          status: execution.status,
+          revision: execution.goalTask?.revision,
+        },
+      }),
+    );
+    if (decision._tag === "Read") return decision.value;
+    yield* save({ tasks: decision.tasks });
+    if (decision._tag === "Save") {
+      if (decision.cancelRun) {
+        const child = yield* context.child(
+          childActorName(`runs/${decision.cancelRun.split("/").at(-1)!}`),
+        );
+        if (child)
+          yield* (child as ActorRef<RunCommand>).tell({
+            _tag: "Cancel",
+            reason: "Task deleted or revised; prior confirmation is invalid",
+          });
+      }
+      return decision.value;
+    }
+    const { task, runPath } = decision;
+    const ref = yield* spawnContextChild(
+      context,
+      `runs/${runPath.split("/").at(-1)!}`,
+      SignalRunActor,
+    ).pipe(Effect.orDie);
+    yield* ref.tell({
+      _tag: "Initialize",
+      path: runPath,
+      definition: {
+        slug: `${goal().slug}--${task.id}`,
+        when: "Execution proposed by the Goal",
+        task: task.instructions,
+        agent: "doubao-delegate",
+        mode: "confirm",
+      },
+      sourceContext: current(),
+      subscriber: context.self,
+      goalTask: { goalPath: path(), taskId: task.id, revision: task.revision },
+    });
+    return { runPath, status: "preparing" };
+  });
+
+  const recover = Effect.fn("Goal.recoverRuns")(function* (context: GoalActorContext) {
+    for (const record of Object.values(registry.snapshot())) {
+      if (!record.path.startsWith(`${path()}/runs/`)) continue;
+      const relative = `runs/${record.path.split("/").at(-1)!}`;
+      const ref =
+        ((yield* context.child(childActorName(relative))) as ActorRef<RunCommand> | undefined) ??
+        (yield* spawnContextChild(context, relative, SignalRunActor).pipe(Effect.orDie));
+      yield* ref.tell({ _tag: "Resume", path: record.path, subscriber: context.self });
+    }
+    // Recover a proposal committed immediately before its Run was created.
+    for (const task of state().tasks) {
+      if (
+        !task.execution ||
+        task.execution.status !== "preparing" ||
+        registry.get(task.execution.runPath) ||
+        task.status !== "open" ||
+        !active()
+      )
+        continue;
+      const relative = `runs/${task.execution.runPath.split("/").at(-1)!}`;
+      const ref =
+        ((yield* context.child(childActorName(relative))) as ActorRef<RunCommand> | undefined) ??
+        (yield* spawnContextChild(context, relative, SignalRunActor).pipe(Effect.orDie));
+      yield* ref.tell({
+        _tag: "Initialize",
+        path: task.execution.runPath,
+        definition: {
+          slug: `${goal().slug}--${task.id}`,
+          when: "Restore execution awaiting preparation",
+          task: task.instructions,
+          agent: "doubao-delegate",
+          mode: "confirm",
+        },
+        sourceContext: current(),
+        subscriber: context.self,
+        goalTask: { goalPath: path(), taskId: task.id, revision: task.revision },
+      });
+    }
+  });
+  return { cancelPending, execute, recover };
+};

@@ -1,0 +1,3 @@
+# Allow virtual segments in Context paths
+
+A Context actor may directly create and supervise a descendant whose public path contains additional grouping segments, such as `/lark/email` owning `/lark/email/me/{message_id}` without an actor at `/lark/email/me`. The Context layer accepts a relative path such as `me/{message_id}` and maps it to a valid direct child Actor name; the domain-neutral Actor module keeps single-segment names. This keeps path grouping independent from actor cardinality and avoids empty routing actors. It amends ADR-0020: supervision follows the actual creator relationship between Context actors, while some intermediate path segments are virtual rather than actors.

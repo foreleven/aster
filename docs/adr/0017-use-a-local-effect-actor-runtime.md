@@ -1,0 +1,3 @@
+# Use a local Effect actor runtime instead of Cluster RPC
+
+The current product is a single local process and does not need distributed addressing or network RPC. Each normalized Context path therefore identifies one local actor managed with Effect 4 RC primitives: a scoped fiber, an in-memory mailbox queue, and an Akka-style hierarchical registry. Context persistence is handled by its event journal and checkpoints; it does not rely on Effect Cluster `Entity`, `Rpc`, Runner, or `MessageStorage`. This keeps the Actor Model while avoiding distributed-system protocol and serialization costs. Distribution, if required later, will need a new boundary rather than being assumed now.
