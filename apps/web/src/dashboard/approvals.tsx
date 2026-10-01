@@ -12,11 +12,16 @@ import { approvalEntries, approvalDiagnostics } from "./state";
 export function Approvals({
   inspect,
   report,
+  contextPaths,
 }: {
   inspect: (path: string) => void;
   report: (error: string) => void;
+  contextPaths?: readonly string[];
 }) {
-  const entries = useAtomValue(approvalEntries);
+  const allEntries = useAtomValue(approvalEntries);
+  const entries = contextPaths
+    ? allEntries.filter((entry) => contextPaths.includes(entry.contextPath))
+    : allEntries;
   const { runs, failures: goalFailures } = useAtomValue(approvalDiagnostics);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const respondMutation = useAtomSet(respondToApproval, { mode: "promise" });

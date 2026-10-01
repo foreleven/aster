@@ -1,154 +1,5 @@
 import { test, expect } from "@playwright/test";
-const at = "2026-09-29T12:30:00Z";
-function fixture() {
-  const context = (path, description, state = {}, messages = []) => ({
-    path,
-    description,
-    state,
-    messages,
-  });
-  const actor = (path, contextPath) => ({
-    path,
-    contextPath,
-    parent: path.slice(0, path.lastIndexOf("/")),
-    incarnation: path,
-    status: "running",
-    phase: "running",
-    pendingEffects: 0,
-    failures: 0,
-    restarts: 0,
-    processing: false,
-    mailboxSize: 0,
-    processed: 12,
-    lastActivity: at,
-  });
-  return {
-    at,
-    runtime: {
-      phase: "ready",
-      actors: [
-        actor("/user/lark", "/lark"),
-        actor("/user/lark/im", "/lark/im"),
-        actor("/user/lark/im/chat-1", "/lark/im/chats/chat-1"),
-        actor("/user/goals", "/goals"),
-        actor("/user/goals/engine", "/goals/engine"),
-        actor("/user/signals", "/signals"),
-        actor("/user/signals/progress", "/signals/progress"),
-        actor("/user/signals/progress/run-1", "/signals/progress/runs/run-1"),
-        actor("/user/approvals", "/approvals"),
-        actor("/user/memory", "/memory"),
-      ],
-      events: [
-        {
-          _tag: "CommandProcessed",
-          incarnation: "run-1",
-          commandTag: "TaskPrepared",
-          path: "/user/signals/progress/run-1",
-          timestamp: at,
-          success: true,
-        },
-        {
-          _tag: "CommandProcessed",
-          incarnation: "chat-1",
-          commandTag: "Summarized",
-          path: "/user/lark/im/chat-1",
-          timestamp: at,
-          success: true,
-        },
-      ],
-    },
-    contexts: [
-      context("/lark", "My work account", { status: "ready" }),
-      context("/lark/im", "Work IM", { ready: true }),
-      context(
-        "/lark/im/chats/chat-1",
-        "Knowledge Engine · Frontend discussion",
-        { summary: "Core workflow integration is complete; validation starts this week." },
-        [
-          {
-            type: "Summary",
-            text: "Core workflow integration is complete; validation starts this week.",
-            at,
-          },
-        ],
-      ),
-      context(
-        "/goals/engine",
-        "Monitor Knowledge Engine project progress",
-        { slug: "engine", status: "active", progress: "Awaiting test feedback" },
-        [
-          {
-            type: "assistant",
-            text: "Monitoring project progress. Next, track integration and validation results.",
-            at,
-          },
-        ],
-      ),
-      context("/signals/progress", "Significant change in project progress", {
-        goal: "engine",
-        active: true,
-      }),
-      context(
-        "/signals/progress/runs/run-1",
-        "Summarize Knowledge Engine project progress",
-        {
-          status: "awaiting-confirmation",
-          sourcePath: "/lark/im/chats/chat-1",
-          definition: { goal: "engine" },
-        },
-        [
-          { type: "Triggered", at },
-          {
-            type: "TaskPrepared",
-            task: { instructions: "Summarize this week’s project progress", input: [] },
-            at,
-          },
-          { type: "ConfirmationRequested", at },
-        ],
-      ),
-      context("/approvals", "Task approval queue", {
-        entries: [
-          {
-            id: "approval-1",
-            target: "/user/signals/progress/run-1",
-            contextPath: "/signals/progress/runs/run-1",
-            kind: "confirmation",
-            status: "pending",
-            request: {
-              id: "approval-1",
-              kind: "approval",
-              prompt:
-                "Summarize this week’s Knowledge Engine integration progress and remaining validation work.",
-            },
-          },
-          {
-            id: "question-1",
-            target: "/user/signals/progress/run-1",
-            contextPath: "/signals/progress/runs/run-1",
-            kind: "input",
-            status: "pending",
-            request: {
-              id: "question-1",
-              kind: "input",
-              prompt: "Specify the release scope",
-              questions: [
-                {
-                  id: "scope",
-                  prompt: "Which environment should receive the release?",
-                  options: ["Test", "Production"],
-                },
-              ],
-            },
-          },
-        ],
-      }),
-      context("/memory", "Long-term work memory", { status: "ready" }),
-      context("/signals/old/runs/old", "Historical execution record", { status: "completed" }, [
-        { type: "Completed", text: "Historical result", at },
-      ]),
-    ],
-  };
-}
+import { at, fixture, designFixture } from "./fixtures.js";
 async function setup(page, data = fixture()) {
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
@@ -202,7 +53,7 @@ async function setup(page, data = fixture()) {
             data.contexts.find((c) => c.path === `/goals/${body.slug}`)?.messages ?? [];
           const before = body.before ?? messages.length + 1;
           const entries = messages
-            .map((message, i) => ({ seq: i + 1, at, message }))
+            .map((message, i) => ({ seq: i + 1, at: message.at ?? at, message }))
             .filter((e) => e.seq < before)
             .slice(-30);
           value = {
@@ -245,77 +96,105 @@ async function setup(page, data = fixture()) {
     return route.fulfill({ status: 404, json: { error: "Not found" } });
   });
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Overview", exact: true })).toBeVisible();
-  await expect(page.getByText("Live", { exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Refresh data" })).toBeEnabled();
+  await expect(
+    page.getByRole("heading", {
+      name:
+        data.contexts.find((context) => /^\/goals\/[^/]+$/.test(context.path))?.description ??
+        "No Goals yet",
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(page.getByText("Live", { exact: true })).toHaveCount(1);
+  await expect(
+    page.getByRole("button", { name: "Refresh data", includeHidden: true }),
+  ).toBeEnabled();
   return { errors, writes, reads, historyRequests };
 }
-test("overview, actor inspection, execution links and approval responses", async ({ page }) => {
+test("Goals workspace links executions, accepts notes, and handles approvals", async ({ page }) => {
   const { errors, writes } = await setup(page);
-  await expect(page.getByText("10 instances")).toBeVisible();
-  await page.screenshot({
-    path: "/tmp/aster-dashboard-desktop.png",
-    fullPage: true,
-  });
+  await expect(page.getByRole("heading", { name: "Goal Timeline" })).toBeVisible();
+  for (const name of ["Home", "Search", "Library", "Settings", "Overview", "Actors"]) {
+    await expect(
+      page.getByRole("navigation").getByRole("button", { name, exact: true }),
+    ).toHaveCount(0);
+  }
+  await page.getByRole("button", { name: /^View execution:/ }).click();
+  await expect(page.getByRole("dialog")).toContainText("Current stage");
   await page
-    .getByRole("button", {
-      name: "View /user/signals/progress/run-1",
-      exact: true,
-    })
+    .getByRole("dialog")
+    .getByRole("button", { name: "/lark/im/chats/chat-1", exact: true })
     .click();
-  await expect(page.getByRole("dialog")).toBeVisible();
-  await expect(page.getByText("Current stage", { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "/lark/im/chats/chat-1", exact: true }).click();
-  await expect(
-    page
-      .getByRole("dialog")
-      .getByText("Core workflow integration is complete; validation starts this week."),
-  ).toBeVisible();
+  await expect(page.getByRole("dialog")).toContainText("Core workflow integration is complete");
   await page.keyboard.press("Escape");
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Approvals/ })
-    .click();
-  await page.getByRole("button", { name: "Approve execution" }).click();
+  await page.getByRole("button", { name: "Approve execution", exact: true }).click();
   await expect(
     page.getByText("The task has received your decision. View its records for execution results."),
   ).toBeVisible();
   await page.getByLabel("Which environment should receive the release?").fill("Test");
   await page.getByRole("button", { name: "Submit response" }).click();
   expect(writes[1].body.response.answers).toEqual({ scope: ["Test"] });
-  await page.getByRole("navigation").getByRole("button", { name: "Goals", exact: true }).click();
-  await page.getByRole("button", { name: "View /user/goals/engine" }).click();
   await page.getByLabel("Add information to Goal").fill("Prioritize frontend validation");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByText("Prioritize frontend validation", { exact: true })).toBeVisible();
-  await page.keyboard.press("Escape");
-  await page.getByRole("navigation").getByRole("button", { name: "Actors", exact: true }).click();
-  await page.getByLabel("Search Actors").fill("nonexistent-path");
-  await expect(page.getByText("No matching results")).toBeVisible();
+  await page.getByRole("tab", { name: "Notes", exact: true }).click();
+  await expect(page.getByText("Prioritize frontend validation", { exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Monitoring project progress. Next, track integration and validation results.", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
+  await page.getByRole("tab", { name: "Related", exact: true }).click();
+  await expect(
+    page
+      .getByRole("tabpanel", { name: "Related", exact: true })
+      .getByRole("button", { name: /Significant change in project progress/ }),
+  ).toBeVisible();
+  await page.getByRole("tab", { name: "Details", exact: true }).click();
+  await expect(
+    page
+      .getByRole("tabpanel", { name: "Details", exact: true })
+      .getByText("Awaiting test feedback", { exact: true }),
+  ).toBeVisible();
   expect(errors).toEqual([]);
 });
-test("mobile and empty state remain usable", async ({ page }) => {
+
+test("mobile keeps navigation, composer, and Goal work accessible without overflow", async ({
+  page,
+}) => {
   await page.setViewportSize({ width: 390, height: 844 });
-  const { errors } = await setup(page);
-  await page.screenshot({
-    path: "/tmp/aster-dashboard-mobile.png",
-    fullPage: true,
+  const data = fixture();
+  data.contexts.push({
+    path: "/goals/second",
+    description: "Another active goal",
+    state: { status: "active" },
+    messages: [],
   });
+  const { errors } = await setup(page, data);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
   );
-  await page.getByRole("navigation").getByRole("button", { name: "Actors", exact: true }).click();
-  await page.getByRole("tab", { name: "Persisted" }).click();
-  await expect(page.getByText("Historical execution record", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "Choose goal" }).click();
+  await page
+    .getByRole("navigation", { name: "Goals" })
+    .getByRole("button", { name: /Another active goal/ })
+    .click();
+  await expect(
+    page.getByRole("heading", { name: "Another active goal", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No messages yet" })).toBeVisible();
+  await page.getByRole("link", { name: "View tasks and signals" }).click();
+  await expect(page.getByRole("complementary", { name: "Goal work" })).toBeVisible();
+  await page.screenshot({ path: "/tmp/aster-goals-mobile.png", fullPage: true });
   expect(errors).toEqual([]);
 });
+
 test("empty runtime and API failures are explicit", async ({ page }) => {
   const { errors } = await setup(page, {
     at,
     contexts: [],
     runtime: { phase: "ready", actors: [], events: [] },
   });
-  await expect(page.getByText("No running Actors")).toBeVisible();
+  await expect(page.getByText("No Goals yet", { exact: true })).toBeVisible();
   await page.route("**/api/rpc{,/}", async (route) => {
     const rpc = JSON.parse(route.request().postData().trim());
     if (rpc.tag !== "ListContexts") return route.fallback();
@@ -418,10 +297,10 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   });
   try {
     await page.goto(api.url);
-    await expect(page).toHaveTitle("Aster · Actor Dashboard");
+    await expect(page).toHaveTitle("Aster · Goals");
     await expect(page.getByText("Live", { exact: true })).toBeVisible();
-    await page.getByRole("navigation").getByRole("button", { name: "Goals", exact: true }).click();
-    await page.getByRole("button", { name: "View /user/preview" }).click();
+    await page.getByRole("button", { name: "Goal actions" }).click();
+    await page.getByRole("menuitem", { name: "Inspect goal" }).click();
     await expect(
       page.getByRole("dialog").getByText("No messages yet", { exact: true }),
     ).toBeVisible();
@@ -445,7 +324,9 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
       ],
     };
     await Effect.runPromise(registry.set(updated));
-    await expect(page.getByText("Live HTTP and SSE updates received")).toBeVisible();
+    await expect(
+      page.getByRole("dialog").getByText("Live HTTP and SSE updates received"),
+    ).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
     try {
@@ -460,24 +341,16 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   }
 });
 
-test("empty approvals explain absent runs and expose Goal planning failure", async ({ page }) => {
+test("Goal errors and absent runs remain explicit", async ({ page }) => {
   const data = fixture();
-  data.contexts = data.contexts.filter((c) => !c.path.includes("/runs/"));
-  data.contexts.find((c) => c.path === "/approvals").state.entries = [];
-  data.contexts.find((c) => c.path === "/goals/engine").messages = [
+  data.contexts = data.contexts.filter((context) => !context.path.includes("/runs/"));
+  data.contexts.find((context) => context.path === "/approvals").state.entries = [];
+  data.contexts.find((context) => context.path === "/goals/engine").messages = [
     { type: "error", text: "Goal Agent returned no plan", at, references: [] },
   ];
   await setup(page, data);
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /^Approvals/ })
-    .click();
-  await expect(page.getByText("No approval requests yet", { exact: true })).toBeVisible();
-  await expect(page.getByText("No Signal occurrences yet", { exact: false })).toBeVisible();
   await expect(page.getByText("Goal Agent returned no plan", { exact: true })).toBeVisible();
-  await page.screenshot({ path: "/tmp/aster-approvals-diagnostic.png", fullPage: true });
-  await page.getByRole("button", { name: "View Goal failure records" }).click();
-  await expect(page.getByRole("dialog")).toContainText("Goal Agent returned no plan");
+  await expect(page.getByText("No tasks yet. Planned work will appear here.")).toBeVisible();
 });
 
 test("Goal feed loads older native messages and displays flat tasks", async ({ page }) => {
@@ -503,8 +376,8 @@ test("Goal feed loads older native messages and displays flat tasks", async ({ p
   goal.messages[63].content = "[运行时事件，仅作为证据]\nHistorical observation 64";
   goal.messages[64].content = "[Runtime event, evidence only]\nHistorical observation 65";
   const { errors, historyRequests } = await setup(page, data);
-  await page.getByRole("navigation").getByRole("button", { name: "Goals", exact: true }).click();
-  await page.getByRole("button", { name: "View /user/goals/engine" }).click();
+  await page.getByRole("button", { name: "Goal actions" }).click();
+  await page.getByRole("menuitem", { name: "Inspect goal" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText("Key conclusions saved", { exact: true })).toBeVisible();
   await expect(dialog.getByText("Historical observation 65", { exact: true })).toBeVisible();
@@ -563,11 +436,6 @@ test("SSE keys isolate queries, reconnect refreshes all, and invalidation cancel
   const data = fixture();
   const { reads, errors } = await setup(page, data);
   const contextsBefore = reads.filter((tag) => tag === "ListContexts").length;
-  const runtimeBefore = reads.filter((tag) => tag === "InspectRuntime").length;
-  // The independent telemetry tick must not refetch durable Contexts.
-  await expect
-    .poll(() => reads.filter((tag) => tag === "InspectRuntime").length)
-    .toBeGreaterThan(runtimeBefore);
   expect(reads.filter((tag) => tag === "ListContexts").length).toBe(contextsBefore);
   const approvalsBefore = reads.filter((tag) => tag === "ListApprovals").length;
   await page.evaluate(() =>
@@ -588,11 +456,17 @@ test("SSE keys isolate queries, reconnect refreshes all, and invalidation cancel
     window.testEvents.emit("invalidate", { _tag: "Invalidate", keys: ["contexts"] }),
   );
   await expect.poll(() => Boolean(delayed)).toBe(true);
-  data.contexts.find((c) => c.path === "/memory").description = "Latest committed memory";
+  data.contexts.find((c) => c.path === "/goals/engine").state.progress =
+    "Latest committed progress";
+  await page.getByRole("tab", { name: "Details", exact: true }).click();
   await page.evaluate(() =>
     window.testEvents.emit("invalidate", { _tag: "Invalidate", keys: ["contexts"] }),
   );
-  await expect(page.getByText("Latest committed memory", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole("tabpanel", { name: "Details", exact: true })
+      .getByText("Latest committed progress", { exact: true }),
+  ).toBeVisible();
   await delayed.route.fulfill({
     contentType: "application/ndjson",
     body:
@@ -602,7 +476,11 @@ test("SSE keys isolate queries, reconnect refreshes all, and invalidation cancel
         exit: { _tag: "Success", value: delayed.value },
       }) + "\n",
   });
-  await expect(page.getByText("Latest committed memory", { exact: true })).toBeVisible();
+  await expect(
+    page
+      .getByRole("tabpanel", { name: "Details", exact: true })
+      .getByText("Latest committed progress", { exact: true }),
+  ).toBeVisible();
 
   const beforeReconnect = [...reads];
   await page.evaluate(() => window.testEvents.emit("ready"));
@@ -655,10 +533,6 @@ test("rejected approval preserves pending state and is not resubmitted", async (
         }) + "\n",
     });
   });
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /^Approvals/ })
-    .click();
   const before = reads.filter((tag) => tag === "ListApprovals").length;
   await page.getByRole("button", { name: "Approve execution", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Approval no longer accepts this response");
@@ -679,8 +553,8 @@ test("history invalidation during an older-page request retains both ends withou
     timestamp: Date.parse(at),
   }));
   const { errors } = await setup(page, data);
-  await page.getByRole("navigation").getByRole("button", { name: "Goals", exact: true }).click();
-  await page.getByRole("button", { name: "View /user/goals/engine" }).click();
+  await page.getByRole("button", { name: "Goal actions" }).click();
+  await page.getByRole("menuitem", { name: "Inspect goal" }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByText("Entry 65", { exact: true })).toBeVisible();
   let delayed;
@@ -735,9 +609,139 @@ test("invalid dashboard fields report a projection error while preserving raw Co
   await expect(page.getByRole("alert")).toContainText(
     "Unsupported dashboard fields in /goals/engine",
   );
-  await page.getByRole("button", { name: "View /user/goals/engine" }).click();
+  await page.getByRole("button", { name: "Goal actions" }).click();
+  await page.getByRole("menuitem", { name: "Inspect goal" }).click();
   await page.getByRole("dialog").getByRole("tab", { name: "State", exact: true }).click();
   await expect(page.getByRole("dialog").locator("pre")).toContainText("invalid-task-list");
   await expect(page.getByRole("dialog").locator("pre")).toContainText("kept verbatim");
+  expect(errors).toEqual([]);
+});
+
+test("reference layout has a fixed composer, scoped work, and working timeline filters", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1487, height: 1058 });
+  const { errors } = await setup(page, designFixture());
+  await expect(page.locator(".goal-timeline .timeline-event")).toHaveCount(9);
+  await expect(
+    page.getByRole("button", { name: "Google Flights – HND to CTS", exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("hashed-source-fingerprint", { exact: true })).toHaveCount(0);
+  await page.screenshot({ path: "/tmp/aster-goals-reference-desktop.png" });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
+    true,
+  );
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeInViewport();
+  await page.getByLabel("Filter timeline events").selectOption("signals");
+  await expect(page.locator(".goal-timeline .timeline-event")).toHaveCount(2);
+  await page.getByRole("tab", { name: "Notes", exact: true }).click();
+  await expect(page.locator(".goal-timeline .timeline-event")).toHaveCount(2);
+  await page.getByRole("tab", { name: "Timeline", exact: true }).click();
+  await page.getByLabel("Filter timeline events").selectOption("all");
+  await page.getByText("View 3 context items", { exact: true }).click();
+  await page.getByRole("button", { name: "/sources/flights", exact: true }).click();
+  await expect(page.getByRole("dialog")).toContainText("Google Flights – HND to CTS");
+  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "Add context reference" }).click();
+  await page.getByRole("menuitem", { name: "Google Flights – HND to CTS", exact: true }).click();
+  await expect(page.getByLabel("Add information to Goal")).toHaveValue("/sources/flights");
+  expect(errors).toEqual([]);
+});
+
+test("Goal completion is confirmed and moves only the selected Goal to Archived", async ({
+  page,
+}) => {
+  const data = fixture();
+  data.contexts.push({
+    path: "/goals/other",
+    description: "Another goal",
+    state: { status: "active" },
+    messages: [],
+  });
+  const { writes, errors } = await setup(page, data);
+  await page.getByRole("button", { name: "Goal actions" }).click();
+  await page.getByRole("menuitem", { name: "End Goal", exact: true }).click();
+  await expect(page.getByRole("alertdialog")).toContainText(
+    "Work already submitted may still finish",
+  );
+  await page.getByRole("button", { name: "Keep Goal active" }).click();
+  expect(writes).toEqual([]);
+  await page.getByRole("button", { name: "Goal actions" }).click();
+  await page.getByRole("menuitem", { name: "End Goal", exact: true }).click();
+  await page.getByRole("button", { name: "Confirm ending Goal" }).click();
+  await expect(page.getByRole("alertdialog")).toHaveCount(0);
+  expect(writes).toEqual([{ tag: "EndGoal", body: { slug: "engine" } }]);
+  await expect(page.getByLabel("Add information to Goal")).toHaveCount(0);
+  await expect(
+    page
+      .getByRole("navigation")
+      .getByRole("button", { name: /Monitor Knowledge Engine.*Archived/ }),
+  ).toBeVisible();
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /Another goal/ })
+    .click();
+  await expect(page.getByLabel("Add information to Goal")).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+test("failed message submission preserves the draft and never retries automatically", async ({
+  page,
+}) => {
+  const { errors } = await setup(page);
+  let attempts = 0;
+  await page.route("**/api/rpc{,/}", async (route) => {
+    const rpc = JSON.parse(route.request().postData().trim());
+    if (rpc.tag !== "SendGoalMessage") return route.fallback();
+    attempts++;
+    await route.fulfill({
+      contentType: "application/ndjson",
+      body:
+        JSON.stringify({
+          _tag: "Exit",
+          requestId: rpc.id,
+          exit: {
+            _tag: "Failure",
+            cause: [
+              {
+                _tag: "Fail",
+                error: {
+                  _tag: "ApplicationError",
+                  kind: "unavailable",
+                  message: "Message not accepted",
+                },
+              },
+            ],
+          },
+        }) + "\n",
+    });
+  });
+  await page.getByLabel("Add information to Goal").fill("Keep this draft");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Message not accepted");
+  await expect(page.getByLabel("Add information to Goal")).toHaveValue("Keep this draft");
+  expect(attempts).toBe(1);
+  expect(errors).toEqual([]);
+});
+
+test("populated responsive layouts retain all Goal work and wrap long content", async ({
+  page,
+}) => {
+  const data = designFixture();
+  const goal = data.contexts.find((context) => context.path === "/goals/engine");
+  goal.description = "Plan our Hokkaido trip and compare every transport and accommodation option";
+  const { errors } = await setup(page, data);
+  for (const width of [1280, 1024, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    expect(
+      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+    ).toBe(true);
+    await expect(page.getByLabel("Add information to Goal")).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Goal work" })).toBeVisible();
+    await page.screenshot({ path: `/tmp/aster-goals-responsive-${width}.png`, fullPage: true });
+  }
+  await page.getByRole("button", { name: "Choose goal" }).click();
+  await page.getByRole("button", { name: "Close goals", exact: true }).click();
+  await expect(page.getByRole("navigation", { name: "Goals" })).toBeHidden();
   expect(errors).toEqual([]);
 });

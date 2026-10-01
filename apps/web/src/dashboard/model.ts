@@ -8,6 +8,8 @@ const DisplayTask = Schema.Struct({
   instructions: Schema.String,
   status: Schema.String,
   result: Schema.optional(Schema.String),
+  updatedAt: Schema.optional(Schema.String),
+  evidence: Schema.optional(Schema.Array(Schema.String)),
   execution: Schema.optional(Schema.Struct({ runPath: Schema.String, status: Schema.String })),
 });
 const DisplayState = Schema.Struct({
@@ -15,6 +17,25 @@ const DisplayState = Schema.Struct({
   deleted: Schema.optional(Schema.Boolean),
   lastError: Schema.optional(Schema.String),
   summary: Schema.optional(Schema.String),
+  progress: Schema.optional(Schema.String),
+  completionCriteria: Schema.optional(Schema.String),
+  active: Schema.optional(Schema.Boolean),
+  when: Schema.optional(Schema.String),
+  task: Schema.optional(Schema.String),
+  occurrences: Schema.optional(
+    Schema.Array(Schema.Struct({ source: Schema.Struct({ path: Schema.String }) })),
+  ),
+  nextDue: Schema.optional(Schema.Number),
+  schedule: Schema.optional(
+    Schema.Union([
+      Schema.Struct({ type: Schema.Literal("once"), at: Schema.String }),
+      Schema.Struct({
+        type: Schema.Literal("cron"),
+        expression: Schema.String,
+        timeZone: Schema.String,
+      }),
+    ]),
+  ),
   historyCount: Schema.optional(Schema.Number),
   tasks: Schema.optional(Schema.Array(DisplayTask)),
   sourceContext: Schema.optional(Schema.String),
