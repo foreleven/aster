@@ -1,6 +1,6 @@
 # Agent
 
-A thin Effect wrapper around pi 0.87.1. Message and tool types are re-exported from pi; integrations own prompts, tools and business-result validation.
+A thin Effect wrapper around pi 1.0.0. Message and tool types are re-exported from pi; integrations own prompts, tools and business-result validation. `pi-durable` 1.0.0 is available for the Goal Agent Session adapter, while the current wrapper still uses the compatible `pi-agent-core` runtime path.
 
 ```ts
 import { Agent, Models } from "@aster/agent";

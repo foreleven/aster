@@ -21,7 +21,12 @@ export const eventResponse = (application: ApplicationApi) =>
       Effect.catchTag("SlowEventClient", (error) => Queue.fail(frames, error)),
       Effect.forkScoped,
     );
-    const heartbeats = Stream.tick("15 seconds").pipe(Stream.map(() => ": heartbeat\n\n"));
+    // Do not let the initial heartbeat race a committed invalidation frame. `Stream.tick`
+    // emits immediately and then at the interval, so discard only that initial pulse.
+    const heartbeats = Stream.tick("15 seconds").pipe(
+      Stream.drop(1),
+      Stream.map(() => ": heartbeat\n\n"),
+    );
     const body = Stream.make("event: ready\ndata: {}\n\n").pipe(
       Stream.concat(Stream.fromQueue(frames).pipe(Stream.merge(heartbeats))),
       Stream.encodeText,
