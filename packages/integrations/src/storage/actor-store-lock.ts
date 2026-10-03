@@ -11,10 +11,17 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 /** The actor directory has one writer, independently of which memory configuration is selected. */
-export const acquireActorStoreLock = (root = join(homedir(), ".aster")) => {
+export const acquireActorStoreLock = (
+  root = join(homedir(), ".aster"),
+  options: { readonly recoverStale?: boolean } = {},
+) => {
   mkdirSync(root, { recursive: true, mode: 0o700 });
   const path = join(root, "actors.pid");
   if (existsSync(path)) {
+    // Pi shards fail closed after an unclean exit. Automatically unlinking a
+    // stale lock can race another recovery process acquiring the same pathname.
+    if (options.recoverStale === false)
+      throw new Error(`Storage ownership requires reconciliation: ${path}`);
     const pid = Number(readFileSync(path, "utf8").trim());
     if (!Number.isSafeInteger(pid) || pid <= 0)
       throw new Error(`Invalid actor-store lock: ${path}`);

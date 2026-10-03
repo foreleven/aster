@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": {
+      "aster-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     }
@@ -16,8 +17,11 @@
   },
   "dependencies": {
     "@aster/actor": "workspace:*",
-    "effect": "4.0.0-rc.117",
     "@aster/agent": "workspace:*",
-    "@aster/api-contracts": "workspace:*"
+    "@aster/api-contracts": "workspace:*",
+    "effect": "4.0.0-rc.117"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.0.0"
   }
 }

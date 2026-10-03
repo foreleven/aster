@@ -92,18 +92,23 @@ export function references(record?: ContextView) {
         state.definition?.goal && `/goals/${state.definition.goal}`,
         state.request?.runPath,
         state.goal && `/goals/${state.goal}`,
+        ...(typeof state.task === "object" ? state.task.input.flatMap((item) => item.sources) : []),
         ...(record?.messages || []).flatMap((m) => m.references),
+        ...(record?.personalState?.outbox ?? []).map((item) => item.input.target),
+        ...(state.deliveries ?? []).map((item) => item.input.source),
       ].filter((v): v is string => typeof v === "string" && v.startsWith("/")),
     ),
   ];
 }
+export const isRunPath = (path: string) =>
+  /^\/(?:runs\/[^/]+|(?:signals|goals)\/[^/]+\/runs\/[^/]+)$/.test(path);
 export function runStages(record: ContextView) {
   const types = new Set((record?.messages || []).map((m) => m.type));
   const status = record?.state?.status;
   return [
     {
       title: "Task preparation",
-      done: types.has("TaskPrepared"),
+      done: typeof record.state.task === "object" || types.has("TaskPrepared"),
       active: status === "preparing",
     },
     {

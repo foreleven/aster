@@ -10,7 +10,17 @@ import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { Config, ConfigProvider, Context, Effect, Layer, Redacted, Schema } from "effect";
 import { secretConfig } from "./configuration.js";
+import { PiStorageLease } from "./pi-storage-lease.js";
+export { PiStorageLease, PiStorageLeaseError } from "./pi-storage-lease.js";
+import {
+  durableDirectory,
+  runDurableAgent,
+  DurableCloseFailure,
+  type DurableRunOptions,
+} from "./durable.js";
+import { DurableAgentFailure } from "./durable-error.js";
 export { secretConfig } from "./configuration.js";
+export { rejectedToolResult } from "./durable-tools.js";
 
 export type {
   AgentMessage,
@@ -32,12 +42,14 @@ export type ModelConfig = typeof ModelConfig.Type;
 
 export class AgentError extends Error {
   readonly _tag = "AgentError";
+  readonly outcome?: "failed" | "unknown";
   constructor(
     message: string,
     readonly messages: readonly AgentMessage[] = [],
-    options?: ErrorOptions,
+    options?: ErrorOptions & { readonly outcome?: "failed" | "unknown" },
   ) {
     super(message, options);
+    this.outcome = options?.outcome;
   }
 }
 export interface ResolvedModel {
@@ -136,6 +148,7 @@ export const Agent = {
       messages: AgentMessage[],
       signal?: AbortSignal,
     ) => Promise<AgentMessage[]>;
+    readonly durable?: DurableRunOptions;
   }): Effect.Effect<Agent, AgentError, Models> =>
     Effect.gen(function* () {
       const models = yield* Models;
@@ -146,6 +159,75 @@ export const Agent = {
       return {
         run: ({ messages }) =>
           Effect.suspend(() => {
+            const durable = options.durable;
+            if (durable)
+              return Effect.scoped(
+                Effect.gen(function* () {
+                  const lease = yield* PiStorageLease.acquire(
+                    durableDirectory(durable),
+                    JSON.stringify([durable.owner ?? "goals", durable.sessionId]),
+                  ).pipe(
+                    Effect.mapError(
+                      (cause) =>
+                        new AgentError(
+                          "Pi storage is owned by another process or unavailable",
+                          [],
+                          { cause, outcome: "unknown" },
+                        ),
+                    ),
+                  );
+                  return yield* Effect.acquireUseRelease(
+                    Effect.sync(() => {
+                      const controller = new AbortController();
+                      const task = runDurableAgent({
+                        resolved,
+                        messages,
+                        tools,
+                        resultTool: options.resultTool,
+                        onMessage: options.onMessage,
+                        transformContext: options.transformContext,
+                        durable: { ...durable, storageDirectory: lease.identity.directory },
+                        signal: controller.signal,
+                      });
+                      return { controller, task };
+                    }),
+                    ({ task, controller }) =>
+                      Effect.tryPromise({
+                        try: (signal) => {
+                          const abort = () => controller.abort();
+                          signal.addEventListener("abort", abort, { once: true });
+                          return task.finally(() => signal.removeEventListener("abort", abort));
+                        },
+                        catch: (cause) =>
+                          cause instanceof AgentError
+                            ? cause
+                            : new AgentError(
+                                cause instanceof Error ? cause.message : String(cause),
+                                [],
+                                {
+                                  cause,
+                                  outcome:
+                                    cause instanceof DurableAgentFailure ? "failed" : "unknown",
+                                },
+                              ),
+                      }),
+                    ({ controller, task }) =>
+                      Effect.gen(function* () {
+                        controller.abort();
+                        // The SDK wait can cancel before its owner closes. Join the complete
+                        // invocation (including finally) before releasing this Effect's scope.
+                        // Its failure is already delivered by the use phase; this only joins.
+                        const closeFailed = yield* Effect.promise(() =>
+                          task.then(
+                            () => false,
+                            (cause) => cause instanceof DurableCloseFailure,
+                          ),
+                        );
+                        if (closeFailed) yield* lease.quarantine;
+                      }),
+                  );
+                }),
+              );
             const generated: AgentMessage[] = [];
             return Effect.acquireUseRelease(
               Effect.try({
@@ -244,3 +326,14 @@ export const Agent = {
       };
     }),
 };
+
+export {
+  PiDurableAgentRuntime,
+  PiExecutionOwner,
+  PiRuntimeError,
+  PiExecutionHandle,
+  PiExecutionResult,
+  type PiExecutionStatus,
+  type PiDurableRuntime,
+  type PiExecutionEnvironment,
+} from "./pi-runtime.js";

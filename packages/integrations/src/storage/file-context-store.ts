@@ -12,15 +12,49 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import type { ContextRecord, ContextStore } from "@aster/core";
+import { ContextRecord, type ContextStore } from "@aster/core";
+
+import { Schema } from "effect";
+
+const StateFile = Schema.Struct({
+  path: ContextRecord.fields.path,
+  revision: ContextRecord.fields.revision,
+  description: ContextRecord.fields.description,
+  state: ContextRecord.fields.state,
+  reactionEvents: ContextRecord.fields.reactionEvents,
+  messageCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+});
+const decodePending = Schema.decodeUnknownSync(Schema.fromJsonString(ContextRecord));
+const decodeState = Schema.decodeUnknownSync(Schema.fromJsonString(StateFile));
+const decodeMessage = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
+
+// Native fsync is required for the existing synchronous store contract. Persist
+// directory entries as well as file contents before acknowledging a commit.
+const syncDirectory = (directory: string) => {
+  const fd = openSync(directory, "r");
+  try {
+    fsyncSync(fd);
+  } finally {
+    closeSync(fd);
+  }
+};
+const ensureDirectory = (directory: string) => {
+  const firstCreated = mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (firstCreated === undefined) return;
+  const parent = dirname(firstCreated);
+  for (let current = directory; ; current = dirname(current)) {
+    syncDirectory(current);
+    if (current === parent) break;
+  }
+};
 
 /** File commits have a durable intent so the two public files recover as one record. */
 export const makeFileContextStore = (root = join(homedir(), ".aster", "actors")): ContextStore => {
   root = resolve(root);
-  mkdirSync(root, { recursive: true, mode: 0o700 });
+  ensureDirectory(root);
   const directory = (path: string) => {
     if (
       !path.startsWith("/") ||
@@ -43,6 +77,7 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
       closeSync(fd);
     }
     renameSync(temp, path);
+    syncDirectory(dirname(path));
   };
   const jsonl = (messages: ReadonlyArray<unknown>) =>
     messages.map((message) => JSON.stringify(message) + "\n").join("");
@@ -70,8 +105,10 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
       JSON.stringify(
         {
           path: record.path,
+          ...(record.revision === undefined ? {} : { revision: record.revision }),
           description: record.description,
           state: record.state,
+          ...(record.reactionEvents === undefined ? {} : { reactionEvents: record.reactionEvents }),
           messageCount: record.messages.length,
         },
         null,
@@ -79,6 +116,7 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
       ) + "\n",
     );
     rmSync(join(dir, ".pending.json"), { force: true });
+    syncDirectory(dir);
   };
   const cache = new Map<string, ContextRecord>();
   const loadAll = () => {
@@ -87,7 +125,7 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
       const entries = readdirSync(dir, { withFileTypes: true });
       const pending = join(dir, ".pending.json");
       if (existsSync(pending)) {
-        const record = JSON.parse(readFileSync(pending, "utf8")) as ContextRecord;
+        const record = decodePending(readFileSync(pending, "utf8"));
         if (directory(record.path) !== dir)
           throw new Error(`Context recovery path mismatch: ${dir}`);
         // Rewrite rather than append: a crash may have committed only part of the previous append.
@@ -95,24 +133,28 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
       }
       const statePath = join(dir, "state.json");
       if (existsSync(statePath)) {
-        const stored = JSON.parse(readFileSync(statePath, "utf8")) as Omit<
-          ContextRecord,
-          "messages"
-        > & { messageCount: number };
+        const stored = decodeState(readFileSync(statePath, "utf8"));
         if (directory(stored.path) !== dir) throw new Error(`Context state path mismatch: ${dir}`);
         const raw = readFileSync(join(dir, "messages.jsonl"), "utf8");
         const messages = raw
           .split("\n")
           .filter(Boolean)
-          .map((line) => JSON.parse(line) as unknown);
+          .map((line) => decodeMessage(line));
         if (messages.length !== stored.messageCount)
           throw new Error(`Context message count mismatch: ${stored.path}`);
-        cache.set(stored.path, {
-          path: stored.path,
-          description: stored.description,
-          state: stored.state,
-          messages,
-        });
+        cache.set(
+          stored.path,
+          Schema.decodeUnknownSync(ContextRecord)({
+            path: stored.path,
+            ...(stored.revision === undefined ? {} : { revision: stored.revision }),
+            description: stored.description,
+            state: stored.state,
+            ...(stored.reactionEvents === undefined
+              ? {}
+              : { reactionEvents: stored.reactionEvents }),
+            messages,
+          }),
+        );
       }
       for (const entry of entries) if (entry.isDirectory()) visit(join(dir, entry.name));
     };
@@ -122,9 +164,9 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
   return {
     loadAll,
     save: (input) => {
-      const record = structuredClone(input);
+      const record = Schema.decodeUnknownSync(ContextRecord)(structuredClone(input));
       const dir = directory(record.path);
-      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      ensureDirectory(dir);
       atomic(join(dir, ".pending.json"), JSON.stringify(record));
       finish(record, cache.get(record.path));
       cache.set(record.path, record);

@@ -1,3 +1,4 @@
+import { publicImMessage } from "./model.js";
 import { ImSummaryError } from "../shared/errors.js";
 import { Agent, Models, Type } from "@aster/agent";
 import { LarkConfig } from "../config.js";
@@ -106,7 +107,15 @@ export const makeChatSummarizer = (
               { role: "system", content: prompt, timestamp },
               {
                 role: "user",
-                content: [{ type: "text", text: JSON.stringify(input) }],
+                content: [
+                  {
+                    type: "text",
+                    text: JSON.stringify({
+                      ...input,
+                      messages: input.messages.map(publicImMessage),
+                    }),
+                  },
+                ],
                 timestamp,
               },
             ],

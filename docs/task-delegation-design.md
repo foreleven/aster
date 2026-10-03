@@ -1,5 +1,11 @@
 # Unified external Agent tasks
 
+## Pi execution authority (implemented, 2026-10-03)
+
+The Pi executor uses the native read tool with a host-owned `SandboxManager`. The initial policy exposes only two immutable virtual files, `/task/input.md` and `/task/instructions.md`, reconstructed from the admitted Task. It has no host filesystem, process, network or credential capability. File mutations and shell requests fail at the ExecutionEnv boundary. This permits evidence analysis without granting arbitrary host execution; installed native tool code remains trusted infrastructure.
+
+Admission persists the environment policy ID with the model and tool catalogue. Pending recovery and each environment acquisition verify the same policy before tool execution. Result replay does not reacquire the environment or invoke the model. Task confirmation grants no additional capabilities; external writeback still requires an explicit action and its own domain policy or approval. A future execution backend must enforce that authority rather than forwarding it as prompt text.
+
 ## Doubao task quality and continuity (implemented, 2026-09-30)
 
 Requested improvements: make submitted task text readable; introduce configurable default instructions under `agents.doubao`, including read-only behavior and confirmation for actions such as sending messages; and prevent repeated similar work by improving task context, memory recall, and retention of execution outcomes. Permission boundaries and Goal task continuity are recorded below and in the Goal design; exact configuration schema and rendering format remain implementation details.
@@ -163,3 +169,45 @@ The Codex adapter uses the generated local app-server protocol: thread/start, th
 The inspected Doubao CLI main branch (0.12.0) explicitly does not submit approvals. The integration therefore supplies a native response bridge, following observed Work 2.31.6 module and communication contracts. It handles local interaction.ask answers, single-command allow/reject, and pre-tool safety decisions; it rejects unsupported native controls and does not grant broader persistent permissions. Before responding it queries the original session/run and checks the exact pending request. Read-only probing confirmed the current app exposes the required bridge/API functions. Actual user approvals were not issued during validation; controlled tests cover protocol mapping.
 
 Automated tests cover path resolution across ActorSystem recreation, durable queue delivery, confirmation recovery without rebuilding the Task, execution readiness ordering, external response correlation, failure handling, Codex session/approval/result recovery with a protocol fixture, and Doubao native mapping. Existing Goal, Signal, memory and IM flows remain covered by the full suite.
+
+## Pi durable executor
+
+An optional `agents.pi.model` registers Pi behind the same ExternalAgent contract. TaskPreparation remains responsible for constructing the exact Task from the Signal definition and source snapshot. Delegation now passes a stable `requestId` derived from its Context path; existing executors may ignore this optional admission metadata. Pi commits task, owned conversation, configuration and accepted history atomically, and rejects changed content under an existing request identity. Its returned sessionId/runId are real Pi conversation/task IDs; adapter metadata identifies the owner shard and request.
+
+Status and wait read durable outcomes. A completed execution can be replayed after restart without another model request; safe tool intents may resume, while unsafe interrupted/error outcomes are projected as unknown and block subsequent tool calls. Execution result/history is stored before core applies it to Delegation and Signal Run. When a submission handle was not acknowledged, Delegation now uses optional ExternalAgent.lookupSubmission to query the original Task/request identity. Pi looks up retained admission without creating or resuming work. Found handles commit before Run notification and ordinary observation continues; missing, failed or unsupported lookup remains uncertain. No generic external submit is automatically retried. Explicit user resumeRun admission remains separate work.
+
+The configured initial Pi executor provides evidence-only analysis without tools. It does not support interactive input or approval requests, and rejects responses it cannot deliver. Approval-aware real tools, controlled execution environments, ownerless Personal/Goal runtime migration remain unfinished; shared Pi Context/runtime ownership and offline backend migration are implemented. Temporary-store tests cover the real Delegation mailbox path with a fake model; no live external service is exercised.
+
+## Admission inspection and reconciliation
+
+A Delegation without an acknowledged execution handle can ask a capable adapter to look up its stable submission identity. This is a read-only query against durable admission, not another submit. Pi matches the original prompt/instructions and request ID against its task record and validates the single owned conversation. Lookup uses the retained model/catalogue, so a completed admission remains inspectable under a newer configuration. New submit still rejects changed configuration under the same identity, and reopening pending execution still requires its original catalogue/model.
+
+On found admission, Delegation persists its session and clears the superseded uncertainty before notifying Run. Run clears its old uncertain display outcome when the submitted handle arrives. The ordinary status/wait path then observes and, where the existing runtime contract permits, continues already-admitted pending work according to replay policy. Lookup itself never starts the Harness, restarts failed execution or replaces an unsafe unknown outcome. Missing or unavailable admission stays uncertain; unsupported adapters keep the existing conservative behavior.
+
+Personal's inspectDelegation command is independent of executor observation: it reads the committed business record in the Personal mailbox and returns a schema-defined projection. Its RPC and replay-safe model tool omit provider/session metadata, raw transcript and native frames. The Delegation page consumes this projection and refreshes after path changes or SSE reconnection. General Context access redaction and external unsafe-tool outcome reconciliation remain broader requirements.
+
+## Independent Personal Task admission
+
+Personal may submit a prepared Task directly through `StartPersonalTask`. This creates a Run under `/runs/personal--<sha256(requestId)>`, owned by the runtime’s `/user/runs` root. It does not create a Signal or schedule. Existing Goal and Signal Run ownership remains separate. The shared `PreparedTask` contract is the exact execution input; TaskPreparation.prepare must not rewrite it.
+
+Personal persists its command in the outbox before delivery. The receiving Run validates the target identity and executor, and creates its frozen Task, source/causation, checking state and exact-input receipt in one expectedRevision-zero commit. Only then does it acknowledge admission. Exact retries return that receipt before revision checking; payload reuse conflicts. Recovery resumes the retained readiness/confirmation/delegation phase, and completed retries never start another execution. Readiness runs before a mandatory confirmation of that concrete Task. A model can propose the Task in its structured reply but cannot approve it.
+
+## Explicit Run resumption
+
+`ResumePersonalRun` carries separate Personal and Run revisions, request ID, causation ID and an existing Run path. It accepts failed or uncertain executions with a frozen Task. It does not restart task preparation, replace a session, bypass pending confirmation, or reopen completed/cancelled/rejected work. Goal Task validity is checked at admission. The `/runs` root routes the command to the original Personal, Signal or Goal child and never creates a replacement owner for an unavailable path.
+
+Personal queues the command before acknowledging. The Run commits exact-input admission and a pending handoff with its receipt before sending to Delegation. Repeated requests reconcile the same handoff; collisions and stale new requests conflict. Delegation likewise admits the exact command before provider observation. Creating a child for manual resumption suppresses its ordinary recovery path until this admission, while already-admitted unfinished commands recover on restart.
+
+Delegation first uses retained completion/cancellation or queries the original external session. Only a provider-reported resumable failure permits resume. A `resuming` marker commits before the external call. The returned session handle (including a changed run ID) and successful marker commit together. Resume failure or a crash in that interval leaves an unknown outcome; recovery can observe but cannot repeat the call, including with a new request ID. A different returned session ID is rejected as uncertainty and the original handle is retained. A later authoritative running/completed observation reconciles unknown markers. Durable completion replays after parent outcome loss without consulting the provider.
+
+Run admission receipts, Delegation execution status and Task completion remain separate. UI controls preserve uncertain source admission identity across navigation/reconnect, expose handoff state, and read business resumption status through Delegation inspection. Browser-only identity does not yet survive a full document reload. Ordinary pre-existing automatic recovery paths are still subject to the broader execution-reconciliation audit.
+
+## Personal approval requests
+
+`RequestPersonalApproval` takes Personal/ApprovalQueue revisions, a source Context revision, the existing approval ID, and request/causation identity. Personal saves the command through its durable outbox. A structured Personal reply can propose `approvalRequests`; reply, cursor and intents commit together. Approval decisions remain explicit user operations.
+
+ApprovalQueue derives the entry from committed domain state. A Run must be awaiting confirmation for the concrete frozen Task, with a valid Goal Task reference when present. A Delegation must be waiting for an unanswered request from its current session. Queue prompts, input options and Actor destinations come from those records rather than caller input. A request cannot invent a new permission, reuse an answered/obsolete execution request, reopen a resolved/revoked entry, or grant standing authority.
+
+The queue validates source and queue revisions and atomically commits the entry with its exact-input command receipt. A matching existing pending entry remains unchanged; only the new command receipt is added. Exact retry returns the retained receipt even after later domain progress or revocation. Approval admission snapshots a demand; source state may progress independently, and the execution owner revalidates the response in its mailbox. Revocation is durable even if it arrives before enqueue, so a delayed request cannot recreate a withdrawn demand after restart.
+
+The API requests approval of existing work. Preparation, generation of external questions and permission policy remain owned by Run, Delegation and their execution services. This endpoint never executes work or decides the approval itself.

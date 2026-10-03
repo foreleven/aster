@@ -1,5 +1,15 @@
-import { signalEnabled, sourceSignalEligible } from "./policy.js";
+import { SignalReactionInput, acceptSignalReaction } from "./reaction.js";
+import {
+  CausalChain,
+  ApplicationError,
+  SignalDeliveryInput,
+  SignalDeliveryReceipt,
+} from "@aster/api-contracts";
+import { applyPersonalSignal } from "./command.js";
+import { applyGoalSignal, GoalSignalInput } from "./goal-command.js";
+import { scheduledCausalChain, signalEnabled, sourceSignalEligible } from "./policy.js";
 import { createHash } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { ReplyTo, type ActorContext, type ActorRef } from "@aster/actor";
 import { ContextActor, childActorName, spawnContextChild } from "../context/actor.js";
 import { defineContext, ContextRecord } from "../context/model.js";
@@ -9,6 +19,8 @@ import { SignalDefinition, validateSignalTime } from "../config/schema.js";
 import { TaskPreparation, ExternalAgents } from "../tasks/model.js";
 import type { GoalCommand } from "../goals/actors.js";
 import { SignalRunActor, type RunCommand } from "../tasks/run.js";
+import { SignalState as DurableSignalState } from "./state.js";
+import { signalNotifications } from "../notifications/signal.js";
 
 export class SignalDefinitions extends Context.Service<
   SignalDefinitions,
@@ -16,13 +28,16 @@ export class SignalDefinitions extends Context.Service<
 >()("signals/Definitions") {}
 
 interface Occurrence {
+  causal?: CausalChain;
   id: string;
   text: string;
   delivered: boolean;
   source: ContextRecord;
 }
 interface SignalState extends SignalDefinition {
+  causal?: CausalChain;
   goal?: string;
+  owner?: string;
   active?: boolean;
   deleted?: boolean;
   revision?: number;
@@ -31,18 +46,48 @@ interface SignalState extends SignalDefinition {
   timerDone?: boolean;
   occurrences?: readonly Occurrence[];
 }
+export const SignalCommandReply = Schema.Union([
+  Schema.TaggedStruct("Accepted", { receipt: SignalDeliveryReceipt }),
+  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
+]);
+export type SignalCommandReply = typeof SignalCommandReply.Type;
+export const SignalConfigureReply = Schema.Union([
+  Schema.TaggedStruct("Accepted", { ref: ReplyTo<unknown>() }),
+  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
+]);
+export type SignalConfigureReply = typeof SignalConfigureReply.Type;
+const ApplyPersonalCommand = Schema.TaggedStruct("ApplyPersonalCommand", {
+  input: SignalDeliveryInput,
+  replyTo: ReplyTo<SignalCommandReply>(),
+});
+const ApplyGoalCommand = Schema.TaggedStruct("ApplyGoalCommand", {
+  input: GoalSignalInput,
+  subscriber: ReplyTo<GoalCommand>(),
+  replyTo: ReplyTo<SignalCommandReply>(),
+});
+const ReactCommand = Schema.TaggedStruct("React", {
+  input: SignalReactionInput,
+  replyTo: ReplyTo<SignalCommandReply>(),
+});
+const ReadyCommand = Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() });
 const SignalCommand = Schema.Union([
+  ReadyCommand,
+  Schema.TaggedStruct("ReadyAfterConfiguration", { replyTo: ReplyTo<void>() }),
+  ReactCommand,
+  ApplyPersonalCommand,
+  ApplyGoalCommand,
   Schema.TaggedStruct("Trigger", { sourceContext: ContextRecord }),
   Schema.TaggedStruct("Tick", { revision: Schema.Number, due: Schema.Number }),
   Schema.TaggedStruct("DeliverOccurrences", {}),
   Schema.TaggedStruct("DeliveryFinished", { id: Schema.String, accepted: Schema.Boolean }),
   Schema.TaggedStruct("Configure", {
+    causal: Schema.optional(CausalChain),
     definition: SignalDefinition,
     goal: Schema.optional(Schema.String),
     subscriber: Schema.optional(ReplyTo<GoalCommand>()),
     active: Schema.Boolean,
     deleted: Schema.optional(Schema.Boolean),
-    replyTo: Schema.optional(ReplyTo<ActorRef<unknown>>()),
+    replyTo: Schema.optional(ReplyTo<SignalConfigureReply>()),
   }),
   Schema.TaggedStruct("Recover", {}),
 ]);
@@ -64,14 +109,28 @@ export class SignalActor extends ContextActor.Service<
     Effect.gen(function* () {
       const registry = yield* ContextRegistry,
         definitions = yield* SignalDefinitions;
+      const agents = yield* ExternalAgents;
       let subscriber: ActorRef<GoalCommand> | undefined,
         path = "";
       let armed = "";
       let retryScheduled = false;
       const inFlight = new Set<string>();
       const state = () => registry.get(path)?.state as SignalState | undefined;
-      const save = (patch: object) =>
-        registry.set({ ...registry.get(path)!, state: { ...state(), ...patch } });
+      const save = Effect.fn("Signal.save")(function* (patch: object) {
+        const current = registry.get(path)!;
+        const next = { ...current.state, ...patch } as Record<string, unknown>;
+        if (next.goal === undefined) delete next.goal;
+        next.businessOutbox = signalNotifications({
+          path,
+          revision: (current.revision ?? 0) + 1,
+          at: new Date(yield* Clock.currentTimeMillis).toISOString(),
+          previous: Schema.decodeUnknownSync(DurableSignalState)(current.state),
+          next: Schema.decodeUnknownSync(DurableSignalState)(next),
+        });
+        yield* registry
+          .commit({ ...current, state: next }, { expectedRevision: current.revision ?? 0 })
+          .pipe(Effect.asVoid, Effect.orDie);
+      });
       const enabled = () =>
         !!state() && signalEnabled(state()!, (slug) => registry.get(`/goals/${slug}`));
       const nextTime = (s: SignalState, now: number) =>
@@ -118,6 +177,7 @@ export class SignalActor extends ContextActor.Service<
                   _tag: "Occurrence",
                   id: occurrence.id,
                   signalPath: path,
+                  causal: occurrence.causal,
                   text: occurrence.text,
                   replyTo,
                 }))
@@ -140,6 +200,7 @@ export class SignalActor extends ContextActor.Service<
                     path: runPath,
                     definition: Schema.decodeUnknownSync(SignalDefinition)(state()!),
                     sourceContext: occurrence.source,
+                    causal: occurrence.causal,
                     replyTo,
                   }))
                   .pipe(Effect.as(true));
@@ -166,22 +227,33 @@ export class SignalActor extends ContextActor.Service<
           Effect.gen(function* () {
             const slug = context.path.split("/").at(-1)!;
             path = `/signals/${slug}`;
+            if (state())
+              yield* Schema.decodeUnknownEffect(DurableSignalState)(state()).pipe(Effect.orDie);
             const definition = definitions.find((d) => d.slug === slug);
+            if (definition && state()?.owner === "/personal")
+              return yield* Effect.die(
+                new Error("Configured Signal collides with a Personal-owned Signal"),
+              );
             if (definition) {
               validateSignalTime(definition);
               if (!state())
-                yield* registry.set({
-                  path,
-                  description: `Signal：${slug}`,
-                  state: {
-                    ...definition,
-                    active: true,
-                    revision: 1,
-                    occurrences: [],
-                    nextDue: nextTime(definition, yield* Clock.currentTimeMillis),
-                  },
-                  messages: [],
-                });
+                yield* registry
+                  .commit(
+                    {
+                      path,
+                      description: `Signal：${slug}`,
+                      state: {
+                        ...definition,
+                        active: true,
+                        revision: 1,
+                        occurrences: [],
+                        nextDue: nextTime(definition, yield* Clock.currentTimeMillis),
+                      },
+                      messages: [],
+                    },
+                    { expectedRevision: 0 },
+                  )
+                  .pipe(Effect.asVoid, Effect.orDie);
               yield* context.self.tell({ _tag: "Configure", definition, active: true });
             } else if (state()) {
               const goal = state()!.goal;
@@ -198,16 +270,104 @@ export class SignalActor extends ContextActor.Service<
         receive: (command, context) =>
           Effect.gen(function* () {
             switch (command._tag) {
+              case "Ready":
+                // A root can queue Ready before started queues Configure. Requeue the
+                // barrier behind startup commands before acknowledging the catalogue.
+                return yield* context.self.tell({
+                  _tag: "ReadyAfterConfiguration",
+                  replyTo: command.replyTo,
+                });
+              case "ReadyAfterConfiguration":
+                return yield* command.replyTo.tell(undefined);
+              case "React": {
+                const result = yield* acceptSignalReaction(registry, path, command.input).pipe(
+                  Effect.result,
+                );
+                if (result._tag === "Failure")
+                  yield* command.replyTo.tell({ _tag: "Rejected", error: result.failure });
+                else {
+                  yield* command.replyTo.tell({ _tag: "Accepted", receipt: result.success });
+                  yield* dispatch(context);
+                }
+                return;
+              }
+              case "ApplyGoalCommand": {
+                const now = yield* Clock.currentTimeMillis;
+                const result = yield* applyGoalSignal({
+                  registry,
+                  path,
+                  raw: command.input,
+                  configured: definitions,
+                  agents: Object.keys(agents),
+                  nextDue: (definition) => nextTime(definition, now),
+                }).pipe(Effect.result);
+                if (result._tag === "Failure")
+                  yield* command.replyTo.tell({ _tag: "Rejected", error: result.failure });
+                else {
+                  subscriber = command.subscriber;
+                  yield* command.replyTo.tell({ _tag: "Accepted", receipt: result.success });
+                  yield* context.self.tell({ _tag: "Recover" });
+                }
+                return;
+              }
+              case "ApplyPersonalCommand": {
+                const now = yield* Clock.currentTimeMillis;
+                const result = yield* applyPersonalSignal({
+                  registry,
+                  path,
+                  raw: command.input,
+                  configured: definitions,
+                  agents: Object.keys(agents),
+                  nextDue: (definition) => nextTime(definition, now),
+                }).pipe(Effect.result);
+                if (result._tag === "Failure")
+                  yield* command.replyTo.tell({ _tag: "Rejected", error: result.failure });
+                else {
+                  yield* command.replyTo.tell({ _tag: "Accepted", receipt: result.success });
+                  yield* context.self.tell({ _tag: "Recover" });
+                }
+                return;
+              }
               case "Configure": {
+                // Personal definitions may only change through the versioned command protocol.
+                if (
+                  state()?.owner === "/personal" ||
+                  (state()?.goal !== undefined && state()?.goal !== command.goal)
+                ) {
+                  if (command.replyTo)
+                    yield* command.replyTo.tell({
+                      _tag: "Rejected",
+                      error: new ApplicationError({
+                        kind: "conflict",
+                        message: "Signal belongs to another owner",
+                      }),
+                    });
+                  return;
+                }
+                if (command.goal !== undefined && command.definition.action !== undefined) {
+                  if (command.replyTo)
+                    yield* command.replyTo.tell({
+                      _tag: "Rejected",
+                      error: new ApplicationError({
+                        kind: "invalid-input",
+                        message:
+                          "Goal Signals deliver evidence to the Goal; publication actions require a Task-producing Signal",
+                      }),
+                    });
+                  return;
+                }
                 validateSignalTime(command.definition);
                 subscriber = command.subscriber;
-                const previous = state();
+                const snapshot = registry.get(path);
+                const previous = snapshot?.state as SignalState | undefined;
                 const content = (s: SignalState) =>
                   JSON.stringify({
                     slug: s.slug,
+                    goal: s.goal,
                     when: s.when,
                     task: s.task,
-                    taskId: s.taskId,
+                    action: s.action,
+                    ...(s.taskId === undefined ? {} : { taskId: s.taskId }),
                     agent: s.agent,
                     mode: s.mode,
                     schedule: s.schedule,
@@ -217,24 +377,45 @@ export class SignalActor extends ContextActor.Service<
                   });
                 const proposed = {
                   ...Schema.decodeUnknownSync(SignalDefinition)(command.definition),
-                  goal: command.goal,
+                  ...(command.goal === undefined ? {} : { goal: command.goal }),
                   active: command.active,
                   deleted: !!command.deleted,
                 };
                 const changed = !previous || content(previous) !== content(proposed);
                 const now = yield* Clock.currentTimeMillis;
-                yield* registry.set({
-                  path,
-                  description: `Signal：${command.definition.slug}`,
-                  state: {
-                    ...previous,
-                    ...proposed,
-                    revision: (previous?.revision ?? 0) + (changed ? 1 : 0),
-                    ...(changed ? { nextDue: nextTime(proposed, now), timerDone: false } : {}),
-                  },
-                  messages: [],
-                });
-                if (command.replyTo) yield* command.replyTo.tell(context.self as ActorRef<unknown>);
+                // Reattachment must not invalidate frozen commands by advancing Context revision.
+                if (
+                  changed ||
+                  (command.causal && !isDeepStrictEqual(command.causal, previous?.causal))
+                )
+                  yield* registry
+                    .commit(
+                      {
+                        path,
+                        description: `Signal：${command.definition.slug}`,
+                        state: {
+                          ...previous,
+                          ...proposed,
+                          action: proposed.action,
+                          schedule: proposed.schedule,
+                          notBefore: proposed.notBefore,
+                          taskId: proposed.taskId,
+                          ...(command.causal ? { causal: command.causal } : {}),
+                          revision: (previous?.revision ?? 0) + (changed ? 1 : 0),
+                          ...(changed
+                            ? { nextDue: nextTime(proposed, now), timerDone: false }
+                            : {}),
+                        },
+                        messages: [],
+                      },
+                      { expectedRevision: snapshot?.revision ?? 0 },
+                    )
+                    .pipe(Effect.asVoid, Effect.orDie);
+                if (command.replyTo)
+                  yield* command.replyTo.tell({
+                    _tag: "Accepted",
+                    ref: context.self as ActorRef<unknown>,
+                  });
                 yield* context.self.tell({ _tag: "Recover" });
                 return;
               }
@@ -285,20 +466,23 @@ export class SignalActor extends ContextActor.Service<
                   return;
                 }
                 const id = `${path}:${s.revision}:time:${command.due}`;
+                const causal = scheduledCausalChain(s, id);
                 const source = {
                   path,
                   description: registry.get(path)!.description,
                   state: {
                     slug: s.slug,
+                    goal: s.goal,
                     when: s.when,
                     task: s.task,
+                    action: s.action,
                     taskId: s.taskId,
                     agent: s.agent,
                     mode: s.mode,
-                    schedule: s.schedule,
-                    notBefore: s.notBefore,
-                    goal: s.goal,
-                    revision: s.revision,
+                    ...(s.schedule === undefined ? {} : { schedule: s.schedule }),
+                    ...(s.notBefore === undefined ? {} : { notBefore: s.notBefore }),
+                    ...(s.goal === undefined ? {} : { goal: s.goal }),
+                    ...(s.revision === undefined ? {} : { revision: s.revision }),
                   },
                   messages: [
                     {
@@ -317,6 +501,7 @@ export class SignalActor extends ContextActor.Service<
                       id,
                       text: `Scheduled check: ${s.when}\nRelated task: ${s.taskId ?? "None"}\nScheduled time: ${new Date(command.due).toISOString()}\nRead the current evidence before deciding whether work is needed.`,
                       source,
+                      ...(causal ? { causal } : {}),
                       delivered: false,
                     },
                   ],
@@ -353,6 +538,7 @@ export class SignalActor extends ContextActor.Service<
                       id,
                       text: `Condition: ${s.when}\nRelated task: ${s.taskId ?? "None"}\nSource: ${command.sourceContext.path}\nRead the source Context; the matched snapshot is stored in the occurrences at ${path}.`,
                       source: command.sourceContext,
+                      ...(s.causal ? { causal: s.causal } : {}),
                       delivered: false,
                     },
                   ],
@@ -368,17 +554,22 @@ export class SignalActor extends ContextActor.Service<
 }
 
 export const SignalRootCommand = Schema.Union([
+  ReadyCommand,
+  ReactCommand,
+  ApplyPersonalCommand,
+  ApplyGoalCommand,
   Schema.TaggedStruct("Trigger", {
     slug: Schema.String,
     sourceContext: ContextRecord,
   }),
   Schema.TaggedStruct("Upsert", {
+    causal: Schema.optional(CausalChain),
     definition: SignalDefinition,
     goal: Schema.String,
     subscriber: ReplyTo<GoalCommand>(),
     active: Schema.Boolean,
     deleted: Schema.optional(Schema.Boolean),
-    replyTo: ReplyTo<ActorRef<unknown>>(),
+    replyTo: ReplyTo<SignalConfigureReply>(),
   }),
 ]);
 export type SignalRootCommand = typeof SignalRootCommand.Type;
@@ -397,12 +588,17 @@ export class SignalRootActor extends ContextActor.Service<
       return SignalRootActor.of({
         started: (context) =>
           Effect.gen(function* () {
-            yield* registry.set({
-              path: "/signals",
-              description: "Condition and schedule monitoring",
-              state: {},
-              messages: [],
-            });
+            yield* registry
+              .commit(
+                {
+                  path: "/signals",
+                  description: "Condition and schedule monitoring",
+                  state: {},
+                  messages: [],
+                },
+                { expectedRevision: registry.get("/signals")?.revision ?? 0 },
+              )
+              .pipe(Effect.asVoid, Effect.orDie);
             const slugs = new Set([
               ...definitions.map((d) => d.slug),
               ...Object.keys(registry.snapshot())
@@ -417,6 +613,7 @@ export class SignalRootActor extends ContextActor.Service<
               if (
                 record &&
                 !(record.state as { goal?: string }).goal &&
+                (record.state as { owner?: string }).owner !== "/personal" &&
                 !definitions.some((d) => d.slug === slug)
               )
                 yield* child.tell({
@@ -428,7 +625,79 @@ export class SignalRootActor extends ContextActor.Service<
           }),
         receive: (command, context) =>
           Effect.gen(function* () {
-            if (command._tag === "Upsert") {
+            if (command._tag === "Ready") {
+              for (const child of yield* context.children())
+                yield* (child as ActorRef<SignalCommand>)
+                  .ask<void>((replyTo) => ({ _tag: "Ready", replyTo }))
+                  .pipe(Effect.orDie);
+              yield* command.replyTo.tell(undefined);
+            } else if (command._tag === "React") {
+              const decoded = yield* Schema.decodeUnknownEffect(SignalReactionInput)(
+                command.input,
+              ).pipe(Effect.result);
+              if (decoded._tag === "Failure")
+                return yield* command.replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({
+                    kind: "invalid-input",
+                    message: "Invalid Signal reaction",
+                  }),
+                });
+              const child = yield* context.child(decoded.success.target.slice("/signals/".length));
+              if (child)
+                yield* (child as ActorRef<SignalCommand>).tell({
+                  ...command,
+                  input: decoded.success,
+                });
+              else
+                yield* command.replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({
+                    kind: "not-found",
+                    message: "Signal Actor unavailable",
+                  }),
+                });
+            } else if (command._tag === "ApplyGoalCommand") {
+              const decoded = yield* Schema.decodeUnknownEffect(GoalSignalInput)(
+                command.input,
+              ).pipe(Effect.result);
+              if (decoded._tag === "Failure")
+                return yield* command.replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({
+                    kind: "invalid-input",
+                    message: "Invalid Goal Signal command",
+                  }),
+                });
+              const slug = decoded.success.target.slice("/signals/".length);
+              const child =
+                (yield* context.child(slug)) ??
+                (yield* context.spawn(slug, SignalActor).pipe(Effect.orDie));
+              yield* (child as ActorRef<SignalCommand>).tell({
+                ...command,
+                input: decoded.success,
+              });
+            } else if (command._tag === "ApplyPersonalCommand") {
+              const decoded = yield* Schema.decodeUnknownEffect(SignalDeliveryInput)(
+                command.input,
+              ).pipe(Effect.result);
+              if (decoded._tag === "Failure")
+                return yield* command.replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({
+                    kind: "invalid-input",
+                    message: "Invalid Personal Signal command",
+                  }),
+                });
+              const slug = decoded.success.target.slice("/signals/".length);
+              const child =
+                (yield* context.child(slug)) ??
+                (yield* context.spawn(slug, SignalActor).pipe(Effect.orDie));
+              yield* (child as ActorRef<SignalCommand>).tell({
+                ...command,
+                input: decoded.success,
+              });
+            } else if (command._tag === "Upsert") {
               const existing = yield* context.child(command.definition.slug);
               const child =
                 (existing as ActorRef<SignalCommand> | undefined) ??

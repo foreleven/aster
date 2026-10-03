@@ -18,7 +18,8 @@ import { ArrowRight, Check } from "lucide-react";
 import { Status, Messages } from "./shared";
 import { runStages } from "@/lib/dashboard";
 import { inspectorView } from "./state";
-import { projectMessage, type DisplayState } from "./model";
+import { projectMessage, summaryText, type DisplayState } from "./model";
+import { titleFor } from "../goals/presentation";
 export function Inspector({
   path,
   close,
@@ -35,7 +36,8 @@ export function Inspector({
     [confirmEnd, setConfirmEnd] = useState(false);
   const c = row?.context,
     s: DisplayState = c?.state || {},
-    goal = c?.path.match(/^\/goals\/([^/]+)$/);
+    restricted = c?.projection?.visibility === "restricted",
+    goal = restricted ? null : c?.path.match(/^\/goals\/([^/]+)$/);
   const send = useAtomSet(sendGoalMessage, { mode: "promise" });
   const end = useAtomSet(endGoal, { mode: "promise" });
   const sending = useAtomValue(sendGoalMessage).waiting;
@@ -62,11 +64,19 @@ export function Inspector({
     >
       <SheetContent className="inspector">
         <SheetHeader className="px-0">
-          <SheetTitle>{c?.description || row?.path?.split("/").at(-1)}</SheetTitle>
+          <SheetTitle>
+            {goal && c ? titleFor(c) : c?.description || row?.path?.split("/").at(-1)}
+          </SheetTitle>
           <SheetDescription className="mono break-all">{row?.path}</SheetDescription>
         </SheetHeader>
         {row && (
           <>
+            {restricted && (
+              <p role="status" className="quiet-message">
+                This Context exposes its path and revision only. Its contents are not available in
+                the public view.
+              </p>
+            )}
             <div className="flex gap-2 my-4">
               <Status value={row.status} />
               {s.status && <Status value={s.status} />}
@@ -97,7 +107,7 @@ export function Inspector({
                 Latest runtime error: {row.actor.lastError}
               </p>
             )}
-            {c?.path.includes("/runs/") && (
+            {!restricted && c?.path.includes("/runs/") && (
               <div className="flow">
                 {runStages(c).map((v, i) => (
                   <React.Fragment key={v.title}>
@@ -138,10 +148,10 @@ export function Inspector({
                 ))}
               </div>
             )}
-            {goal && s.summary && (
+            {goal && summaryText(s.summary) && (
               <div className="my-4 text-sm whitespace-pre-wrap">
                 <b>Current summary</b>
-                <p className="mt-2">{s.summary}</p>
+                <p className="mt-2">{summaryText(s.summary)}</p>
               </div>
             )}
             <Tabs defaultValue="messages">
@@ -154,7 +164,7 @@ export function Inspector({
                     Tasks · {(s.tasks || []).filter((t) => t.status !== "deleted").length}
                   </TabsTrigger>
                 )}
-                <TabsTrigger value="state">State</TabsTrigger>
+                {!restricted && <TabsTrigger value="state">State</TabsTrigger>}
                 <TabsTrigger value="runtime">Runtime details</TabsTrigger>
                 <TabsTrigger value="events">Runtime events</TabsTrigger>
               </TabsList>

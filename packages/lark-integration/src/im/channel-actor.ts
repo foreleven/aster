@@ -1,3 +1,4 @@
+import { imChannelView } from "../public-views.js";
 import { ImPollError } from "../shared/errors.js";
 import { LarkConfig } from "../config.js";
 import { Clock, Effect, Match, Layer, Schema } from "effect";
@@ -44,6 +45,7 @@ export class LarkImActor extends ContextActor.Service<
 >()("lark/ImActor", {
   command: ImCommand,
   context: defineContext({
+    view: imChannelView,
     identity: "Work Lark IM integration",
     state: Schema.Struct({
       ready: Schema.Boolean,
@@ -101,15 +103,17 @@ export class LarkImActor extends ContextActor.Service<
               );
             }
             const previous = registry.get("/lark/im");
-            yield* registry.set(
-              {
-                path: "/lark/im",
-                description: string(entry.description) || "My work Lark messages",
-                state: { ready: false, chats: Number(object(previous?.state).chats ?? 0) },
-                messages: [],
-              },
-              { evaluate: false },
-            );
+            yield* registry
+              .commit(
+                {
+                  path: "/lark/im",
+                  description: string(entry.description) || "My work Lark messages",
+                  state: { ready: false, chats: Number(object(previous?.state).chats ?? 0) },
+                  messages: [],
+                },
+                { evaluate: false, expectedRevision: previous?.revision ?? 0 },
+              )
+              .pipe(Effect.asVoid, Effect.orDie);
             yield* context.self.tell({ _tag: "Poll" });
           }),
         receive: (command, context) =>
@@ -134,17 +138,22 @@ export class LarkImActor extends ContextActor.Service<
                     Effect.gen(function* () {
                       yield* Effect.logWarning(result.error.message);
                       const previous = registry.get("/lark/im");
-                      yield* registry.set({
-                        path: "/lark/im",
-                        description: string(entry.description) || "My work Lark messages",
-                        state: {
-                          chats: 0,
-                          ...previous?.state,
-                          ready: false,
-                          lastError: result.error.message,
-                        },
-                        messages: [],
-                      });
+                      yield* registry
+                        .commit(
+                          {
+                            path: "/lark/im",
+                            description: string(entry.description) || "My work Lark messages",
+                            state: {
+                              chats: 0,
+                              ...previous?.state,
+                              ready: false,
+                              lastError: result.error.message,
+                            },
+                            messages: [],
+                          },
+                          { expectedRevision: previous?.revision ?? 0 },
+                        )
+                        .pipe(Effect.asVoid, Effect.orDie);
                     }),
                   ),
                   Match.tag("Success", (result) =>
@@ -202,15 +211,20 @@ export class LarkImActor extends ContextActor.Service<
                           ),
                         }),
                       );
-                      yield* registry.set({
-                        path: "/lark/im",
-                        description: string(entry.description) || "My work Lark messages",
-                        state: {
-                          ready: result.value.caughtUp,
-                          chats: result.value.batches.length,
-                        },
-                        messages: [],
-                      });
+                      yield* registry
+                        .commit(
+                          {
+                            path: "/lark/im",
+                            description: string(entry.description) || "My work Lark messages",
+                            state: {
+                              ready: result.value.caughtUp,
+                              chats: result.value.batches.length,
+                            },
+                            messages: [],
+                          },
+                          { expectedRevision: registry.get("/lark/im")?.revision ?? 0 },
+                        )
+                        .pipe(Effect.asVoid, Effect.orDie);
                     }),
                   ),
                   Match.exhaustive,

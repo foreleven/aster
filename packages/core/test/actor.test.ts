@@ -36,14 +36,17 @@ class Counter extends ContextActor.Service<Counter>()("test/ContextCounter", {
         started: (actor) => {
           const path = contextPath(actor);
           assert.equal(registry.definition(path), Counter.context);
-          return registry.set(
-            registry.get(path) ?? {
-              path,
-              description: "Counter",
-              state: { value: 0 },
-              messages: [],
-            },
-          );
+          return registry
+            .commit(
+              registry.get(path) ?? {
+                path,
+                description: "Counter",
+                state: { value: 0 },
+                messages: [],
+              },
+              { expectedRevision: registry.get(path)?.revision ?? 0 },
+            )
+            .pipe(Effect.asVoid);
         },
         receive: (command, actor) => {
           const path = contextPath(actor);
@@ -55,11 +58,16 @@ class Counter extends ContextActor.Service<Counter>()("test/ContextCounter", {
               command.replyTo.tell({ path, value: (record.state as { value: number }).value }),
             ),
             Match.tag("Set", (command) =>
-              registry.set({
-                ...record,
-                state: { value: command.value },
-                messages: [...record.messages, "updated"],
-              }),
+              registry
+                .commit(
+                  {
+                    ...record,
+                    state: { value: command.value },
+                    messages: [...record.messages, "updated"],
+                  },
+                  { expectedRevision: record.revision ?? 0 },
+                )
+                .pipe(Effect.asVoid, Effect.orDie),
             ),
             Match.exhaustive,
           );

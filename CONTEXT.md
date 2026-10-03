@@ -68,11 +68,53 @@ The current understanding of a Goal's progress, established findings, outstandin
 **Goal Conversation**:
 The ordered conversation through which the user and Agent pursue a Goal, preserving their exchanges and the evidence used during reasoning. It includes important observations and conclusions even when no task is created.
 
+**Goal Agent Session**:
+The isolated durable Agent execution space owned by one Goal. It contains that Goal's primary Conversation and its Agent Runs; a Goal does not share this session with another Goal.
+
+**Agent Run**:
+One model planning execution within a Goal Agent Session, including its model messages, tool interactions, and structured planning result. It is distinct from a Delegation, which performs external work.
+
+**Evaluation Result**:
+The structured result of an Agent Run, containing the planning conclusion and proposed Goal Task or Goal-owned Signal changes. The GoalActor validates and applies it; the result is not itself an authorization for external execution.
+
+**Goal Input**:
+An accepted, ordered input to a Goal evaluation, such as a Goal Intent, User Input, Signal Occurrence, Execution Feedback, startup recovery, or retry request. It is persisted by the Goal before being handed to the Agent Session.
+
 **Goal History**:
 The complete retained record of a Goal's conversation and progression, including milestones, conclusions, task and Signal decisions, and execution feedback. It remains available beyond the portion used for current reasoning.
 
 **Goal Feed**:
 The chronological view of a Goal's ongoing activity drawn from its History, including observations that do not lead to a task.
+
+**Goal-relevant Context Change**:
+A change to another Context that contains evidence capable of changing this Goal's progress, blockers, tasks, Signals, or conclusions. A change screened as unrelated does not belong to the Goal History or Goal Feed.
+
+**Goal Screening**:
+The independent relevance assessment of one source Context change against one Goal before it can enter that Goal's history. Goals do not compete for selection, and screening does not itself become a Goal activity record.
+
+**Goal Relevance Score**:
+A calibrated continuous score in `0..1` expressing how strongly a source Chat Summary contains evidence relevant to one Goal. It is evaluated independently for each Chat–Goal pair; it does not rank Goals against one another or express urgency.
+
+**Screening Rationale**:
+A bounded explanation accompanying an admitted Goal Relevance Score, stating why one source Context was judged relevant to one Goal. It is part of the Goal activity shown to the user, not an authorization or execution instruction.
+
+**Goal Intent**:
+A durable, admitted input to one Goal Agent evaluation, identifying the source Chat, its persisted summary content, the independent relevance score, and the screening rationale. It is evidence for Goal planning, not a Task, Signal, or execution authorization.
+
+**Goal Evaluation**:
+One Goal Agent planning exchange that considers an ordered batch of admitted Goal Intents and current Goal state and may produce a conclusion together with Task or Goal-owned Signal changes. Intents arriving during that exchange belong to a subsequent evaluation, and its outcomes are not mutually exclusive.
+
+**Goal Evaluation Group**:
+The Timeline projection that explicitly links one Goal Evaluation's ordered input Intents to its conclusions and Task or Signal changes. Later execution results are separate items linked back to the originating Evaluation and Task.
+
+**Evaluation Handoff**:
+The durable transfer of an accepted Goal Input from its Goal to the Goal Agent Session. Its pending, running, failed, or reconciliation-required state describes whether planning was delivered and processed; it does not describe external Task execution.
+
+**Evaluation Retry**:
+A new Goal Evaluation Group that reprocesses the same durable Intent batch after a failed planning exchange. It points to the failed group and preserves both groups as separate history.
+
+**Screening Decision Record**:
+The structured audit record of one Goal relevance assessment, including its score, admission result, normalized screening input snapshot, input/version fingerprints, policy and model metadata, and outcome. It is retained in a separate local append-only JSONL dataset for evaluation and calibration, outside Goal History; raw message batches, credentials, and unrelated Contexts are excluded.
 
 **Goal Task**:
 A persistent piece of work tracked by a Goal, retaining its identity as evidence, plans, and execution outcomes accumulate. The Goal Agent can mark it complete while associated Signals continue monitoring for subsequent changes; its completion is distinct from an individual execution's outcome.

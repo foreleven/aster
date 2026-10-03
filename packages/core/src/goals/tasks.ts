@@ -1,4 +1,5 @@
 import { SignalSchedule } from "../config/schema.js";
+import { CausalChain } from "@aster/api-contracts";
 import { Data, Match, Result, Schema } from "effect";
 
 export const GoalTask = Schema.Struct({
@@ -13,16 +14,16 @@ export const GoalTask = Schema.Struct({
   execution: Schema.optional(
     Schema.Struct({
       runPath: Schema.String,
+      evaluationId: Schema.optional(Schema.String),
       status: Schema.String,
+      causal: Schema.optional(CausalChain),
       revision: Schema.optional(Schema.Number),
     }),
   ),
   result: Schema.optional(Schema.String),
 });
 export type GoalTask = typeof GoalTask.Type;
-export const TaskToolRequest = Schema.Union([
-  Schema.Struct({ operation: Schema.Literal("task_list") }),
-  Schema.Struct({ operation: Schema.Literal("task_get"), id: Schema.String }),
+export const GoalTaskChange = Schema.Union([
   Schema.Struct({
     operation: Schema.Literal("task_create"),
     id: Schema.String,
@@ -50,6 +51,12 @@ export const TaskToolRequest = Schema.Union([
     revision: Schema.Number,
   }),
 ]);
+export type GoalTaskChange = typeof GoalTaskChange.Type;
+export const TaskToolRequest = Schema.Union([
+  Schema.Struct({ operation: Schema.Literal("task_list") }),
+  Schema.Struct({ operation: Schema.Literal("task_get"), id: Schema.String }),
+  GoalTaskChange,
+]);
 export type TaskToolRequest = typeof TaskToolRequest.Type;
 const SignalPatch = Schema.Struct({
   taskId: Schema.optional(Schema.NullOr(Schema.String)),
@@ -58,9 +65,7 @@ const SignalPatch = Schema.Struct({
   notBefore: Schema.optional(Schema.NullOr(Schema.String)),
   schedule: Schema.optional(Schema.NullOr(SignalSchedule)),
 });
-export const SignalToolRequest = Schema.Union([
-  Schema.Struct({ operation: Schema.Literal("signal_list") }),
-  Schema.Struct({ operation: Schema.Literal("signal_get"), id: Schema.String }),
+export const GoalSignalChange = Schema.Union([
   Schema.Struct({
     operation: Schema.Literal("signal_create"),
     id: Schema.String,
@@ -77,6 +82,12 @@ export const SignalToolRequest = Schema.Union([
     id: Schema.String,
     revision: Schema.Number,
   }),
+]);
+export type GoalSignalChange = typeof GoalSignalChange.Type;
+export const SignalToolRequest = Schema.Union([
+  Schema.Struct({ operation: Schema.Literal("signal_list") }),
+  Schema.Struct({ operation: Schema.Literal("signal_get"), id: Schema.String }),
+  GoalSignalChange,
 ]);
 export type SignalToolRequest = typeof SignalToolRequest.Type;
 export const GoalToolRequest = Schema.Union([TaskToolRequest, SignalToolRequest]);
@@ -99,6 +110,8 @@ export const startedExecution = (status?: string) =>
 
 export class GoalToolError extends Data.TaggedError("GoalToolError")<{
   readonly message: string;
+  /** Missing acknowledgement is not proof that the owner rejected a mutation. */
+  readonly outcome?: "unknown";
 }> {}
 
 export type TaskDecision =
@@ -122,7 +135,9 @@ export const decideTaskOperation = (
   request: TaskToolRequest,
   options: {
     readonly at: string;
+    readonly evaluationId?: string;
     readonly runPath?: string;
+    readonly causal?: CausalChain;
     readonly execution?: { readonly status?: string; readonly revision?: number };
   },
 ): Result.Result<TaskDecision, GoalToolError> => {
@@ -178,6 +193,8 @@ export const decideTaskOperation = (
         if (!options.runPath) return fail("Execution requires a Run path");
         const execution = {
           runPath: options.runPath,
+          ...(options.evaluationId ? { evaluationId: options.evaluationId } : {}),
+          ...(options.causal ? { causal: options.causal } : {}),
           status: "preparing",
           revision: task.revision,
         };

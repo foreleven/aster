@@ -5,6 +5,7 @@ import {
   ContextRegistry,
   ContextRecord,
   defineContext,
+  contextView,
   ConfigLocation,
   ProcessEnvironment,
   RuntimeIntegrations,
@@ -79,6 +80,7 @@ export const MemoryIntegration = {
     Effect.gen(function* () {
       const backend = yield* MemoryRuntime;
       const registry = yield* ContextRegistry;
+      yield* registry.registerViews([memoryView]);
       const integrations = yield* RuntimeIntegrations;
       const ready = yield* Deferred.make<ActorRef<MemoryCommand>>();
       yield* integrations.register(
@@ -124,11 +126,21 @@ export const MemoryCommand = Schema.Union([
 ]);
 export type MemoryCommand = typeof MemoryCommand.Type;
 
+const memoryView = contextView({
+  matches: (path) => path === "/memory",
+  state: Schema.Struct({
+    status: Schema.Literal("ready"),
+    retrieval: Schema.Literals(["bm25", "hybrid"]),
+    llm: Schema.optional(Schema.Struct({ provider: Schema.String, model: Schema.String })),
+  }),
+});
+
 export class MemoryActor extends ContextActor.Service<MemoryActor, MemoryRuntime>()(
   "memory/Actor",
   {
     command: MemoryCommand,
     context: defineContext({
+      view: memoryView,
       identity: "My long-term memory",
       state: Schema.Struct({
         pending: Schema.optional(
@@ -150,6 +162,7 @@ export class MemoryActor extends ContextActor.Service<MemoryActor, MemoryRuntime
     Effect.gen(function* () {
       const { client, config } = yield* MemoryRuntime;
       const registry = yield* ContextRegistry;
+      yield* registry.registerViews([memoryView]);
       const inFlight = new Set<string>();
       const state = () =>
         registry.get("/memory")!.state as {
@@ -157,27 +170,37 @@ export class MemoryActor extends ContextActor.Service<MemoryActor, MemoryRuntime
           captured?: string[];
         };
       const save = (patch: object) =>
-        registry.set({
-          ...registry.get("/memory")!,
-          state: { ...registry.get("/memory")!.state, ...patch },
+        Effect.suspend(() => {
+          const current = registry.get("/memory")!;
+          return registry
+            .commit(
+              { ...current, state: { ...current.state, ...patch } },
+              { expectedRevision: current.revision ?? 0 },
+            )
+            .pipe(Effect.asVoid, Effect.orDie);
         });
       return MemoryActor.of({
         started: (context) =>
           Effect.gen(function* () {
             const previous = registry.get("/memory");
-            yield* registry.set({
-              path: "/memory",
-              description: config.description,
-              state: {
-                ...previous?.state,
-                status: "ready",
-                retrieval: config.embedding ? "hybrid" : "bm25",
-                ...(config.llm
-                  ? { llm: { provider: config.llm.provider, model: config.llm.model } }
-                  : {}),
-              },
-              messages: [],
-            });
+            yield* registry
+              .commit(
+                {
+                  path: "/memory",
+                  description: config.description,
+                  state: {
+                    ...previous?.state,
+                    status: "ready",
+                    retrieval: config.embedding ? "hybrid" : "bm25",
+                    ...(config.llm
+                      ? { llm: { provider: config.llm.provider, model: config.llm.model } }
+                      : {}),
+                  },
+                  messages: [],
+                },
+                { expectedRevision: previous?.revision ?? 0 },
+              )
+              .pipe(Effect.asVoid, Effect.orDie);
             yield* context.self.tell({ _tag: "Retry" });
           }),
         receive: (command, context) =>
@@ -188,7 +211,12 @@ export class MemoryActor extends ContextActor.Service<MemoryActor, MemoryRuntime
                 state().pending?.some((p) => p.sessionId === command.input.sessionId)
               )
                 return;
-              yield* save({ pending: [...(state().pending ?? []), command.input] });
+              yield* save({
+                pending: [
+                  ...(state().pending ?? []),
+                  { ...command.input, records: command.input.records.map(registry.project) },
+                ],
+              });
             } else if (command._tag === "Captured") {
               inFlight.delete(command.sessionId);
               if (command.result._tag === "Success")
@@ -210,7 +238,12 @@ export class MemoryActor extends ContextActor.Service<MemoryActor, MemoryRuntime
                   !state().captured?.includes(capture.sessionId) &&
                   !state().pending?.some((p) => p.sessionId === capture.sessionId)
                 )
-                  yield* save({ pending: [...(state().pending ?? []), capture] });
+                  yield* save({
+                    pending: [
+                      ...(state().pending ?? []),
+                      { ...capture, records: capture.records.map(registry.project) },
+                    ],
+                  });
               }
               yield* context.pipeToSelf(Effect.sleep("30 seconds"), () => ({ _tag: "Retry" }));
             }
@@ -220,7 +253,8 @@ export class MemoryActor extends ContextActor.Service<MemoryActor, MemoryRuntime
               inFlight.add(input.sessionId);
               yield* context.pipeToSelf(
                 Effect.tryPromise({
-                  try: () => client.capture(input),
+                  try: () =>
+                    client.capture({ ...input, records: input.records.map(registry.project) }),
                   catch: (cause) =>
                     new MemoryCaptureError({
                       cause,

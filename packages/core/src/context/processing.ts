@@ -1,4 +1,9 @@
-import type { ContextDescriptionError } from "./errors.js";
+import type {
+  ContextDescriptionError,
+  ContextConflict,
+  ContextCommitError,
+  ContextValidationError,
+} from "./errors.js";
 import type { DescriptionInitializer } from "./description.js";
 import { type ContextChange, type ContextRecord, type ContextCapture } from "./model.js";
 import { ContextRegistry } from "./registry.js";
@@ -15,7 +20,12 @@ export const makeContextProcessor = <E>(
   describe: DescriptionInitializer,
 ) => {
   const captures = new Set<string>();
-  return (change: ContextChange): Effect.Effect<void, ContextDescriptionError | E> =>
+  return (
+    change: ContextChange,
+  ): Effect.Effect<
+    void,
+    ContextDescriptionError | ContextConflict | ContextCommitError | ContextValidationError | E
+  > =>
     Effect.gen(function* () {
       let record = change.record;
       const definition = registry.definition(record.path);
@@ -33,20 +43,22 @@ export const makeContextProcessor = <E>(
             identity: definition.identity,
             parentDescription: registry.get(ancestor)?.description ?? "",
           });
-          yield* registry.describe(record.path, description);
+          const latest = registry.get(record.path);
+          if (latest) yield* registry.describe(record.path, description, latest.revision ?? 0);
           record = { ...record, description };
         }
       }
       const capture = definition.capture?.(record);
       if (capture && !captures.has(capture.sessionId)) {
-        yield* captureMemory(capture);
+        yield* captureMemory({ ...capture, records: capture.records.map(registry.project) });
         // Deduplicate only accepted captures. A failed handoff must remain eligible
         // when a later Context change offers the same session again.
         captures.add(capture.sessionId);
       }
       if (definition.signalSource && change.stateChanged && change.evaluate !== false) {
         // A queued notification must evaluate its own source snapshot, even if newer data exists.
-        yield* evaluate(record, { ...registry.snapshot(), [record.path]: structuredClone(record) });
+        const source = registry.project(record);
+        yield* evaluate(source, { ...registry.publicSnapshot(), [record.path]: source });
       }
     });
 };

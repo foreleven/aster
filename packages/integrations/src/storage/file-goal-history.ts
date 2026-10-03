@@ -1,12 +1,21 @@
 import { mkdir, open, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { Effect, Semaphore } from "effect";
+import { isDeepStrictEqual } from "node:util";
+import { Effect, Schema, Semaphore } from "effect";
 import { GoalHistoryError, type GoalHistory, type HistoryEntry } from "@aster/core";
+
+const StoredHistoryEntry = Schema.Struct({
+  seq: Schema.Int.check(Schema.isGreaterThanOrEqualTo(1)),
+  at: Schema.String,
+  requestId: Schema.optional(Schema.NonEmptyString),
+  message: Schema.Unknown,
+});
 
 interface Index {
   /** Byte boundary for every sequence, including the final committed boundary. */
   offsets: number[];
+  requests: Map<string, number>;
 }
 
 /** A single writer owns each journal. Indexes retain offsets, never transcript bodies. */
@@ -23,7 +32,7 @@ export const makeFileGoalHistory = (root = join(homedir(), ".aster", "goals")): 
     const file = path(goal);
     await mkdir(join(root, goal), { recursive: true, mode: 0o700 });
     const fd = await open(file, "a+", 0o600);
-    const index: Index = { offsets: [0] };
+    const index: Index = { offsets: [0], requests: new Map() };
     let pending = Buffer.alloc(0),
       position = 0;
     try {
@@ -35,9 +44,20 @@ export const makeFileGoalHistory = (root = join(homedir(), ".aster", "goals")): 
         pending = Buffer.concat([pending, chunk.subarray(0, bytesRead)]);
         let end: number;
         while ((end = pending.indexOf(10)) >= 0) {
-          const entry = JSON.parse(pending.subarray(0, end).toString("utf8")) as HistoryEntry;
+          const entry = Schema.decodeUnknownSync(StoredHistoryEntry)(
+            JSON.parse(pending.subarray(0, end).toString("utf8")),
+          );
           if (entry.seq !== index.offsets.length)
             throw new Error(`Goal history sequence mismatch: ${goal}`);
+          if (entry.requestId !== undefined) {
+            if (
+              typeof entry.requestId !== "string" ||
+              !entry.requestId ||
+              index.requests.has(entry.requestId)
+            )
+              throw new Error(`Invalid Goal history request identity: ${goal}`);
+            index.requests.set(entry.requestId, entry.seq);
+          }
           index.offsets.push(index.offsets.at(-1)! + end + 1);
           pending = pending.subarray(end + 1);
         }
@@ -87,9 +107,30 @@ export const makeFileGoalHistory = (root = join(homedir(), ".aster", "goals")): 
   };
   return {
     count: (goal) => operate(goal, async (index) => index.offsets.length - 1),
-    append: (goal, message) =>
+    append: (goal, message, requestId) =>
       operate(goal, async (index) => {
+        const previousSequence =
+          requestId === undefined ? undefined : index.requests.get(requestId);
+        if (previousSequence !== undefined) {
+          const fd = await open(path(goal), "r");
+          try {
+            const bytes = await readExactly(
+              fd,
+              index.offsets[previousSequence]! - index.offsets[previousSequence - 1]!,
+              index.offsets[previousSequence - 1]!,
+            );
+            const entry = Schema.decodeUnknownSync(StoredHistoryEntry)(
+              JSON.parse(bytes.toString("utf8")),
+            );
+            if (!isDeepStrictEqual(entry.message, message))
+              throw new Error("History request ID belongs to another message");
+            return { ...entry, message: structuredClone(message) };
+          } finally {
+            await fd.close();
+          }
+        }
         const entry: HistoryEntry = {
+          ...(requestId === undefined ? {} : { requestId }),
           seq: index.offsets.length,
           at: new Date().toISOString(),
           message,
@@ -103,6 +144,7 @@ export const makeFileGoalHistory = (root = join(homedir(), ".aster", "goals")): 
           await fd.close();
         }
         index.offsets.push(index.offsets.at(-1)! + bytes.length);
+        if (requestId !== undefined) index.requests.set(requestId, entry.seq);
         return structuredClone(entry);
       }),
     read: (goal, options = {}) =>

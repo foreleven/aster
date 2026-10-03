@@ -1,4 +1,18 @@
 config:
+  # Optional per-Context durable backend routing. Defaults to Local storage.
+  # Stop Aster and run `pnpm aster storage migrate --config FILE` before changing routes.
+  # Roll back through the same command with routes: []; keep the Pi directory/owner.
+  # durable:
+  #   root: /absolute/path/to/aster-data # default ~/.aster
+  #   pi:
+  #     directory: /absolute/path/to/aster-data/pi # default <root>/pi
+  #     ownerId: aster-executions
+  #   routes:
+  #     - { prefix: /personal, backend: pi }
+  #     - { prefix: /goals, backend: pi }
+  # Optional persistent Personal Agent. Uses the same named model catalogue as Goals.
+  personal:
+    model: goal-reasoning
   agent:
     model: goal-reasoning
   system-one:
@@ -17,6 +31,10 @@ config:
     reserveTokens: 8192
 
 agents:
+  # Optional durable executor for analysis of prepared Task evidence. Select agent: pi on a Signal.
+  # pi:
+  #   model: goal-reasoning
+  #   storageDirectory: /absolute/path/to/pi-executions
   doubao:
     prompt: |
       Perform read-only investigation and analysis by default. You may create reports and drafts in the task-specific workspace.
@@ -67,6 +85,7 @@ signals:
 
 goals:
   knowledge-engine:
+    title: Knowledge Engine
     description: |
       As the Knowledge Engine frontend tech lead, continuously monitor the Knowledge Engine project.
       Track significant changes, frontend impact, dependencies and blockers, matters requiring my involvement, and recommended next steps.

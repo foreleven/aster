@@ -23,7 +23,16 @@ export const runtimeQuery = ApplicationClient.query("InspectRuntime", undefined,
 export const approvalsQuery = ApplicationClient.query("ListApprovals", undefined, {
   reactivityKeys: [QueryKeys.all, QueryKeys.approvals],
 });
+export const retryGoalSignal = ApplicationClient.mutation("RetryGoalSignal");
 export const sendGoalMessage = ApplicationClient.mutation("SendGoalMessage");
+export const sendPersonalMessage = ApplicationClient.mutation("SendPersonalMessage");
+export const retryPersonalInput = ApplicationClient.mutation("RetryPersonalInput");
+export const requestPersonalApproval = ApplicationClient.mutation("RequestPersonalApproval");
+export const respondPersonalApproval = ApplicationClient.mutation("RespondPersonalApproval");
+export const resumePersonalRun = ApplicationClient.mutation("ResumePersonalRun");
+export const startPersonalTask = ApplicationClient.mutation("StartPersonalTask");
+export const applyPersonalSignal = ApplicationClient.mutation("ApplyPersonalSignal");
+export const sendPersonalGoalMessage = ApplicationClient.mutation("SendPersonalGoalMessage");
 export const endGoal = ApplicationClient.mutation("EndGoal");
 export const respondToApproval = ApplicationClient.mutation("RespondToApproval");
 export const invalidateQueries = ApplicationClient.runtime.fn<readonly string[]>()((keys) =>

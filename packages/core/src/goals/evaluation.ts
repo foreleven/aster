@@ -1,5 +1,7 @@
 import type { ActorRef } from "@aster/actor";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
+import { GoalState } from "./state.js";
+import type { FrozenGoalEvaluation } from "./frozen-evaluation.js";
 import type { ContextRegistry } from "../context/registry.js";
 import type { GoalDefinition } from "../config/schema.js";
 import type { GoalCommand } from "./actors.js";
@@ -17,34 +19,57 @@ export const evaluateGoal = (options: {
   readonly self: ActorRef<GoalCommand>;
   readonly generation: string;
   readonly reason: string;
+  readonly requestId: string;
+  readonly historyThrough?: number;
 }) =>
   Effect.gen(function* () {
     const { runtime, registry, definition, history, self, generation, reason } = options;
     const current = () => registry.get(`/goals/${definition.slug}`)!;
-    const state = () => current().state as { summary: string; historyThrough: number };
+    const state = () =>
+      current().state as { summary: string; historyThrough: number; agentThrough?: number };
     let active = true;
     // A custom reasoner may retain callbacks. Retired callbacks cannot start new asks,
     // and the mailbox generation check also rejects already queued stale commands.
     const guard = <A, E>(effect: Effect.Effect<A, E>) =>
       Effect.suspend(() => (active ? effect : Effect.interrupt));
-    const failure = (cause: { readonly message: string }) =>
+    const failure = (cause: {
+      readonly message: string;
+      readonly outcome?: "failed" | "unknown";
+    }) =>
       new GoalOperationError({
+        outcome: cause.outcome,
         goal: definition.slug,
         operation: "plan",
         cause,
         message: cause.message,
       });
     return yield* Effect.gen(function* () {
+      let frozen = runtime.reasoner.durableSessions
+        ? Schema.decodeUnknownSync(GoalState)(current().state).pendingHandoff?.input
+        : undefined;
       const target = Math.floor(
         ((runtime.contextTokens ?? 48000) - (runtime.reserveTokens ?? 8192)) / 3,
       );
       const read = () =>
-        history.read(definition.slug, { after: state().historyThrough, limit: 200 });
+        history.read(definition.slug, {
+          after:
+            frozen?.historyAfter ??
+            (runtime.reasoner.durableSessions
+              ? Math.max(state().historyThrough, state().agentThrough ?? 0)
+              : state().historyThrough),
+          before: frozen
+            ? frozen.historyThrough + 1
+            : options.historyThrough === undefined
+              ? undefined
+              : options.historyThrough + 1,
+          limit: 200,
+        });
       let entries = yield* read();
       while (
+        !frozen &&
         entries.length &&
         (contextSize(entries.map((e) => e.message)) > target ||
-          entries.at(-1)!.seq < (yield* history.count(definition.slug)))
+          entries.at(-1)!.seq < (options.historyThrough ?? (yield* history.count(definition.slug))))
       ) {
         if (!runtime.reasoner.compact)
           return yield* new GoalOperationError({
@@ -89,12 +114,37 @@ export const evaluateGoal = (options: {
         }));
         entries = yield* read();
       }
-      return yield* runtime.reasoner.plan({
+      const candidate = frozen ?? {
         goal: definition,
-        current: current(),
-        contexts: registry.snapshot(),
+        current: registry.project(current()),
+        contexts: registry.publicSnapshot(),
         signals: runtime.signals(definition.slug),
+        historyAfter: entries[0]
+          ? entries[0].seq - 1
+          : (options.historyThrough ?? state().historyThrough),
+        historyThrough: options.historyThrough ?? entries.at(-1)?.seq ?? state().historyThrough,
+      };
+      if (runtime.reasoner.durableSessions && !frozen) {
+        frozen = yield* self.ask<FrozenGoalEvaluation | undefined>((replyTo) => ({
+          _tag: "FreezeEvaluation",
+          generation,
+          requestId: options.requestId,
+          input: candidate,
+          replyTo,
+        }));
+        if (!frozen) return yield* Effect.interrupt;
+      }
+      const admitted = frozen ?? candidate;
+      const plan = yield* runtime.reasoner.plan({
+        goal: admitted.goal,
+        current: admitted.current,
+        contexts: admitted.contexts,
+        signals: admitted.signals,
         reason,
+        durable: {
+          sessionId: definition.slug,
+          requestId: options.requestId,
+        },
         messages: entries.map((e) => e.message),
         history,
         tool: (request) =>
@@ -107,7 +157,9 @@ export const evaluateGoal = (options: {
                 replyTo,
               }))
               .pipe(
-                Effect.mapError((cause) => new GoalToolError({ message: cause.message })),
+                Effect.mapError(
+                  (cause) => new GoalToolError({ message: cause.message, outcome: "unknown" }),
+                ),
                 Effect.flatMap((result) =>
                   result.error
                     ? Effect.fail(new GoalToolError({ message: result.error }))
@@ -115,18 +167,28 @@ export const evaluateGoal = (options: {
                 ),
               ),
           ),
-        onMessage: (message) =>
-          guard(
-            self
-              .ask<void>((replyTo) => ({
-                _tag: "Transcript",
-                generation,
-                message,
-                replyTo,
-              }))
-              .pipe(Effect.mapError(failure)),
-          ),
+        onMessage: runtime.reasoner.durableSessions
+          ? undefined
+          : (message) =>
+              guard(
+                self
+                  .ask<void>((replyTo) => ({
+                    _tag: "Transcript",
+                    generation,
+                    message,
+                    replyTo,
+                  }))
+                  .pipe(Effect.mapError(failure)),
+              ),
       });
+      return {
+        plan,
+        through:
+          options.historyThrough ??
+          entries.at(-1)?.seq ??
+          state().agentThrough ??
+          state().historyThrough,
+      };
     }).pipe(
       Effect.mapError((cause) => (cause instanceof GoalOperationError ? cause : failure(cause))),
       Effect.ensuring(

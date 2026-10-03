@@ -10,7 +10,8 @@
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
     "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js",
-    "start": "node --use-env-proxy dist/cli.js start"
+    "start": "node --use-env-proxy --conditions=aster-source --import=tsx src/cli.ts start",
+    "start:built": "node --use-env-proxy dist/cli.js start"
   },
   "dependencies": {
     "@aster/actor": "workspace:*",
@@ -19,5 +20,8 @@
     "effect": "4.0.0-rc.117",
     "@aster/api-contracts": "workspace:*",
     "@effect/platform-node": "4.0.0-rc.117"
+  },
+  "devDependencies": {
+    "vite": "^7.3.1"
   }
 }

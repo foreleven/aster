@@ -1,5 +1,6 @@
 import { Config, ConfigProvider, Context, Effect, Layer, Schema } from "effect";
 import {
+  GoalTitle,
   SignalEntry,
   validateSignalTime,
   type GoalDefinition,
@@ -37,6 +38,7 @@ export const validateConfig = <A>(label: string, run: () => A) =>
   });
 
 const GoalEntry = Schema.Struct({
+  title: Schema.optional(GoalTitle),
   description: Schema.NonEmptyString,
   completionCriteria: Schema.optional(Schema.String),
 });

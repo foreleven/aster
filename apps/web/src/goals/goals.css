@@ -1139,3 +1139,89 @@
     min-height: 60px;
   }
 }
+
+/* Business evaluations group accepted input, conclusions and their durable outputs. */
+.evaluation-card {
+  border: 1px solid var(--goal-line);
+  border-radius: 12px;
+  margin: 0 0 20px;
+  padding: 18px;
+  overflow-wrap: anywhere;
+}
+.evaluation-header,
+.timeline-input header,
+.timeline-output header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.evaluation-header {
+  margin-bottom: 16px;
+}
+.evaluation-header time {
+  display: block;
+  font-size: 12px;
+  color: var(--goal-muted);
+  margin-top: 4px;
+}
+.timeline-input {
+  background: #f5f7fa;
+  border-radius: 8px;
+  padding: 12px 14px;
+  margin-bottom: 10px;
+}
+.timeline-input p,
+.evaluation-conclusion p {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  margin: 8px 0;
+}
+.timeline-input > time,
+.timeline-input details,
+.evaluation-run,
+.timeline-output header > span {
+  font-size: 12px;
+  color: var(--goal-muted);
+}
+.timeline-input > time {
+  display: block;
+  margin-top: 8px;
+}
+.timeline-input details {
+  margin-top: 8px;
+}
+.input-rationale {
+  font-size: 13px;
+}
+.evaluation-conclusion {
+  padding: 10px 2px;
+}
+.timeline-output {
+  border-top: 1px solid var(--goal-line);
+  padding: 12px 0;
+}
+.evaluation-run {
+  border-top: 1px solid var(--goal-line);
+  padding-top: 12px;
+  margin-top: 8px;
+}
+.evaluation-run dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px;
+}
+.evaluation-run dd {
+  margin: 0;
+}
+.timeline-pending h3 {
+  font-size: 13px;
+  color: var(--goal-muted);
+  margin: 12px 0;
+}
+@media (max-width: 600px) {
+  .evaluation-card {
+    padding: 12px;
+  }
+}

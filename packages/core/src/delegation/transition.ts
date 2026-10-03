@@ -1,4 +1,4 @@
-import { Match, Schema } from "effect";
+import { Match, Schema, Struct } from "effect";
 import type { ApprovalResponse, ExecutionSession, InputRequest } from "../tasks/model.js";
 import { DelegationState } from "./state.js";
 
@@ -85,7 +85,12 @@ export const transitionDelegation = (
     Match.exhaustive,
   );
   return {
-    state: Schema.decodeUnknownSync(DelegationState)({ ...current, ...change.patch }),
+    state: Schema.decodeUnknownSync(DelegationState)({
+      ...(["Submitted", "Completed", "Running"].includes(transition.type)
+        ? Struct.omit(current, ["error"])
+        : current),
+      ...change.patch,
+    }),
     event: "event" in change ? change.event : undefined,
   };
 };

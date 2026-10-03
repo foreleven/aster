@@ -1,6 +1,8 @@
+import { ApplicationError, CommandReceipt, CausalChain } from "@aster/api-contracts";
+import { GoalState, goalOutputCause } from "./state.js";
 import { GoalToolError } from "./tasks.js";
 import { Context, Effect, Schema } from "effect";
-import { choice } from "../decisions/system-one.js";
+import { createHash } from "node:crypto";
 import type { ActorRef, AskTimeoutError } from "@aster/actor";
 import type { ContextRecord } from "../context/model.js";
 import type { ContextRegistry } from "../context/registry.js";
@@ -13,10 +15,21 @@ import {
   type CoreConfig,
   type GoalDefinition,
 } from "../config/schema.js";
-import type { SignalRootCommand } from "../signals/actors.js";
+import type { GoalSignalInput } from "../signals/goal-command.js";
+import type {
+  SignalCommandReply,
+  SignalConfigureReply,
+  SignalRootCommand,
+} from "../signals/actors.js";
 import type { SystemOneClient } from "../decisions/system-one.js";
 import type { GoalHistory } from "./history.js";
 import type { SignalToolRequest } from "./tasks.js";
+import {
+  GoalScreeningStore,
+  screeningDecision,
+  chatSummaryText,
+  type GoalScreeningRecord,
+} from "./screening.js";
 
 /** Goal coordination stays in the caller Fiber; only external reasoning uses Promise adapters. */
 export class GoalRuntime extends Context.Service<
@@ -32,6 +45,10 @@ export class GoalRuntime extends Context.Service<
       goal: string,
       subscriber: ActorRef<GoalCommand>,
     ) => Effect.Effect<readonly ActorRef<unknown>[], GoalToolError | AskTimeoutError>;
+    readonly applySignal?: (
+      input: GoalSignalInput,
+      subscriber: ActorRef<GoalCommand>,
+    ) => Effect.Effect<CommandReceipt, ApplicationError>;
     readonly editSignal?: (
       goal: string,
       request: SignalToolRequest,
@@ -56,20 +73,22 @@ export const makeGoalRuntime = (
   const signals = (goal: string) =>
     records(goal)
       .filter((r) => r.state.active !== false && !r.state.deleted)
-      .map((r) => r.state as SignalDefinition);
+      .map((r) => Schema.decodeUnknownSync(SignalDefinition)(r.state));
   const upsert = (
     definition: SignalDefinition,
     goal: string,
     active: boolean,
     subscriber: ActorRef<GoalCommand>,
     deleted = false,
+    causal?: CausalChain,
   ) =>
     Effect.gen(function* () {
       const existing = registry.get(`/signals/${definition.slug}`);
       if (existing && (existing.state as { goal?: string }).goal !== goal)
         return yield* new GoalToolError({ message: "Signal belongs to another owner" });
-      return yield* root.ask<ActorRef<unknown>>((replyTo) => ({
+      const result = yield* root.ask<SignalConfigureReply>((replyTo) => ({
         _tag: "Upsert",
+        causal,
         definition,
         goal,
         active,
@@ -77,6 +96,9 @@ export const makeGoalRuntime = (
         subscriber,
         replyTo,
       }));
+      if (result._tag === "Rejected")
+        return yield* new GoalToolError({ message: result.error.message });
+      return result.ref;
     });
 
   return {
@@ -110,20 +132,42 @@ export const makeGoalRuntime = (
           );
         return refs;
       }),
+    applySignal: (input, subscriber) =>
+      root
+        .ask<SignalCommandReply>((replyTo) => ({
+          _tag: "ApplyGoalCommand",
+          input,
+          subscriber,
+          replyTo,
+        }))
+        .pipe(
+          Effect.catchTag("AskTimeoutError", () =>
+            Effect.fail(
+              new ApplicationError({
+                kind: "unavailable",
+                message: "Signal acknowledgement was not received",
+              }),
+            ),
+          ),
+          Effect.flatMap((result) =>
+            result._tag === "Accepted" ? Effect.succeed(result.receipt) : Effect.fail(result.error),
+          ),
+        ),
     editSignal: (goal, request, subscriber) =>
       Effect.gen(function* () {
         const all = records(goal);
         if (request.operation === "signal_list")
-          return all.filter((r) => !r.state.deleted).map((r) => r.state);
+          return all.filter((r) => !r.state.deleted).map((r) => registry.project(r).state);
         if (!request.id || !/^[a-z0-9][a-z0-9-]*$/.test(request.id))
           return yield* new GoalToolError({ message: "Invalid Signal ID" });
         const slug = request.id.startsWith(`${goal}--`) ? request.id : `${goal}--${request.id}`;
         const existing = all.find((r) => r.state.slug === slug);
         if (request.operation === "signal_get") {
           if (!existing) return yield* new GoalToolError({ message: "Signal not found" });
-          return existing.state;
+          return registry.project(existing).state;
         }
-        if (request.operation === "signal_create" && existing) return existing.state;
+        if (request.operation === "signal_create" && existing)
+          return registry.project(existing).state;
         if (
           request.operation !== "signal_create" &&
           (!existing || existing.state.deleted || request.revision !== existing.state.revision)
@@ -166,40 +210,89 @@ export const makeGoalRuntime = (
         }
         if (!definition.when.trim() || !definition.task.trim())
           return yield* new GoalToolError({ message: "Signal condition must not be empty" });
-        yield* upsert(definition, goal, !deleting, subscriber, deleting);
-        return registry.get(`/signals/${slug}`)!.state;
+        const currentGoal = registry.get(`/goals/${goal}`);
+        yield* upsert(
+          definition,
+          goal,
+          !deleting,
+          subscriber,
+          deleting,
+          currentGoal && goalOutputCause(Schema.decodeUnknownSync(GoalState)(currentGoal.state)),
+        );
+        return registry.project(registry.get(`/signals/${slug}`)!).state;
       }),
   };
+};
+
+export type GoalRelevance = CoreConfig["goals"][number] & {
+  readonly score: number;
+  readonly rationale: string;
+  readonly screening: GoalScreeningRecord;
 };
 
 export const relevantGoals = (
   client: SystemOneClient,
   record: ContextRecord,
   goals: CoreConfig["goals"],
+  options: {
+    readonly goalRecords?: Readonly<Record<string, ContextRecord>>;
+    readonly screening?: GoalScreeningStore["Service"];
+    readonly threshold?: number;
+    readonly policyVersion?: string;
+    readonly model?: string;
+    readonly now?: () => number;
+  } = {},
 ) =>
   Effect.gen(function* () {
-    if (!goals.length) return [];
-    const result = yield* client.systemOne({
-      state: JSON.stringify({
-        path: record.path,
-        description: record.description,
-        state: record.state,
-      }),
-      questions: Object.fromEntries(
-        goals.map((goal, index) => [
-          `goal_${index}`,
-          choice(
-            `Does this Context contain information relevant to this Goal: ${goal.description}?`,
-            {
-              yes: "Relevant evidence may change progress, blockers, or useful Signals.",
-              no: "Unrelated to this Goal.",
-            },
-          ),
-        ]),
-      ),
-    });
-    return goals.filter((_, index) => {
-      const answer = result.answers[`goal_${index}`];
-      return answer?.type === "choice" && answer.choice === "yes";
-    });
+    const summary = chatSummaryText(record);
+    if (!goals.length || !summary.trim()) return [];
+    const summaryFingerprint = createHash("sha256")
+      .update(JSON.stringify({ path: record.path, summary }))
+      .digest("hex");
+    const summaryRevision = summaryFingerprint;
+    const threshold = options.threshold ?? 0.7;
+    const policyVersion = options.policyVersion ?? "goal-relevance-v1";
+    const model = options.model ?? "system-one";
+    const now = options.now ?? Date.now;
+    const relevant: GoalRelevance[] = [];
+    for (const goal of goals) {
+      const requestId = createHash("sha256")
+        .update(`${record.path}:${goal.slug}:${summaryRevision}`)
+        .digest("hex");
+      const screening = yield* screeningDecision({
+        client,
+        goal,
+        source: record,
+        goalRecord: options.goalRecords?.[`/goals/${goal.slug}`],
+        screeningRecordId: requestId,
+        requestId,
+        summaryRevision,
+        summaryFingerprint,
+        threshold,
+        policyVersion,
+        model,
+        now,
+        store: options.screening,
+      });
+      yield* Effect.logInfo(
+        JSON.stringify({
+          event: "goal.screening.completed",
+          screeningRecordId: screening.screeningRecordId,
+          sourcePath: screening.sourcePath,
+          goalSlug: screening.goalSlug,
+          score: screening.score,
+          admitted: screening.admitted,
+          latencyMs: screening.latencyMs,
+          error: screening.error,
+        }),
+      );
+      if (screening.admitted)
+        relevant.push({
+          ...goal,
+          score: screening.score,
+          rationale: screening.rationale,
+          screening,
+        });
+    }
+    return relevant;
   });

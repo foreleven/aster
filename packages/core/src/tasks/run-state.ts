@@ -1,3 +1,10 @@
+import {
+  BusinessNotification,
+  CausalChain,
+  TaskAdmission,
+  RunResumption,
+  WritebackOperation,
+} from "@aster/api-contracts";
 import { Match, Option, Schema } from "effect";
 import { ContextRecord } from "../context/model.js";
 import { SignalDefinition } from "../config/schema.js";
@@ -5,11 +12,17 @@ import { Task } from "./model.js";
 
 export const GoalTaskReference = Schema.Struct({
   goalPath: Schema.String,
+  evaluationId: Schema.optional(Schema.String),
   taskId: Schema.String,
   revision: Schema.Number,
 });
 
 const fields = {
+  writeback: Schema.optional(WritebackOperation),
+  causal: Schema.optional(CausalChain),
+  businessOutbox: Schema.optional(Schema.Array(BusinessNotification)),
+  resumptions: Schema.optional(Schema.Array(RunResumption)),
+  admission: Schema.optional(TaskAdmission),
   outcomeText: Schema.optional(Schema.String),
   signalSlug: Schema.String,
   sourcePath: Schema.String,

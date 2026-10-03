@@ -4,7 +4,7 @@ import { Models } from "@aster/integrations";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { ContextRegistry, makeContextRegistry } from "@aster/core";
+import { ContextRegistry, makeContextRegistry, contextSpawnOptions } from "@aster/core";
 import {
   ChatSummarizer,
   ImAgentQueue,
@@ -16,9 +16,10 @@ import {
   LarkAccountCli,
   LarkMailCli,
   LarkRootActor,
+  LarkEmailChannelActor,
   type EmailData,
 } from "@aster/integrations";
-import { Effect, Fiber, Layer, Option, Stream } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option, Stream } from "effect";
 import { SystemOneClient } from "@aster/core";
 import { makeSystemOneGate } from "@aster/core";
 import { SignalDefinitions, SignalRootActor } from "@aster/core";
@@ -264,3 +265,45 @@ test("System One receives email fields and every Signal condition, then selects 
   assert.equal(JSON.parse(payload.state).context.state.bodyPlainText, email.bodyPlainText);
   assert.match(payload.questions.signal_1!.instructions, /Invoice/);
 });
+
+for (const mailbox of ["me", "other"])
+  test(`mailbox restart preserves only the matching profile before remote refresh: ${mailbox}`, async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const saved = {
+            path: "/lark/mail",
+            description: "Mailbox",
+            revision: 7,
+            state: { mailbox: "me", profile: { address: "saved@example.com", name: "Saved" } },
+            messages: [],
+          };
+          const registry = yield* makeContextRegistry({ loadAll: () => [saved], save: () => {} });
+          const entered = yield* Deferred.make<void>();
+          const system = yield* ActorSystem.make().pipe(
+            ActorSystem.provide(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(LarkConfig, {
+                description: "Account",
+                mail: { mailbox, description: "Mailbox", pollIntervalMs: 60_000 },
+              }),
+              Layer.succeed(LarkMailCli, {
+                getMailboxProfile: () =>
+                  Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+                listRecentIds: () => Effect.succeed([]),
+                getMessages: () => Effect.succeed([]),
+              }),
+            ),
+          );
+          yield* system.spawn("mail", LarkEmailChannelActor, contextSpawnOptions("/lark/mail"));
+          yield* Deferred.await(entered);
+          const restored = registry.get("/lark/mail")!;
+          if (mailbox === "me") assert.deepEqual(restored, saved);
+          else {
+            assert.deepEqual(restored.state, { mailbox: "other" });
+            assert.equal(restored.revision, 8);
+          }
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  });

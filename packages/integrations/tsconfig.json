@@ -3,6 +3,7 @@
     "target": "ES2024",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
+    "customConditions": ["aster-source"],
     "strict": true,
     "noEmit": true,
     "verbatimModuleSyntax": true,
@@ -14,5 +15,5 @@
       }
     ]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts"]
+  "include": ["src/**/*.ts", "src/**/*.d.ts", "test/**/*.ts"]
 }

@@ -10,12 +10,19 @@ import type { GoalToolRequest } from "./tasks.js";
 
 /** Reasoning and callbacks share the caller fiber environment; only the Agent adapter bridges SDK Promises. */
 export interface GoalReasoner {
+  /** Durable Pi owns the native transcript; GoalHistory receives only business inputs. */
+  readonly durableSessions?: boolean;
   plan(input: {
     readonly goal: GoalDefinition;
     readonly current: ContextRecord;
     readonly contexts: Readonly<Record<string, ContextRecord>>;
     readonly signals: readonly SignalDefinition[];
     readonly reason: string;
+    readonly durable?: {
+      readonly sessionId: string;
+      readonly requestId: string;
+      readonly storageDirectory?: string;
+    };
     readonly messages?: readonly AgentMessage[];
     readonly history?: GoalHistory;
     readonly tool?: (request: GoalToolRequest) => Effect.Effect<unknown, GoalToolError>;

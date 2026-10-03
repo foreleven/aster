@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AlertDialog, DropdownMenu } from "radix-ui";
 import {
@@ -16,12 +16,12 @@ import {
 } from "lucide-react";
 import { contextQueryKeys } from "@aster/api-contracts";
 import { sendGoalMessage, endGoal } from "../api/client";
-import type { ContextView } from "../dashboard/model";
+import { summaryText, type ContextView } from "../dashboard/model";
 import { references } from "../lib/dashboard";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
 import { Timeline } from "./timeline";
 import { WorkPanel } from "./work-panel";
-import { dateLabel, EmptyState, lastActivity, Pill, slugFor } from "./presentation";
+import { dateLabel, EmptyState, lastActivity, Pill, slugFor, titleFor } from "./presentation";
 
 export function GoalWorkspace({
   goal,
@@ -34,6 +34,7 @@ export function GoalWorkspace({
   inspect: (path: string) => void;
   showGoals: () => void;
 }) {
+  const pendingSubmission = useRef<{ text: string; requestId: string } | undefined>(undefined);
   const [text, setText] = useState("");
   const [error, setError] = useState("");
   const [tab, setTab] = useState("timeline");
@@ -73,7 +74,12 @@ export function GoalWorkspace({
     try {
       const reactivityKeys = contextQueryKeys(goal.path);
       if (kind === "message") {
-        await send({ payload: { slug, text: text.trim() }, reactivityKeys });
+        const message = text.trim();
+        if (pendingSubmission.current?.text !== message) {
+          pendingSubmission.current = { text: message, requestId: crypto.randomUUID() };
+        }
+        await send({ payload: { slug, ...pendingSubmission.current }, reactivityKeys });
+        pendingSubmission.current = undefined;
         setText("");
       } else {
         await end({ payload: { slug }, reactivityKeys });
@@ -97,7 +103,7 @@ export function GoalWorkspace({
           </button>
           <span>Goals</span>
           <ChevronRight size={14} />
-          <span className="breadcrumb-title">{goal.description}</span>
+          <span className="breadcrumb-title">{titleFor(goal)}</span>
           <div className="breadcrumb-actions">
             <DropdownMenu.Root>
               <DropdownMenu.Trigger className="icon-button" aria-label="Goal actions">
@@ -132,7 +138,7 @@ export function GoalWorkspace({
           <section className="goal-header">
             <div className="goal-title-row">
               <Orbit className="goal-title-icon" size={26} />
-              <h1>{goal.description || slug}</h1>
+              <h1>{titleFor(goal)}</h1>
               <Pill status={goal.state.status} />
             </div>
             <div className="goal-header-actions">
@@ -155,8 +161,10 @@ export function GoalWorkspace({
                 Last activity {dateLabel(activity)}
               </div>
             )}
-            {(goal.state.summary || goal.state.progress) && (
-              <p className="goal-description">{goal.state.summary || goal.state.progress}</p>
+            {(summaryText(goal.state.summary) || goal.state.progress) && (
+              <p className="goal-description">
+                {summaryText(goal.state.summary) || goal.state.progress}
+              </p>
             )}
           </section>
           <Tabs value={tab} onValueChange={setTab} className="goal-tabs">
@@ -327,7 +335,8 @@ export function GoalWorkspace({
               <AlertDialog.Title>End this goal?</AlertDialog.Title>
               <AlertDialog.Description>
                 This marks the goal complete and deactivates its generated signals. Work already
-                submitted may still finish. The conversation will remain available under Archived.
+                submitted may still finish. The conversation will remain available in the Context
+                tree.
               </AlertDialog.Description>
               {error && (
                 <p role="alert" className="goals-error">

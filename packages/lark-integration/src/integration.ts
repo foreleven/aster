@@ -1,3 +1,4 @@
+import { larkContextViews } from "./public-views.js";
 import { RuntimeConfigurationError } from "@aster/core";
 import { Layer, Effect, Context, Deferred, Stream, Fiber } from "effect";
 import {
@@ -5,6 +6,7 @@ import {
   RuntimeIntegrations,
   defineIntegration,
   SystemOneClient,
+  ChannelWrites,
 } from "@aster/core";
 import { LarkRootActor } from "./account/root-actor.js";
 import { parseImPolicy } from "./im/policy.js";
@@ -16,6 +18,7 @@ import { ImSearch } from "./im/client.js";
 import { ImAgentQueue } from "./im/agent-queue.js";
 import { ImSummaryGate } from "./im/summary-gate.js";
 import { ImStorage } from "./im/storage.js";
+import { larkChannelWritesLayer } from "./im/writeback.js";
 const services = Layer.effect(
   LarkMailCli,
   Effect.gen(function* () {
@@ -36,6 +39,7 @@ const services = Layer.effect(
   Layer.merge(ImSummaryGate.layer),
   Layer.merge(ImAgentQueue.layer.pipe(Layer.provideMerge(ImStorage.layer))),
   Layer.merge(ImSearch.layer),
+  Layer.merge(larkChannelWritesLayer),
   Layer.provideMerge(LarkConfig.layer),
 );
 
@@ -45,6 +49,7 @@ export const LarkIntegration = {
     Effect.gen(function* () {
       const modules = yield* RuntimeIntegrations;
       const registry = yield* ContextRegistry;
+      yield* registry.registerViews(larkContextViews);
       const im = (yield* LarkConfig).im;
       if (im !== undefined) {
         yield* Effect.try(() => parseImPolicy(im));
@@ -64,6 +69,7 @@ export const LarkIntegration = {
         ImStorage,
         ImAgentQueue,
         ImSummaryGate,
+        ChannelWrites,
       )(
         yield* Effect.context<
           | ContextRegistry
@@ -75,6 +81,7 @@ export const LarkIntegration = {
           | ImStorage
           | ImAgentQueue
           | ImSummaryGate
+          | ChannelWrites
         >(),
       );
       yield* modules.register(

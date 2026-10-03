@@ -1,3 +1,5 @@
+import { chatView } from "../public-views.js";
+import { isLarkWritebackEcho } from "./writeback.js";
 import { randomUUID } from "node:crypto";
 import { ReplyTo } from "@aster/actor";
 import { ImSummaryError } from "../shared/errors.js";
@@ -48,6 +50,7 @@ export class LarkChatActor extends ContextActor.Service<
 >()("lark/ChatActor", {
   command: ChatCommand,
   context: defineContext({
+    view: chatView,
     identity: "Work Lark conversation",
     state: Schema.Struct({ chat: ImChat, summary: Schema.optional(ChatSummary) }),
     message: ImMessage,
@@ -86,21 +89,25 @@ export class LarkChatActor extends ContextActor.Service<
             }
             for (const message of day.pending) messages.set(message.id, message);
           }
-          yield* registry.set(
-            {
-              path,
-              description:
-                previous?.description || `Work Lark conversation: ${chat.name || chat.id}`,
-              state: {
-                chat,
-                ...(object(previous?.state).summary
-                  ? { summary: object(previous?.state).summary }
-                  : {}),
+          yield* registry
+            .commit(
+              {
+                path,
+                description:
+                  previous?.description || `Work Lark conversation: ${chat.name || chat.id}`,
+                state: {
+                  chat,
+                  ...(object(previous?.state).summary
+                    ? { summary: object(previous?.state).summary }
+                    : {}),
+                },
+                messages: [...messages.values()].sort(
+                  (a, b) => Date.parse(a.at) - Date.parse(b.at),
+                ),
               },
-              messages: [...messages.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
-            },
-            { evaluate: false },
-          );
+              { evaluate: false, expectedRevision: previous?.revision ?? 0 },
+            )
+            .pipe(Effect.asVoid, Effect.orDie);
         });
       const commitSummary = (date: string, commit: SummaryCommit) =>
         Effect.gen(function* () {
@@ -113,16 +120,18 @@ export class LarkChatActor extends ContextActor.Service<
           const covered = new Map(
             commit.batch.map((message) => [message.id, messageFingerprint(message)]),
           );
-          yield* registry.set(
-            {
-              ...current,
-              state: { chat: day.chat, summary: commit.rolling },
-              messages: (current.messages as readonly ImMessage[]).filter(
-                (message) => covered.get(message.id) !== messageFingerprint(message),
-              ),
-            },
-            { evaluate: commit.evaluate },
-          );
+          yield* registry
+            .commit(
+              {
+                ...current,
+                state: { chat: day.chat, summary: commit.rolling },
+                messages: (current.messages as readonly ImMessage[]).filter(
+                  (message) => covered.get(message.id) !== messageFingerprint(message),
+                ),
+              },
+              { evaluate: commit.evaluate, expectedRevision: current.revision ?? 0 },
+            )
+            .pipe(Effect.asVoid, Effect.orDie);
           storage.finish(date, id, commit);
           yield* Effect.logInfo(
             JSON.stringify({
@@ -278,6 +287,7 @@ export class LarkChatActor extends ContextActor.Service<
             );
             yield* context.pipeToSelf(
               prepareChatSummary({
+                isExternalInput: (message) => !isLarkWritebackEcho(registry, path, message),
                 path,
                 date,
                 id,

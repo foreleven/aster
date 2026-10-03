@@ -160,3 +160,113 @@ test("IM private storage decodes operational checkpoints before returning them",
   );
   assert.throws(() => storage.get(date, chat.id));
 });
+
+for (const status of ["published", "unknown", "sending"] as const) {
+  test(`Chat Actor retains ${status} publication echoes without triggering a reaction`, async (t) => {
+    const dir = mkdtempSync(join(tmpdir(), "aster-im-echo-"));
+    t.after(() => rmSync(dir, { recursive: true, force: true }));
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const clock = yield* TestClock.make();
+          const at = "2026-10-03T00:00:00.000Z";
+          yield* clock.adjust(Date.parse(at));
+          const date = imDate(at);
+          const source = "/signals/report/runs/one";
+          const assessed = yield* Deferred.make<void>();
+          const flushed = yield* Deferred.make<void>();
+          const reacted = yield* Deferred.make<void>();
+          const base = makeImStorage(dir);
+          const echo = { ...message, id: "om_echo", at, content: "Published report" };
+          base.ingest({ chat, messages: [echo] });
+          let finishes = 0;
+          const storage: ImStorage["Service"] = {
+            ...base,
+            save: (day) => {
+              base.save(day);
+              if (day.assessment) Deferred.doneUnsafe(assessed, Effect.void);
+            },
+            finish: (...args) => {
+              base.finish(...args);
+              Deferred.doneUnsafe(++finishes === 1 ? flushed : reacted, Effect.void);
+            },
+          };
+          const registry = yield* makeContextRegistry({
+            loadAll: () => [
+              {
+                path: source,
+                revision: 1,
+                description: "Published Run",
+                messages: [],
+                state: {
+                  writeback: {
+                    status,
+                    submittedAt: at,
+                    ...(status === "published" ? { externalId: echo.id } : {}),
+                    authorization: {
+                      approvalId: `${source}:writeback:publish-1`,
+                      approvalsRevision: 2,
+                      approvedAt: at,
+                    },
+                    request: {
+                      requestId: "publish-1",
+                      source,
+                      signalPath: "/signals/report",
+                      causationId: "user-1",
+                      createdAt: at,
+                      action: { _tag: "PublishResult", channelPath: path, identity: "user" },
+                      content: echo.content,
+                      causal: { rootRequestId: "user-1", remainingAgentTurns: 0 },
+                    },
+                  },
+                },
+              },
+            ],
+            save: () => {},
+          });
+          const gated: string[][] = [];
+          const system = yield* ActorSystem.make().pipe(
+            ActorSystem.provide(
+              Layer.succeed(Clock.Clock, clock),
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(ImStorage, storage),
+              Layer.succeed(ImAgentQueue, { run: (_id, work) => work }),
+              Layer.succeed(ImSummaryGate, {
+                needed: (input) =>
+                  Effect.sync(() => {
+                    gated.push(input.messages.map((item) => item.id));
+                    return true;
+                  }),
+              }),
+              Layer.succeed(ChatSummarizer, {
+                summarize: (input) =>
+                  Effect.succeed({
+                    text: input.messages.map((item) => item.content).join("\n"),
+                    references: [],
+                  }),
+              }),
+            ),
+          );
+          const actor = yield* system.spawn("chat", LarkChatActor, contextSpawnOptions(path));
+          yield* Deferred.await(assessed);
+          assert.equal(gated.length, 0, "Echo-only batches do not ask System One");
+          yield* actor.tell({ _tag: "Flush", date });
+          yield* Deferred.await(flushed);
+          assert.equal(registry.get(path)!.reactionEvents?.length ?? 0, 0);
+          assert.equal(storage.get(date, chat.id)!.pending.length, 0);
+          assert.equal(storage.get(date, chat.id)!.summary!.text, echo.content);
+          yield* actor.tell({
+            _tag: "Update",
+            chat,
+            messages: [{ ...echo, id: "human", content: "New human evidence" }],
+          });
+          yield* actor.tell({ _tag: "Summarize" });
+          yield* Deferred.await(reacted);
+          // Flush remains active for late arrivals; the human update still produces one reaction.
+          assert.deepEqual(gated, []);
+          assert.equal(registry.get(path)!.reactionEvents!.length, 1);
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  });
+}

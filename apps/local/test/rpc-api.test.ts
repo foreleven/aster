@@ -4,16 +4,23 @@ import { Effect, Layer, Schema, Stream } from "effect";
 import { FetchHttpClient } from "effect/unstable/http";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import { ApplicationRpcs } from "@aster/api-contracts";
+import { ActorSystem } from "@aster/actor";
 import {
   ApplicationError,
   defineContext,
+  contextView,
   makeApplicationApi,
   makeContextRegistry,
+  ContextRegistry,
+  PersonalAgentActor,
+  PersonalProcessor,
+  PersonalActions,
 } from "@aster/core";
 import { startGoalApi } from "../src/http-api.js";
 
 const definition = defineContext({
   identity: "API test Goal",
+  view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
   state: Schema.Struct({ value: Schema.Number }),
   message: Schema.Unknown,
 });
@@ -24,10 +31,67 @@ const record = {
   messages: [],
 };
 
+test("Personal RPC returns the same durable receipt for duplicate business requests", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeContextRegistry();
+        const system = yield* ActorSystem.make().pipe(
+          ActorSystem.provide(
+            PersonalActions.unavailable,
+            Layer.succeed(ContextRegistry, registry),
+            PersonalProcessor.disabled,
+          ),
+        );
+        const personal = yield* system.spawn("personal", PersonalAgentActor);
+        const application = makeApplicationApi({
+          registry,
+          personal,
+          inspect: Effect.succeed(null),
+        });
+        const api = yield* Effect.acquireRelease(
+          Effect.promise(() => startGoalApi({ port: 0, application })),
+          (api) => Effect.promise(() => api.close()),
+        );
+        const call = (id: number, tag: string, payload: unknown) =>
+          Effect.promise(async () => {
+            const response = await fetch(`${api.url}/api/rpc`, {
+              method: "POST",
+              headers: { "content-type": "application/ndjson" },
+              body: JSON.stringify({ _tag: "Request", id, tag, payload, headers: [] }) + "\n",
+            });
+            return JSON.parse(await response.text());
+          });
+        const before = yield* call(1, "GetPersonal", null);
+        assert.equal(before.exit._tag, "Success");
+        assert.equal(before.exit.value.revision, 1);
+        const input = {
+          requestId: "stable-business-request",
+          causationId: "user",
+          expectedRevision: 1,
+          text: "Watch the release",
+        };
+        const first = yield* call(2, "SendPersonalMessage", input);
+        const duplicate = yield* call(3, "SendPersonalMessage", input);
+        assert.equal(first.exit._tag, "Success");
+        assert.deepEqual(first.exit.value, {
+          requestId: input.requestId,
+          revision: 2,
+          sequence: 1,
+        });
+        assert.deepEqual(duplicate.exit, first.exit);
+        assert.equal((yield* application.personal.get).messages.length, 1);
+      }),
+    ),
+  );
+});
+
 test("RPC shares typed query contracts and propagates application failures without retrying mutations", async () => {
   const registry = await Effect.runPromise(makeContextRegistry());
   await Effect.runPromise(registry.register(record.path, definition));
-  await Effect.runPromise(registry.set(record));
+  await Effect.runPromise(
+    registry.commit(record, { expectedRevision: registry.get(record.path)?.revision ?? 0 }),
+  );
   let submissions = 0;
   const application = makeApplicationApi({
     registry,
@@ -52,8 +116,14 @@ test("RPC shares typed query contracts and propagates application failures witho
       Effect.scoped(
         Effect.gen(function* () {
           const client = yield* RpcClient.make(ApplicationRpcs, { flatten: true });
-          assert.deepEqual(yield* client("ListContexts", undefined), [record]);
-          assert.deepEqual(yield* client("GetContext", { path: record.path }), record);
+          assert.deepEqual(yield* client("ListContexts", undefined), [
+            { ...record, revision: 1, projection: { version: 1, visibility: "public" } },
+          ]);
+          assert.deepEqual(yield* client("GetContext", { path: record.path }), {
+            ...record,
+            revision: 1,
+            projection: { version: 1, visibility: "public" },
+          });
           assert.deepEqual(yield* client("InspectRuntime", undefined), {
             phase: "ready",
             actors: [],
@@ -96,6 +166,76 @@ test("RPC shares typed query contracts and propagates application failures witho
   }
 });
 
+test("ListContexts encodes cleared optional fields in public state and nested messages", async () => {
+  const registry = await Effect.runPromise(makeContextRegistry());
+  const path = "/goals/cleared";
+  await Effect.runPromise(
+    registry.register(
+      path,
+      defineContext({
+        identity: "Goal with optional fields",
+        view: contextView({
+          state: Schema.Struct({
+            lastError: Schema.optional(Schema.String),
+            nested: Schema.Struct({ active: Schema.Boolean }),
+          }),
+          message: Schema.Struct({
+            role: Schema.String,
+            content: Schema.Array(
+              Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+            ),
+          }),
+        }),
+        state: Schema.Struct({ lastError: Schema.optional(Schema.String), nested: Schema.Unknown }),
+        message: Schema.Unknown,
+      }),
+    ),
+  );
+  await Effect.runPromise(
+    registry.commit(
+      {
+        path,
+        description: "Cleared error",
+        state: { lastError: undefined, nested: { goal: undefined, active: false } },
+        messages: [
+          { role: "assistant", content: [{ type: "text", text: "done", signature: undefined }] },
+        ],
+      },
+      { expectedRevision: registry.get(path)?.revision ?? 0 },
+    ),
+  );
+  const api = await startGoalApi({
+    port: 0,
+    application: makeApplicationApi({ registry, inspect: Effect.succeed(null) }),
+  });
+  try {
+    const response = await fetch(`${api.url}/api/rpc`, {
+      method: "POST",
+      headers: { "content-type": "application/ndjson" },
+      body:
+        JSON.stringify({
+          _tag: "Request",
+          id: 0,
+          tag: "ListContexts",
+          payload: null,
+          headers: [],
+        }) + "\n",
+    });
+    const reply = JSON.parse(await response.text());
+    assert.equal(reply.exit._tag, "Success", JSON.stringify(reply));
+    assert.deepEqual(reply.exit.value[0], {
+      path,
+      revision: 1,
+      description: "Cleared error",
+      projection: { version: 1, visibility: "public" },
+      state: { nested: { active: false } },
+      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
+    });
+  } finally {
+    await api.close();
+  }
+});
+
 test(
   "SSE subscribes before ready, broadcasts committed keys, and releases disconnected subscribers",
   { timeout: 5000 },
@@ -132,7 +272,9 @@ test(
         }),
       );
       assert.equal(active, 2);
-      await Effect.runPromise(registry.set(record));
+      await Effect.runPromise(
+        registry.commit(record, { expectedRevision: registry.get(record.path)?.revision ?? 0 }),
+      );
       for (const reader of readers) {
         const frame = new TextDecoder().decode((await reader.read()).value);
         assert.match(frame, /event: invalidate/);
@@ -171,14 +313,23 @@ test("failed persistence and unchanged writes do not invalidate application quer
             received.push(change);
           }),
         ).pipe(Effect.forkScoped);
-        yield* registry.set(record);
-        yield* registry.set(record);
+        yield* registry.commit(record, {
+          expectedRevision: registry.get(record.path)?.revision ?? 0,
+        });
+        yield* registry.commit(record, {
+          expectedRevision: registry.get(record.path)?.revision ?? 0,
+        });
         fail = true;
-        const failed = yield* Effect.exit(registry.set({ ...record, state: { value: 2 } }));
+        const failed = yield* Effect.exit(
+          registry.commit(
+            { ...record, state: { value: 2 } },
+            { expectedRevision: registry.get(record.path)?.revision ?? 0 },
+          ),
+        );
         assert.equal(failed._tag, "Failure");
         yield* Effect.yieldNow;
         assert.equal(received.length, 1);
-        assert.deepEqual(registry.get(record.path), record);
+        assert.deepEqual(registry.get(record.path), { ...record, revision: 1 });
       }),
     ),
   );

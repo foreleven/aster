@@ -139,6 +139,9 @@ importers:
 
   packages/agent:
     dependencies:
+      '@earendil-works/chord':
+        specifier: 1.0.0
+        version: 1.0.0
       '@earendil-works/pi-agent-core':
         specifier: 1.0.0
         version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.30.1(zod@4.6.5))(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.5)
@@ -172,6 +175,10 @@ importers:
       effect:
         specifier: 4.0.0-rc.117
         version: 4.0.0-rc.117
+    devDependencies:
+      '@earendil-works/pi-ai':
+        specifier: 1.0.0
+        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.30.1(zod@4.6.5))(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.5)
 
   packages/integrations:
     dependencies:
@@ -187,6 +194,12 @@ importers:
       '@aster/memory':
         specifier: workspace:*
         version: link:../memory
+      '@earendil-works/chord':
+        specifier: 1.0.0
+        version: 1.0.0
+      '@earendil-works/pi-durable':
+        specifier: 1.0.0
+        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.30.1(zod@4.6.5))(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.5)
       '@typesafe-ai/sdk':
         specifier: ^0.6.0
         version: 0.6.0
@@ -206,6 +219,12 @@ importers:
         specifier: 2.8.3
         version: 2.8.3
     devDependencies:
+      '@aster/actor':
+        specifier: workspace:*
+        version: link:../actor
+      '@earendil-works/pi-ai':
+        specifier: 1.0.0
+        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.30.1(zod@4.6.5))(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.5)
       '@types/mailparser':
         specifier: ^3.9.0
         version: 3.9.0

@@ -10,15 +10,8 @@ export const ModelConfig = Schema.Struct({
 });
 export type ModelConfig = typeof ModelConfig.Type;
 
-export const SignalSchedule = Schema.Union([
-  Schema.Struct({ type: Schema.Literal("once"), at: Schema.String }),
-  Schema.Struct({
-    type: Schema.Literal("cron"),
-    expression: Schema.String,
-    timeZone: Schema.String,
-  }),
-]);
-export type SignalSchedule = typeof SignalSchedule.Type;
+import { SignalSchedule, SignalAction } from "@aster/api-contracts";
+export { SignalSchedule } from "@aster/api-contracts";
 export const validateSignalTime = (signal: { schedule?: SignalSchedule; notBefore?: string }) => {
   const absolute = (value: string) => {
     if (!/(Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value)))
@@ -31,6 +24,7 @@ export const validateSignalTime = (signal: { schedule?: SignalSchedule; notBefor
 };
 
 export const SignalEntry = Schema.Struct({
+  action: Schema.optional(SignalAction),
   when: Schema.String,
   schedule: Schema.optional(SignalSchedule),
   notBefore: Schema.optional(Schema.String),
@@ -39,6 +33,8 @@ export const SignalEntry = Schema.Struct({
   agent: Schema.String,
   mode: Schema.Union([Schema.Literal("auto"), Schema.Literal("confirm")]),
 });
+
+export const GoalTitle = Schema.String.check(Schema.isPattern(/\S/));
 
 const ConfigFile = Schema.Struct({
   config: Schema.optional(
@@ -56,7 +52,15 @@ const ConfigFile = Schema.Struct({
     }),
   ),
   agents: Schema.optional(
-    Schema.Struct({ doubao: Schema.optional(Schema.Struct({ prompt: Schema.String })) }),
+    Schema.Struct({
+      doubao: Schema.optional(Schema.Struct({ prompt: Schema.String })),
+      pi: Schema.optional(
+        Schema.Struct({
+          model: Schema.NonEmptyString,
+          storageDirectory: Schema.optional(Schema.NonEmptyString),
+        }),
+      ),
+    }),
   ),
   contexts: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
   signals: Schema.optional(Schema.Record(Schema.String, SignalEntry)),
@@ -64,6 +68,7 @@ const ConfigFile = Schema.Struct({
     Schema.Record(
       Schema.String,
       Schema.Struct({
+        title: Schema.optional(GoalTitle),
         description: Schema.String,
         completionCriteria: Schema.optional(Schema.String),
       }),
@@ -77,7 +82,7 @@ export type SignalDefinition = typeof SignalDefinition.Type;
 export interface CoreConfig {
   readonly config: NonNullable<typeof ConfigFile.Type.config>;
   readonly contexts: Readonly<Record<string, unknown>>;
-  readonly agents?: { readonly doubao?: { readonly prompt: string } };
+  readonly agents?: typeof ConfigFile.Type.agents;
   readonly baseDir: string;
   readonly signals: ReadonlyArray<SignalDefinition>;
   readonly goals: ReadonlyArray<GoalDefinition>;
@@ -85,6 +90,7 @@ export interface CoreConfig {
 
 export interface GoalDefinition {
   readonly slug: string;
+  readonly title?: string;
   readonly description: string;
   readonly completionCriteria?: string;
 }

@@ -14,6 +14,36 @@ const until = (condition: () => boolean) =>
     while (!condition()) yield* Effect.sleep(1);
   }).pipe(Effect.timeout("2 seconds"));
 
+test("Signal configuration omits an unassigned goal from public state", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeContextRegistry();
+        const definition = {
+          slug: "review",
+          when: "A review is needed",
+          task: "Review the change",
+          agent: "doubao-delegate",
+          mode: "auto" as const,
+        };
+        const system = yield* ActorSystem.make().pipe(
+          ActorSystem.provide(
+            Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(SignalDefinitions, [definition]),
+            preparationLayer,
+            Layer.succeed(ExternalAgents, {}),
+          ),
+        );
+        yield* system.spawn("signals", SignalRootActor);
+        yield* until(() => registry.get("/signals/review") !== undefined);
+        const state = registry.get("/signals/review")!.state;
+        assert.equal(Object.hasOwn(state, "goal"), false);
+        assert.doesNotThrow(() => JSON.stringify(state));
+      }),
+    ),
+  );
+});
+
 test("a user message during planning is retained for a second evaluation without steer", async () => {
   await Effect.runPromise(
     Effect.scoped(
@@ -158,53 +188,62 @@ test("restart resumes a persisted delegation session without another submission"
         };
         const source = { path: "/source", description: "Source", state: {}, messages: [] };
         yield* registry.register("/signals/review", SignalActor.context);
-        yield* registry.set({
-          path: "/signals/review",
-          description: "Analysis",
-          state: definition,
-          messages: [],
-        });
-        yield* registry.register("/signals/review/runs/saved", SignalRunActor.context);
-        yield* registry.set({
-          path: "/signals/review/runs/saved",
-          description: "Run",
-          state: {
-            signalSlug: "review",
-            sourcePath: "/source",
-            status: "running",
-            definition,
-            source,
-            task: { instructions: "Analysis", input: [] },
+        yield* registry.commit(
+          {
+            path: "/signals/review",
+            description: "Analysis",
+            state: definition,
+            messages: [],
           },
-          messages: [
-            {
-              type: "Triggered",
-              at: new Date().toISOString(),
+          { expectedRevision: registry.get("/signals/review")?.revision ?? 0 },
+        );
+        yield* registry.register("/signals/review/runs/saved", SignalRunActor.context);
+        yield* registry.commit(
+          {
+            path: "/signals/review/runs/saved",
+            description: "Run",
+            state: {
+              signalSlug: "review",
               sourcePath: "/source",
-              task: "Analysis",
-              agent: "doubao-delegate",
-              mode: "auto",
-              sourceContext: source,
-            },
-          ],
-        });
-        yield* registry.register("/delegations/saved", DelegationActor.context);
-        yield* registry.set({
-          path: "/delegations/saved",
-          description: "Execution",
-          state: {
-            status: "running",
-            request: {
-              runPath: "/signals/review/runs/saved",
-              agent: "doubao-delegate",
+              status: "running",
+              definition,
+              source,
               task: { instructions: "Analysis", input: [] },
             },
-            session: { sessionId: "saved-session" },
-            requests: {},
-            responses: {},
+            messages: [
+              {
+                type: "Triggered",
+                at: new Date().toISOString(),
+                sourcePath: "/source",
+                task: "Analysis",
+                agent: "doubao-delegate",
+                mode: "auto",
+                sourceContext: source,
+              },
+            ],
           },
-          messages: [],
-        });
+          { expectedRevision: registry.get("/signals/review/runs/saved")?.revision ?? 0 },
+        );
+        yield* registry.register("/delegations/saved", DelegationActor.context);
+        yield* registry.commit(
+          {
+            path: "/delegations/saved",
+            description: "Execution",
+            state: {
+              status: "running",
+              request: {
+                runPath: "/signals/review/runs/saved",
+                agent: "doubao-delegate",
+                task: { instructions: "Analysis", input: [] },
+              },
+              session: { sessionId: "saved-session" },
+              requests: {},
+              responses: {},
+            },
+            messages: [],
+          },
+          { expectedRevision: registry.get("/delegations/saved")?.revision ?? 0 },
+        );
         let submitted = 0;
         let waited = 0;
         const system = yield* ActorSystem.make().pipe(

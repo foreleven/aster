@@ -1,3 +1,4 @@
+import { emailView } from "../public-views.js";
 import { Effect, Match, Layer, Schema } from "effect";
 
 import { ContextActor, ContextRegistry, defineContext } from "@aster/core";
@@ -12,6 +13,7 @@ export class LarkMailMessageActor extends ContextActor.Service<LarkMailMessageAc
   {
     command: MailMessageCommand,
     context: defineContext({
+      view: emailView,
       identity: "An email in a Lark mailbox",
       state: EmailData,
       message: Schema.Never,
@@ -29,12 +31,17 @@ export class LarkMailMessageActor extends ContextActor.Service<LarkMailMessageAc
           Match.value(command).pipe(
             Match.tag("SetEmail", ({ email }) => {
               const path = `/lark/mail/${email.mailbox}/${email.messageId}`;
-              return registry.set({
-                path,
-                description: "",
-                state: email,
-                messages: [],
-              });
+              return registry
+                .commit(
+                  {
+                    path,
+                    description: "",
+                    state: email,
+                    messages: [],
+                  },
+                  { expectedRevision: registry.get(path)?.revision ?? 0 },
+                )
+                .pipe(Effect.asVoid, Effect.orDie);
             }),
             Match.exhaustive,
           ),

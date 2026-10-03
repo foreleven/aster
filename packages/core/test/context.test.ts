@@ -42,15 +42,20 @@ test("only public Schema fields notify automatically; snapshots and descriptions
           messages: ["one"],
           token: "private",
         };
-        yield* registry.set(input);
+        yield* registry.commit(input, {
+          expectedRevision: registry.get(input.path)?.revision ?? 0,
+        });
         state.value = 9;
         const copy = registry.snapshot();
         (copy["/x"]!.state as { value: number }).value = 99;
-        yield* registry.set({
-          ...input,
-          description: "changed",
-          state: { value: 1, cursor: "another cursor" },
-        });
+        yield* registry.commit(
+          {
+            ...input,
+            description: "changed",
+            state: { value: 1, cursor: "another cursor" },
+          },
+          { expectedRevision: registry.get(input.path)?.revision ?? 0 },
+        );
         yield* Effect.sleep(10);
         yield* Fiber.interrupt(listener);
         return { events, record: registry.get("/x") };
@@ -59,6 +64,7 @@ test("only public Schema fields notify automatically; snapshots and descriptions
   );
   assert.deepEqual(result.record, {
     path: "/x",
+    revision: 1,
     description: "My test",
     state: { value: 1 },
     messages: ["one"],
@@ -74,15 +80,21 @@ test("dynamic description initializes once and preserves content updated during 
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
         yield* registry.register("/x", definition);
-        yield* registry.set({ path: "/x", description: "", state: { value: 1 }, messages: [] });
-        yield* registry.set({
-          path: "/x",
-          description: "",
-          state: { value: 2 },
-          messages: ["new"],
-        });
-        yield* registry.describe("/x", "Fixed identity");
-        yield* registry.describe("/x", "Must not overwrite");
+        yield* registry.commit(
+          { path: "/x", description: "", state: { value: 1 }, messages: [] },
+          { expectedRevision: registry.get("/x")?.revision ?? 0 },
+        );
+        yield* registry.commit(
+          {
+            path: "/x",
+            description: "",
+            state: { value: 2 },
+            messages: ["new"],
+          },
+          { expectedRevision: registry.get("/x")?.revision ?? 0 },
+        );
+        yield* registry.describe("/x", "Fixed identity", registry.get("/x")?.revision ?? 0);
+        yield* registry.describe("/x", "Must not overwrite", registry.get("/x")?.revision ?? 0);
         return registry.get("/x");
       }),
     ),
@@ -103,7 +115,9 @@ test("invalid public state and unregistered Context paths are rejected", async (
           Effect.gen(function* () {
             const registry = yield* makeContextRegistry();
             yield* registry.register("/x", definition);
-            yield* registry.set(record);
+            yield* registry.commit(record, {
+              expectedRevision: registry.get(record.path)?.revision ?? 0,
+            });
           }),
         ),
       ),
@@ -130,10 +144,18 @@ test("message-only and description-only updates do not mark state as changed", a
           state: { value: 1 },
           messages: [] as string[],
         };
-        yield* registry.set(record);
-        yield* registry.set({ ...record, messages: ["new message"] });
-        yield* registry.describe("/x", "Fixed description");
-        yield* registry.set({ ...registry.get("/x")!, state: { value: 2 } });
+        yield* registry.commit(record, {
+          expectedRevision: registry.get(record.path)?.revision ?? 0,
+        });
+        yield* registry.commit(
+          { ...record, messages: ["new message"] },
+          { expectedRevision: registry.get(record.path)?.revision ?? 0 },
+        );
+        yield* registry.describe("/x", "Fixed description", registry.get("/x")?.revision ?? 0);
+        yield* registry.commit(
+          { ...registry.get("/x")!, state: { value: 2 } },
+          { expectedRevision: registry.get("/x")?.revision ?? 0 },
+        );
         yield* Effect.sleep(10);
         return changes;
       }),
@@ -156,7 +178,12 @@ test("storage adapters cannot mutate the registry through loaded or saved record
   loaded.state.value = 99;
   assert.deepEqual(registry.get("/x")?.state, { value: 1 });
   await Effect.runPromise(registry.register("/x", definition));
-  await Effect.runPromise(registry.set({ ...loaded, state: { value: 2 } }));
+  await Effect.runPromise(
+    registry.commit(
+      { ...loaded, state: { value: 2 } },
+      { expectedRevision: registry.get(loaded.path)?.revision ?? 0 },
+    ),
+  );
   saved!.state.value = 100;
   assert.deepEqual(registry.get("/x")?.state, { value: 2 });
 });
@@ -171,7 +198,9 @@ test("a failed memory handoff is retried on the next change before capture dedup
         capture: (record) => ({ sessionId: "session", records: [record] }),
       });
       const record = { path: "/x", description: "x", state: { value: 1 }, messages: [] };
-      yield* registry.set(record);
+      yield* registry.commit(record, {
+        expectedRevision: registry.get(record.path)?.revision ?? 0,
+      });
       const process = makeContextProcessor(
         registry,
         () =>

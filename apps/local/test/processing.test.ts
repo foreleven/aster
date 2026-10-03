@@ -114,22 +114,32 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
           Effect.forkScoped,
         );
         yield* Effect.yieldNow;
-        yield* registry.set({
-          path: "/lark/mail",
-          description: "Work mailbox",
-          state: { mailbox: "me" },
-          messages: [],
+        yield* registry.commit(
+          {
+            path: "/lark/mail",
+            description: "Work mailbox",
+            state: { mailbox: "me" },
+            messages: [],
+          },
+          { expectedRevision: registry.get("/lark/mail")?.revision ?? 0 },
+        );
+        yield* registry.commit(source("Unconfirmed candidate"), {
+          expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0,
         });
-        yield* registry.set(source("Unconfirmed candidate"));
         yield* waitFor(() => evaluated === 1);
         assert.equal(captures.length, 0, "Jev candidate must not write memory");
-        yield* registry.set(source("Confirmed request"));
+        yield* registry.commit(source("Confirmed request"), {
+          expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0,
+        });
         yield* waitFor(() => Object.keys(registry.snapshot()).some((p) => p.includes("/runs/")));
         // A newer source value exists before memory finishes processing the Run notification.
-        yield* registry.set({
-          ...source("Later source update"),
-          description: "Fixed An email in a Lark mailbox",
-        });
+        yield* registry.commit(
+          {
+            ...source("Later source update"),
+            description: "Fixed An email in a Lark mailbox",
+          },
+          { expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0 },
+        );
         yield* Deferred.succeed(newerSourceWritten, undefined);
         yield* waitFor(() => captures.length >= 1);
         yield* Fiber.interrupt(listener);
@@ -190,40 +200,55 @@ test("discovered account and mailbox identities use separate sessions; no captur
           Effect.forkScoped,
         );
         yield* Effect.yieldNow;
-        yield* registry.set({
-          path: "/lark",
-          description: "Work account",
-          state: {},
-          messages: [],
-        });
-        yield* registry.set({
-          path: "/lark/mail",
-          description: "Work mailbox",
-          state: { mailbox: "me" },
-          messages: [],
-        });
+        yield* registry.commit(
+          {
+            path: "/lark",
+            description: "Work account",
+            state: {},
+            messages: [],
+          },
+          { expectedRevision: registry.get("/lark")?.revision ?? 0 },
+        );
+        yield* registry.commit(
+          {
+            path: "/lark/mail",
+            description: "Work mailbox",
+            state: { mailbox: "me" },
+            messages: [],
+          },
+          { expectedRevision: registry.get("/lark/mail")?.revision ?? 0 },
+        );
         yield* Effect.sleep(10);
         assert.equal(captures.length, 0);
-        yield* registry.set({
-          path: "/lark/mail",
-          description: "Work mailbox",
-          state: { mailbox: "me", profile: { address: "test@example.com", name: "Work mailbox" } },
-          messages: [],
-        });
-        yield* waitFor(() => captures.length === 1);
-        yield* registry.set({
-          path: "/lark",
-          description: "Work account",
-          state: {
-            account: {
-              openId: "ou_test",
-              name: "Test",
-              email: "test@example.com",
-              enterpriseEmail: "",
+        yield* registry.commit(
+          {
+            path: "/lark/mail",
+            description: "Work mailbox",
+            state: {
+              mailbox: "me",
+              profile: { address: "test@example.com", name: "Work mailbox" },
             },
+            messages: [],
           },
-          messages: [],
-        });
+          { expectedRevision: registry.get("/lark/mail")?.revision ?? 0 },
+        );
+        yield* waitFor(() => captures.length === 1);
+        yield* registry.commit(
+          {
+            path: "/lark",
+            description: "Work account",
+            state: {
+              account: {
+                openId: "ou_test",
+                name: "Test",
+                email: "test@example.com",
+                enterpriseEmail: "",
+              },
+            },
+            messages: [],
+          },
+          { expectedRevision: registry.get("/lark")?.revision ?? 0 },
+        );
         yield* waitFor(() => captures.length === 2);
         yield* Fiber.interrupt(listener);
         return captures;

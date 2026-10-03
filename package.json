@@ -13,7 +13,7 @@
     "test": "pnpm build && pnpm --filter @aster/agent test && pnpm --filter @aster/actor test && pnpm --filter @aster/core test && pnpm --filter @aster/memory test && pnpm --filter @aster/integrations test && pnpm --filter @aster/local test",
     "start": "pnpm --filter @aster/local start",
     "test:web": "pnpm build && pnpm --filter @aster/web test",
-    "aster": "node apps/local/dist/cli.js",
+    "aster": "node --use-env-proxy --conditions=aster-source --import=tsx apps/local/src/cli.ts",
     "lint": "eslint . --max-warnings 0",
     "lint:fix": "eslint . --fix --max-warnings 0",
     "format": "prettier . --write",
@@ -31,6 +31,7 @@
     "eslint-plugin-react-x": "5.23.1",
     "globals": "17.12.0",
     "prettier": "3.9.9",
+    "tsx": "^4.23.15",
     "typescript": "5.9.3",
     "typescript-eslint": "8.71.0"
   }

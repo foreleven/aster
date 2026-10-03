@@ -39,7 +39,16 @@ export const ApprovalEntry = Schema.Struct({
 export type ApprovalEntry = typeof ApprovalEntry.Type;
 
 export const PublicContext = Schema.Struct({
+  projection: Schema.optional(
+    Schema.Struct({
+      version: Schema.Literal(1),
+      visibility: Schema.Literals(["public", "restricted"]),
+      reason: Schema.optional(Schema.Literals(["missing-policy", "invalid-data"])),
+    }),
+  ),
   path: Schema.String,
+  /** Absent only on legacy snapshots; the first versioned commit starts at one. */
+  revision: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
   description: Schema.String,
   state: Schema.ObjectKeyword,
   messages: Schema.Array(Schema.Unknown),
@@ -89,6 +98,17 @@ export type RuntimeEvent = typeof RuntimeEvent.Type;
 export const RuntimePhase = Schema.Literals(["starting", "ready", "failed", "stopping"]);
 export type RuntimePhase = typeof RuntimePhase.Type;
 export const RuntimeSnapshot = Schema.Struct({
+  storageOwners: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        ownerId: Schema.String,
+        leaseId: Schema.String,
+        storageId: Schema.String,
+        pid: Schema.Int,
+        status: Schema.Literals(["held", "quarantined"]),
+      }),
+    ),
+  ),
   phase: RuntimePhase,
   actors: Schema.Array(
     Schema.Struct({

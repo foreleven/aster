@@ -1,7 +1,8 @@
+import { ReactionPolicy, makeReactionPolicy } from "../src/context/reaction-policy.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ActorRef } from "@aster/actor";
-import { Effect, Layer, Schema } from "effect";
+import { ActorSystem, ActorTestKit } from "@aster/actor";
+import { Effect, Fiber, Layer, Schema } from "effect";
 import {
   ContextRegistry,
   ContextCaptureSink,
@@ -10,6 +11,7 @@ import {
   SystemOneClient,
   makeContextRegistry,
   defineContext,
+  contextView,
   startContextReactions,
   sourceSignals,
   type SignalRootCommand,
@@ -17,15 +19,6 @@ import {
   type ContextRecord,
 } from "../src/index.js";
 
-const ref = <A>(values: A[]): ActorRef<A> => ({
-  path: "/test",
-  incarnation: "test",
-  tell: (value) =>
-    Effect.sync(() => {
-      values.push(value);
-    }),
-  ask: () => Effect.die("Unexpected ask"),
-});
 const record = (path: string, state: object): ContextRecord => ({
   path,
   description: path,
@@ -77,14 +70,22 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
   for (const item of [
     record("/signals/one", { ...definition, slug: "one", goal: "owned" }),
     record("/signals/two", { ...definition, slug: "two", goal: "owned" }),
-    record("/goals/owned", { status: "active" }),
-    record("/goals/other", { status: "active" }),
+    record("/goals/owned", { status: "active", summary: "Owned Goal" }),
+    record("/goals/other", { status: "active", summary: "Other Goal" }),
     record("/goals/done", { status: "completed" }),
   ]) {
     await Effect.runPromise(registry.register(item.path, generic));
-    await Effect.runPromise(registry.set(item));
+    await Effect.runPromise(
+      registry.commit(item, { expectedRevision: registry.get(item.path)?.revision ?? 0 }),
+    );
   }
-  await Effect.runPromise(registry.register("/source", { ...generic, signalSource: true }));
+  await Effect.runPromise(
+    registry.register("/source", {
+      ...generic,
+      signalSource: true,
+      view: contextView({ state: Schema.Struct({ summary: Schema.String }) }),
+    }),
+  );
   const layers = Layer.mergeAll(
     Layer.succeed(ContextRegistry, registry),
     Layer.succeed(ContextCaptureSink, { capture: () => Effect.void, drain: Effect.void }),
@@ -99,11 +100,15 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
     Layer.succeed(SystemOneClient, {
       systemOne: (request) =>
         Effect.sync(() => {
-          for (const [key, question] of Object.entries(request.questions))
-            if (key.startsWith("goal_")) screened.push(question.instructions);
+          for (const question of Object.values(request.questions))
+            if (question.type === "score") screened.push(question.instructions);
           return {
             answers: Object.fromEntries(
-              Object.keys(request.questions).map((key) => [key, { type: "choice", choice: "yes" }]),
+              Object.entries(request.questions).map(([key, question]) =>
+                question.type === "score"
+                  ? [key, { type: "score", score: 8, legend: { "8": "Relevant evidence" } }]
+                  : [key, { type: "choice", choice: "yes" }],
+              ),
             ),
           };
         }),
@@ -112,20 +117,73 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        yield* startContextReactions({ signals: ref(signals), goals: ref(goals) });
+        const goalProbe = yield* ActorTestKit.probe<GoalsRootCommand>();
+        const signalProbe = yield* ActorTestKit.probe<SignalRootCommand>();
+        const policy = yield* makeReactionPolicy({
+          client: yield* SystemOneClient,
+          internal: yield* InternalAgent,
+        });
+        yield* policy.bind(signalProbe.ref, goalProbe.ref);
+        const system = yield* ActorSystem.make().pipe(
+          ActorSystem.provide(
+            Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(ReactionPolicy, policy),
+            Layer.succeed(GoalSettings, yield* GoalSettings),
+          ),
+        );
+        const starting = yield* startContextReactions({
+          system,
+          signals: signalProbe.ref,
+          goals: goalProbe.ref,
+        }).pipe(Effect.forkScoped);
+        const signalReady = yield* signalProbe.take();
+        assert.equal(signalReady._tag, "Ready");
+        if (signalReady._tag === "Ready") yield* signalReady.replyTo.tell(undefined);
+        const goalReady = yield* goalProbe.take();
+        assert.equal(goalReady._tag, "Ready");
+        if (goalReady._tag === "Ready") yield* goalReady.replyTo.tell(undefined);
+        yield* Fiber.join(starting);
         // The subscription is acquired before this returns, even without yieldNow.
-        yield* registry.set(record("/source", { value: 1 }));
-        yield* Effect.gen(function* () {
-          while (!goals.length) yield* Effect.sleep(1);
-        }).pipe(Effect.timeout("2 seconds"));
+        yield* registry.commit(record("/source", { summary: "A relevant source summary" }), {
+          expectedRevision: registry.get("/source")?.revision ?? 0,
+        });
+        for (let index = 0; index < 2; index++) {
+          const signal = yield* signalProbe.take();
+          signals.push(signal);
+          assert.equal(signal._tag, "React");
+          if (signal._tag === "React")
+            yield* signal.replyTo.tell({
+              _tag: "Accepted",
+              receipt: { requestId: signal.input.requestId, revision: 2 },
+            });
+        }
+        const delivered = yield* goalProbe.take();
+        goals.push(delivered);
+        if (delivered._tag === "Route" && delivered.command._tag === "Intent")
+          yield* delivered.command.replyTo.tell({
+            _tag: "Accepted",
+            receipt: { requestId: delivered.command.input.requestId, revision: 2 },
+          });
         assert.equal(signals.length, 2);
         assert.deepEqual(
           goals.map((command) => (command._tag === "Route" ? command.slug : "initialize")),
           ["other"],
         );
+        const intent = goals[0];
+        assert.equal(intent?._tag, "Route");
+        if (intent?._tag === "Route" && intent.command._tag === "Intent") {
+          assert.equal(intent.command.input.intent.relevance.score, 0.8);
+          assert.equal(intent.command.input.intent.relevance.rationale, "Relevant evidence");
+        }
         assert.equal(screened.length, 1);
         assert.match(screened[0]!, /other/);
-        yield* registry.set({ ...record("/source", { value: 1 }), messages: ["message only"] });
+        yield* registry.commit(
+          {
+            ...record("/source", { summary: "A relevant source summary" }),
+            messages: ["message only"],
+          },
+          { expectedRevision: registry.get("/source")?.revision ?? 0 },
+        );
         yield* Effect.sleep(5);
         assert.equal(signals.length, 2);
       }).pipe(Effect.provide(layers)),

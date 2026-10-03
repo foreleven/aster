@@ -17,19 +17,22 @@ test("Goal coordination retains the caller's Clock and cancellation instead of s
         const registry = yield* makeContextRegistry();
         const path = "/signals/project--watch";
         yield* registry.register(path, SignalActor.context);
-        yield* registry.set({
-          path,
-          description: "watch",
-          messages: [],
-          state: {
-            slug: "project--watch",
-            goal: "project",
-            when: "changed",
-            task: "read",
-            agent: "test",
-            mode: "confirm",
+        yield* registry.commit(
+          {
+            path,
+            description: "watch",
+            messages: [],
+            state: {
+              slug: "project--watch",
+              goal: "project",
+              when: "changed",
+              task: "read",
+              agent: "test",
+              mode: "confirm",
+            },
           },
-        });
+          { expectedRevision: registry.get(path)?.revision ?? 0 },
+        );
         const subscriber = yield* ActorTestKit.probe<GoalCommand>();
         const entered = yield* Deferred.make<void>();
         let cancelled = false;

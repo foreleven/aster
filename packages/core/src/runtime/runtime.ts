@@ -1,7 +1,13 @@
+import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster/api-contracts";
+import type { ReactionCommand } from "../context/reaction-actor.js";
+import type { NotificationCommand } from "../notifications/actor.js";
+import { ReactionPolicy, makeReactionPolicy } from "../context/reaction-policy.js";
+import { GoalScreeningStore } from "../goals/screening.js";
+import { RunRootActor } from "../tasks/root.js";
 import type { RuntimeEvent, RuntimePhase } from "@aster/api-contracts";
 import { RuntimeConfigurationError } from "./errors.js";
-import { ActorSystem } from "@aster/actor";
-import { Models } from "@aster/agent";
+import { ActorSystem, type ActorRef } from "@aster/actor";
+import { Models, PiStorageLease } from "@aster/agent";
 import {
   Cause,
   Clock,
@@ -12,6 +18,7 @@ import {
   Fiber,
   Layer,
   Ref,
+  Option,
   Scope,
   Stream,
 } from "effect";
@@ -28,6 +35,9 @@ import { goalRuntimeLayer } from "../goals/services.js";
 import { ExternalAgents, TaskPreparation } from "../tasks/model.js";
 import { InternalAgent, taskPreparationLayer } from "../tasks/services.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
+import { PersonalAgentActor, type PersonalReply } from "../personal/actor.js";
+import { PersonalProcessor } from "../personal/processor.js";
+import { PersonalActions } from "../personal/actions.js";
 import { startContextReactions } from "../context/reactions.js";
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
 import { makeApplicationApi, type ApplicationApi } from "./api.js";
@@ -44,6 +54,8 @@ type ActorServices =
   | SystemOneClient
   | ExternalAgents
   | TaskPreparation
+  | PersonalProcessor
+  | PersonalActions
   | GoalRuntime;
 
 const acquireRuntime = Effect.gen(function* () {
@@ -59,6 +71,11 @@ const acquireRuntime = Effect.gen(function* () {
   const endpoint = yield* SignalCommands;
   const capture = yield* ContextCaptureSink;
   const modules = (yield* RuntimeIntegrations).installed();
+  const reactionPolicy = yield* makeReactionPolicy({
+    client: decisions,
+    internal: yield* InternalAgent,
+    screening: Option.getOrUndefined(yield* Effect.serviceOption(GoalScreeningStore)),
+  });
   const shared = Context.pick(
     Models,
     ContextRegistry,
@@ -66,6 +83,8 @@ const acquireRuntime = Effect.gen(function* () {
     SystemOneClient,
     ExternalAgents,
     TaskPreparation,
+    PersonalProcessor,
+    PersonalActions,
     GoalRuntime,
   )(yield* Effect.context<ActorServices>());
   // Integration environments are captured by their own Layers. Never inject an ambient Scope.
@@ -74,7 +93,12 @@ const acquireRuntime = Effect.gen(function* () {
       (context, module) => Context.merge(context, module.services),
       shared as Context.Context<any>,
     )
-    .pipe(Context.omit(Scope.Scope), Context.add(Clock.Clock, yield* Clock.Clock));
+    .pipe(
+      Context.omit(Scope.Scope),
+      Context.add(Clock.Clock, yield* Clock.Clock),
+      Context.add(ReactionPolicy, reactionPolicy),
+      Context.add(GoalSettings, settings),
+    );
   const workScope = yield* Effect.acquireRelease(Scope.make(), (scope, exit) =>
     Scope.close(scope, exit),
   );
@@ -125,18 +149,22 @@ const acquireRuntime = Effect.gen(function* () {
     })),
   ).pipe(Effect.forkIn(workScope));
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
+  const personal = yield* system.spawn("personal", PersonalAgentActor);
   const signals = yield* system.spawn("signals", SignalRootActor);
+  const runs = yield* system.spawn("runs", RunRootActor);
   yield* endpoint.bind(signals);
   const goals = settings.definitions.length
     ? yield* system.spawn("goals", GoalsRootActor)
     : undefined;
+  yield* (yield* PersonalActions).bind(goals, signals, approvals, runs);
   for (const module of modules.filter((module) => module.phase === "consumer")) {
     const handle = yield* module
       .activate(system)
       .pipe(Effect.provideService(Scope.Scope, workScope));
     handles.push({ phase: module.phase, handle });
   }
-  running.reactions = yield* startContextReactions({ signals, goals }).pipe(
+  yield* reactionPolicy.bind(signals, goals);
+  running.reactions = yield* startContextReactions({ system, signals, goals }).pipe(
     Effect.provideService(Scope.Scope, workScope),
   );
   for (const module of modules.filter((module) => module.phase === "source")) {
@@ -146,6 +174,8 @@ const acquireRuntime = Effect.gen(function* () {
     handles.push({ phase: module.phase, handle });
   }
   running.initialization = yield* Effect.gen(function* () {
+    // Readiness includes Personal recovery, not only a transient mailbox enqueue.
+    yield* personal.ask<PersonalReply>((replyTo) => ({ _tag: "Get", replyTo }));
     yield* Effect.forEach(handles, ({ handle }) => handle.ready, { concurrency: "unbounded" });
     if (goals) yield* goals.tell({ _tag: "Initialize" });
   }).pipe(
@@ -166,10 +196,42 @@ const acquireRuntime = Effect.gen(function* () {
     Effect.forkIn(workScope),
   );
   const api = makeApplicationApi({
+    recoverProcessing: Effect.fn("Runtime.recoverProcessing")(function* (input: RecoveryInput) {
+      const target =
+        input._tag === "RetryNotification" ? "/user/notifications" : "/user/system-one";
+      const selected = yield* system
+        .select(target)
+        .resolve()
+        .pipe(
+          Effect.catchTag("ActorNotFound", () =>
+            Effect.fail(
+              new ApplicationError({
+                kind: "unavailable",
+                message: "Processing owner unavailable",
+              }),
+            ),
+          ),
+        );
+      const reply = yield* (selected as ActorRef<ReactionCommand | NotificationCommand>)
+        .ask<RecoveryReply>((replyTo) => ({ _tag: "Recover", input, replyTo }))
+        .pipe(
+          Effect.catchTag("AskTimeoutError", () =>
+            Effect.fail(
+              new ApplicationError({
+                kind: "unavailable",
+                message: "Recovery acknowledgement missing; reuse the same request identity",
+              }),
+            ),
+          ),
+        );
+      if (reply._tag === "Rejected") return yield* reply.error;
+      return reply.receipt;
+    }),
     registry,
     history,
     goals,
     approvals,
+    personal,
     inspect: Effect.gen(function* () {
       // The host owns domain metadata and the dashboard contract; actor stays domain-neutral.
       const actors = (yield* system.inspect({ metadata: ["contextPath"] })).map(
@@ -178,7 +240,11 @@ const acquireRuntime = Effect.gen(function* () {
           contextPath: typeof metadata.contextPath === "string" ? metadata.contextPath : undefined,
         }),
       );
-      return { actors, ...(yield* Ref.get(diagnostics)) };
+      return {
+        actors,
+        storageOwners: yield* PiStorageLease.inspect,
+        ...(yield* Ref.get(diagnostics)),
+      };
     }),
   });
   return { api, ready: Deferred.await(ready) };
@@ -198,6 +264,7 @@ export class AsterRuntime extends Context.Service<
       ContextRegistry.layer,
       GoalSettings.layer,
       SignalCommands.layer,
+      PersonalActions.layer,
       RuntimeIntegrations.layer,
       Layer.effect(SignalDefinitions, signalSettings),
     );
@@ -207,6 +274,7 @@ export class AsterRuntime extends Context.Service<
     const domain = Layer.mergeAll(
       taskPreparationLayer.pipe(Layer.provideMerge(InternalAgent.layer)),
       goalRuntimeLayer,
+      PersonalProcessor.layer,
     ).pipe(Layer.provideMerge(installed));
     return Layer.effect(AsterRuntime, acquireRuntime).pipe(Layer.provide(domain));
   }

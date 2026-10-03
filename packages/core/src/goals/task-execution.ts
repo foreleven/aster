@@ -10,6 +10,8 @@ import { RunState } from "../tasks/run-state.js";
 import type { GoalRuntime } from "./runtime.js";
 import type { GoalCommand } from "./actors.js";
 import type { goalWorkingState } from "./working-state.js";
+import { goalOutputCause } from "./state.js";
+import { planTaskChanges } from "./task-proposals.js";
 import {
   GoalToolError,
   activeExecution,
@@ -17,6 +19,7 @@ import {
   decideTaskOperation,
   type GoalTask,
   type TaskToolRequest,
+  type GoalTaskChange,
 } from "./tasks.js";
 
 export type GoalActorContext = ActorContext<
@@ -65,6 +68,7 @@ export const goalTaskExecution = (
     const execution = prior && runState(prior);
     const decision = yield* Effect.fromResult(
       decideTaskOperation(state().tasks, req, {
+        causal: goalOutputCause(state()),
         at: new Date().toISOString(),
         runPath: req.operation === "task_execute" ? `${path()}/runs/${randomUUID()}` : undefined,
         execution: execution && {
@@ -96,6 +100,7 @@ export const goalTaskExecution = (
     ).pipe(Effect.orDie);
     yield* ref.tell({
       _tag: "Initialize",
+      causal: goalOutputCause(working.state()),
       path: runPath,
       definition: {
         slug: `${goal().slug}--${task.id}`,
@@ -106,25 +111,49 @@ export const goalTaskExecution = (
       },
       sourceContext: current(),
       subscriber: context.self,
-      goalTask: { goalPath: path(), taskId: task.id, revision: task.revision },
+      goalTask: {
+        goalPath: path(),
+        taskId: task.id,
+        revision: task.revision,
+        evaluationId: task.execution?.evaluationId,
+      },
     });
     return { runPath, status: "preparing" };
   });
 
-  const recover = Effect.fn("Goal.recoverRuns")(function* (context: GoalActorContext) {
+  const recover = Effect.fn("Goal.recoverRuns")(function* (
+    context: GoalActorContext,
+    resumeExisting = true,
+  ) {
     for (const record of Object.values(registry.snapshot())) {
       if (!record.path.startsWith(`${path()}/runs/`)) continue;
       const relative = `runs/${record.path.split("/").at(-1)!}`;
+      const existing = (yield* context.child(childActorName(relative))) as
+        ActorRef<RunCommand> | undefined;
       const ref =
-        ((yield* context.child(childActorName(relative))) as ActorRef<RunCommand> | undefined) ??
+        existing ??
         (yield* spawnContextChild(context, relative, SignalRunActor).pipe(Effect.orDie));
-      yield* ref.tell({ _tag: "Resume", path: record.path, subscriber: context.self });
+      if (resumeExisting || !existing)
+        yield* ref.tell({ _tag: "Resume", path: record.path, subscriber: context.self });
+      const run = Schema.decodeUnknownSync(RunState)(record.state);
+      const task = run.goalTask && taskById(run.goalTask.taskId);
+      if (
+        run.goalTask &&
+        activeExecution(run.status) &&
+        !startedExecution(run.status) &&
+        (!active() || !task || task.status !== "open" || task.revision !== run.goalTask.revision)
+      )
+        yield* ref.tell({
+          _tag: "Cancel",
+          reason: "Goal or Task changed; prior confirmation is invalid",
+        });
     }
     // Recover a proposal committed immediately before its Run was created.
     for (const task of state().tasks) {
       if (
         !task.execution ||
         task.execution.status !== "preparing" ||
+        task.execution.revision !== task.revision ||
         registry.get(task.execution.runPath) ||
         task.status !== "open" ||
         !active()
@@ -136,6 +165,7 @@ export const goalTaskExecution = (
         (yield* spawnContextChild(context, relative, SignalRunActor).pipe(Effect.orDie));
       yield* ref.tell({
         _tag: "Initialize",
+        causal: task.execution.causal,
         path: task.execution.runPath,
         definition: {
           slug: `${goal().slug}--${task.id}`,
@@ -146,9 +176,33 @@ export const goalTaskExecution = (
         },
         sourceContext: current(),
         subscriber: context.self,
-        goalTask: { goalPath: path(), taskId: task.id, revision: task.revision },
+        goalTask: {
+          goalPath: path(),
+          taskId: task.id,
+          revision: task.revision,
+          evaluationId: task.execution?.evaluationId,
+        },
       });
     }
   });
-  return { cancelPending, execute, recover };
+  const planChanges = (
+    changes: readonly GoalTaskChange[],
+    evaluationId: string,
+    at: string,
+    completed: boolean,
+  ) =>
+    planTaskChanges({
+      tasks: state().tasks,
+      changes,
+      evaluationId,
+      at,
+      completed,
+      goalPath: path(),
+      causal: goalOutputCause(state()),
+      execution: (task) => {
+        const run = runState(task);
+        return run && { status: run.status, revision: run.goalTask?.revision };
+      },
+    });
+  return { cancelPending, execute, recover, planChanges };
 };

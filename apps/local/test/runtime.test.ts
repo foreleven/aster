@@ -7,12 +7,14 @@ import {
   ConfigLocation,
   ContextActor,
   ContextRegistry,
-  ContextStore,
+  DurableContext,
+  LocalDurableContext,
   GoalHistoryStore,
   SystemOneClient,
   ExternalAgents,
   RuntimeIntegrations,
   defineContext,
+  contextView,
   defineIntegration,
   contextPath,
   makeMemoryGoalHistory,
@@ -23,6 +25,7 @@ class Source extends ContextActor.Service<Source>()("test/Source", {
   command: Schema.TaggedStruct("Ping", {}),
   context: defineContext({
     identity: "source",
+    view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
     state: Schema.Struct({ value: Schema.Number }),
     message: Schema.Never,
     capture: (record) => ({ sessionId: record.path, records: [record] }),
@@ -34,12 +37,15 @@ class Source extends ContextActor.Service<Source>()("test/Source", {
       const registry = yield* ContextRegistry;
       return Source.of({
         started: (actor) =>
-          registry.set({
-            path: contextPath(actor),
-            description: "Source",
-            state: { value: 1 },
-            messages: [],
-          }),
+          registry.commit(
+            {
+              path: contextPath(actor),
+              description: "Source",
+              state: { value: 1 },
+              messages: [],
+            },
+            { expectedRevision: registry.get(contextPath(actor))?.revision ?? 0 },
+          ),
         receive: () => Effect.void,
       });
     }),
@@ -91,7 +97,7 @@ const sourceLayer = (
 const infrastructure = (events: string[]) =>
   Layer.mergeAll(
     Layer.succeed(ConfigLocation, { baseDir: "/tmp", projectRoot: "/tmp", envPath: "/tmp/.env" }),
-    Layer.succeed(ContextStore, { loadAll: () => [], save: () => {} }),
+    Layer.effect(DurableContext, LocalDurableContext.fromStore()),
     Layer.sync(GoalHistoryStore, makeMemoryGoalHistory),
     Models.layer([
       {

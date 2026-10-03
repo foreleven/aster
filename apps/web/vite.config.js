@@ -1,10 +1,15 @@
-import { defineConfig } from "vite";
+import { defaultClientConditions, defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath } from "node:url";
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [react(), tailwindcss()],
-  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
+  resolve: {
+    alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) },
+    conditions:
+      command === "serve" ? ["aster-source", ...defaultClientConditions] : defaultClientConditions,
+  },
+  optimizeDeps: { exclude: ["@aster/api-contracts"] },
   server: {
     proxy: {
       "/api": {
@@ -14,4 +19,4 @@ export default defineConfig({
       },
     },
   },
-});
+}));

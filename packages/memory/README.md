@@ -18,3 +18,7 @@ The pinned CLI uses global PID files. An Aster ownership lock and preflight prev
 Aster retains the legacy memory agent identity `signals`, ownership lock, engine template, and provenance database filenames for compatibility with existing memories and running-process detection. These are storage identifiers, not the product name.
 
 The core-facing `MemoryRecall` port is Effect-native. `makeMemoryRecall` converts backend search/expand promises to typed `MemoryRecallError` failures and forwards cancellation into the transport. The Promise client accepts `search(query, { signal })` and `expand(references, signal)`; each request combines that signal with its 15-second timeout and rechecks cancellation before continuing expansion fallbacks. `MemoryRecallError` is defined in core and re-exported here as the same class. Capture/drain retain their existing durable queue and shutdown behavior.
+
+Memory Actor commits now pass the revision from the same snapshot used to merge pending/captured state. Restored unversioned state starts at revision zero; restart and capture acknowledgements preserve the persisted queue through the explicit Context commit boundary.
+
+The `/memory` public view exposes readiness, retrieval mode and model identity. Pending capture payloads and internal capture receipts remain private. Both new captures and recovered pending batches are projected through the source owners' read policies before being sent to the memory backend; retained canonical source records are not rewritten.

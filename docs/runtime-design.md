@@ -29,27 +29,26 @@ const RuntimeLive = AsterRuntime.layer({
 }).pipe(
   Layer.provide(
     Layer.mergeAll(
-      FileContextStore.layer,
+      ConfiguredDurableInfrastructure.layer,
       FileGoalHistory.layer,
       Models.configured,
       SystemOneClientLive.layer,
       AgentMemoryBackend.layer,
-      ExternalAgentsLive.layer,
     ),
   ),
   Layer.provide(LocalConfig.layer({ configPath, envPath, projectRoot })),
 );
 ```
 
-| External capability                                | Local implementation      | Internal consumer                                                      |
-| -------------------------------------------------- | ------------------------- | ---------------------------------------------------------------------- |
-| ConfigProvider, ConfigLocation, ProcessEnvironment | LocalConfig.layer         | Module Config declarations and adapters                                |
-| ContextStore                                       | FileContextStore.layer    | ContextRegistry.layer                                                  |
-| GoalHistoryStore                                   | FileGoalHistory.layer     | Goal runtime and application history API                               |
-| Models                                             | Models.configured         | Internal Agent, Goal reasoner, Lark summarizer                         |
-| SystemOneClient                                    | SystemOneClientLive.layer | Signal/Goal policies and Lark summary gate                             |
-| MemoryRuntime                                      | AgentMemoryBackend.layer  | MemoryIntegration supplies MemoryRecall and ContextCaptureSink to core |
-| ExternalAgents                                     | ExternalAgentsLive.layer  | Task preparation and Delegation Actors                                 |
+| External capability                                | Local implementation                  | Internal consumer                                                      |
+| -------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------- |
+| ConfigProvider, ConfigLocation, ProcessEnvironment | LocalConfig.layer                     | Module Config declarations and adapters                                |
+| DurableContext                                     | ConfiguredDurableInfrastructure.layer | ContextRegistry.layer                                                  |
+| GoalHistoryStore                                   | FileGoalHistory.layer                 | Goal runtime and application history API                               |
+| Models                                             | Models.configured                     | Internal Agent, Goal reasoner, Lark summarizer                         |
+| SystemOneClient                                    | SystemOneClientLive.layer             | Signal/Goal policies and Lark summary gate                             |
+| MemoryRuntime                                      | AgentMemoryBackend.layer              | MemoryIntegration supplies MemoryRecall and ContextCaptureSink to core |
+| ExternalAgents                                     | ConfiguredDurableInfrastructure.layer | Task preparation and Delegation Actors                                 |
 
 `ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. A host without MemoryIntegration can supply MemoryRecall and ContextCaptureSink directly. Local never supplies the internal registry, command endpoint, reasoner or TaskPreparation separately.
 
@@ -90,3 +89,15 @@ Runtime exposes Context reads/change notifications, normalized query invalidatio
 Acceptance is about change ownership: changing Signal rules touches core; changing IM readiness touches Lark; adding an executor touches its adapter and registration; adding a client reuses application use cases. No live external integrations are necessary for acceptance tests.
 
 External execution follows the same boundary: core's `ExternalAgent` port exposes Effect operations and tagged `ExternalAgentError`; the infrastructure Layer owns adapter release. Fiber cancellation reaches transport requests without treating it as proof of external cancellation or automatically retrying submission. Delegation persists terminal results before notifying Run and replays them on restart or parent reattachment, even when that executor is no longer configured. The host still supplies `ExternalAgentsLive.layer`; no new internal Layer needs application assembly.
+
+## Shared Pi infrastructure owner
+
+A host selecting `PiDurableBackend.layer` receives both DurableContext and the Pi ExternalAgent from one storage lease and one scoped Harness. The core graph retains the same ports and Actor ownership. PiDurableContext attaches through the runtime's infrastructure-only Session bridge; it does not create or close another writer. Shared short operations serialize with owner recovery, while observing task completion does not hold that permit. Recovery joins the retired Harness before reopening, keeps the storage lease, validates persisted mappings, and reuses business execution handles. Interrupted unsafe tool outcomes remain unknown. The local host selects this combined owner when both Pi storage and execution are configured. Otherwise it uses model-free Pi Context storage or Local according to the configured routes.
+
+The process captures LocalConfig once before resolving and locking `config.durable.root`. That lock outlives runtime resources and covers Context storage, Goal history, screening logs and private routing authority. Longest segment-prefix routes select one authoritative writer per Context; other copies are startup validation evidence. Activation refuses missing selected data, newer shadow data or same-revision divergence. A configured route change requires the offline `storage migrate` command, which takes the same root/Pi locks, validates the entire plan, copies full snapshots at their existing revisions, reopens storage for verification and publishes authority last. Reverse migration carries post-activation writes back to Local. The command opens no Harness or models, and does not relocate execution sessions.
+
+## Local Pi process ownership
+
+Every production Pi directory opener uses `PiStorageLease` from the Agent adapter, including ownerless Goal/Personal runs and the shared Context/execution backend. The host holds a SQLite exclusive transaction on a permanent lock file in the canonical directory. This local-filesystem kernel lock survives symlink aliases and competing recovery processes; a paused live owner cannot be evicted, while process death releases the lock. No stale PID file is deleted to acquire Pi ownership. This is not a distributed lease protocol.
+
+The lease outlives all Pi writers and callbacks in its Scope. SDK close failure quarantines ownership until process exit; accepted mutations and cancellation cleanup drain before a normal release. Session/Harness reopen retains the same lease and rejects a retired or quarantined owner. Logical owner identity is still validated against Pi documents; acquiring an OS lock does not authorize adopting another owner's conversation. Runtime inspection includes redacted storage owner identities, lease identities and held/quarantined status. Lock descriptors on disk are diagnostics only, and lock database files are never removed by acquisition or release.

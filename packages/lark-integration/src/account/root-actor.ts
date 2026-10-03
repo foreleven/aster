@@ -1,3 +1,4 @@
+import { accountView } from "../public-views.js";
 import { Effect, Match, Layer, Schema } from "effect";
 
 import { ContextActor, ContextRegistry, defineContext } from "@aster/core";
@@ -36,6 +37,7 @@ export class LarkRootActor extends ContextActor.Service<
 >()("lark/RootActor", {
   command: LarkRootCommand,
   context: defineContext({
+    view: accountView,
     identity: "Lark account",
     state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
     message: Schema.Never,
@@ -57,12 +59,18 @@ export class LarkRootActor extends ContextActor.Service<
       return LarkRootActor.of({
         started: (context) =>
           Effect.gen(function* () {
-            yield* registry.set({
-              path: "/lark",
-              description: config.description,
-              state: {},
-              messages: [],
-            });
+            const previous = registry.get("/lark");
+            yield* registry
+              .commit(
+                {
+                  path: "/lark",
+                  description: config.description,
+                  state: previous?.state ?? {},
+                  messages: [],
+                },
+                { expectedRevision: previous?.revision ?? 0 },
+              )
+              .pipe(Effect.asVoid, Effect.orDie);
             yield* context.pipeToSelf(cli.getAccount(), (result) => ({
               _tag: "AccountLoaded",
               result,
@@ -79,12 +87,17 @@ export class LarkRootActor extends ContextActor.Service<
               Match.value(result).pipe(
                 Match.tag("Failure", (result) => Effect.logWarning(result.error.message)),
                 Match.tag("Success", (result) =>
-                  registry.set({
-                    path: "/lark",
-                    description: config.description,
-                    state: { account: result.value },
-                    messages: [],
-                  }),
+                  registry
+                    .commit(
+                      {
+                        path: "/lark",
+                        description: config.description,
+                        state: { account: result.value },
+                        messages: [],
+                      },
+                      { expectedRevision: registry.get("/lark")?.revision ?? 0 },
+                    )
+                    .pipe(Effect.asVoid, Effect.orDie),
                 ),
                 Match.exhaustive,
               ),

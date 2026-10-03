@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem, type ActorRef } from "@aster/actor";
+import { ActorSystem } from "@aster/actor";
+import type { SignalConfigureReply } from "../src/signals/actors.js";
 import { Deferred, Effect, Layer } from "effect";
 import {
   ContextRegistry,
@@ -29,14 +30,14 @@ test("Signal configuration can progress while a Run has not acknowledged durable
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, {
               ...registry,
-              set: (record, options) =>
+              commit: (record, options) =>
                 record.path.includes("/runs/") &&
                 (record.state as { status?: string }).status === "preparing"
                   ? Deferred.succeed(entered, undefined).pipe(
                       Effect.andThen(Deferred.await(release)),
-                      Effect.andThen(registry.set(record, options)),
+                      Effect.andThen(registry.commit(record, options)),
                     )
-                  : registry.set(record, options),
+                  : registry.commit(record, options),
             }),
             Layer.succeed(SignalDefinitions, [definition]),
             preparationLayer,
@@ -56,7 +57,7 @@ test("Signal configuration can progress while a Run has not acknowledged durable
         });
         yield* Deferred.await(entered);
         const signal = yield* system.select("/user/signals/watch").resolve();
-        const reply = yield* signal.ask<ActorRef<unknown>>(
+        const reply = yield* signal.ask<SignalConfigureReply>(
           (replyTo) => ({
             _tag: "Configure",
             definition,
@@ -65,7 +66,8 @@ test("Signal configuration can progress while a Run has not acknowledged durable
           }),
           "200 millis",
         );
-        assert.equal(reply, signal);
+        assert.equal(reply._tag, "Accepted");
+        if (reply._tag === "Accepted") assert.equal(reply.ref, signal);
         const state = registry.get("/signals/watch")!.state as {
           active: boolean;
           occurrences: { delivered: boolean }[];

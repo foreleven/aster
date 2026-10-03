@@ -2,7 +2,8 @@ import { TaskPreparationError } from "../src/index.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit, type ActorRef } from "@aster/actor";
-import { Cause, Clock, Effect, Exit, Layer, Stream } from "effect";
+import { Cause, Clock, Deferred, Effect, Exit, Layer, Schema, Stream } from "effect";
+import { ApplicationError, GoalDelivery, PersonalState } from "@aster/api-contracts";
 import { TestClock } from "effect/testing";
 import {
   ContextRegistry,
@@ -10,6 +11,11 @@ import {
   GoalRuntime,
   GoalReasoningError,
   GoalsRootActor,
+  PersonalActions,
+  PersonalProcessor,
+  PersonalAgentActor,
+  makeApplicationApi,
+  type GoalDeliveryReply,
   SignalRootActor,
   SignalDefinitions,
   ExternalAgents,
@@ -18,16 +24,20 @@ import {
   makeGoalRuntime,
   makeMemoryGoalHistory,
   type GoalReasoner,
+  type GoalPlan,
   type GoalTask,
   type GoalToolRequest,
   type SignalRootCommand,
   type ContextStore,
+  type ContextRecord,
   TaskPreparation,
   type Task,
   type ExecutionStatus,
   type ExternalAgent,
 } from "../src/index.js";
 import { preparationLayer, fakeAgent } from "./fixtures.js";
+import { GoalState } from "../src/goals/state.js";
+import type { GoalCommandReply } from "../src/goals/actors.js";
 
 const until = (condition: () => boolean) =>
   Effect.gen(function* () {
@@ -43,6 +53,8 @@ const setup = (
     prepare?: () => Promise<Task>;
     wait?: ExternalAgent["wait"];
     contextTokens?: number;
+    personalActions?: PersonalActions["Service"];
+    loseSignalAck?: boolean;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -67,9 +79,28 @@ const setup = (
     const clock = options.clock ?? (yield* Clock.Clock);
     const base = ActorSystem.make().pipe(
       ActorSystem.provide(
+        options.personalActions
+          ? Layer.succeed(PersonalActions, options.personalActions)
+          : PersonalActions.unavailable,
+        PersonalProcessor.disabled,
         Layer.succeed(Clock.Clock, clock),
         Layer.succeed(ContextRegistry, registry),
-        Layer.succeed(GoalRuntime, runtime),
+        Layer.succeed(GoalRuntime, {
+          ...runtime,
+          applySignal: (input, subscriber) =>
+            runtime.applySignal!(input, subscriber).pipe(
+              Effect.flatMap((receipt) =>
+                options.loseSignalAck
+                  ? Effect.fail(
+                      new ApplicationError({
+                        kind: "unavailable",
+                        message: "Lost Signal acknowledgement",
+                      }),
+                    )
+                  : Effect.succeed(receipt),
+              ),
+            ),
+        }),
         Layer.succeed(SignalDefinitions, []),
         options.prepare
           ? Layer.succeed(TaskPreparation, {
@@ -112,6 +143,873 @@ const plan = {
   signals: [],
   evidence: [],
 };
+
+test("Goal rejects the whole Task proposal batch when a later revision conflicts", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const env = yield* setup({
+          durableSessions: true,
+          plan: () =>
+            Effect.succeed({
+              ...plan,
+              taskChanges: [
+                { operation: "task_create", id: "review", title: "Review", instructions: "Review" },
+                { operation: "task_update", id: "review", revision: 9, title: "Changed" },
+              ],
+            }),
+        });
+        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.tell({ _tag: "Initialize" });
+        const state = () =>
+          Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
+        yield* until(() => state().evaluations?.at(-1)?.status === "failed");
+        assert.deepEqual(state().tasks, []);
+        assert.equal(state().summary, "Not yet evaluated");
+        assert.equal(state().pendingHandoff, undefined);
+        assert.match(state().lastError!, /revision changed/);
+        const rejected = state().evaluations!.at(-1)!;
+        assert.equal(rejected.status, "failed");
+        if (rejected.status === "failed") assert.equal(rejected.result?.taskChanges?.length, 2);
+        assert.equal(
+          Object.keys(env.registry.snapshot()).some((path) => path.includes("/runs/")),
+          false,
+        );
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("Task result reservations survive lost Goal commit acknowledgement and create one Run requiring confirmation", async () => {
+  const records = new Map<string, ContextRecord>();
+  let fail = true;
+  let generations = 0;
+  const proposal: GoalPlan = {
+    ...plan,
+    taskChanges: [
+      { operation: "task_create", id: "review", title: "Review", instructions: "Review evidence" },
+      { operation: "task_execute", id: "review", revision: 1 },
+    ],
+  };
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const env = yield* setup(
+          {
+            durableSessions: true,
+            plan: () =>
+              Effect.sync(() => {
+                generations++;
+                return proposal;
+              }),
+          },
+          {
+            store: {
+              loadAll: () => [...records.values()],
+              save: (record) => {
+                records.set(record.path, structuredClone(record));
+                if (record.path !== "/goals/project") return;
+                const state = Schema.decodeUnknownSync(GoalState)(record.state);
+                if (state.tasks.length) {
+                  assert.equal(state.summary, plan.progress);
+                  assert.equal(state.evaluations?.[0].status, "completed");
+                  assert.ok(state.tasks[0].execution?.runPath);
+                  if (fail) {
+                    fail = false;
+                    throw new Error("Lost result acknowledgement before Run creation");
+                  }
+                }
+              },
+            },
+          },
+        );
+        yield* env.goals.tell({ _tag: "Initialize" });
+        yield* until(() => approvalEntries(env.registry).length === 1);
+        const runs = Object.values(env.registry.snapshot()).filter((record) =>
+          record.path.startsWith("/goals/project/runs/"),
+        );
+        assert.equal(runs.length, 1);
+        assert.equal((runs[0].state as { status: string }).status, "awaiting-confirmation");
+        const state = Schema.decodeUnknownSync(GoalState)(
+          env.registry.get("/goals/project")!.state,
+        );
+        assert.equal(state.tasks[0].execution?.runPath, runs[0].path);
+        assert.equal(state.evaluations?.length, 1);
+        assert.equal(generations, 1);
+        assert.equal(state.pendingHandoff, undefined);
+        const api = makeApplicationApi({
+          registry: env.registry,
+          goals: env.goals,
+          inspect: Effect.succeed(null),
+        });
+        const timeline = yield* api.goals.timeline("project");
+        assert.equal(timeline.groups[0].outputs.length, 2);
+        assert.equal(timeline.groups[0].outputs[1].runPath, runs[0].path);
+        assert.equal(timeline.groups[0].outputs[1].status, "applied");
+        assert.equal(state.tasks[0].execution?.evaluationId, timeline.groups[0].evaluationId);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+for (const running of [false, true]) {
+  test(`Task result updates ${running ? "preserve started execution" : "revoke pending confirmation"}`, async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          let plans = 0;
+          const executing = yield* Deferred.make<void>();
+          const env = yield* setup(
+            {
+              durableSessions: true,
+              plan: () =>
+                Effect.suspend(() =>
+                  ++plans === 1
+                    ? Effect.succeed({
+                        ...plan,
+                        taskChanges: [
+                          {
+                            operation: "task_update",
+                            id: "review",
+                            revision: 1,
+                            instructions: "Revised evidence",
+                          },
+                        ],
+                      })
+                    : Effect.never,
+                ),
+            },
+            {
+              wait: () => Deferred.succeed(executing, undefined).pipe(Effect.andThen(Effect.never)),
+            },
+          );
+          yield* env.operate({
+            operation: "task_create",
+            id: "review",
+            title: "Review",
+            instructions: "Original evidence",
+          });
+          yield* env.operate({ operation: "task_execute", id: "review", revision: 1 });
+          yield* until(() => approvalEntries(env.registry).length === 1);
+          const approval = approvalEntries(env.registry)[0];
+          const runPath = Schema.decodeUnknownSync(GoalState)(
+            env.registry.get("/goals/project")!.state,
+          ).tasks[0].execution!.runPath;
+          if (running) {
+            yield* env.approvals.ask((replyTo) => ({
+              _tag: "Resolve",
+              id: approval.id,
+              response: { decision: "approve" },
+              replyTo,
+            }));
+            yield* env.approvals.tell({ _tag: "Deliver" });
+            yield* Deferred.await(executing);
+          }
+          yield* env.goals.tell({ _tag: "Initialize" });
+          yield* until(
+            () =>
+              Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state)
+                .tasks[0].revision === 2,
+          );
+          if (!running) yield* until(() => approvalEntries(env.registry)[0].status === "revoked");
+          const run = env.registry.get(runPath)!.state as { status: string; task: Task };
+          assert.equal(run.status, running ? "running" : "cancelled");
+          assert.equal(run.task.instructions, "Original evidence");
+          assert.equal(
+            Object.keys(env.registry.snapshot()).filter((path) =>
+              path.startsWith("/goals/project/runs/"),
+            ).length,
+            1,
+          );
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  });
+}
+
+for (const outcome of ["failed", "unknown"] as const) {
+  test(`Goal ${outcome} evaluations retain structured evidence and the correct retry identity`, async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const inputs: Parameters<GoalReasoner["plan"]>[0][] = [];
+          const env = yield* setup({
+            durableSessions: true,
+            plan: (input) =>
+              Effect.suspend(() => {
+                inputs.push(input);
+                return inputs.length === 1
+                  ? Effect.fail(
+                      new GoalReasoningError({
+                        operation: "plan",
+                        outcome,
+                        message: "Retained failure",
+                      }),
+                    )
+                  : Effect.succeed(plan);
+              }),
+          });
+          yield* env.goals.tell({ _tag: "Initialize" });
+          yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+          const state = () =>
+            Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
+          yield* until(() => state().lastError === "Retained failure");
+          const first = inputs[0].durable!.requestId;
+          assert.equal(
+            state().evaluations?.[0].status,
+            outcome === "failed" ? "failed" : "reconciliation_required",
+          );
+          assert.equal(state().pendingRequestId, outcome === "failed" ? undefined : first);
+          yield* env.goals.tell({
+            _tag: "Route",
+            slug: "project",
+            command: { _tag: "Evaluate", reason: "Retry admitted work" },
+          });
+          yield* until(() => state().evaluations?.at(-1)?.status === "completed");
+          const completed = state().evaluations!.at(-1)!;
+          assert.equal(inputs.length, 2);
+          assert.equal(inputs[1].durable!.requestId === first, outcome === "unknown");
+          assert.equal(completed.retryOf, outcome === "failed" ? first : undefined);
+          assert.deepEqual(completed.inputIds, state().evaluations![0].inputIds);
+          assert.equal(state().inputs?.length, 1);
+          assert.equal(state().evaluations!.length, outcome === "failed" ? 2 : 1);
+          assert.equal(state().summary, plan.progress);
+          assert.equal(state().pendingRequestId, undefined);
+          assert.equal(completed.status, "completed");
+          if (completed.status === "completed") {
+            assert.deepEqual(completed.result, plan);
+            assert.equal(completed.resultId, inputs[1].durable!.requestId);
+          }
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  });
+}
+
+for (const committed of [false, true]) {
+  test(`Goal result application recovers ${committed ? "lost acknowledgement" : "rejected persistence"} without another model result`, async () => {
+    const records = new Map<string, ContextRecord>();
+    const results = new Map<string, typeof plan>();
+    let fail = true;
+    let generations = 0;
+    const store: ContextStore = {
+      loadAll: () => [...records.values()],
+      save: (record) => {
+        const applied =
+          record.path === "/goals/project" &&
+          Schema.decodeUnknownSync(GoalState)(record.state).evaluations?.at(-1)?.status ===
+            "completed";
+        if (applied && fail) {
+          fail = false;
+          if (committed) records.set(record.path, structuredClone(record));
+          throw new Error("Result persistence interrupted");
+        }
+        records.set(record.path, structuredClone(record));
+      },
+    };
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const env = yield* setup(
+            {
+              durableSessions: true,
+              plan: (input) =>
+                Effect.sync(() => {
+                  const id = input.durable!.requestId;
+                  if (!results.has(id)) {
+                    generations++;
+                    results.set(id, plan);
+                  }
+                  return results.get(id)!;
+                }),
+            },
+            { store },
+          );
+          yield* env.goals.tell({ _tag: "Initialize" });
+          yield* until(() => {
+            const record = records.get("/goals/project");
+            return (
+              !!record &&
+              Schema.decodeUnknownSync(GoalState)(record.state).evaluations?.at(-1)?.status ===
+                "completed"
+            );
+          });
+          // A mailbox query crosses the recovery boundary after the failed commit.
+          yield* env.operate({ operation: "task_list" });
+          const state = Schema.decodeUnknownSync(GoalState)(
+            env.registry.get("/goals/project")!.state,
+          );
+          assert.equal(state.summary, plan.progress);
+          assert.equal(state.pendingHandoff, undefined);
+          assert.equal(state.evaluations?.length, 1);
+          assert.equal(state.evaluations?.[0].status, "completed");
+          assert.equal(generations, 1);
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  });
+}
+
+test("Goal Task feedback consumes its frozen causal budget and restart does not replenish it", async () => {
+  const records = new Map<string, ContextRecord>();
+  const history = makeMemoryGoalHistory();
+  let calls = 0;
+  const reasoner: GoalReasoner = {
+    plan: (input) =>
+      Effect.gen(function* () {
+        calls++;
+        const id = `work-${calls}`;
+        yield* input.tool!({
+          operation: "task_create",
+          id,
+          title: `Review ${calls}`,
+          instructions: "Review the evidence",
+        }).pipe(Effect.orDie);
+        yield* input.tool!({
+          operation: "signal_create",
+          id,
+          definition: { when: `Evidence for ${id} changes`, task: "Read the evidence" },
+        }).pipe(Effect.orDie);
+        yield* input.tool!({ operation: "task_execute", id, revision: 1 }).pipe(Effect.orDie);
+        return { ...plan, progress: `Reviewed evidence ${calls}` };
+      }),
+  };
+  for (const restart of [false, true]) {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const env = yield* setup(reasoner, {
+            history,
+            store: {
+              loadAll: () => [...records.values()],
+              save: (record) => {
+                records.set(record.path, structuredClone(record));
+              },
+            },
+            prepare: () => Promise.reject(new Error("No executable evidence")),
+            submit: () => Effect.die(new Error("Unprepared work must never reach an executor")),
+          });
+          const changes = yield* env.registry.subscribe;
+          const current = () =>
+            Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
+          const waitForLimit = () => {
+            const exhausted = () => current().lastError?.includes("reached its limit") === true;
+            return exhausted()
+              ? Effect.void
+              : changes.pipe(
+                  Stream.filter(() => exhausted()),
+                  Stream.take(1),
+                  Stream.runDrain,
+                );
+          };
+          yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+          if (!restart) {
+            yield* env.goals.tell({ _tag: "Initialize" });
+            yield* waitForLimit();
+          }
+          assert.equal(calls, 4);
+          assert.equal(current().causal?.remainingAgentTurns, 0);
+          assert.equal(current().agentAdmissions?.[0]?.count, 4);
+          const runs = Object.values(env.registry.snapshot()).filter((record) =>
+            record.path.startsWith("/goals/project/runs/"),
+          );
+          const causalRun = Schema.Struct({
+            causal: Schema.Struct({ remainingAgentTurns: Schema.Number }),
+          });
+          assert.deepEqual(
+            runs
+              .map(
+                (record) =>
+                  Schema.decodeUnknownSync(causalRun)(record.state).causal.remainingAgentTurns,
+              )
+              .sort(),
+            [0, 1, 2, 3],
+          );
+          const signals = Object.values(env.registry.snapshot()).filter((record) =>
+            /^\/signals\/project--/.test(record.path),
+          );
+          assert.deepEqual(
+            signals
+              .map(
+                (record) =>
+                  Schema.decodeUnknownSync(causalRun)(record.state).causal.remainingAgentTurns,
+              )
+              .sort(),
+            [0, 1, 2, 3],
+          );
+          if (restart) {
+            const priorRoot = current().causal!.rootRequestId;
+            yield* env.goals.ask<GoalCommandReply>((replyTo) => ({
+              _tag: "Route",
+              slug: "project",
+              command: {
+                _tag: "UserMessage",
+                text: "Continue the review with new evidence",
+                replyTo,
+              },
+            }));
+            yield* changes.pipe(
+              Stream.filter(
+                () => calls === 8 && current().lastError?.includes("reached its limit") === true,
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+            assert.notEqual(current().causal!.rootRequestId, priorRoot);
+            assert.equal(current().agentAdmissions?.length, 2);
+          }
+        }),
+      ).pipe(Effect.timeout("10 seconds")),
+    );
+  }
+});
+
+test("Personal outbox recovers a lost Goal acknowledgement without duplicating its input or history", async () => {
+  const records = new Map<string, ContextRecord>();
+  const history = makeMemoryGoalHistory();
+  let sends = 0;
+  let request:
+    Parameters<ReturnType<typeof makeApplicationApi>["personal"]["sendGoalMessage"]>[0] | undefined;
+  let acceptedRevision = 0;
+  for (let restart = 0; restart < 2; restart++) {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const env = yield* setup(
+            { plan: () => Effect.never },
+            {
+              history,
+              store: {
+                loadAll: () => [...records.values()],
+                save: (record) => {
+                  records.set(record.path, structuredClone(record));
+                },
+              },
+              personalActions: {
+                executors: Effect.succeed([]),
+                applySignal: () => Effect.die(new Error("Unexpected Signal command")),
+                resumeRun: () => Effect.die(new Error("Unexpected Run command")),
+                startTask: () => Effect.die(new Error("Unexpected Task command")),
+                requestApproval: () => Effect.die(new Error("Unexpected approval request")),
+                respondApproval: () => Effect.die(new Error("Unexpected Approval command")),
+                bind: () => Effect.succeed(true),
+                sendGoalMessage: (input) => send(input),
+              },
+            },
+          );
+          // The real receiving Actor persists and projects this command before the
+          // test transport drops its first acknowledgement.
+          const send: PersonalActions["Service"]["sendGoalMessage"] = (input) =>
+            Effect.gen(function* () {
+              sends++;
+              assert.ok(
+                Schema.decodeUnknownSync(PersonalState)(
+                  records.get("/personal")!.state,
+                ).outbox?.some((item) => item.input.requestId === input.requestId),
+              );
+              const reply = yield* env.goals
+                .ask<GoalDeliveryReply>((replyTo) => ({
+                  _tag: "Route",
+                  slug: "project",
+                  command: { _tag: "Deliver", input, replyTo },
+                }))
+                .pipe(Effect.orDie);
+              if (reply._tag === "Rejected") return yield* reply.error;
+              if (sends === 1)
+                return yield* new ApplicationError({
+                  kind: "unavailable",
+                  message: "Injected lost acknowledgement",
+                });
+              return reply.receipt;
+            });
+          // Wait for startup metadata/reconciliation writes before selecting a CAS revision.
+          yield* env.operate({ operation: "task_list" });
+          const personal = yield* env.system.spawn("personal", PersonalAgentActor);
+          const api = makeApplicationApi({
+            registry: env.registry,
+            personal,
+            inspect: Effect.succeed(null),
+          });
+          const changes = yield* env.registry.subscribe;
+          if (!request) {
+            const current = yield* api.personal.get;
+            request = {
+              requestId: "send-release",
+              causationId: "user-release",
+              expectedRevision: current.revision!,
+              goalSlug: "project",
+              goalRevision: env.registry.get("/goals/project")!.revision!,
+              text: "Focus on the release blocker",
+            };
+            acceptedRevision = (yield* api.personal.sendGoalMessage(request)).revision;
+          }
+          const status = restart === 0 ? "unknown" : "delivered";
+          yield* changes.pipe(
+            Stream.filter(
+              (change) =>
+                change.path === "/personal" &&
+                Schema.decodeUnknownSync(PersonalState)(change.record.state).outbox?.[0]?.status ===
+                  status,
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+          );
+          if (restart > 0)
+            assert.equal((yield* api.personal.sendGoalMessage(request)).revision, acceptedRevision);
+          const goal = env.registry.get("/goals/project")!;
+          const deliveries = Schema.decodeUnknownSync(Schema.Array(GoalDelivery))(
+            (goal.state as { deliveries: unknown }).deliveries,
+          );
+          assert.equal(deliveries.length, 1);
+          const entries = yield* history.read("project", { limit: 100 });
+          assert.equal(entries.filter((entry) => entry.requestId).length, 1);
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  }
+  assert.equal(sends, 2);
+});
+
+test("Goal inbox recovers after history append but before projection acknowledgement and rejects conflicting deliveries", async () => {
+  const records = new Map<string, ContextRecord>();
+  let failProjection = true;
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const env = yield* setup(
+          { plan: () => Effect.never },
+          {
+            store: {
+              loadAll: () => [...records.values()],
+              save: (record) => {
+                const deliveries = (record.state as { deliveries?: { historySequence?: number }[] })
+                  .deliveries;
+                if (
+                  record.path === "/goals/project" &&
+                  deliveries?.[0]?.historySequence !== undefined &&
+                  failProjection
+                ) {
+                  failProjection = false;
+                  throw new Error("Injected projection acknowledgement loss");
+                }
+                records.set(record.path, structuredClone(record));
+              },
+            },
+          },
+        );
+        yield* env.operate({ operation: "task_list" });
+        const input = {
+          requestId: "inbox-one",
+          causationId: "user-one",
+          source: "/personal" as const,
+          target: "/goals/project",
+          expectedRevision: env.registry.get("/goals/project")!.revision!,
+          createdAt: "2026-10-02T00:00:00.000Z",
+          text: "Review the blocker",
+        };
+        const deliver = (value = input) =>
+          env.goals.ask<GoalDeliveryReply>((replyTo) => ({
+            _tag: "Route",
+            slug: "project",
+            command: { _tag: "Deliver", input: value, replyTo },
+          }));
+        const changes = yield* env.registry.subscribe;
+        yield* deliver().pipe(Effect.forkScoped);
+        yield* changes.pipe(
+          Stream.filter(
+            (change) =>
+              change.path === "/goals/project" &&
+              (change.record.state as { deliveries?: { historySequence?: number }[] })
+                .deliveries?.[0]?.historySequence !== undefined,
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+        );
+        const replay = yield* deliver();
+        assert.equal(replay._tag, "Accepted");
+        const conflict = yield* deliver({ ...input, text: "Changed content" });
+        assert.ok(conflict._tag === "Rejected" && conflict.error.kind === "conflict");
+        const stale = yield* deliver({ ...input, requestId: "new-stale-input" });
+        assert.ok(stale._tag === "Rejected" && stale.error.kind === "conflict");
+        const messages = yield* env.history.read("project", { limit: 100 });
+        assert.equal(messages.filter((entry) => entry.requestId).length, 1);
+        const deliveries = (env.registry.get("/goals/project")!.state as { deliveries: unknown[] })
+          .deliveries;
+        assert.equal(deliveries.length, 1);
+        assert.equal(failProjection, false);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("a durable Goal applies its answer and consumed cursor in one Context commit", async () => {
+  const records = new Map<string, ContextRecord>();
+  const commits: ContextRecord[] = [];
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const env = yield* setup(
+          {
+            durableSessions: true,
+            plan: () => Effect.succeed(plan),
+          },
+          {
+            store: {
+              loadAll: () => [...records.values()],
+              save: (record) => {
+                const saved = structuredClone(record);
+                records.set(saved.path, saved);
+                if (saved.path === "/goals/project") commits.push(saved);
+              },
+            },
+          },
+        );
+        const changes = yield* env.registry.subscribe;
+        yield* env.goals.tell({ _tag: "Initialize" });
+        yield* changes.pipe(
+          Stream.filter(
+            (change) =>
+              change.path === "/goals/project" &&
+              (change.record.state as { summary?: string }).summary === plan.progress,
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+          Effect.timeout("5 seconds"),
+        );
+        const applied = commits.filter(
+          (record) => (record.state as { agentThrough?: number }).agentThrough! > 0,
+        );
+        assert.ok(applied.length > 0);
+        for (const record of applied) {
+          const state = record.state as { summary: string; pendingRequestId?: string };
+          assert.equal(state.summary, plan.progress);
+          assert.equal(state.pendingRequestId, undefined);
+        }
+        assert.ok(
+          commits.some(
+            (record) =>
+              typeof (record.state as { pendingRequestId?: string }).pendingRequestId === "string",
+          ),
+        );
+      }),
+    ),
+  );
+});
+
+test("a recovered durable Goal replays only its frozen input prefix before consuming later input", async () => {
+  const records = new Map<string, ContextRecord>();
+  const history = makeMemoryGoalHistory();
+  const store: ContextStore = {
+    loadAll: () => [...records.values()],
+    save: (record) => {
+      records.set(record.path, structuredClone(record));
+    },
+  };
+  type Input = Parameters<GoalReasoner["plan"]>[0];
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const firstStarted = yield* Deferred.make<Input>();
+      const original = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const env = yield* setup(
+            {
+              durableSessions: true,
+              plan: (input) =>
+                Deferred.succeed(firstStarted, input).pipe(Effect.andThen(Effect.never)),
+            },
+            { store, history },
+          );
+          yield* env.goals.tell({ _tag: "Initialize" });
+          const input = yield* Deferred.await(firstStarted);
+          const accepted = yield* env.goals.ask<GoalCommandReply>((replyTo) => ({
+            _tag: "Route",
+            slug: "project",
+            command: { _tag: "UserMessage", text: "New input received after the handoff", replyTo },
+          }));
+          assert.equal(accepted._tag, "Accepted");
+          const state = Schema.decodeUnknownSync(GoalState)(records.get("/goals/project")!.state);
+          assert.equal(state.pendingRequestId, input.durable!.requestId);
+          assert.deepEqual(state.pendingHandoff?.input?.current, input.current);
+          assert.deepEqual(state.pendingHandoff?.input?.contexts, input.contexts);
+          assert.equal(state.pendingEvaluation, true);
+          return input;
+        }),
+      );
+      const recoveredStarted = yield* Deferred.make<Input>();
+      const nextStarted = yield* Deferred.make<Input>();
+      yield* Effect.scoped(
+        Effect.gen(function* () {
+          let calls = 0;
+          const env = yield* setup(
+            {
+              durableSessions: true,
+              plan: (input) =>
+                Effect.gen(function* () {
+                  calls++;
+                  if (calls === 1) {
+                    yield* Deferred.succeed(recoveredStarted, input);
+                    return plan;
+                  }
+                  yield* Deferred.succeed(nextStarted, input);
+                  return yield* Effect.never;
+                }),
+            },
+            { store, history },
+          );
+          const recovered = yield* Deferred.await(recoveredStarted);
+          assert.equal(recovered.durable!.requestId, original.durable!.requestId);
+          assert.equal(recovered.reason, original.reason);
+          assert.deepEqual(recovered.messages, original.messages);
+          assert.deepEqual(recovered.current, original.current);
+          assert.deepEqual(recovered.contexts, original.contexts);
+          assert.deepEqual(recovered.signals, original.signals);
+          assert.deepEqual(recovered.goal, original.goal);
+          const next = yield* Deferred.await(nextStarted);
+          assert.notEqual(next.durable!.requestId, original.durable!.requestId);
+          assert.ok(
+            next.messages?.some(
+              (message) =>
+                message.role === "user" &&
+                message.content === "New input received after the handoff",
+            ),
+          );
+          assert.equal(
+            Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state).summary,
+            plan.progress,
+          );
+          assert.equal(calls, 2);
+        }),
+      );
+    }).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("durable compaction cannot absorb inputs received after its frozen handoff", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const history = makeMemoryGoalHistory();
+        for (let index = 0; index < 205; index++)
+          yield* history.append("project", {
+            role: "user",
+            content: `Original input ${index}`,
+            timestamp: 1,
+          });
+        const compacting = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const nextStarted = yield* Deferred.make<void>();
+        let calls = 0;
+        const env = yield* setup(
+          {
+            durableSessions: true,
+            compact: (_summary, messages) =>
+              Effect.gen(function* () {
+                assert.ok(
+                  !messages.some(
+                    (message) => message.role === "user" && message.content === "Later input",
+                  ),
+                );
+                yield* Deferred.succeed(compacting, undefined);
+                yield* Deferred.await(release);
+                return "Compacted original inputs";
+              }),
+            plan: (input) =>
+              Effect.gen(function* () {
+                calls++;
+                const containsLater = input.messages?.some(
+                  (message) => message.role === "user" && message.content === "Later input",
+                );
+                if (calls === 1) {
+                  assert.equal(containsLater, false);
+                  return plan;
+                }
+                assert.equal(containsLater, true);
+                yield* Deferred.succeed(nextStarted, undefined);
+                return yield* Effect.never;
+              }),
+          },
+          { history },
+        );
+        yield* env.goals.tell({ _tag: "Initialize" });
+        yield* Deferred.await(compacting);
+        yield* env.goals.ask<GoalCommandReply>((replyTo) => ({
+          _tag: "Route",
+          slug: "project",
+          command: { _tag: "UserMessage", text: "Later input", replyTo },
+        }));
+        yield* Deferred.succeed(release, undefined);
+        yield* Deferred.await(nextStarted);
+        assert.equal(calls, 2);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("legacy unresolved Goal handoffs are fenced instead of guessing a new input range", async () => {
+  const record: ContextRecord = {
+    path: "/goals/project",
+    description: "Observe the project",
+    revision: 1,
+    messages: [],
+    state: {
+      slug: "project",
+      description: "Observe the project",
+      status: "active",
+      summary: "Previous summary",
+      progress: "Previous summary",
+      tasks: [],
+      historyThrough: 0,
+      historyCount: 0,
+      agentThrough: 0,
+      pendingEvaluation: true,
+      pendingRequestId: "legacy-request",
+      receivedEvents: [],
+    },
+  };
+  const records = new Map([[record.path, record]]);
+  let calls = 0;
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const env = yield* setup(
+          {
+            durableSessions: true,
+            plan: () =>
+              Effect.sync(() => {
+                calls++;
+                return plan;
+              }),
+          },
+          {
+            store: {
+              loadAll: () => [...records.values()],
+              save: (saved) => {
+                records.set(saved.path, structuredClone(saved));
+              },
+            },
+          },
+        );
+        const changes = yield* env.registry.subscribe;
+        const state = () =>
+          Schema.decodeUnknownSync(GoalState)(env.registry.get(record.path)!.state);
+        if (!state().lastError)
+          yield* changes.pipe(
+            Stream.filter(
+              (change) =>
+                change.path === record.path &&
+                !!Schema.decodeUnknownSync(GoalState)(change.record.state).lastError,
+            ),
+            Stream.take(1),
+            Stream.runDrain,
+          );
+        assert.match(state().lastError!, /frozen input range; reconciliation required/);
+        assert.equal(state().pendingRequestId, "legacy-request");
+        assert.equal(state().agentThrough, 0);
+        assert.equal(calls, 0);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
 
 test("Goal-owned Signal wakes assessment without delegating and task tools enforce revision confirmation", async () => {
   let calls = 0,
@@ -592,16 +1490,18 @@ test("a tool storage defect restarts Goal once and reuses its pending Run", asyn
     Effect.scoped(
       Effect.gen(function* () {
         let fail = false;
+        const durable = new Map<string, ContextRecord>();
         const env = yield* setup(
           { plan: () => Effect.sync(() => plan) },
           {
             store: {
-              loadAll: () => [],
+              loadAll: () => [...durable.values()],
               save: (record) => {
                 if (fail && record.path === "/goals/project") {
                   fail = false;
                   throw new Error("one disk failure");
                 }
+                durable.set(record.path, structuredClone(record));
               },
             },
           },
@@ -677,6 +1577,7 @@ test("old Goal callbacks and queued generation messages cannot mutate a restarte
       Effect.gen(function* () {
         const plans: { input: Parameters<GoalReasoner["plan"]>[0]; cancelled: boolean }[] = [];
         let fail = false;
+        const durable = new Map<string, ContextRecord>();
         const env = yield* setup(
           {
             plan: (input) =>
@@ -694,12 +1595,13 @@ test("old Goal callbacks and queued generation messages cannot mutate a restarte
           },
           {
             store: {
-              loadAll: () => [],
+              loadAll: () => [...durable.values()],
               save: (r) => {
                 if (fail && r.path === "/goals/project") {
                   fail = false;
                   throw new Error("restart");
                 }
+                durable.set(r.path, structuredClone(r));
               },
             },
           },
@@ -778,6 +1680,7 @@ test("Run restart reattaches to a surviving delegation and delivers its saved re
         let finish: ((value: ExecutionStatus) => void) | undefined;
         let submissions = 0,
           failed = false;
+        const durable = new Map<string, ContextRecord>();
         const env = yield* setup(
           { plan: () => Effect.sync(() => plan) },
           {
@@ -791,7 +1694,7 @@ test("Run restart reattaches to a surviving delegation and delivers its saved re
                 finish = (status) => resume(Effect.succeed(status));
               }),
             store: {
-              loadAll: () => [],
+              loadAll: () => [...durable.values()],
               save: (record) => {
                 if (
                   !failed &&
@@ -801,6 +1704,7 @@ test("Run restart reattaches to a surviving delegation and delivers its saved re
                   failed = true;
                   throw new Error("one Run result storage failure");
                 }
+                durable.set(record.path, structuredClone(record));
               },
             },
           },
@@ -972,4 +1876,541 @@ test("a reasoning defect enters supervision; an expected failure stays in Goal h
       ),
     );
   }
+});
+
+test("Goal Signal proposals commit with Tasks and reconcile a lost receipt after restart without new reasoning", async () => {
+  const records = new Map<string, ContextRecord>();
+  const history = makeMemoryGoalHistory();
+  let generations = 0;
+  const reasoner: GoalReasoner = {
+    durableSessions: true,
+    plan: () =>
+      Effect.sync(() => {
+        generations++;
+        return {
+          ...plan,
+          taskChanges: [
+            {
+              operation: "task_create" as const,
+              id: "review",
+              title: "Review",
+              instructions: "Inspect",
+            },
+          ],
+          signalChanges: [
+            {
+              operation: "signal_create" as const,
+              id: "watch",
+              definition: { taskId: "review", when: "Blockers change", task: "Review blockers" },
+            },
+          ],
+        };
+      }),
+  };
+  const store: ContextStore = {
+    loadAll: () => [...records.values()],
+    save: (record) => {
+      if (record.path === "/signals/project--watch") {
+        const goal = Schema.decodeUnknownSync(GoalState)(records.get("/goals/project")!.state);
+        assert.equal(goal.tasks[0]?.id, "review");
+        assert.equal(goal.summary, plan.progress);
+        assert.equal(goal.signalOutbox?.[0].status, "sending");
+        assert.equal(goal.evaluations?.[0].status, "partially_applied");
+      }
+      records.set(record.path, structuredClone(record));
+    },
+  };
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const env = yield* setup(reasoner, { store, history, loseSignalAck: true });
+        const changes = yield* env.registry.subscribe;
+        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.tell({ _tag: "Initialize" });
+        const state = () =>
+          Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
+        if (state().signalOutbox?.[0]?.status !== "unknown")
+          yield* changes.pipe(
+            Stream.filter(() => state().signalOutbox?.[0]?.status === "unknown"),
+            Stream.take(1),
+            Stream.runDrain,
+          );
+        assert.equal(state().evaluations?.[0].status, "partially_applied");
+        assert.equal(state().signalOutbox?.[0].attempts, 1);
+        const timeline = yield* makeApplicationApi({
+          registry: env.registry,
+          goals: env.goals,
+          inspect: Effect.succeed(null),
+        }).goals.timeline("project");
+        assert.equal(timeline.groups[0].status, "partially_applied");
+        assert.equal(
+          timeline.groups[0].outputs.find((output) => output.kind === "signal")?.status,
+          "unknown",
+        );
+        const projected = JSON.stringify(env.registry.project(env.registry.get("/goals/project")!));
+        assert.equal(projected.includes('"remainingAgentTurns"'), false);
+        assert.equal(projected.includes('"expectedRevision"'), false);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+  const signal = structuredClone(records.get("/signals/project--watch")!);
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const env = yield* setup(reasoner, { store, history });
+        const changes = yield* env.registry.subscribe;
+        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        const state = () =>
+          Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
+        if (state().signalOutbox?.[0]?.status !== "delivered")
+          yield* changes.pipe(
+            Stream.filter(() => state().signalOutbox?.[0]?.status === "delivered"),
+            Stream.take(1),
+            Stream.runDrain,
+          );
+        assert.equal(generations, 1);
+        assert.equal(state().evaluations?.[0].status, "completed");
+        assert.equal(state().signalOutbox?.[0].attempts, 2);
+        assert.equal(state().signalOutbox?.[0].receipt?.revision, 1);
+        assert.deepEqual(env.registry.get(signal.path), signal);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("Invalid Signal proposal rejects the entire Goal result before applying its Task changes", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const env = yield* setup({
+          durableSessions: true,
+          plan: () =>
+            Effect.succeed({
+              ...plan,
+              taskChanges: [
+                {
+                  operation: "task_create",
+                  id: "review",
+                  title: "Review",
+                  instructions: "Inspect",
+                },
+              ],
+              signalChanges: [
+                { operation: "signal_create", id: "watch", definition: { taskId: "missing" } },
+              ],
+            }),
+        });
+        const changes = yield* env.registry.subscribe;
+        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.tell({ _tag: "Initialize" });
+        const state = () =>
+          Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
+        if (state().evaluations?.[0]?.status !== "failed")
+          yield* changes.pipe(
+            Stream.filter(() => state().evaluations?.[0]?.status === "failed"),
+            Stream.take(1),
+            Stream.runDrain,
+          );
+        assert.deepEqual(state().tasks, []);
+        assert.deepEqual(state().signalOutbox ?? [], []);
+        assert.equal(state().summary, "Not yet evaluated");
+        assert.match(state().lastError!, /missing or deleted/);
+        assert.equal(env.registry.get("/signals/project--watch"), undefined);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("Signal outbox survives lost Goal result acknowledgement and stops replay after three unknown sends", async () => {
+  const records = new Map<string, ContextRecord>();
+  const history = makeMemoryGoalHistory();
+  let generations = 0;
+  let loseCommit = true;
+  const reasoner: GoalReasoner = {
+    durableSessions: true,
+    plan: () =>
+      Effect.sync(() => {
+        generations++;
+        return {
+          ...plan,
+          signalChanges: [
+            {
+              operation: "signal_create" as const,
+              id: "watch",
+              definition: { when: "Changed", task: "Review" },
+            },
+          ],
+        };
+      }),
+  };
+  const store: ContextStore = {
+    loadAll: () => [...records.values()],
+    save: (record) => {
+      records.set(record.path, structuredClone(record));
+      if (
+        record.path === "/goals/project" &&
+        loseCommit &&
+        Schema.decodeUnknownSync(GoalState)(record.state).signalOutbox?.length
+      ) {
+        loseCommit = false;
+        throw new Error("Lost result acknowledgement before Signal dispatch");
+      }
+    },
+  };
+  for (const attempt of [1, 2, 3, 3]) {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const env = yield* setup(reasoner, { store, history, loseSignalAck: true });
+          const changes = yield* env.registry.subscribe;
+          yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+          if (generations === 0) yield* env.goals.tell({ _tag: "Initialize" });
+          const state = () =>
+            Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
+          const done = () =>
+            state().signalOutbox?.[0]?.status === "unknown" &&
+            state().signalOutbox?.[0]?.attempts === attempt;
+          if (!done()) yield* changes.pipe(Stream.filter(done), Stream.take(1), Stream.runDrain);
+          assert.equal(state().evaluations?.[0]?.status, "partially_applied");
+          assert.equal(env.registry.get("/signals/project--watch")?.revision, 1);
+          assert.equal(generations, 1);
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  }
+  const state = Schema.decodeUnknownSync(GoalState)(records.get("/goals/project")!.state);
+  assert.equal(state.signalOutbox?.[0]?.attempts, 3);
+  const operation = state.signalOutbox![0];
+  const retryInput = {
+    slug: "project",
+    operationId: operation.input.requestId,
+    requestId: "operator-retry",
+    expectedAttempts: 3,
+  };
+  let loseRetryAck = true;
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const env = yield* setup(reasoner, {
+          history,
+          store: {
+            loadAll: store.loadAll,
+            save: (record) => {
+              store.save(record);
+              if (
+                record.path === "/goals/project" &&
+                loseRetryAck &&
+                Schema.decodeUnknownSync(GoalState)(record.state).signalOutbox?.[0]?.retries?.length
+              ) {
+                loseRetryAck = false;
+                throw new Error("Lost retry authorization acknowledgement");
+              }
+            },
+          },
+        });
+        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        const reply =
+          yield* ActorTestKit.probe<import("../src/goals/actors.js").GoalDeliveryReply>();
+        const changes = yield* env.registry.subscribe;
+        yield* env.goals.tell({
+          _tag: "Route",
+          slug: "project",
+          command: { _tag: "RetrySignal", input: retryInput, replyTo: reply.ref },
+        });
+        const current = () =>
+          Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
+        const done = () => current().signalOutbox?.[0]?.status === "delivered";
+        if (!done()) yield* changes.pipe(Stream.filter(done), Stream.take(1), Stream.runDrain);
+        const api = makeApplicationApi({
+          registry: env.registry,
+          goals: env.goals,
+          inspect: Effect.succeed(null),
+        });
+        const receipt = yield* api.goals.retrySignal(retryInput);
+        assert.deepEqual(receipt, current().signalOutbox![0].retries![0].receipt);
+        assert.deepEqual(yield* api.goals.retrySignal(retryInput), receipt);
+        assert.equal(
+          (yield* api.goals.retrySignal({ ...retryInput, expectedAttempts: 4 }).pipe(Effect.flip))
+            .kind,
+          "conflict",
+        );
+        assert.equal(
+          (yield* api.goals
+            .retrySignal({ ...retryInput, requestId: "stale-operator" })
+            .pipe(Effect.flip)).kind,
+          "conflict",
+        );
+        assert.equal(current().signalOutbox![0].attempts, 4);
+        assert.equal(current().signalOutbox![0].retries!.length, 1);
+        assert.equal(current().evaluations![0].status, "completed");
+        assert.deepEqual(current().signalOutbox![0].input, operation.input);
+        assert.equal(env.registry.get("/signals/project--watch")?.revision, 1);
+        assert.equal(generations, 1);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("Goal Timeline freezes ordered inputs, keeps pending arrivals separate and retains ignored conclusions", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = [yield* Deferred.make<void>(), yield* Deferred.make<void>()];
+        const release = [yield* Deferred.make<void>(), yield* Deferred.make<void>()];
+        const calls: Parameters<GoalReasoner["plan"]>[0][] = [];
+        const env = yield* setup({
+          durableSessions: true,
+          plan: (input) =>
+            Effect.gen(function* () {
+              const index = calls.length;
+              calls.push(input);
+              yield* Deferred.succeed(entered[index]!, undefined);
+              yield* Deferred.await(release[index]!);
+              return {
+                ...plan,
+                disposition: index === 0 ? ("ignored" as const) : ("no_change" as const),
+                progress:
+                  index === 0
+                    ? "This evidence is outside the release scope"
+                    : "Noted the new requirements",
+              };
+            }),
+        });
+        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        const api = makeApplicationApi({
+          registry: env.registry,
+          goals: env.goals,
+          history: env.history,
+          inspect: Effect.succeed(null),
+        });
+        yield* api.goals.sendMessage("project", "Unrelated evidence", "user-one");
+        yield* Deferred.await(entered[0]!);
+        yield* api.goals.sendMessage("project", "New requirement", "user-two");
+        yield* api.goals.sendMessage("project", "Supporting evidence", "user-three");
+        yield* api.goals.sendMessage("project", "Supporting evidence", "user-three");
+        const conflict = yield* api.goals
+          .sendMessage("project", "Changed payload", "user-three")
+          .pipe(Effect.flip);
+        assert.equal(conflict.kind, "conflict");
+        const during = yield* api.goals.timeline("project");
+        assert.equal(during.groups.length, 1);
+        assert.equal(during.groups[0].inputs.length, 1);
+        assert.deepEqual(
+          during.pendingInputs.map((input) =>
+            input.payload._tag === "UserInput" ? input.payload.text : "",
+          ),
+          ["New requirement", "Supporting evidence"],
+        );
+        assert.equal(JSON.stringify(calls[0].messages).includes("New requirement"), false);
+        yield* Deferred.succeed(release[0]!, undefined);
+        yield* Deferred.await(entered[1]!);
+        const next = yield* api.goals.timeline("project");
+        assert.equal(next.groups[0].disposition, "ignored");
+        assert.equal(next.groups[0].conclusion?.applied, true);
+        assert.equal(next.groups[0].outputs.length, 0);
+        assert.equal(next.groups[1].inputs.length, 2);
+        assert.equal(next.pendingInputs.length, 0);
+        assert.deepEqual(next.groups[0].inputs, during.groups[0].inputs);
+        assert.equal(JSON.stringify(next).includes("historySequence"), false);
+        yield* Deferred.succeed(release[1]!, undefined);
+        const changes = yield* env.registry.subscribe;
+        const finished = () =>
+          Schema.decodeUnknownSync(GoalState)(
+            env.registry.get("/goals/project")!.state,
+          ).evaluations?.at(-1)?.status === "completed";
+        if (!finished())
+          yield* changes.pipe(Stream.filter(finished), Stream.take(1), Stream.runDrain);
+        const latest = yield* api.goals.timeline("project", { limit: 1 });
+        assert.equal(latest.groups[0].evaluationId, next.groups[1].evaluationId);
+        const older = yield* api.goals.timeline("project", {
+          limit: 1,
+          before: latest.nextBefore!,
+        });
+        assert.equal(older.groups[0].evaluationId, during.groups[0].evaluationId);
+        assert.equal(older.nextBefore, null);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("New user evidence after a failed evaluation gets its own group instead of being hidden in a retry", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        let count = 0;
+        const env = yield* setup({
+          durableSessions: true,
+          plan: () =>
+            ++count === 1
+              ? Effect.fail(
+                  new GoalReasoningError({
+                    operation: "plan",
+                    outcome: "failed",
+                    message: "Needs correction",
+                  }),
+                )
+              : Effect.succeed(plan),
+        });
+        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        const api = makeApplicationApi({
+          registry: env.registry,
+          goals: env.goals,
+          inspect: Effect.succeed(null),
+        });
+        const changes = yield* env.registry.subscribe;
+        yield* api.goals.sendMessage("project", "Original input", "first");
+        yield* changes.pipe(
+          Stream.filter(
+            () =>
+              Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state)
+                .evaluations?.[0]?.status === "failed",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+        );
+        const later = yield* env.registry.subscribe;
+        yield* api.goals.sendMessage("project", "Corrected instructions", "correction");
+        yield* later.pipe(
+          Stream.filter(
+            () =>
+              Schema.decodeUnknownSync(GoalState)(
+                env.registry.get("/goals/project")!.state,
+              ).evaluations?.at(-1)?.status === "completed",
+          ),
+          Stream.take(1),
+          Stream.runDrain,
+        );
+        const page = yield* api.goals.timeline("project");
+        assert.equal(page.groups.length, 2);
+        assert.equal(page.groups[0].status, "failed");
+        assert.equal(page.groups[1].retryOf, undefined);
+        assert.equal(page.groups[1].inputs[0].payload._tag, "UserInput");
+        assert.notEqual(page.groups[0].inputs[0].inputId, page.groups[1].inputs[0].inputId);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("Task execution feedback names the evaluation that reserved its Run", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        let calls = 0;
+        const env = yield* setup({
+          durableSessions: true,
+          plan: () =>
+            Effect.sync(() =>
+              ++calls === 1
+                ? {
+                    ...plan,
+                    taskChanges: [
+                      {
+                        operation: "task_create" as const,
+                        id: "review",
+                        title: "Review",
+                        instructions: "Inspect evidence",
+                      },
+                      { operation: "task_execute" as const, id: "review", revision: 1 },
+                    ],
+                  }
+                : { ...plan, disposition: "no_change" as const },
+            ),
+        });
+        const api = makeApplicationApi({
+          registry: env.registry,
+          goals: env.goals,
+          inspect: Effect.succeed(null),
+        });
+        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        const changes = yield* env.registry.subscribe;
+        yield* api.goals.sendMessage("project", "Review the current evidence", "start-review");
+        const approved = () => approvalEntries(env.registry).length > 0;
+        if (!approved())
+          yield* changes.pipe(Stream.filter(approved), Stream.take(1), Stream.runDrain);
+        const before = yield* api.goals.timeline("project");
+        const runPath = before.groups[0].outputs.find((output) => output.runPath)?.runPath;
+        assert.ok(runPath);
+        yield* env.approvals.ask((replyTo) => ({
+          _tag: "Resolve",
+          id: approvalEntries(env.registry)[0].id,
+          response: { decision: "approve" },
+          replyTo,
+        }));
+        yield* env.approvals.tell({ _tag: "Deliver" });
+        const state = () =>
+          Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
+        const done = () =>
+          state().evaluations?.length === 2 && state().evaluations?.[1].status === "completed";
+        if (!done()) yield* changes.pipe(Stream.filter(done), Stream.take(1), Stream.runDrain);
+        const after = yield* api.goals.timeline("project");
+        const feedback = after.groups[1].inputs.find(
+          (input) => input.payload._tag === "ExecutionFeedback" && input.payload.terminal,
+        )?.payload;
+        assert.ok(feedback && feedback._tag === "ExecutionFeedback");
+        assert.equal(feedback.runPath, runPath);
+        assert.equal(feedback.evaluationId, before.groups[0].evaluationId);
+        assert.equal(after.groups[0].outputs.find((output) => output.runPath)?.status, "applied");
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("Goal input admission splits oversized batches without losing or reassigning inputs", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = [
+          yield* Deferred.make<void>(),
+          yield* Deferred.make<void>(),
+          yield* Deferred.make<void>(),
+        ];
+        const release = [
+          yield* Deferred.make<void>(),
+          yield* Deferred.make<void>(),
+          yield* Deferred.make<void>(),
+        ];
+        let calls = 0;
+        const env = yield* setup(
+          {
+            durableSessions: true,
+            compact: () => Effect.succeed("Earlier evidence"),
+            plan: () =>
+              Effect.gen(function* () {
+                const index = calls++;
+                yield* Deferred.succeed(entered[index]!, undefined);
+                yield* Deferred.await(release[index]!);
+                return plan;
+              }),
+          },
+          { contextTokens: 12000 },
+        );
+        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        const api = makeApplicationApi({
+          registry: env.registry,
+          goals: env.goals,
+          inspect: Effect.succeed(null),
+        });
+        yield* api.goals.sendMessage("project", "Start", "batch-start");
+        yield* Deferred.await(entered[0]!);
+        yield* api.goals.sendMessage("project", "A".repeat(1000), "batch-a");
+        yield* api.goals.sendMessage("project", "B".repeat(1000), "batch-b");
+        yield* Deferred.succeed(release[0]!, undefined);
+        yield* Deferred.await(entered[1]!);
+        const partial = yield* api.goals.timeline("project");
+        assert.equal(partial.groups[1].inputs.length, 1);
+        assert.equal(partial.pendingInputs.length, 1);
+        const pendingId = partial.pendingInputs[0].inputId;
+        yield* Deferred.succeed(release[1]!, undefined);
+        yield* Deferred.await(entered[2]!);
+        const last = yield* api.goals.timeline("project");
+        assert.equal(last.groups[2].inputs[0].inputId, pendingId);
+        assert.equal(last.pendingInputs.length, 0);
+        assert.equal(
+          new Set(last.groups.flatMap((group) => group.inputs.map((input) => input.inputId))).size,
+          3,
+        );
+        yield* Deferred.succeed(release[2]!, undefined);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
 });

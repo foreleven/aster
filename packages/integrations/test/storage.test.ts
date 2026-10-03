@@ -1,10 +1,24 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
-import { defineContext, makeContextRegistry } from "@aster/core";
+import {
+  ContextCommitError,
+  LocalDurableContext,
+  defineContext,
+  makeContextRegistry,
+  makeContextRegistryWithBackend,
+} from "@aster/core";
 import { makeFileContextStore } from "../src/index.js";
 
 test("JSON state and JSONL messages survive restart, append, and history compaction", async () => {
@@ -20,23 +34,30 @@ test("JSON state and JSONL messages survive restart, append, and history compact
         Effect.gen(function* () {
           const registry = yield* makeContextRegistry(makeFileContextStore(dir));
           yield* registry.register("/goals/test", definition);
-          yield* registry.set({
-            path: "/goals/test",
-            description: "Goal",
-            state: { status: "active" },
-            messages: [{ text: "a\nb" }],
-          });
-          yield* registry.set({
-            ...registry.get("/goals/test")!,
-            messages: [{ text: "a\nb" }, { text: "done" }],
-            state: { status: "completed" },
-          });
+          yield* registry.commit(
+            {
+              path: "/goals/test",
+              description: "Goal",
+              state: { status: "active" },
+              messages: [{ text: "a\nb" }],
+            },
+            { expectedRevision: registry.get("/goals/test")?.revision ?? 0 },
+          );
+          yield* registry.commit(
+            {
+              ...registry.get("/goals/test")!,
+              messages: [{ text: "a\nb" }, { text: "done" }],
+              state: { status: "completed" },
+            },
+            { expectedRevision: registry.get("/goals/test")?.revision ?? 0 },
+          );
         }),
       ),
     );
     const store = makeFileContextStore(dir);
     const records = store.loadAll();
     assert.equal(records[0]?.messages.length, 2);
+    assert.equal(records[0]?.revision, 2);
     assert.deepEqual(records[0]?.state, { status: "completed" });
     assert.equal(
       readFileSync(join(dir, "goals/test/messages.jsonl"), "utf8").trim().split("\n").length,
@@ -63,6 +84,7 @@ test("interrupted two-file commit recovers its intended state and messages exact
     store.save(original);
     const intended = {
       ...original,
+      revision: 3,
       state: { status: "completed" },
       messages: [...original.messages, { id: "two" }],
     };
@@ -72,6 +94,90 @@ test("interrupted two-file commit recovers its intended state and messages exact
     assert.deepEqual(makeFileContextStore(dir).loadAll(), [intended]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("LocalDurableContext recovers state, message, receipt and outbox together after a native rename failure", async () => {
+  const root = mkdtempSync(join(tmpdir(), "aster-local-rename-"));
+  const original = {
+    path: "/personal",
+    description: "Personal",
+    state: { receipts: [], outbox: [] },
+    messages: [],
+  };
+  const intended = {
+    ...original,
+    state: {
+      receipts: [{ requestId: "input-one", revision: 2 }],
+      outbox: [{ requestId: "delivery-one", status: "pending" }],
+    },
+    messages: [{ requestId: "input-one", text: "Accepted input" }],
+  };
+  try {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
+        const registry = makeContextRegistryWithBackend(backend);
+        const definition = defineContext({
+          identity: "Personal test",
+          state: Schema.Struct({
+            receipts: Schema.Array(Schema.Unknown),
+            outbox: Schema.Array(Schema.Unknown),
+          }),
+          message: Schema.Unknown,
+        });
+        yield* registry.register(original.path, definition);
+        yield* registry.commit(original, { expectedRevision: 0 });
+        const statePath = join(root, "personal/state.json");
+        renameSync(statePath, `${statePath}.previous`);
+        mkdirSync(statePath);
+        const failed = yield* registry
+          .commit(intended, { expectedRevision: 1 })
+          .pipe(Effect.result);
+        assert.ok(failed._tag === "Failure" && failed.failure instanceof ContextCommitError);
+        assert.equal(existsSync(join(root, "personal/.pending.json")), true);
+        assert.deepEqual(registry.get(original.path), { ...original, revision: 1 });
+        rmSync(statePath, { recursive: true });
+        // Reopen the real driver: the durable intent replaces both public files.
+        const recoveredBackend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
+        const recovered = makeContextRegistryWithBackend(recoveredBackend);
+        yield* recovered.register(original.path, definition);
+        const accepted = recovered.get(original.path)!;
+        assert.deepEqual(accepted, { ...intended, revision: 2 });
+        assert.equal(existsSync(join(root, "personal/.pending.json")), false);
+        assert.deepEqual(makeFileContextStore(root).loadAll(), [accepted]);
+        // A no-op at the recovered revision neither duplicates messages nor receipts.
+        assert.deepEqual(yield* recovered.commit(intended, { expectedRevision: 2 }), accepted);
+      }),
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("invalid pending recovery data is rejected before rewriting committed public files", () => {
+  const root = mkdtempSync(join(tmpdir(), "aster-invalid-pending-"));
+  try {
+    const store = makeFileContextStore(root);
+    const original = {
+      path: "/context",
+      description: "Original",
+      state: {},
+      messages: ["original"],
+    };
+    store.save(original);
+    const state = readFileSync(join(root, "context/state.json"), "utf8");
+    const messages = readFileSync(join(root, "context/messages.jsonl"), "utf8");
+    writeFileSync(
+      join(root, "context/.pending.json"),
+      JSON.stringify({ ...original, revision: -1, messages: "invalid" }),
+    );
+    assert.throws(() => makeFileContextStore(root).loadAll());
+    assert.equal(readFileSync(join(root, "context/state.json"), "utf8"), state);
+    assert.equal(readFileSync(join(root, "context/messages.jsonl"), "utf8"), messages);
+    assert.equal(existsSync(join(root, "context/.pending.json")), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -110,6 +216,38 @@ test("Goal full history pages survive restart and recover only an incomplete tra
     await assert.rejects(Effect.runPromise(restored.count("../unsafe")));
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("Goal history deduplicates identified projection writes across concurrent calls and restart", async () => {
+  const { makeFileGoalHistory } = await import("../src/index.js");
+  const directory = mkdtempSync(join(tmpdir(), "aster-history-receipts-"));
+  const message = { role: "user" as const, content: "Accepted Goal input", timestamp: 1 };
+  try {
+    const history = makeFileGoalHistory(directory);
+    const entries = await Effect.runPromise(
+      Effect.all(
+        [
+          history.append("project", message, "delivery-one"),
+          history.append("project", message, "delivery-one"),
+        ],
+        { concurrency: "unbounded" },
+      ),
+    );
+    assert.deepEqual(entries[0], entries[1]);
+    const reopened = makeFileGoalHistory(directory);
+    assert.deepEqual(
+      await Effect.runPromise(reopened.append("project", message, "delivery-one")),
+      entries[0],
+    );
+    await assert.rejects(
+      Effect.runPromise(
+        reopened.append("project", { ...message, content: "Different" }, "delivery-one"),
+      ),
+    );
+    assert.equal(await Effect.runPromise(reopened.count("project")), 1);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
   }
 });
 

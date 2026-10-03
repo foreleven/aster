@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { Agent, AgentError, Models, type AgentMessage } from "@aster/agent";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
-import { GoalReasoningError, makeGoalReasoner } from "../src/index.js";
+import { GoalReasoningError, GoalToolError, makeGoalReasoner } from "../src/index.js";
 
 const input = {
   goal: { slug: "project", description: "Review" },
@@ -163,6 +163,141 @@ test("cancelling a Goal releases SDK callback waits before the Agent idle finali
       ),
     );
   }
+});
+
+test("Goal tools distinguish committed rejection from missing acknowledgement", async (t) => {
+  for (const unknown of [false, true]) {
+    t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
+      Effect.succeed({
+        run: () =>
+          Effect.promise(async () => {
+            assert.equal(options.tools!.find((tool) => tool.name === "task_list")!.replay, "safe");
+            assert.equal(
+              options.tools!.find((tool) => tool.name === "submit_plan")!.replay,
+              "safe",
+            );
+            const mutate = options.tools!.find((tool) => tool.name === "signal_get")!;
+            const call = mutate.execute("test", {
+              operation: "task_create",
+              id: "work",
+              definition: { when: "Changed", task: "Review" },
+            });
+            if (unknown) await assert.rejects(Promise.resolve(call), /Acknowledgement missing/);
+            else {
+              const rejected = await call;
+              assert.equal(rejected.isError, true);
+              assert.deepEqual(rejected.details, { aster: { outcome: "rejected" } });
+            }
+            return { messages: [result] };
+          }),
+      } satisfies Agent),
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const reasoner = yield* makeGoalReasoner("test", memory);
+        yield* reasoner.plan({
+          ...input,
+          tool: (request) => {
+            assert.equal(
+              request.operation,
+              "signal_get",
+              "the host owns the operation discriminator",
+            );
+            return Effect.fail(
+              new GoalToolError({
+                message: unknown ? "Acknowledgement missing" : "Stale revision",
+                ...(unknown ? { outcome: "unknown" as const } : {}),
+              }),
+            );
+          },
+        });
+      }).pipe(Effect.provide(models)),
+    );
+  }
+});
+
+test("Goal Agent returns Task proposals without calling the mutation boundary", async (t) => {
+  const taskChanges = [
+    {
+      operation: "task_create" as const,
+      id: "review",
+      title: "Review",
+      instructions: "Review evidence",
+      evidence: [],
+    },
+  ];
+  let calls = 0;
+  t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
+    Effect.succeed({
+      run: () =>
+        Effect.promise(async () => {
+          for (const name of [
+            "task_create",
+            "task_update",
+            "task_delete",
+            "task_execute",
+            "signal_create",
+            "signal_update",
+            "signal_delete",
+          ])
+            assert.equal(
+              options.tools!.some((tool) => tool.name === name),
+              false,
+            );
+          const submit = options.tools!.find((tool) => tool.name === "submit_plan")!;
+          const oversized = await submit.execute("oversized", {
+            progress: "Review",
+            completed: false,
+            evidence: [],
+            taskChanges: [{ ...taskChanges[0], instructions: "x".repeat(20000) }],
+          });
+          assert.equal(oversized.isError, true);
+          assert.notEqual(oversized.terminate, true);
+          for (const disposition of ["ignored", "no_change"]) {
+            const rejected = await submit.execute(`invalid-${disposition}`, {
+              disposition,
+              progress: "No action",
+              completed: false,
+              evidence: [],
+              taskChanges,
+            });
+            assert.equal(rejected.isError, true);
+            assert.notEqual(rejected.terminate, true);
+          }
+          const proposal = await submit.execute("result", {
+            progress: "Proposed review",
+            completed: false,
+            evidence: [],
+            taskChanges,
+            signalChanges: [
+              {
+                operation: "signal_create",
+                id: "watch",
+                definition: { when: "Changes", task: "Review" },
+              },
+            ],
+          });
+          assert.equal(proposal.terminate, true);
+          return { messages: [{ ...result, details: proposal.details }] };
+        }),
+    } satisfies Agent),
+  );
+  const proposal = await Effect.runPromise(
+    Effect.gen(function* () {
+      const reasoner = yield* makeGoalReasoner("test", memory);
+      return yield* reasoner.plan({
+        ...input,
+        tool: () =>
+          Effect.sync(() => {
+            calls++;
+            return {};
+          }),
+      });
+    }).pipe(Effect.provide(models)),
+  );
+  assert.equal(calls, 0);
+  assert.deepEqual(proposal.taskChanges, taskChanges);
+  assert.equal(proposal.signalChanges?.[0]?.operation, "signal_create");
 });
 
 test("model failures are tagged while a reasoning defect retains its original cause", async (t) => {

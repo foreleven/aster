@@ -1,4 +1,4 @@
-import { Config, Context, Effect, Exit, Layer, Scope } from "effect";
+import { Config, Context, Effect, Exit, FileSystem, Layer, Scope } from "effect";
 import { NodeFileSystem, NodeHttpServer } from "@effect/platform-node";
 import { HttpRouter } from "effect/unstable/http";
 import { NetAddress } from "effect/unstable/net";
@@ -12,19 +12,26 @@ import { eventResponse } from "./http-events.js";
 import { withHttpPolicy } from "./http-policy.js";
 import { legacyRest } from "./legacy-rest.js";
 import { staticAssets } from "./static-assets.js";
+import { sourceAssets } from "./source-assets.js";
 
 export interface GoalApi {
   readonly url: string;
   close(): Promise<void>;
 }
+interface BoundGoalApi {
+  readonly url: string;
+}
 interface ApiOptions {
   readonly application: ApplicationApi;
   readonly port?: number;
   readonly webDir?: string;
+  readonly webSourceDir?: string;
 }
 
 /** Host owns transport scopes. RPC and legacy REST share the same application operations. */
-export const makeGoalApi = Effect.fn("LocalHttpApi.make")(function* (options: ApiOptions) {
+export const makeGoalApi = Effect.fn("LocalHttpApi.make")(function* (
+  options: ApiOptions,
+): Effect.fn.Return<BoundGoalApi, unknown, Scope.Scope | FileSystem.FileSystem> {
   const { application } = options;
   const server = yield* NodeHttpServer.make(createServer, {
     host: "127.0.0.1",
@@ -44,7 +51,9 @@ export const makeGoalApi = Effect.fn("LocalHttpApi.make")(function* (options: Ap
   const routes = Layer.mergeAll(
     rpc,
     legacyRest(application, url),
-    staticAssets(options.webDir, url),
+    options.webSourceDir
+      ? yield* sourceAssets(options.webSourceDir)
+      : staticAssets(options.webDir, url),
     HttpRouter.addAll([HttpRouter.route("GET", "/api/events", eventResponse(application))]),
   );
   const handler = yield* HttpRouter.toHttpEffect(routes);
@@ -71,17 +80,22 @@ export const startGoalApi = async (options: ApiOptions): Promise<GoalApi> => {
 export class LocalHttpApi extends Context.Service<LocalHttpApi, { readonly url: string }>()(
   "local/HttpApi",
 ) {
-  static readonly layer = Layer.effect(
-    LocalHttpApi,
-    Effect.gen(function* () {
-      const runtime = yield* AsterRuntime;
-      const { projectRoot } = yield* ConfigLocation;
-      const port = yield* Config.Port("port").pipe(Config.withDefault(4317), Config.nested("http"));
-      return yield* makeGoalApi({
-        application: runtime.api,
-        port,
-        webDir: resolve(projectRoot, "apps/web/dist"),
-      });
-    }),
-  ).pipe(Layer.provide(NodeFileSystem.layer));
+  static readonly layer = (options: { readonly source?: boolean } = {}) =>
+    Layer.effect(
+      LocalHttpApi,
+      Effect.gen(function* () {
+        const runtime = yield* AsterRuntime;
+        const { projectRoot } = yield* ConfigLocation;
+        const port = yield* Config.Port("port").pipe(
+          Config.withDefault(4317),
+          Config.nested("http"),
+        );
+        return yield* makeGoalApi({
+          application: runtime.api,
+          port,
+          webDir: resolve(projectRoot, "apps/web/dist"),
+          ...(options.source ? { webSourceDir: resolve(projectRoot, "apps/web") } : {}),
+        });
+      }),
+    ).pipe(Layer.provide(NodeFileSystem.layer));
 }

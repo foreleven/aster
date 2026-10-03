@@ -1,3 +1,4 @@
+import { ExecutionResumption } from "@aster/api-contracts";
 import { Schema } from "effect";
 import { ApprovalResponse, ExecutionSession, InputRequest, Task } from "../tasks/model.js";
 
@@ -14,6 +15,7 @@ const ResponseRecord = Schema.Struct({
   status: Schema.Literals(["received", "sending", "sent", "uncertain"]),
 });
 const fields = {
+  resumptions: Schema.optional(Schema.Array(ExecutionResumption)),
   request: DelegationRequest,
   replyPath: Schema.optional(Schema.String),
   requests: Schema.Record(Schema.String, InputRequest),

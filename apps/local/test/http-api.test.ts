@@ -72,23 +72,26 @@ test("Goal HTTP API reads public messages, routes user input, and rejects cross-
   const registry = await Effect.runPromise(makeContextRegistry());
   await Effect.runPromise(registry.register("/goals/project", GoalActor.context));
   await Effect.runPromise(
-    registry.set({
-      path: "/goals/project",
-      description: "Project",
-      state: {
-        slug: "project",
+    registry.commit(
+      {
+        path: "/goals/project",
         description: "Project",
-        status: "active",
-        progress: "",
-        summary: "",
-        tasks: [],
-        historyThrough: 0,
-        historyCount: 0,
-        pendingEvaluation: false,
-        receivedEvents: [],
+        state: {
+          slug: "project",
+          description: "Project",
+          status: "active",
+          progress: "",
+          summary: "",
+          tasks: [],
+          historyThrough: 0,
+          historyCount: 0,
+          pendingEvaluation: false,
+          receivedEvents: [],
+        },
+        messages: [],
       },
-      messages: [],
-    }),
+      { expectedRevision: registry.get("/goals/project")?.revision ?? 0 },
+    ),
   );
   const commands: GoalsRootCommand[] = [];
   const api = await startGoalApi({
@@ -192,23 +195,26 @@ test("dashboard returns public contexts and runtime observations with origin pro
   const registry = await Effect.runPromise(makeContextRegistry());
   await Effect.runPromise(registry.register("/goals/test", GoalActor.context));
   await Effect.runPromise(
-    registry.set({
-      path: "/goals/test",
-      description: "Test",
-      state: {
-        slug: "test",
+    registry.commit(
+      {
+        path: "/goals/test",
         description: "Test",
-        status: "active",
-        progress: "",
-        summary: "",
-        tasks: [],
-        historyThrough: 0,
-        historyCount: 0,
-        pendingEvaluation: false,
-        receivedEvents: [],
+        state: {
+          slug: "test",
+          description: "Test",
+          status: "active",
+          progress: "",
+          summary: "",
+          tasks: [],
+          historyThrough: 0,
+          historyCount: 0,
+          pendingEvaluation: false,
+          receivedEvents: [],
+        },
+        messages: [],
       },
-      messages: [],
-    }),
+      { expectedRevision: registry.get("/goals/test")?.revision ?? 0 },
+    ),
   );
   const api = await startGoalApi({
     application: makeApplicationApi({
@@ -239,23 +245,26 @@ test("Goal feed paginates full history independently of its working messages", a
   const registry = await Effect.runPromise(makeContextRegistry());
   await Effect.runPromise(registry.register("/goals/feed", GoalActor.context));
   await Effect.runPromise(
-    registry.set({
-      path: "/goals/feed",
-      description: "Feed",
-      state: {
-        slug: "feed",
+    registry.commit(
+      {
+        path: "/goals/feed",
         description: "Feed",
-        status: "active",
-        progress: "",
-        summary: "Older history summarized",
-        tasks: [],
-        historyThrough: 60,
-        historyCount: 65,
-        pendingEvaluation: false,
-        receivedEvents: [],
+        state: {
+          slug: "feed",
+          description: "Feed",
+          status: "active",
+          progress: "",
+          summary: "Older history summarized",
+          tasks: [],
+          historyThrough: 60,
+          historyCount: 65,
+          pendingEvaluation: false,
+          receivedEvents: [],
+        },
+        messages: [],
       },
-      messages: [],
-    }),
+      { expectedRevision: registry.get("/goals/feed")?.revision ?? 0 },
+    ),
   );
   const history = makeMemoryGoalHistory();
   for (let i = 0; i < 65; i++)

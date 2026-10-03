@@ -1,3 +1,4 @@
+import type { PersonalApprovalResponseInput } from "@aster/api-contracts";
 import { Atom, AsyncResult } from "effect/unstable/reactivity";
 import {
   contextsQuery,
@@ -8,7 +9,7 @@ import {
 } from "../api/client";
 import { connection } from "../api/events";
 import { projectContext, eventPath, type DashboardRow } from "./model";
-import { rowsFor, references } from "../lib/dashboard";
+import { rowsFor, references, isRunPath } from "../lib/dashboard";
 
 // Decode only when Context data changes, independently of the telemetry refresh cadence.
 export const contextViews = Atom.make((get) =>
@@ -96,7 +97,7 @@ export const inspectorView = Atom.family((path: string) =>
 export const approvalDiagnostics = Atom.make((get) => {
   const contexts = get(contextViews);
   return {
-    runs: contexts.filter((c) => /^\/signals\/[^/]+\/runs\//.test(c.path)).length,
+    runs: contexts.filter((c) => isRunPath(c.path)).length,
     failures: contexts
       .filter((c) => /^\/goals\/[^/]+$/.test(c.path))
       .flatMap((c) => {
@@ -106,3 +107,8 @@ export const approvalDiagnostics = Atom.make((get) => {
       }),
   };
 });
+
+// Frozen user decisions survive navigation while an admission acknowledgement is uncertain.
+export const pendingApprovalResponses = Atom.make<
+  Record<string, { input: PersonalApprovalResponseInput; accepted: boolean }>
+>({}).pipe(Atom.keepAlive);

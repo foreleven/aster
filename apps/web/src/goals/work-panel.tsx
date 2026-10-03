@@ -159,7 +159,12 @@ export function WorkPanel({
                     </h3>
                   </div>
                   <Pill status={signal.state.active === false ? "paused" : "active"} />
-                  <p>{signal.state.when || signal.state.task}</p>
+                  <p>
+                    {signal.state.when ||
+                      (typeof signal.state.task === "string"
+                        ? signal.state.task
+                        : signal.state.task?.instructions)}
+                  </p>
                   <div className="signal-schedule">
                     <Clock3 size={14} />
                     <span>

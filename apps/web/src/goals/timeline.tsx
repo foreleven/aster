@@ -1,10 +1,274 @@
-import React, { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
-import { ChevronRight } from "lucide-react";
-import { goalHistory } from "../api/history";
-import { resultError, resultValue } from "../api/client";
-import { projectMessage } from "../dashboard/model";
-import { clockLabel, dateLabel, EmptyState, eventKind } from "./presentation";
+import { Cause, Exit, Match, Schema } from "effect";
+import {
+  ApplicationError,
+  contextQueryKeys,
+  type GoalInput,
+  type GoalTimelineGroup,
+} from "@aster/api-contracts";
+import { goalTimeline, pendingSignalRetries } from "../api/timeline";
+import { resultError, resultValue, retryGoalSignal } from "../api/client";
+import { clockLabel, dateLabel, EmptyState } from "./presentation";
+
+type Inspect = (path: string) => void;
+const labels: Record<GoalTimelineGroup["status"], string> = {
+  pending: "Queued",
+  running: "Evaluating",
+  failed: "Failed",
+  reconciliation_required: "Needs reconciliation",
+  completed: "Applied",
+  partially_applied: "Delivery pending",
+};
+const dispositionLabels = { advance: "Progress", no_change: "No change", ignored: "Not relevant" };
+const matchesInput = (input: GoalInput, filter: string) =>
+  filter === "all" ||
+  (filter === "notes" && input.payload._tag === "UserInput") ||
+  (filter === "signals" && input.payload._tag === "SignalOccurrence") ||
+  ((filter === "tasks" || filter === "results") && input.payload._tag === "ExecutionFeedback");
+
+function InputCard({ input, inspect }: { input: GoalInput; inspect: Inspect }) {
+  const link = (path: string, label = path) => (
+    <button className="text-link" onClick={() => inspect(path)}>
+      {label}
+    </button>
+  );
+  return (
+    <article className="timeline-input" data-input-id={input.inputId}>
+      {Match.value(input.payload).pipe(
+        Match.tag("GoalIntent", ({ intent }) => (
+          <>
+            <header>
+              <strong>Context update · {intent.source.name}</strong>
+              <span className="goal-pill tone-amber">
+                Score {(intent.relevance.score * 100).toFixed(0)}%
+              </span>
+            </header>
+            <p>{intent.content.summary}</p>
+            <p className="input-rationale">
+              <strong>Why it matters</strong> {intent.relevance.rationale}
+            </p>
+            {link(intent.source.contextPath, "View source")}
+            <details>
+              <summary>Screening details</summary>
+              <p>{intent.source.actorPath}</p>
+              <p>
+                Revision {intent.content.summaryRevision} · Screening{" "}
+                {intent.relevance.screeningRecordId}
+              </p>
+            </details>
+          </>
+        )),
+        Match.tag("UserInput", ({ text }) => (
+          <>
+            <strong>Your note</strong>
+            <p>{text}</p>
+          </>
+        )),
+        Match.tag("PersonalMessage", ({ text, source }) => (
+          <>
+            <strong>Personal Agent</strong>
+            <p>{text}</p>
+            {link(source)}
+          </>
+        )),
+        Match.tag("SignalOccurrence", ({ signalPath, evidence }) => (
+          <>
+            <strong>Signal occurrence</strong>
+            <p>{evidence}</p>
+            {link(signalPath)}
+          </>
+        )),
+        Match.tag("ExecutionFeedback", ({ runPath, status, text, evaluationId }) => (
+          <>
+            <strong>Execution feedback · {status}</strong>
+            <p>{text}</p>
+            {link(runPath, "View execution")}
+            {evaluationId && <p className="quiet-message">From evaluation {evaluationId}</p>}
+          </>
+        )),
+        Match.tag("Startup", ({ reason }) => (
+          <>
+            <strong>Goal check</strong>
+            <p>{reason}</p>
+          </>
+        )),
+        Match.exhaustive,
+      )}
+      <time dateTime={input.receivedAt}>{clockLabel(input.receivedAt)}</time>
+    </article>
+  );
+}
+
+function RetrySignal({
+  slug,
+  operationId,
+  attempts,
+}: {
+  slug: string;
+  operationId: string;
+  attempts: number;
+}) {
+  const pending = useAtomValue(pendingSignalRetries);
+  const setPending = useAtomSet(pendingSignalRetries);
+  const retry = useAtomSet(retryGoalSignal, { mode: "promiseExit" });
+  const busy = useAtomValue(retryGoalSignal).waiting;
+  const [error, setError] = useState("");
+  const key = `${slug}:${operationId}`;
+  async function submit() {
+    if (busy) return;
+    const input = pending[key] ?? {
+      slug,
+      operationId,
+      expectedAttempts: attempts,
+      requestId: crypto.randomUUID(),
+    };
+    setPending((previous) => ({ ...previous, [key]: input }));
+    setError("");
+    const result = await retry({
+      payload: input,
+      reactivityKeys: contextQueryKeys(`/goals/${slug}`),
+    });
+    let settled = Exit.isSuccess(result);
+    if (Exit.isFailure(result)) {
+      const failure = Cause.squash(result.cause);
+      setError(failure instanceof Error ? failure.message : String(failure));
+      const typed = Cause.findError(result.cause);
+      settled =
+        typed._tag === "Success" &&
+        Schema.is(ApplicationError)(typed.success) &&
+        typed.success.kind !== "unavailable";
+    }
+    if (settled)
+      setPending((previous) => {
+        const next = { ...previous };
+        delete next[key];
+        return next;
+      });
+  }
+  return (
+    <div className="signal-retry">
+      <button className="outline-action" disabled={busy} onClick={() => void submit()}>
+        {pending[key] ? "Check retry receipt" : "Retry delivery"}
+      </button>
+      <p className="quiet-message">
+        Reuses the original Signal command. {attempts} delivery attempts recorded.
+      </p>
+      {error && (
+        <p className="goals-error" role="alert">
+          {error}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function EvaluationCard({
+  slug,
+  group,
+  filter,
+  inspect,
+}: {
+  slug: string;
+  group: GoalTimelineGroup;
+  filter: string;
+  inspect: Inspect;
+}) {
+  const inputs = group.inputs.filter((input) => matchesInput(input, filter));
+  const outputs = group.outputs.filter(
+    (output) => filter === "all" || filter === `${output.kind}s`,
+  );
+  const showConclusion = filter === "all" || filter === "results" || filter === "progress";
+  if (!inputs.length && !outputs.length && !(showConclusion && group.conclusion)) return null;
+  return (
+    <article className="timeline-event evaluation-card" id={`evaluation-${group.evaluationId}`}>
+      <header className="evaluation-header">
+        <div>
+          <strong>Evaluation {group.ordinal}</strong>
+          <time dateTime={group.startedAt}>
+            {dateLabel(group.startedAt)} · {clockLabel(group.startedAt)}
+          </time>
+        </div>
+        <span
+          className={`goal-pill ${group.status === "failed" || group.status === "reconciliation_required" ? "tone-red" : "tone-neutral"}`}
+        >
+          {labels[group.status]}
+        </span>
+      </header>
+      {group.retryOf && <p className="quiet-message">Retry of {group.retryOf}</p>}
+      <div className="evaluation-inputs">
+        {inputs.map((input) => (
+          <InputCard key={input.inputId} input={input} inspect={inspect} />
+        ))}
+      </div>
+      {showConclusion && group.conclusion && (
+        <section className="evaluation-conclusion">
+          <strong>
+            {group.disposition ? dispositionLabels[group.disposition] : "Conclusion"}
+            {!group.conclusion.applied && " · Not applied"}
+          </strong>
+          <p>{group.conclusion.text}</p>
+          {group.conclusion.evidence.length > 0 && (
+            <details className="event-context">
+              <summary>
+                View {group.conclusion.evidence.length} context{" "}
+                {group.conclusion.evidence.length === 1 ? "item" : "items"}
+              </summary>
+              {group.conclusion.evidence.map((path) => (
+                <button key={path} className="text-link" onClick={() => inspect(path)}>
+                  {path}
+                </button>
+              ))}
+            </details>
+          )}
+        </section>
+      )}
+      {outputs.map((output) => (
+        <section className="timeline-output" key={output.id}>
+          <header>
+            <strong>
+              {output.kind === "task" ? "Task" : "Signal"} · {output.title}
+            </strong>
+            <span>
+              {output.operation} · {output.status}
+            </span>
+          </header>
+          {output.kind === "signal" && (
+            <button className="text-link" onClick={() => inspect(output.target)}>
+              View signal
+            </button>
+          )}
+          {output.runPath && (
+            <>
+              <p className="quiet-message">Execution has its own status.</p>
+              <button className="text-link" onClick={() => inspect(output.runPath!)}>
+                View execution
+              </button>
+            </>
+          )}
+          {output.error && <p className="goals-error">{output.error}</p>}
+          {output.kind === "signal" &&
+            output.status === "unknown" &&
+            output.attempts !== undefined && (
+              <RetrySignal slug={slug} operationId={output.id} attempts={output.attempts} />
+            )}
+        </section>
+      ))}
+      {group.error && filter !== "notes" && <p className="goals-error">{group.error}</p>}
+      {filter !== "notes" && (
+        <details className="evaluation-run">
+          <summary>Agent run details</summary>
+          <dl>
+            <dt>Session</dt>
+            <dd>{group.agentRun.sessionId}</dd>
+            <dt>Request</dt>
+            <dd>{group.agentRun.requestId}</dd>
+          </dl>
+        </details>
+      )}
+    </article>
+  );
+}
 
 export function Timeline({
   slug,
@@ -13,20 +277,25 @@ export function Timeline({
 }: {
   slug: string;
   filter: string;
-  inspect: (path: string) => void;
+  inspect: Inspect;
 }) {
-  // The family owns its weakly held cache bundle for this mounted Goal.
-  const atoms = useMemo(() => goalHistory(slug), [slug]);
+  const atoms = useMemo(() => goalTimeline(slug), [slug]);
   const result = useAtomValue(atoms.feed);
   const setBefore = useAtomSet(atoms.before);
-  const retryFeed = useAtomRefresh(atoms.feed);
-  const refreshTail = useAtomRefresh(atoms.latest);
+  const retry = useAtomRefresh(atoms.feed);
+  const refresh = useAtomRefresh(atoms.latest);
   const page = resultValue(result);
   const error = resultError(result);
-  const entries = (page?.entries ?? [])
-    .toReversed()
-    .map((entry) => ({ ...entry, view: projectMessage(entry.message) }))
-    .filter((entry) => filter === "all" || eventKind(entry.view).category === filter);
+  const pending = page?.pendingInputs.filter((input) => matchesInput(input, filter)) ?? [];
+  const groups =
+    page?.groups
+      .toReversed()
+      .filter(
+        (group) =>
+          group.inputs.some((input) => matchesInput(input, filter)) ||
+          group.outputs.some((output) => filter === "all" || filter === `${output.kind}s`) ||
+          ((filter === "all" || filter === "results" || filter === "progress") && group.conclusion),
+      ) ?? [];
   return (
     <div className="goal-timeline" aria-busy={result.waiting}>
       {error && (
@@ -34,85 +303,41 @@ export function Timeline({
           {error}
           <button
             onClick={() => {
-              refreshTail();
-              retryFeed();
+              refresh();
+              retry();
             }}
           >
-            Retry history
+            Retry timeline
           </button>
         </div>
       )}
       {!page && !error && (
         <p role="status" className="quiet-message">
-          Loading history…
+          Loading timeline…
         </p>
       )}
-      {page && !entries.length && (
+      {pending.length > 0 && (
+        <section className="timeline-pending">
+          <h3>Awaiting evaluation</h3>
+          {pending.map((input) => (
+            <InputCard key={input.inputId} input={input} inspect={inspect} />
+          ))}
+        </section>
+      )}
+      {page && !groups.length && !pending.length && (
         <EmptyState title={filter === "all" ? "No messages yet" : "No matching events"}>
-          {filter === "notes"
-            ? "Notes and instructions you send to this Goal appear here."
-            : "New activity appears here automatically."}
+          New activity appears here automatically.
         </EmptyState>
       )}
-      {entries.map((entry, index) => {
-        const kind = eventKind(entry.view);
-        const day = dateLabel(entry.at);
-        const showDate = index === 0 || dateLabel(entries[index - 1].at) !== day;
-        const lines = entry.view.text?.split("\n") ?? [];
-        const hasTitle = lines.length > 1 && lines[0].length < 100 && kind.category !== "notes";
-        return (
-          <React.Fragment key={entry.seq}>
-            {showDate && <h3 className="timeline-day">{day}</h3>}
-            <article className="timeline-event message">
-              <time dateTime={entry.at} className="timeline-time">
-                {clockLabel(entry.at)}
-              </time>
-              <kind.icon
-                size={21}
-                className={`timeline-icon tone-${kind.tone}`}
-                aria-hidden="true"
-              />
-              <span className="timeline-kind">{kind.label}</span>
-              <div className="timeline-body">
-                {entry.view.tool ? (
-                  <details>
-                    <summary>{entry.view.toolName || "View tool activity"}</summary>
-                    <pre>{entry.view.details}</pre>
-                  </details>
-                ) : (
-                  <>
-                    {hasTitle && <strong>{lines[0]}</strong>}
-                    {entry.view.text !== undefined ? (
-                      <p>{hasTitle ? lines.slice(1).join("\n") : entry.view.text}</p>
-                    ) : (
-                      <details>
-                        <summary>View event details</summary>
-                        <pre>{entry.view.details}</pre>
-                      </details>
-                    )}
-                  </>
-                )}
-                {entry.view.references.length > 0 && (
-                  <details className="event-context">
-                    <summary>
-                      View {entry.view.references.length} context{" "}
-                      {entry.view.references.length === 1 ? "item" : "items"}{" "}
-                      <ChevronRight size={13} />
-                    </summary>
-                    <div>
-                      {entry.view.references.map((path) => (
-                        <button className="text-link" key={path} onClick={() => inspect(path)}>
-                          {path}
-                        </button>
-                      ))}
-                    </div>
-                  </details>
-                )}
-              </div>
-            </article>
-          </React.Fragment>
-        );
-      })}
+      {groups.map((group) => (
+        <EvaluationCard
+          key={group.evaluationId}
+          slug={slug}
+          group={group}
+          filter={filter}
+          inspect={inspect}
+        />
+      ))}
       {page?.nextBefore && (
         <button
           className="outline-action load-history"

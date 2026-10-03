@@ -18,9 +18,20 @@ export * from "./goals/agent-reasoner.js";
 export * from "./signals/execution-gate.js";
 export * from "./signals/extractor.js";
 export * from "./tasks/model.js";
+export * from "./tasks/writeback.js";
+export {
+  SignalAction,
+  WritebackOperation,
+  WritebackRequest,
+  WritebackAuthorization,
+  writebackApprovalId,
+  writebackPrompt,
+} from "@aster/api-contracts";
 export * from "./tasks/preparation.js";
 export * from "./approvals/actor.js";
 export * from "./goals/history.js";
+export * from "./goals/intent.js";
+export * from "./goals/screening.js";
 export * from "./goals/tasks.js";
 export * from "./config/settings.js";
 export * from "./context/memory.js";
@@ -45,3 +56,18 @@ export * from "./tasks/run-state.js";
 export * from "./tasks/outcome.js";
 export * from "./signals/state.js";
 export * from "./goals/state.js";
+export * from "./personal/actor.js";
+export * from "./personal/processor.js";
+export * from "./personal/actions.js";
+
+export * from "./context/durable.js";
+export * from "./context/durable-kernel.js";
+export * from "./context/routed-durable.js";
+export * from "./context/local-durable.js";
+
+export * from "./tasks/root.js";
+
+export { contextView } from "./context/view.js";
+export type { ContextViewPolicy } from "./context/model.js";
+
+export * from "./goals/intent.js";

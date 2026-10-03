@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Models } from "@aster/agent";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Models, PiStorageLease } from "@aster/agent";
 import { Cause, ConfigProvider, Context, Effect, Exit, Layer } from "effect";
 import {
   AsterRuntime,
   ContextCaptureSink,
-  ContextStore,
+  DurableContext,
+  LocalDurableContext,
   ExternalAgents,
   GoalHistoryStore,
   MemoryRecall,
@@ -37,7 +41,7 @@ const integration = (
 
 const infrastructure = (drain = Effect.void) =>
   Layer.mergeAll(
-    Layer.succeed(ContextStore, { loadAll: () => [], save: () => {} }),
+    Layer.effect(DurableContext, LocalDurableContext.fromStore()),
     Layer.sync(GoalHistoryStore, makeMemoryGoalHistory),
     Models.layer([
       {
@@ -62,6 +66,34 @@ const infrastructure = (drain = Effect.void) =>
 const config = ConfigProvider.layer(
   ConfigProvider.fromUnknown({ config: { agent: { model: "test" } } }),
 );
+
+test("runtime readiness includes the Personal root and its durable command API", async () => {
+  const live = AsterRuntime.layer({ integrations: [] }).pipe(
+    Layer.provide(infrastructure()),
+    Layer.provide(config),
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const runtime = yield* AsterRuntime;
+      yield* runtime.ready;
+      const personal = yield* runtime.api.personal.get;
+      assert.equal(personal.path, "/personal");
+      assert.equal(personal.revision, 1);
+      const request = {
+        requestId: "runtime-input",
+        causationId: "user",
+        expectedRevision: 1,
+        text: "Track my work",
+      };
+      const accepted = yield* runtime.api.personal.sendMessage(request);
+      assert.equal(accepted.revision, 2);
+      assert.deepEqual(yield* runtime.api.personal.sendMessage(request), accepted);
+      assert.ok(
+        (yield* runtime.api.inspect).actors.some((actor) => actor.path === "/user/personal"),
+      );
+    }).pipe(Effect.provide(live)),
+  );
+});
 
 test("a readiness defect settles runtime.ready with its original cause", async () => {
   const defect = new Error("source readiness defect");
@@ -113,4 +145,36 @@ test("closing a runtime before readiness also settles later readiness callers", 
   const exit = await Effect.runPromiseExit(runtime.ready.pipe(Effect.timeout("200 millis")));
   assert.ok(Exit.isFailure(exit));
   assert.ok(Cause.hasInterruptsOnly(exit.cause));
+});
+
+test("runtime inspection exposes current storage ownership without local filesystem paths", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aster-runtime-lease-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const live = AsterRuntime.layer({ integrations: [] }).pipe(
+    Layer.provide(infrastructure()),
+    Layer.provide(config),
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const runtime = yield* AsterRuntime;
+      yield* runtime.ready;
+      const token = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const lease = yield* PiStorageLease.acquire(directory, "goal:test");
+          const view = (yield* runtime.api.inspect).storageOwners?.find(
+            (owner) => owner.leaseId === lease.identity.token,
+          );
+          assert.equal(view?.ownerId, "goal:test");
+          assert.equal(view?.status, "held");
+          assert.equal(view?.pid, process.pid);
+          assert.equal(JSON.stringify(view).includes(directory), false);
+          return lease.identity.token;
+        }),
+      );
+      assert.equal(
+        (yield* runtime.api.inspect).storageOwners?.some((owner) => owner.leaseId === token),
+        false,
+      );
+    }).pipe(Effect.provide(live)),
+  );
 });

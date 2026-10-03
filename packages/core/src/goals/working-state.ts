@@ -1,4 +1,5 @@
-import { Effect, Schema } from "effect";
+import { DateTime, Effect, Schema } from "effect";
+import { goalNotifications } from "../notifications/goal.js";
 import type { AgentMessage } from "@aster/agent";
 import type { GoalDefinition } from "../config/schema.js";
 import type { ContextRegistry } from "../context/registry.js";
@@ -16,11 +17,19 @@ export const goalWorkingState = (
   const current = () => registry.get(path())!;
   const state = () => Schema.decodeUnknownSync(GoalState)(current().state);
   const save = Effect.fn("Goal.save")(function* (patch: Partial<GoalState> = {}) {
+    const snapshot = current();
+    const previous = Schema.decodeUnknownSync(GoalState)(snapshot.state);
     const s = {
-      ...state(),
+      ...previous,
       ...patch,
       historyCount: yield* history.count(goal().slug).pipe(Effect.orDie),
     };
+    if (Object.hasOwn(patch, "lastError") && patch.lastError === undefined)
+      delete (s as { lastError?: string }).lastError;
+    if (Object.hasOwn(patch, "pendingRequestId") && patch.pendingRequestId === undefined)
+      delete (s as { pendingRequestId?: string }).pendingRequestId;
+    if (Object.hasOwn(patch, "pendingHandoff") && patch.pendingHandoff === undefined)
+      delete s.pendingHandoff;
     // The public working window is bounded independently from the full feed on disk.
     const entries = yield* history
       .read(goal().slug, { after: s.historyThrough, limit: 200 })
@@ -32,11 +41,25 @@ export const goalWorkingState = (
       if (size > contextTokens) break;
       messages.push(entry.message);
     }
-    return yield* registry.set({
-      ...current(),
-      state: s,
-      messages: messages.slice(0, completePrefix(messages)),
-    });
+    return yield* registry
+      .commit(
+        {
+          ...snapshot,
+          state: {
+            ...s,
+            businessOutbox: goalNotifications({
+              path: snapshot.path,
+              revision: (snapshot.revision ?? 0) + 1,
+              at: DateTime.formatIso(yield* DateTime.now),
+              previous,
+              next: s,
+            }),
+          },
+          messages: messages.slice(0, completePrefix(messages)),
+        },
+        { expectedRevision: snapshot.revision ?? 0 },
+      )
+      .pipe(Effect.asVoid);
   });
   const append = Effect.fn("Goal.append")(function* (message: AgentMessage) {
     yield* history.append(goal().slug, message).pipe(Effect.orDie);

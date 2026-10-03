@@ -1,3 +1,4 @@
+import { mailChannelView } from "../public-views.js";
 import { Effect, Match, Layer, Schema } from "effect";
 import { type ActorRef } from "@aster/actor";
 import {
@@ -46,17 +47,20 @@ const EmailChannelCommand = Schema.Union([
 ]);
 type EmailChannelCommand = typeof EmailChannelCommand.Type;
 
+const MailboxState = Schema.Struct({
+  mailbox: Schema.String,
+  profile: Schema.optional(MailboxProfile),
+});
+
 export class LarkEmailChannelActor extends ContextActor.Service<
   LarkEmailChannelActor,
   LarkConfig | LarkMailCli
 >()("lark/EmailChannelActor", {
   command: EmailChannelCommand,
   context: defineContext({
+    view: mailChannelView,
     identity: "Lark mailbox",
-    state: Schema.Struct({
-      mailbox: Schema.String,
-      profile: Schema.optional(MailboxProfile),
-    }),
+    state: MailboxState,
     message: Schema.Never,
     capture: (record) =>
       record.state.profile === undefined
@@ -79,12 +83,22 @@ export class LarkEmailChannelActor extends ContextActor.Service<
       return LarkEmailChannelActor.of({
         started: (context) =>
           Effect.gen(function* () {
-            yield* registry.set({
-              path: "/lark/mail",
-              description: config.mail.description,
-              state: { mailbox: config.mail.mailbox },
-              messages: [],
-            });
+            const previous = registry.get("/lark/mail");
+            const restored = previous && Schema.decodeUnknownSync(MailboxState)(previous.state);
+            yield* registry
+              .commit(
+                {
+                  path: "/lark/mail",
+                  description: config.mail.description,
+                  state: {
+                    ...(restored?.mailbox === config.mail.mailbox ? restored : {}),
+                    mailbox: config.mail.mailbox,
+                  },
+                  messages: [],
+                },
+                { expectedRevision: previous?.revision ?? 0 },
+              )
+              .pipe(Effect.asVoid, Effect.orDie);
             yield* context.pipeToSelf(cli.getMailboxProfile(config.mail.mailbox), (result) => ({
               _tag: "ProfileLoaded",
               result,
@@ -98,15 +112,20 @@ export class LarkEmailChannelActor extends ContextActor.Service<
                 yield* Match.value(command.result).pipe(
                   Match.tag("Failure", (result) => Effect.logWarning(result.error.message)),
                   Match.tag("Success", (result) =>
-                    registry.set({
-                      path: "/lark/mail",
-                      description: config.mail.description,
-                      state: {
-                        mailbox: config.mail.mailbox,
-                        profile: result.value,
-                      },
-                      messages: [],
-                    }),
+                    registry
+                      .commit(
+                        {
+                          path: "/lark/mail",
+                          description: config.mail.description,
+                          state: {
+                            mailbox: config.mail.mailbox,
+                            profile: result.value,
+                          },
+                          messages: [],
+                        },
+                        { expectedRevision: registry.get("/lark/mail")?.revision ?? 0 },
+                      )
+                      .pipe(Effect.asVoid, Effect.orDie),
                   ),
                   Match.exhaustive,
                 );

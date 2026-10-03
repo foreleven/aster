@@ -1,0 +1,416 @@
+import { isJsonValue, type Context as ChordContext, type JsonValue } from "@earendil-works/chord";
+import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
+import {
+  createModels,
+  createProvider,
+  lazyStream,
+  type ProviderStreams,
+  type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
+import {
+  createRegistry,
+  defineExtension,
+  defineTool,
+  GenerationTask,
+  CompactionTask,
+  Harness,
+  hook,
+  type Cursor,
+  type EntryRecord,
+  type EntryQuery,
+  type Extension,
+  type ToolRegistration,
+} from "@earendil-works/pi-durable";
+import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+import { admitExchange, completeExchange } from "./durable-exchange.js";
+import { DurableAgentFailure } from "./durable-error.js";
+import { entriesFor, fenceTools, generationFence, hasUnknownToolOutcome } from "./durable-tools.js";
+import type { AgentMessage, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ResolvedModel } from "./index.js";
+
+const durableContext = (signal?: AbortSignal): ChordContext =>
+  signal ? withAbortSignal(signal, BACKGROUND_CONTEXT) : BACKGROUND_CONTEXT;
+
+const jsonDetails = (value: unknown): JsonValue | undefined => {
+  if (value === undefined) return undefined;
+  return isJsonValue(value) ? value : undefined;
+};
+
+const toolResult = (
+  result: AgentToolResult,
+  api: { output: (chunk: string | Uint8Array) => void },
+) => {
+  for (const item of result.content) if (item.type === "text") api.output(item.text);
+  const details = jsonDetails(result.details);
+  return {
+    content: result.content,
+    ...(details === undefined ? {} : { details }),
+    ...(result.isError === undefined ? {} : { isError: result.isError }),
+    ...(result.usage === undefined ? {} : { usage: result.usage }),
+    ...(result.terminate ? { control: { terminate: true as const } } : {}),
+  };
+};
+
+export const durableTool = (tool: AgentTool): ToolRegistration =>
+  defineTool({
+    name: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    replay: tool.replay === "safe" ? "safe" : "unsafe",
+    prepareArguments: tool.prepareArguments,
+    execute: async (args, api, context) => {
+      const result = await tool.execute(api.callId, args, context.abortSignal, (partial) => {
+        for (const item of partial.content) if (item.type === "text") api.output(item.text);
+      });
+      return toolResult(result, api);
+    },
+  });
+
+export const durableModels = (
+  resolved: ResolvedModel,
+  beforeModel?: (signal?: AbortSignal) => Promise<void>,
+) => {
+  const models = createModels();
+  const providerStreams: ProviderStreams = {
+    stream: (model, context, options) =>
+      lazyStream(model, async () => {
+        await beforeModel?.(options?.signal);
+        return resolved.stream(resolved.model, context, options);
+      }),
+    streamSimple: (model, context, options?: SimpleStreamOptions) =>
+      lazyStream(model, async () => {
+        await beforeModel?.(options?.signal);
+        return resolved.stream(resolved.model, context, options);
+      }),
+  };
+  models.setProvider(
+    createProvider({
+      id: resolved.model.provider,
+      name: resolved.model.provider,
+      models: [resolved.model],
+      auth: {
+        apiKey: {
+          name: "Aster model credential",
+          resolve: async () => ({ auth: { apiKey: resolved.getApiKey() } }),
+        },
+      },
+      api: providerStreams,
+    }),
+  );
+  return models;
+};
+
+const inputText = (messages: readonly AgentMessage[]) =>
+  JSON.stringify({
+    evidence: messages.filter((message) => message.role !== "system"),
+    instruction:
+      "Process this newly committed input according to your instructions. Use the available tools and submit any required structured result.",
+  });
+
+export interface DurableRunOptions {
+  /** Bump when tool behavior or context transformation semantics change. */
+  readonly catalogueId?: string;
+  readonly owner?: "goals" | "personal";
+  readonly sessionId: string;
+  readonly requestId: string;
+  readonly storageDirectory?: string;
+}
+
+export class DurableCloseFailure extends Error {
+  constructor(cause: unknown) {
+    super("Pi writer shutdown is uncertain; storage ownership retained", { cause });
+  }
+}
+const closeDurableStorage = async (resource: {
+  close: (context: ChordContext) => Promise<void>;
+}) => {
+  try {
+    await resource.close(BACKGROUND_CONTEXT);
+  } catch (cause) {
+    throw new DurableCloseFailure(cause);
+  }
+};
+
+export const durableDirectory = (options: DurableRunOptions) =>
+  options.storageDirectory ??
+  join(homedir(), ".aster", options.owner ?? "goals", options.sessionId, "pi");
+
+export const runDurableAgent = async (input: {
+  readonly resolved: ResolvedModel;
+  readonly messages: readonly AgentMessage[];
+  readonly tools: readonly AgentTool[];
+  readonly resultTool?: string;
+  readonly onMessage?: (message: AgentMessage) => Promise<void> | void;
+  readonly transformContext?: (
+    messages: AgentMessage[],
+    signal?: AbortSignal,
+  ) => Promise<AgentMessage[]>;
+  readonly durable: DurableRunOptions;
+  readonly signal?: AbortSignal;
+}) => {
+  const context = durableContext(input.signal);
+  const directory = durableDirectory(input.durable);
+  const storage = await openNodeJsonlStorage(directory, context, { fsync: true });
+  const registry = createRegistry();
+  const unsafeTools = new Set(
+    input.tools.filter((tool) => tool.replay !== "safe").map((tool) => tool.name),
+  );
+  const fence = generationFence(
+    () => harness,
+    unsafeTools,
+    async (request, _api, context) =>
+      input.transformContext
+        ? { messages: await input.transformContext([...request.messages], context.abortSignal) }
+        : undefined,
+  );
+  const extension: Extension = defineExtension({
+    name: `aster-${input.durable.owner === "personal" ? "personal" : "goal"}-tools:${input.durable.sessionId}`,
+    tools: fenceTools(input.tools.map(durableTool), unsafeTools),
+    hooks: [
+      hook(GenerationTask, {
+        beforeRequest: fence.beforeRequest,
+      }),
+      hook(CompactionTask, { beforeCompact: fence.beforeCompact }),
+    ],
+  });
+  registry.install(extension);
+  let harness: Harness;
+  try {
+    harness = await Harness.open(
+      storage,
+      {
+        models: durableModels(input.resolved, fence.beforeModel),
+        registry,
+      },
+      context,
+    );
+  } catch (cause) {
+    await closeDurableStorage(storage);
+    throw cause;
+  }
+  try {
+    const conversation = await harness.root(context, {
+      agent: {
+        model: { provider: input.resolved.model.provider, modelId: input.resolved.model.id },
+        extensions: [extension],
+      },
+    });
+    const system = input.messages.find((message) => message.role === "system");
+    const instructions = system
+      ? typeof system.content === "string"
+        ? system.content
+        : JSON.stringify(system.content)
+      : "";
+    const content = inputText(input.messages);
+    // Pi deduplicates request IDs by submission type only. Aster additionally
+    // freezes the complete input/configuration before any scheduler is resumed.
+    const admission = await admitExchange(
+      harness,
+      {
+        conversationId: conversation.id,
+        identity: JSON.stringify([input.durable.owner ?? "goals", input.durable.sessionId]),
+        requestId: input.durable.requestId,
+        input: JSON.stringify({
+          content,
+          instructions,
+          resultTool: input.resultTool,
+          catalogueId: input.durable.catalogueId ?? "aster.agent.v2",
+          configuration: createHash("sha256")
+            .update(
+              JSON.stringify({
+                model: input.resolved.model,
+                tools: input.tools.map(({ name, description, parameters, replay }) => ({
+                  name,
+                  description,
+                  parameters,
+                  replay,
+                })),
+              }),
+            )
+            .digest("hex"),
+        }),
+        instructions,
+        model: { provider: input.resolved.model.provider, modelId: input.resolved.model.id },
+        extension,
+      },
+      context,
+    );
+    if (admission.error !== null) throw new DurableAgentFailure({ message: admission.error });
+    const resultEntries = admission.entryIds;
+    if (resultEntries !== null) {
+      const wanted = new Set(resultEntries);
+      const entries: EntryRecord[] = [];
+      let cursor: Cursor | undefined;
+      do {
+        const page = await conversation.entries({}, 100, cursor, context);
+        entries.push(...page.items.filter((entry) => wanted.has(entry.id)));
+        cursor = page.next;
+      } while (cursor);
+      if (entries.length !== wanted.size)
+        throw new Error("Durable result references missing transcript entries");
+      entries.sort((a, b) => resultEntries.indexOf(a.id) - resultEntries.indexOf(b.id));
+      const messages = entries
+        .flatMap((entry) => entry.model ?? [])
+        .filter((message) => message.role !== "user" && message.role !== "system");
+      for (const message of messages) await input.onMessage?.(message);
+      return { messages };
+    }
+    const assertKnownOutcome = async () => {
+      const unknown = await harness.commit(
+        async (tx) => hasUnknownToolOutcome(await entriesFor(tx, conversation.id), unsafeTools),
+        context,
+      );
+      if (unknown)
+        throw new Error(
+          "Tool outcome is unknown; reconcile the retained operation before further Agent work.",
+        );
+    };
+    await assertKnownOutcome();
+    const submission = await conversation.submit(
+      {
+        type: "input",
+        content,
+        requestId: JSON.stringify(["aster.agent.input", input.durable.requestId, "initial"]),
+        whenBusy: "followUp",
+      },
+      context,
+    );
+    const readEntries = async (query: Omit<EntryQuery, "conversationId">) => {
+      const entries: EntryRecord[] = [];
+      let cursor: Cursor | undefined;
+      do {
+        const page = await conversation.entries(query, 100, cursor, context);
+        entries.push(...page.items);
+        cursor = page.next;
+      } while (cursor);
+      return entries.reverse();
+    };
+    const collect = async (currentSubmission: Awaited<ReturnType<typeof conversation.submit>>) => {
+      const settled = await currentSubmission.wait(context);
+      await assertKnownOutcome();
+      if (settled.status === "unanswered") {
+        const detail = typeof settled.detail === "string" ? `: ${settled.detail}` : "";
+        const error = `Durable agent submission failed: ${settled.reason}${detail}`;
+        await completeExchange(
+          harness,
+          {
+            conversationId: conversation.id,
+            requestId: input.durable.requestId,
+            entryIds: [],
+            error,
+          },
+          context,
+        );
+        throw new DurableAgentFailure({ message: error });
+      }
+      const entries = await readEntries({ minEntryId: settled.entry, maxEntryId: settled.answer });
+      if (
+        !entries.some((entry) => entry.id === settled.entry) ||
+        !entries.some((entry) => entry.id === settled.answer)
+      )
+        throw new Error("Durable submission entry is missing from the transcript");
+      const messages = entries
+        .filter((entry) => entry.id !== settled.entry)
+        .flatMap((entry) => entry.model ?? [])
+        .filter((message) => message.role !== "user" && message.role !== "system");
+      const resultEntryIds = entries
+        .filter((entry) => entry.id !== settled.entry && entry.model?.length)
+        .map((entry) => Number(entry.id));
+      // With terminate:true, Pi's answer is the assistant tool-call entry, not
+      // the result. Include only that final round, stopping at the next input
+      // or assistant so a replay never consumes another run's results.
+      const answer = entries.find((entry) => entry.id === settled.answer);
+      const calls = new Set(
+        answer?.model?.flatMap((message) =>
+          message.role === "assistant"
+            ? message.content.flatMap((part) => (part.type === "toolCall" ? [part.id] : []))
+            : [],
+        ),
+      );
+      if (calls.size) {
+        const tail = await readEntries({ minEntryId: settled.answer });
+        for (const { message, entryId } of tail
+          .filter((entry) => entry.id !== settled.answer)
+          .flatMap((entry) =>
+            (entry.model ?? []).map((message) => ({ message, entryId: Number(entry.id) })),
+          )) {
+          if (message.role === "user" || message.role === "assistant") break;
+          if (message.role === "toolResult" && calls.delete(message.toolCallId)) {
+            messages.push(message);
+            resultEntryIds.push(entryId);
+          }
+          if (!calls.size) break;
+        }
+        if (calls.size)
+          throw new Error("Durable terminal tool results are missing from the transcript");
+      }
+      return { messages, resultEntryIds };
+    };
+    const collected = await collect(submission);
+    let messages = collected.messages;
+    const resultEntryIds = collected.resultEntryIds;
+    if (
+      input.resultTool &&
+      !messages.some(
+        (message) =>
+          message.role === "toolResult" &&
+          message.toolName === input.resultTool &&
+          !message.isError,
+      )
+    ) {
+      const correction = await conversation.submit(
+        {
+          type: "input",
+          content: `The required structured result is missing. Submit it using ${input.resultTool}. Do not substitute prose.`,
+          requestId: JSON.stringify(["aster.agent.input", input.durable.requestId, "correction"]),
+          whenBusy: "followUp",
+        },
+        context,
+      );
+      const correctionMessages = await collect(correction);
+      messages = [...messages, ...correctionMessages.messages];
+      resultEntryIds.push(...correctionMessages.resultEntryIds);
+      if (
+        !messages.some(
+          (message) =>
+            message.role === "toolResult" &&
+            message.toolName === input.resultTool &&
+            !message.isError,
+        )
+      ) {
+        const error = `Agent did not submit ${input.resultTool} after one correction`;
+        await completeExchange(
+          harness,
+          {
+            conversationId: conversation.id,
+            requestId: input.durable.requestId,
+            entryIds: [...new Set(resultEntryIds)],
+            error,
+          },
+          context,
+        );
+        throw new DurableAgentFailure({ message: error });
+      }
+    }
+    await completeExchange(
+      harness,
+      {
+        conversationId: conversation.id,
+        requestId: input.durable.requestId,
+        entryIds: [...new Set(resultEntryIds)],
+      },
+      context,
+    );
+    for (const message of messages)
+      if (message.role === "assistant" || message.role === "toolResult")
+        await input.onMessage?.(message);
+    return { messages };
+  } finally {
+    // Shutdown uncertainty takes precedence over an ordinary run failure: the
+    // enclosing Effect must quarantine ownership even if a result was committed.
+    await closeDurableStorage(harness);
+  }
+};

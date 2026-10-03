@@ -3,6 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { Empty, EmptyHeader, EmptyTitle, EmptyDescription } from "@/components/ui/empty";
 import { Button } from "@/components/ui/button";
 import { label, time } from "@/lib/dashboard";
+import { isTimelineMessage } from "./model";
 export function Status({ value }: { value?: string }) {
   return (
     <Badge
@@ -38,9 +39,10 @@ export function Messages({
   messages?: readonly import("./model").MessageView[];
   inspect: (path: string) => void;
 }) {
-  return messages.length ? (
+  const visible = messages.filter(isTimelineMessage);
+  return visible.length ? (
     <div>
-      {messages.map((message, i) => (
+      {visible.map((message, i) => (
         <article className="message" key={i}>
           <div className="flex items-center justify-between gap-3 mb-2">
             <Badge variant="outline">{message.label}</Badge>
@@ -48,17 +50,11 @@ export function Messages({
               {time(message.at ?? message.timestamp)}
             </time>
           </div>
-          {message.tool ? (
-            <details>
-              <summary className="cursor-pointer text-sm">
-                {message.toolName || "View tool call"}
-              </summary>
-              <pre>{message.details}</pre>
-            </details>
-          ) : message.text !== undefined ? (
-            <p>{message.text}</p>
-          ) : (
-            <pre>{message.details}</pre>
+          {message.text !== undefined ? <p>{message.text}</p> : <pre>{message.details}</pre>}
+          {message.progress?.processing === "display-only" && (
+            <p className="text-sm text-muted-foreground">
+              Saved for you. Automatic follow-up has reached its limit.
+            </p>
           )}
           {message.references.map((path) => (
             <Button key={path} size="sm" variant="link" onClick={() => inspect(path)}>

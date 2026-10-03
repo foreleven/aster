@@ -1,4 +1,4 @@
-import { Match, Schema } from "effect";
+import { Match, Schema, Struct } from "effect";
 import type { ApprovalResponse, Task } from "./model.js";
 import { RunState } from "./run-state.js";
 import { outcomeStatus, type ExecutionOutcome } from "./outcome.js";
@@ -75,5 +75,11 @@ export const transitionRun = (current: RunState, transition: RunTransition) => {
     })),
     Match.orElse((event) => event),
   );
-  return { state: Schema.decodeUnknownSync(RunState)({ ...current, ...next }), event };
+  return {
+    state: Schema.decodeUnknownSync(RunState)({
+      ...(transition.type === "Submitted" ? Struct.omit(current, ["outcomeText"]) : current),
+      ...next,
+    }),
+    event,
+  };
 };

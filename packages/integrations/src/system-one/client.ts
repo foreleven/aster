@@ -1,4 +1,4 @@
-import { TypeSafeClient } from "@typesafe-ai/sdk";
+import { TypeSafeClient, type Questions } from "@typesafe-ai/sdk";
 import { DecisionError, SystemOneConfig, SystemOneClient, secretConfig } from "@aster/core";
 import { Config, ConfigProvider, Effect, Layer, Redacted, Schema } from "effect";
 
@@ -59,6 +59,9 @@ export const makeSystemOneClient = (
           client.systemOne(
             {
               ...request,
+              // The core contract deliberately hides the SDK's generic question union;
+              // this is the single adapter boundary where the validated shapes meet.
+              questions: request.questions as Questions,
               state:
                 typeof request.state === "string" ? request.state : JSON.stringify(request.state),
             },
@@ -69,7 +72,19 @@ export const makeSystemOneClient = (
             cause,
             message: cause instanceof Error ? cause.message : String(cause),
           }),
-      }),
+      }).pipe(
+        Effect.map((result) => ({
+          answers: result.answers as {
+            readonly [key: string]: {
+              readonly type: string;
+              readonly choice?: string;
+              readonly score?: number;
+              readonly confidence?: number;
+              readonly legend?: Readonly<Record<string, unknown>>;
+            };
+          },
+        })),
+      ),
   };
 };
 

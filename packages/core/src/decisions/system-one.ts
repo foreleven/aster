@@ -11,15 +11,25 @@ export const SystemOneConfig = Schema.Struct({
   apiKey: Schema.String,
 });
 export type SystemOneConfig = typeof SystemOneConfig.Type;
-export interface DecisionQuestion {
+export type DecisionQuestion = DecisionChoiceQuestion | DecisionScoreQuestion;
+export interface DecisionChoiceQuestion {
   readonly type: "choice";
   readonly instructions: string;
   readonly criteria: Readonly<Record<string, string>>;
+}
+export interface DecisionScoreQuestion {
+  readonly type: "score";
+  readonly instructions: string;
+  readonly criteria: readonly [string, string, ...string[]];
 }
 export const choice = (
   instructions: string,
   criteria: Readonly<Record<string, string>>,
 ): DecisionQuestion => ({ type: "choice", instructions, criteria });
+export const score = (
+  instructions: string,
+  criteria: readonly [string, string, ...string[]],
+): DecisionQuestion => ({ type: "score", instructions, criteria });
 /** Adapters translate SDK failures and forward fiber interruption to the transport. */
 export interface SystemOneClient {
   readonly configured?: boolean;
@@ -29,7 +39,16 @@ export interface SystemOneClient {
   }) => Effect.Effect<
     {
       readonly answers: Readonly<
-        Record<string, { readonly type: string; readonly choice?: string }>
+        Record<
+          string,
+          {
+            readonly type: string;
+            readonly choice?: string;
+            readonly score?: number;
+            readonly confidence?: number;
+            readonly legend?: Readonly<Record<string, unknown>>;
+          }
+        >
       >;
     },
     DecisionError

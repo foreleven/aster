@@ -151,7 +151,7 @@ The common change notification follows a completed content update, rather than m
 
 Change notification is distinct from Signal eligibility. Signal Run changes continue to be excluded from triggering other Signals. Automatic follow-up processing also does not imply an Agent execution on every change.
 
-The in-memory `ContextRegistry` automatically publishes every changed public representation. Equal public writes and changes to undeclared private bookkeeping do not publish. The application processor initializes empty dynamic descriptions and follows private callbacks registered by Actor implementations to select memory captures and Signal evaluation inputs. It contains no Context type or path-based dispatch. Integrations do not submit memory commands; ordinary source activity remains outside memory capture.
+`ContextRegistry` validates domain records and delegates canonical commits to `DurableContext`. The selected backend publishes each changed public representation only after storage commits; the Local implementation has no model requirement. Equal public writes and changes to undeclared private bookkeeping do not publish. The application processor initializes empty dynamic descriptions and follows private callbacks registered by Actor implementations to select memory captures and Signal evaluation inputs. It contains no Context type or path-based dispatch. Integrations do not submit memory commands; ordinary source activity remains outside memory capture.
 
 ### Memory recall
 
@@ -273,3 +273,45 @@ Domain tests live with core, file/transport/CLI adapter tests with integrations,
 ### Business policy versus adapters
 
 Goal planning prompts/tools and completion validation, Signal extraction prompts/result validation, and whole-Signal execution decisions belong to core. Depending on the shared Agent abstraction does not turn business policy into infrastructure. Integrations owns SDK transport, subprocesses, filesystem access and executor capability descriptions. Core does not import integrations. The app assembles the Goal runtime directly; there is no second integration-owned Goal runtime. Source folders group files by capability, retaining root package exports.
+
+## Explicit Context revision admission
+
+All Context writes now use `ContextRegistry.commit(record, { expectedRevision })`; the implicit-revision `set` helper is removed. Legacy persisted records remain readable at revision zero. Domain owners capture one snapshot before deriving a transition and carry that snapshot's revision through asynchronous work. In particular, Goal working-state projection must not reload a newer revision after awaiting history counts/pages and attach it to an older computed state.
+
+Description initialization also receives an explicit observed revision. It can fill a missing description but cannot overwrite concurrent state/messages. A stale revision fails with typed ContextConflict and emits no change; callers may refresh and decide whether to retry. New caller-driven operations retain their supplied revision, while mailbox-owned observation transitions use the snapshot read by that handler. Actor persistence/ownership failures enter supervision; expected tool validation and version conflicts become protocol errors. Storage failures must never be formatted as a successful tool reply.
+
+This storage-boundary migration does not complete the shared command envelope, stable request receipts, causation propagation, or durable reaction outbox requirements. Those remain separate domain changes.
+
+## Controlled Personal Signal commands
+
+Personal accepts a Signal proposal through `ApplyPersonalSignal`, or as part of a structured model reply. Its mailbox persists an outbox intent before delivery; model replies, completion cursor and proposed intents share one commit. The envelope carries operation, requestId, causationId, source, target, expected target Context revision, creation time, full definition and active state. The Personal admission revision and the target Signal revision are distinct.
+
+The Signal mailbox owns create/update validation and commits the definition with an exact-payload receipt. The reserved `personal--` namespace and persisted `/personal` owner prevent cross-owner updates. YAML/Goal definitions remain outside Personal's write authority; the legacy Configure/Upsert protocol returns a typed rejection if it targets a Personal Signal. Retrying an identical request returns the original receipt before checking the current revision and does not reset a timer. A changed payload under the same request ID conflicts.
+
+A full update can add or remove schedule/notBefore and activate or deactivate the Signal. No schedule means source-change screening; once and cron use the Signal timer path. Accepted updates increment the timer generation independently of the Context revision, invalidating stale ticks. Personal lists only configured executor names, never their credentials. Personal Signal Runs use confirm mode and enter the existing ApprovalQueue flow before execution.
+
+Each due cron occurrence is a new bounded causal root, identified by the persisted Signal path, definition revision and due time. The accepted recurring definition authorizes this renewal; it does not renew authority on message delivery, acknowledgement, or replay. Each root permits at most four Agent turns and remains subject to the receiver's eight-admission branching bound. This prevents a long-lived monitor from exhausting its creation request's lifetime budget. Immediate reactions and one-shot follow-ups retain their parent chain, so repeatedly creating one-shot timers cannot replenish it. The occurrence's root is persisted before delivery and reused after recovery. Deactivation, deletion, Goal completion and stale timer revisions still prevent new occurrences.
+
+Outbox attempts and lastAttemptAt commit before remote submission. Unknown acknowledgements retain the original operation for receipt reconciliation, including after restart. Success clears stale delivery errors. This reconciliation is safe because the receiving owner deduplicates the exact persisted request; it does not authorize retrying an uncertain external execution. Generalized SystemOne reactions, notifications and execution policy remain separate work.
+
+## Personal approval response admission
+
+Explicit user decisions enter Personal through RespondPersonalApproval; model results cannot contain approval proposals. Personal persists the request envelope in its outbox and returns its own admission revision. ApprovalQueue receives the exact request, validates the current pending entry and question/decision constraints, and commits its response, ordered resolution event and command receipt in one Context write using the caller's approvalsRevision. The trace records requestId, causationId, source, target and committed revision. Goal, Signal and Approval delivery receipts share CommandReceipt.
+
+An identical replay returns its original ApprovalQueue receipt even after acknowledgement or unrelated queue changes. A changed payload under the same identity, stale revision, resolved/revoked request or invalid answer cannot produce another resolution. Legacy Enqueue/Resolve/Acknowledge/Revoke updates preserve command receipts. Queue acknowledgement is distinct from external response delivery and execution completion; this command grants no standing Signal authority and does not retry an uncertain external submission.
+
+The browser freezes the explicit decision until admission is reconciled. It stores this identity at application-session scope, so navigation and SSE refresh cannot change it. Once Personal admission is known, the persisted outbox becomes the delivery view. A rejected domain response remains visible and requires a new explicit user command. Browser state alone does not survive a full document reload; committed outbox entries do.
+
+## Personal one-time Tasks
+
+`RunRootActor` adds an independent `/user/runs` owner for Personal’s prepared Tasks, while Goal and Signal Actors retain their Run children. `StartPersonalTask` uses Personal’s durable command outbox and a stable hash-derived Run path. The Run atomically commits exact Task admission and its receipt before readiness. Confirmation remains mandatory. No Signal is synthesized or persisted for this operation.
+
+### Canonical state and public read views
+
+Context storage is authoritative owner state; it is not itself an Agent-readable contract. Each owner declares an explicit read policy. Core supplies its domain policies; integrations register their own path families and may override them for a registered ContextDefinition. Schema decoding selects allowed fields recursively. Missing policy or invalid state returns a restricted metadata-only record, not the canonical state. Read projection is detached and does not mutate recovery state or advance revision.
+
+The API and Personal command boundary, Goal Context catalogue and Signal tools, Task preparation/readiness, Context reactions and memory capture use these read views. Run views omit frozen raw source snapshots; Delegation and Approval views omit provider metadata and session handles; Memory views omit pending capture batches. Native tool calls/results and provider blocks remain in execution history but do not cross public Context/history reads. History pages retain canonical total/sequence and advance the cursor through filtered entries. Text, descriptions and prepared Task evidence are authored business content, not an automatic secret-scanning boundary.
+
+## Processing recovery boundary
+
+SystemOne and notification delivery expose operator diagnostics through InspectProcessing. RecoverProcessing accepts a stable request ID and expected owner revision, then routes the typed recovery command to the owning Actor. The Actor persists authorization and its receipt with the pending transition before acknowledging. Exact replay returns that receipt even after later owner revisions; changed request reuse or stale new authorization is rejected. RetryScreening applies only to failed work and retains its admitted source/catalogue. RetryReactionDelivery and RetryNotification apply only to selected unknown deliveries and retain their original command identity. Successful decisions and known rejections cannot be overwritten through recovery. Context projection excludes frozen evidence and private recovery journals.

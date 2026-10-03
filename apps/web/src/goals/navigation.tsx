@@ -2,7 +2,7 @@ import React from "react";
 import { Archive, Asterisk, Eye, Orbit, Pause, RefreshCw, UserRound, X } from "lucide-react";
 import { Match } from "effect";
 import type { ContextView } from "../dashboard/model";
-import { dateLabel, goalGroup, goalGroups, lastActivity, slugFor } from "./presentation";
+import { dateLabel, goalGroup, goalGroups, lastActivity, titleFor } from "./presentation";
 
 export function GoalsNavigation({
   goals,
@@ -70,7 +70,7 @@ export function GoalsNavigation({
                   >
                     <Icon size={21} className="goal-list-icon" />
                     <span>
-                      <strong>{goal.description || slugFor(goal)}</strong>
+                      <strong>{titleFor(goal)}</strong>
                       <small>
                         {group}
                         {activity !== undefined ? ` · ${dateLabel(activity)}` : ""}

@@ -25,6 +25,8 @@ export const goalGroup = (status?: string) =>
     Match.orElse(() => "Other" as const),
   );
 export const slugFor = (goal: ContextView) => goal.path.slice("/goals/".length);
+export const titleFor = (goal: ContextView) =>
+  goal.state.title || goal.description || slugFor(goal);
 export const lastActivity = (context: ContextView) =>
   context.messages.at(-1)?.at ?? context.messages.at(-1)?.timestamp;
 export const dateLabel = (value?: string | number) => {
@@ -84,6 +86,12 @@ export function WorkIcon({ status }: { status?: string }) {
 }
 export const eventKind = (message: MessageView) =>
   Match.value(message.label.toLowerCase()).pipe(
+    Match.when("goal intent", () => ({
+      label: "Goal intent",
+      icon: Search,
+      tone: "amber",
+      category: "progress",
+    })),
     Match.whenOr("user", "you", () => ({
       label: "You",
       icon: MessageSquare,

@@ -21,3 +21,6 @@ export * from "./im/policy.js";
 export * from "./im/agent-queue.js";
 export * from "./im/summary-gate.js";
 export * from "./shared/errors.js";
+
+export * from "./public-views.js";
+export * from "./im/writeback.js";

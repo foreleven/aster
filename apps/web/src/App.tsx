@@ -1,14 +1,23 @@
-import React, { lazy, Suspense, useContext, useState } from "react";
+import React, { lazy, Suspense, useContext, useState, useSyncExternalStore } from "react";
 import { RegistryContext, useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/unstable/reactivity";
 import { QueryKeys } from "@aster/api-contracts";
 import { connection } from "./api/events";
 import { invalidateQueries } from "./api/client";
 import { contextViews, dashboardStatus, selectedRow } from "./dashboard/state";
-import { GoalsNavigation } from "./goals/navigation";
+import { ContextNavigation } from "./contexts/navigation";
+import { ContextWorkspace } from "./contexts/workspace";
+import { usePersonalCommands } from "./contexts/personal";
 import { GoalWorkspace } from "./goals/workspace";
 import { EmptyState } from "./goals/presentation";
 import "./goals/goals.css";
+import "./contexts/contexts.css";
+
+const subscribeSelection = (notify: () => void) => {
+  window.addEventListener("popstate", notify);
+  return () => window.removeEventListener("popstate", notify);
+};
+const readSelection = () => new URLSearchParams(window.location.search).get("context") ?? "";
 
 const Inspector = lazy(() =>
   import("./dashboard/inspector").then((module) => ({ default: module.Inspector })),
@@ -16,16 +25,27 @@ const Inspector = lazy(() =>
 
 export default function App() {
   const registry = useContext(RegistryContext);
-  const contexts = useAtomValue(contextViews);
+  const contexts = useAtomValue(contextViews).filter((context) => !context.state.deleted);
   const { loaded, loading, connected, error } = useAtomValue(dashboardStatus);
   const goals = contexts.filter(
     (context) => /^\/goals\/[^/]+$/.test(context.path) && !context.state.deleted,
   );
-  const [selected, setSelected] = useState("");
+  const selected = useSyncExternalStore(subscribeSelection, readSelection);
+  const personal = usePersonalCommands(contexts.find((context) => context.path === "/personal"));
   const [inspected, setInspected] = useState("");
   const [actionError, setActionError] = useState("");
   const [mobileNavigation, setMobileNavigation] = useState(false);
-  const active = goals.find((goal) => goal.path === selected) ?? goals[0];
+  const active = selected
+    ? contexts.find((context) => context.path === selected)
+    : (contexts.find((context) => context.path === "/personal") ?? goals[0] ?? contexts[0]);
+  const navigate = (path: string) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("context", path);
+    window.history.pushState(null, "", url);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+    setMobileNavigation(false);
+    setActionError("");
+  };
   const invalidate = useAtomSet(invalidateQueries);
   const reconnect = useAtomRefresh(connection);
   const refresh = () => {
@@ -42,23 +62,19 @@ export default function App() {
   };
   return (
     <div className={`goals-app ${mobileNavigation ? "mobile-navigation-open" : ""}`}>
-      <GoalsNavigation
-        goals={goals}
+      <ContextNavigation
+        contexts={contexts}
         selected={active?.path ?? ""}
         connected={connected}
         loading={loading}
         refresh={refresh}
         close={() => setMobileNavigation(false)}
-        onSelect={(path) => {
-          setSelected(path);
-          setMobileNavigation(false);
-          setActionError("");
-        }}
+        onSelect={navigate}
       />
       {mobileNavigation && (
         <button
           className="navigation-backdrop"
-          aria-label="Close goal navigation"
+          aria-label="Close context navigation"
           onClick={() => setMobileNavigation(false)}
         />
       )}
@@ -71,13 +87,15 @@ export default function App() {
         )}
         {!loaded ? (
           <main className="goals-empty-page">
-            <EmptyState title={error ? "Could not load Goals" : "Loading Goals…"}>
+            <EmptyState title={error ? "Could not load Contexts" : "Loading Contexts…"}>
               {error
                 ? "Check the local connection, then retry."
                 : "Connecting to your local workspace."}
             </EmptyState>
           </main>
-        ) : active ? (
+        ) : active &&
+          active.projection?.visibility !== "restricted" &&
+          /^\/goals\/[^/]+$/.test(active.path) ? (
           <GoalWorkspace
             key={active.path}
             goal={active}
@@ -85,11 +103,27 @@ export default function App() {
             inspect={inspect}
             showGoals={() => setMobileNavigation(true)}
           />
+        ) : active ? (
+          <ContextWorkspace
+            key={active.path}
+            context={active}
+            contexts={contexts}
+            navigate={navigate}
+            showNavigation={() => setMobileNavigation(true)}
+            personal={personal}
+          />
         ) : (
           <main className="goals-empty-page">
-            <EmptyState title="No Goals yet">
-              Add a goal to your Aster configuration to start tracking progress, context, and
-              actions.
+            <button
+              className="mobile-goals-toggle outline-action"
+              onClick={() => setMobileNavigation(true)}
+            >
+              Choose context
+            </button>
+            <EmptyState title={selected ? "Context unavailable" : "No Contexts yet"}>
+              {selected
+                ? `The Context ${selected} is not available in the current snapshot. Select another Context or refresh.`
+                : "Your workspace Contexts will appear here when the runtime is ready."}
             </EmptyState>
           </main>
         )}
