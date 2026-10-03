@@ -142,6 +142,75 @@ test("durable context guard failure prevents a provider request despite native h
   }
 });
 
+test("durable token budgets cap the model window and are frozen for request replay", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aster-pi-budget-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const windows: number[] = [];
+  const models = Layer.succeed(Models, {
+    resolve: () =>
+      Effect.succeed({
+        model,
+        getApiKey: () => "unused",
+        stream: (effective) => {
+          windows.push(effective.contextWindow);
+          const stream = createAssistantMessageEventStream();
+          stream.push({ type: "done", reason: "stop", message: assistant() });
+          return stream;
+        },
+      }),
+  });
+  const run = (contextTokens: number, requestId: string) =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.make({
+        name: "test",
+        durable: {
+          sessionId: "budget",
+          requestId,
+          storageDirectory: directory,
+          contextBudget: { contextTokens, reserveTokens: 100 },
+        },
+      });
+      return yield* agent.run({ messages: [{ role: "user", content: "Review", timestamp: 0 }] });
+    }).pipe(Effect.provide(models));
+  await Effect.runPromise(run(500, "first"));
+  assert.deepEqual(windows, [500]);
+  await Effect.runPromise(run(500, "first"));
+  assert.deepEqual(windows, [500]);
+  await assert.rejects(Effect.runPromise(run(600, "first")), /conflicts with its frozen input/);
+  await Effect.runPromise(run(2000, "second"));
+  assert.deepEqual(windows, [500, 1000]);
+  assert.equal(model.contextWindow, 1000);
+});
+
+test("invalid durable budgets fail before acquiring storage or invoking a provider", async () => {
+  const models = Layer.succeed(Models, {
+    resolve: () =>
+      Effect.succeed({
+        model,
+        getApiKey: () => "unused",
+        stream: () => {
+          throw new Error("Provider must not be called");
+        },
+      }),
+  });
+  for (const contextBudget of [
+    { contextTokens: 0, reserveTokens: 100 },
+    { contextTokens: Infinity, reserveTokens: 100 },
+    { contextTokens: 500, reserveTokens: 500 },
+    { contextTokens: 500, reserveTokens: -1 },
+    { contextTokens: 2000, reserveTokens: 1500 },
+  ]) {
+    const result = await Effect.runPromise(
+      Agent.make({
+        name: "test",
+        durable: { sessionId: "invalid", requestId: "invalid", contextBudget },
+      }).pipe(Effect.provide(models), Effect.result),
+    );
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") assert.equal(result.failure._tag, "AgentError");
+  }
+});
+
 test("durable Effect interruption joins Harness.close before returning", async () => {
   const started = Promise.withResolvers<void>();
   const closing = Promise.withResolvers<void>();

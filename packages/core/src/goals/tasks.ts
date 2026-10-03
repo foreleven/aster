@@ -65,6 +65,8 @@ const SignalPatch = Schema.Struct({
   notBefore: Schema.optional(Schema.NullOr(Schema.String)),
   schedule: Schema.optional(Schema.NullOr(SignalSchedule)),
 });
+export const goalSignalIdPattern = /^[a-z0-9][a-z0-9-]*$/;
+export const GoalSignalId = Schema.String.check(Schema.isPattern(goalSignalIdPattern));
 export const GoalSignalChange = Schema.Union([
   Schema.Struct({
     operation: Schema.Literal("signal_create"),

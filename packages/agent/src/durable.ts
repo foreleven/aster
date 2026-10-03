@@ -25,6 +25,7 @@ import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/n
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
+import { Schema } from "effect";
 import { admitExchange, completeExchange } from "./durable-exchange.js";
 import { DurableAgentFailure } from "./durable-error.js";
 import { entriesFor, fenceTools, generationFence, hasUnknownToolOutcome } from "./durable-tools.js";
@@ -110,6 +111,15 @@ const inputText = (messages: readonly AgentMessage[]) =>
       "Process this newly committed input according to your instructions. Use the available tools and submit any required structured result.",
   });
 
+export const DurableContextBudget = Schema.Struct({
+  contextTokens: Schema.Int.check(Schema.isGreaterThan(0)),
+  reserveTokens: Schema.Int.check(Schema.isGreaterThan(0)),
+}).check(
+  Schema.makeFilter((budget) => budget.reserveTokens < budget.contextTokens, {
+    expected: "Output reserve smaller than the effective model context window",
+  }),
+);
+
 export interface DurableRunOptions {
   /** Bump when tool behavior or context transformation semantics change. */
   readonly catalogueId?: string;
@@ -117,6 +127,8 @@ export interface DurableRunOptions {
   readonly sessionId: string;
   readonly requestId: string;
   readonly storageDirectory?: string;
+  /** Token budget for native compaction, capped to the provider model window. */
+  readonly contextBudget?: typeof DurableContextBudget.Type;
 }
 
 export class DurableCloseFailure extends Error {
@@ -152,6 +164,10 @@ export const runDurableAgent = async (input: {
   readonly signal?: AbortSignal;
 }) => {
   const context = durableContext(input.signal);
+  const budget = input.durable.contextBudget;
+  const resolved = budget
+    ? { ...input.resolved, model: { ...input.resolved.model, contextWindow: budget.contextTokens } }
+    : input.resolved;
   const directory = durableDirectory(input.durable);
   const storage = await openNodeJsonlStorage(directory, context, { fsync: true });
   const registry = createRegistry();
@@ -182,8 +198,19 @@ export const runDurableAgent = async (input: {
     harness = await Harness.open(
       storage,
       {
-        models: durableModels(input.resolved, fence.beforeModel),
+        models: durableModels(resolved, fence.beforeModel),
         registry,
+        // Let Pi compact at generation boundaries before preparing the request.
+        // Keep half the input budget verbatim, leaving space for the summary
+        // and future tool results. Blocking compaction stays owned by the run.
+        settings: budget && {
+          compaction: {
+            enabled: true,
+            reserveTokens: budget.reserveTokens,
+            keepRecentTokens: Math.floor((budget.contextTokens - budget.reserveTokens) / 2),
+            backgroundTokens: 0,
+          },
+        },
       },
       context,
     );
@@ -218,6 +245,7 @@ export const runDurableAgent = async (input: {
           instructions,
           resultTool: input.resultTool,
           catalogueId: input.durable.catalogueId ?? "aster.agent.v2",
+          contextBudget: budget,
           configuration: createHash("sha256")
             .update(
               JSON.stringify({

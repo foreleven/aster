@@ -48,7 +48,7 @@ export const evaluateGoal = (options: {
         ? Schema.decodeUnknownSync(GoalState)(current().state).pendingHandoff?.input
         : undefined;
       const target = Math.floor(
-        ((runtime.contextTokens ?? 48000) - (runtime.reserveTokens ?? 8192)) / 3,
+        ((runtime.contextTokens ?? 200000) - (runtime.reserveTokens ?? 8192)) / 3,
       );
       const read = () =>
         history.read(definition.slug, {

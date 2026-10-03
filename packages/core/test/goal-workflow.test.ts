@@ -1249,7 +1249,7 @@ test("compaction retains original history and restart loads summary plus a bound
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const env = yield* setup(reasoner, { store, history });
+          const env = yield* setup(reasoner, { store, history, contextTokens: 48000 });
           yield* env.goals.tell({ _tag: "Initialize" });
           yield* until(() => calls > i);
           yield* until(

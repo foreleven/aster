@@ -1,5 +1,5 @@
 import { mailChannelView } from "../public-views.js";
-import { Effect, Match, Layer, Schema } from "effect";
+import { Clock, Effect, Match, Layer, Schema } from "effect";
 import { type ActorRef } from "@aster/actor";
 import {
   ContextActor,
@@ -11,8 +11,9 @@ import {
 import { LarkConfig } from "../config.js";
 import { profileCapture } from "../shared/profile.js";
 import { EmailData, MailboxProfile } from "./model.js";
-import { LarkMailCli } from "./client.js";
+import { LarkMailCli, LarkResponseError } from "./client.js";
 import { LarkMailMessageActor, type MailMessageCommand } from "./message-actor.js";
+import { MailWindow, mailDayStart, mailWindow } from "./window.js";
 const EmailChannelCommand = Schema.Union([
   Schema.TaggedStruct("ProfileLoaded", {
     result: Schema.Union([
@@ -23,25 +24,18 @@ const EmailChannelCommand = Schema.Union([
     ]),
   }),
   Schema.TaggedStruct("Poll", {}),
-  Schema.TaggedStruct("Listed", {
+  Schema.TaggedStruct("Polled", {
+    window: MailWindow,
     result: Schema.Union([
-      Schema.TaggedStruct("Success", {
-        value: Schema.Array(Schema.String),
-      }),
-      Schema.TaggedStruct("Failure", {
-        error: Schema.instanceOf(Error),
-      }),
+      Schema.TaggedStruct("Success", { value: Schema.Array(EmailData) }),
+      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
     ]),
   }),
-  Schema.TaggedStruct("Fetched", {
-    ids: Schema.Array(Schema.String),
+  Schema.TaggedStruct("Published", {
+    window: MailWindow,
     result: Schema.Union([
-      Schema.TaggedStruct("Success", {
-        value: Schema.Array(EmailData),
-      }),
-      Schema.TaggedStruct("Failure", {
-        error: Schema.instanceOf(Error),
-      }),
+      Schema.TaggedStruct("Success", { value: Schema.Void }),
+      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
     ]),
   }),
 ]);
@@ -77,8 +71,26 @@ export class LarkEmailChannelActor extends ContextActor.Service<
       const registry = yield* ContextRegistry;
       const cli = yield* LarkMailCli;
       const config = yield* LarkConfig;
-      const seen = new Set<string>();
-      let initialized = false;
+      const sessionStart = mailDayStart(yield* Clock.currentTimeMillis);
+      let cursor: number | undefined;
+      let busy = false;
+      const poll = Effect.fn("LarkMail.poll")(function* (window: MailWindow) {
+        if (window.start >= window.through) return [];
+        const ids = yield* cli.listIds(config.mail.mailbox, window.start, window.through);
+        // Persisted email Contexts deduplicate both overlapping windows and today's restart replay.
+        const unseen = ids.filter((id) => !registry.get(`/lark/mail/${config.mail.mailbox}/${id}`));
+        if (unseen.length === 0) return [];
+        const emails = yield* cli.getMessages(config.mail.mailbox, unseen);
+        const received = new Set(emails.map((email) => email.messageId));
+        if (
+          unseen.some((id) => !received.has(id)) ||
+          emails.some(
+            (email) => email.mailbox !== config.mail.mailbox || !unseen.includes(email.messageId),
+          )
+        )
+          return yield* new LarkResponseError({ cause: "Incomplete or unexpected mail messages" });
+        return emails;
+      });
       const schedule = Effect.sleep(config.mail.pollIntervalMs);
       return LarkEmailChannelActor.of({
         started: (context) =>
@@ -133,77 +145,70 @@ export class LarkEmailChannelActor extends ContextActor.Service<
             ),
             Match.tag("Poll", () =>
               Effect.gen(function* () {
-                yield* context.pipeToSelf(cli.listRecentIds(config.mail.mailbox), (result) => ({
-                  _tag: "Listed",
+                if (busy) return;
+                busy = true;
+                const window = mailWindow(cursor, yield* Clock.currentTimeMillis, sessionStart);
+                yield* context.pipeToSelf(poll(window), (result) => ({
+                  _tag: "Polled",
+                  window,
                   result,
                 }));
               }),
             ),
-            Match.tag("Listed", (command) =>
-              Effect.gen(function* () {
-                yield* Match.value(command.result).pipe(
-                  Match.tag("Failure", (result) =>
-                    Effect.gen(function* () {
-                      yield* Effect.logWarning(result.error.message);
-                      yield* context.pipeToSelf(schedule, () => ({
-                        _tag: "Poll",
-                      }));
-                    }),
-                  ),
-                  Match.tag("Success", (result) =>
-                    Effect.gen(function* () {
-                      const ids = result.value;
-                      if (!initialized) {
-                        for (const id of ids) seen.add(id);
-                        initialized = true;
-                        yield* context.pipeToSelf(schedule, () => ({
-                          _tag: "Poll",
-                        }));
-                        return;
-                      }
-                      const newIds = ids.filter((id) => !seen.has(id));
-                      if (newIds.length === 0) {
-                        yield* context.pipeToSelf(schedule, () => ({
-                          _tag: "Poll",
-                        }));
-                        return;
-                      }
-                      yield* context.pipeToSelf(
-                        cli.getMessages(config.mail.mailbox, newIds),
-                        (result) => ({
-                          _tag: "Fetched",
-                          ids: newIds,
-                          result,
-                        }),
+            Match.tag("Polled", (command) =>
+              Match.value(command.result).pipe(
+                Match.tag("Failure", (result) =>
+                  Effect.gen(function* () {
+                    busy = false;
+                    yield* Effect.logWarning(result.error.message);
+                    yield* context.pipeToSelf(schedule, () => ({ _tag: "Poll" }));
+                  }),
+                ),
+                Match.tag("Success", (result) =>
+                  Effect.gen(function* () {
+                    const deliveries = [];
+                    for (const email of result.value) {
+                      const relative = `${email.mailbox}/${email.messageId}`;
+                      const existing = yield* context.child(childActorName(relative));
+                      const ref =
+                        (existing as ActorRef<MailMessageCommand> | undefined) ??
+                        (yield* spawnContextChild(context, relative, LarkMailMessageActor).pipe(
+                          Effect.orDie,
+                        ));
+                      deliveries.push(
+                        ref.ask<void>((replyTo) => ({ _tag: "SetEmail", email, replyTo })),
                       );
-                    }),
-                  ),
-                  Match.exhaustive,
-                );
-              }),
+                    }
+                    // tell() only enqueues. Advance only after each child acknowledges its durable commit.
+                    yield* context.pipeToSelf(
+                      Effect.all(deliveries, { discard: true }),
+                      (result) => ({
+                        _tag: "Published",
+                        window: command.window,
+                        result,
+                      }),
+                    );
+                  }),
+                ),
+                Match.exhaustive,
+              ),
             ),
-            Match.tag("Fetched", (command) =>
+            Match.tag("Published", (command) =>
               Effect.gen(function* () {
+                busy = false;
                 yield* Match.value(command.result).pipe(
                   Match.tag("Failure", (result) => Effect.logWarning(result.error.message)),
-                  Match.tag("Success", (result) =>
-                    Effect.gen(function* () {
-                      for (const email of result.value) {
-                        const relative = `${email.mailbox}/${email.messageId}`;
-                        const name = childActorName(relative);
-                        const existing = yield* context.child(name);
-                        const ref =
-                          (existing as ActorRef<MailMessageCommand> | undefined) ??
-                          (yield* spawnContextChild(context, relative, LarkMailMessageActor).pipe(
-                            Effect.orDie,
-                          ));
-                        yield* ref.tell({ _tag: "SetEmail", email });
-                      }
-                      for (const id of command.ids) seen.add(id);
+                  Match.tag("Success", () =>
+                    Effect.sync(() => {
+                      cursor = command.window.through;
                     }),
                   ),
                   Match.exhaustive,
                 );
+                if (command.result._tag === "Success" && !command.window.caughtUp) {
+                  yield* context.self.tell({ _tag: "Poll" });
+                  return;
+                }
                 yield* context.pipeToSelf(schedule, () => ({ _tag: "Poll" }));
               }),
             ),

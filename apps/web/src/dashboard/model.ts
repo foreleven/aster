@@ -6,7 +6,6 @@ import {
   PreparedTask,
   RunResumption,
   ExecutionResumption,
-  GoalDelivery,
   type PublicContext,
   type RuntimeEvent,
   type RuntimeSnapshot,
@@ -26,7 +25,10 @@ const DisplayTask = Schema.Struct({
 const DisplayState = Schema.Struct({
   writeback: Schema.optional(WritebackOperation),
   resumptions: Schema.optional(Schema.Array(Schema.Union([RunResumption, ExecutionResumption]))),
-  deliveries: Schema.optional(Schema.Array(GoalDelivery)),
+  // Delivery owners expose different payloads; related work only needs their source path.
+  deliveries: Schema.optional(
+    Schema.Array(Schema.Struct({ input: Schema.Struct({ source: Schema.String }) })),
+  ),
   title: Schema.optional(Schema.String),
   chat: Schema.optional(
     Schema.Struct({

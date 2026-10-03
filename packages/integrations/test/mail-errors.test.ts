@@ -24,7 +24,7 @@ test("mail response errors remain typed failures for polling retries", async () 
       const cli = liveCli();
       const operations: Effect.Effect<unknown, Error>[] = [
         cli.getMailboxProfile("me"),
-        cli.listRecentIds("me"),
+        cli.listIds("me", 0, 1000),
         cli.getMessages("me", ["id"]),
       ];
       for (const operation of operations) {

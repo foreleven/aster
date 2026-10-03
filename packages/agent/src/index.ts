@@ -16,6 +16,7 @@ import {
   durableDirectory,
   runDurableAgent,
   DurableCloseFailure,
+  DurableContextBudget,
   type DurableRunOptions,
 } from "./durable.js";
 import { DurableAgentFailure } from "./durable-error.js";
@@ -153,6 +154,22 @@ export const Agent = {
     Effect.gen(function* () {
       const models = yield* Models;
       const resolved = yield* models.resolve(options.name);
+      const requestedBudget = yield* Schema.decodeUnknownEffect(
+        Schema.optional(DurableContextBudget),
+      )(options.durable?.contextBudget).pipe(
+        Effect.mapError((cause) => new AgentError("Invalid durable context budget", [], { cause })),
+      );
+      const contextBudget =
+        requestedBudget === undefined
+          ? undefined
+          : {
+              ...requestedBudget,
+              contextTokens: Math.min(requestedBudget.contextTokens, resolved.model.contextWindow),
+            };
+      if (contextBudget && contextBudget.reserveTokens >= contextBudget.contextTokens)
+        return yield* Effect.fail(
+          new AgentError("Durable output reserve must fit within the provider model window"),
+        );
       const tools = [...(options.tools ?? [])];
       if (options.resultTool && !tools.some((tool) => tool.name === options.resultTool))
         return yield* Effect.fail(new AgentError(`Unknown result tool: ${options.resultTool}`));
@@ -186,7 +203,11 @@ export const Agent = {
                         resultTool: options.resultTool,
                         onMessage: options.onMessage,
                         transformContext: options.transformContext,
-                        durable: { ...durable, storageDirectory: lease.identity.directory },
+                        durable: {
+                          ...durable,
+                          contextBudget,
+                          storageDirectory: lease.identity.directory,
+                        },
                         signal: controller.signal,
                       });
                       return { controller, task };

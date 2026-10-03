@@ -71,7 +71,7 @@ test("a code-registered Lark root starts without YAML entries and creates its ow
             Layer.succeed(LarkMailCli, {
               getMailboxProfile: () =>
                 Effect.succeed({ address: "test@example.com", name: "Mail" }),
-              listRecentIds: () => Effect.succeed([]),
+              listIds: () => Effect.succeed([]),
               getMessages: () => Effect.succeed([]),
             }),
           ),
@@ -97,12 +97,11 @@ test("a code-registered Lark root starts without YAML entries and creates its ow
   assert.equal("type" in snapshot["/lark/mail"]!, false);
 });
 
-test("Lark channel skips startup mail and publishes a new email Context", async () => {
+test("Lark channel publishes today’s startup mail as an email Context", async () => {
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        let polls = 0;
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
@@ -133,8 +132,7 @@ test("Lark channel skips startup mail and publishes a new email Context", async 
             Layer.succeed(LarkMailCli, {
               getMailboxProfile: () =>
                 Effect.succeed({ address: "test@example.com", name: "Work mailbox" }),
-              listRecentIds: () =>
-                Effect.sync(() => (++polls === 1 ? ["old-id"] : ["new-id", "old-id"])),
+              listIds: () => Effect.succeed(["new-id"]),
               getMessages: (_mailbox, ids) => Effect.succeed(ids.includes("new-id") ? [email] : []),
             }),
           ),
@@ -290,7 +288,7 @@ for (const mailbox of ["me", "other"])
               Layer.succeed(LarkMailCli, {
                 getMailboxProfile: () =>
                   Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
-                listRecentIds: () => Effect.succeed([]),
+                listIds: () => Effect.succeed([]),
                 getMessages: () => Effect.succeed([]),
               }),
             ),

@@ -132,7 +132,7 @@ export const parseConfig = (input: unknown, baseDir: string): CoreConfig => {
     budget?.reserveTokens !== undefined &&
     (!Number.isInteger(budget.reserveTokens) ||
       budget.reserveTokens < 1024 ||
-      budget.reserveTokens >= (budget.contextTokens ?? 48000) / 2)
+      budget.reserveTokens >= (budget.contextTokens ?? 200000) / 2)
   )
     throw new Error("Invalid reserveTokens");
   return { config: parsed.config ?? {}, agents: parsed.agents, contexts, baseDir, signals, goals };

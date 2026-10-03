@@ -172,7 +172,7 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         const intent = goals[0];
         assert.equal(intent?._tag, "Route");
         if (intent?._tag === "Route" && intent.command._tag === "Intent") {
-          assert.equal(intent.command.input.intent.relevance.score, 0.8);
+          assert.equal(intent.command.input.intent.relevance.score, 8 / 9);
           assert.equal(intent.command.input.intent.relevance.rationale, "Relevant evidence");
         }
         assert.equal(screened.length, 1);

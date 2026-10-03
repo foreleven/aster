@@ -74,7 +74,7 @@ export class GoalSettings extends Context.Service<
         if (
           reasoning?.reserveTokens !== undefined &&
           (reasoning.reserveTokens < 1024 ||
-            reasoning.reserveTokens >= (reasoning.contextTokens ?? 48000) / 2)
+            reasoning.reserveTokens >= (reasoning.contextTokens ?? 200000) / 2)
         )
           throw new Error("Invalid reserveTokens");
         return { definitions, reasoning };

@@ -19,6 +19,8 @@ The local app retains CLI commands, HTTP/SSE and web serving, adapter selection 
 
 Source is grouped by capability: `config/, storage/, system-one/, codex/, doubao/, process/`. Consumers use the package root exports rather than internal paths.
 
+System One request failures emit the Effect error event `system-one.request.failed` with the model, question count and error message, independently of SDK log-level filtering. Logs omit credentials and request state; Goal screening retains its normalized input separately in the screening audit store.
+
 The generic mail adapter is exported from `mail/`. `MailIntegration.layer` provides the configured `MailSettings` and `MailFetcher` services; `MailSettings` reads `contexts./mail.config.mailboxes` from the captured `ConfigProvider`, while `mailFetcherLayer(settings.mailboxes)` is available for standalone composition. Passwords are decoded into `Redacted` values. Each mailbox may set `protocol: "imap" | "pop3"`, `host`, `port`, `secure`, `username`, `password`, `folder`, and `maxMessages`; IMAP and POP3 are supported because SMTP is a submission protocol.
 
 Doubao native response supports local command allow/reject, native local `interaction.ask` input, and pre-tool safety confirmation. It verifies the request against the original run before calling the observed desktop protocol; it never substitutes ordinary chat messages for approval. Unsupported action types, changed module contracts and missing bindings fail explicitly, with the saved response retained in Delegation history. No globally installed CLI is modified. Native contracts were checked against Doubao Work 2.31.6 and CLI 0.12.0.

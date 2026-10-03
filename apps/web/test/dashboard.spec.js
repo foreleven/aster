@@ -855,6 +855,42 @@ test("history invalidation during an older-page request retains both ends withou
   expect(errors).toEqual([]);
 });
 
+test("notification deliveries render without a dashboard projection error", async ({ page }) => {
+  const data = fixture();
+  data.contexts.push({
+    path: "/notifications",
+    revision: 1,
+    description: "Business notification delivery",
+    state: {
+      deliveries: [
+        {
+          input: {
+            requestId: "notification-1",
+            source: "/goals/engine",
+            target: "/personal",
+            kind: "GoalProgress",
+            revision: 1,
+          },
+          status: "delivered",
+          attempts: 1,
+          receipt: { requestId: "notification-1", revision: 2 },
+        },
+      ],
+    },
+    messages: [],
+  });
+  const { errors } = await setup(page, data);
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /Business notification delivery/ })
+    .click();
+  await expect(
+    page.getByText("Unsupported dashboard fields in /notifications", { exact: false }),
+  ).toHaveCount(0);
+  await expect(page.locator(".context-related")).toContainText("Knowledge Engine");
+  expect(errors).toEqual([]);
+});
+
 test("invalid dashboard fields report a projection error while preserving raw Context inspection", async ({
   page,
 }) => {

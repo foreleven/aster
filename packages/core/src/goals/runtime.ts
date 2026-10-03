@@ -251,7 +251,7 @@ export const relevantGoals = (
       .digest("hex");
     const summaryRevision = summaryFingerprint;
     const threshold = options.threshold ?? 0.7;
-    const policyVersion = options.policyVersion ?? "goal-relevance-v1";
+    const policyVersion = options.policyVersion ?? "goal-relevance-v3";
     const model = options.model ?? "system-one";
     const now = options.now ?? Date.now;
     const relevant: GoalRelevance[] = [];

@@ -73,6 +73,16 @@ export const makeSystemOneClient = (
             message: cause instanceof Error ? cause.message : String(cause),
           }),
       }).pipe(
+        Effect.tapErrorTag("DecisionError", (error) =>
+          Effect.logError(
+            JSON.stringify({
+              event: "system-one.request.failed",
+              model,
+              questionCount: Object.keys(request.questions).length,
+              error: error.message,
+            }),
+          ),
+        ),
         Effect.map((result) => ({
           answers: result.answers as {
             readonly [key: string]: {

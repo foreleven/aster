@@ -174,7 +174,7 @@ export class GoalActor extends ContextActor.Service<
         history,
         () => definition,
         () => path,
-        runtime.contextTokens ?? 48000,
+        runtime.contextTokens ?? 200000,
       );
       const { current, state, save, append, event } = working;
       const inputs = goalInputs(working, history);
@@ -606,7 +606,7 @@ export class GoalActor extends ContextActor.Service<
                     const inputBudget = Math.max(
                       1,
                       Math.floor(
-                        ((runtime.contextTokens ?? 48000) - (runtime.reserveTokens ?? 8192)) / 3,
+                        ((runtime.contextTokens ?? 200000) - (runtime.reserveTokens ?? 8192)) / 3,
                       ),
                     );
                     let size = 0;

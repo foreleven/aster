@@ -1,8 +1,75 @@
-import { Deferred, Effect, Fiber } from "effect";
+import { Deferred, Effect, Fiber, Logger } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { choice } from "@aster/core";
+import { choice, relevantGoals, type GoalScreeningRecord } from "@aster/core";
 import { makeSystemOneClient } from "../src/index.js";
+
+const screeningSource = {
+  path: "/lark/im/chats/project",
+  description: "Project chat",
+  state: { summary: "Private launch evidence" },
+  messages: [],
+};
+const screeningGoal = { slug: "release", description: "Release readiness" };
+const levelError = "Too many score levels. Must have at most 10 levels.";
+const testConfig = {
+  url: "https://system-one.test",
+  model: "test-model",
+  apiKey: "test-secret",
+};
+
+test("Goal screening respects the System One level limit and normalizes the top score to one", async () => {
+  const client = makeSystemOneClient(testConfig, {}, async (_url, init) => {
+    const body = JSON.parse(String(init?.body));
+    const levels = body.questions.relevance.criteria.length;
+    if (levels > 10) return Response.json({ error: { message: levelError } }, { status: 400 });
+    return Response.json({
+      answers: { relevance: { type: "score", score: levels - 1 } },
+      usage: { input_tokens: 0, output_tokens: 0 },
+    });
+  });
+  const result = await Effect.runPromise(relevantGoals(client, screeningSource, [screeningGoal]));
+  assert.equal(result[0]?.score, 1);
+});
+
+test("failed Goal screening emits an error log and audit record while retaining the failure", async () => {
+  const records: GoalScreeningRecord[] = [];
+  const logs: Array<{ level: string; message: unknown }> = [];
+  const logger = Logger.make<unknown, void>((entry) => {
+    logs.push({ level: entry.logLevel, message: entry.message });
+  });
+  let requests = 0;
+  const client = makeSystemOneClient(testConfig, {}, async () => {
+    requests++;
+    return Response.json({ error: { message: levelError } }, { status: 400 });
+  });
+  const result = await Effect.runPromise(
+    relevantGoals(client, screeningSource, [screeningGoal], {
+      screening: { append: (record) => Effect.sync(() => records.push(record)) },
+    }).pipe(Effect.result, Effect.provide(Logger.layer([logger]))),
+  );
+  assert.equal(result._tag, "Failure");
+  if (result._tag === "Failure") assert.match(result.failure.message, /400 Too many score levels/);
+  assert.equal(requests, 1);
+  for (const event of ["system-one.request.failed", "goal.screening.failed"])
+    assert.ok(
+      logs.some(
+        (entry) =>
+          entry.level === "Error" &&
+          JSON.stringify(entry.message).includes(event) &&
+          JSON.stringify(entry.message).includes("400 Too many score levels"),
+      ),
+    );
+  assert.ok(JSON.stringify(logs).includes(screeningSource.path));
+  assert.ok(JSON.stringify(logs).includes(screeningGoal.slug));
+  assert.equal(records.length, 1);
+  assert.equal(records[0]?.admitted, false);
+  assert.match(records[0]?.error ?? "", /400 Too many score levels/);
+  assert.equal(records[0]?.sourcePath, screeningSource.path);
+  assert.equal(records[0]?.goalSlug, screeningGoal.slug);
+  assert.ok(!JSON.stringify(logs).includes("Private launch evidence"));
+  assert.ok(!JSON.stringify(logs).includes(testConfig.apiKey));
+});
 
 test("interrupting a System One fiber aborts the SDK request without retrying", async () => {
   await Effect.runPromise(

@@ -26,6 +26,95 @@ const models = Layer.succeed(Models, {
 });
 const memory = { search: () => Effect.sync(() => []), expand: () => Effect.sync(() => []) };
 
+test("Goal planning receives an independent relevance check and can ignore a high-scored intent", async (t) => {
+  const progress = "No DataAgent project link is established; ignore the dataset project's bugs.";
+  t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
+    Effect.succeed({
+      run: ({ messages }) =>
+        Effect.promise(async () => {
+          const prompt = messages.find((message) => message.role === "system")!.content;
+          assert.equal(typeof prompt, "string");
+          assert.match(String(prompt), /Independently verify each admitted input/);
+          assert.match(String(prompt), /screening score and rationale are fallible routing hints/);
+          assert.match(
+            String(prompt),
+            /If no input has a verified Goal link, use disposition ignored/,
+          );
+          assert.match(String(prompt), /Do not turn unrelated facts into Goal progress/);
+          assert.match(
+            String(prompt),
+            /In a mixed batch, advance only the verified relevant inputs/,
+          );
+          assert.ok(messages.some((message) => JSON.stringify(message).includes("0.779")));
+          const submit = options.tools!.find((tool) => tool.name === "submit_plan")!;
+          const proposal = await submit.execute("ignore-unrelated", {
+            disposition: "ignored",
+            progress,
+            completed: false,
+            evidence: [],
+            taskChanges: [],
+            signalChanges: [],
+          });
+          assert.equal(proposal.terminate, true);
+          assert.notEqual(proposal.isError, true);
+          return { messages: [{ ...result, details: proposal.details }] };
+        }),
+    } satisfies Agent),
+  );
+  const plan = await Effect.runPromise(
+    Effect.gen(function* () {
+      const reasoner = yield* makeGoalReasoner("test", memory);
+      return yield* reasoner.plan({
+        ...input,
+        goal: { slug: "data-agent", description: "Track DataAgent (iDA) project progress." },
+        messages: [
+          {
+            role: "user",
+            content:
+              '[Goal intent] {"summary":"The high-quality dataset project has overdue P0 labeling permission bugs, P1 agent node bugs and a daily standup.","relevance":{"score":0.779}}',
+            timestamp: 0,
+          },
+        ],
+        tool: () => Effect.die("Ignoring an unrelated intent must not mutate Goal work"),
+      });
+    }).pipe(Effect.provide(models)),
+  );
+  assert.equal(plan.disposition, "ignored");
+  assert.equal(plan.progress, progress);
+  assert.deepEqual(plan.taskChanges, []);
+  assert.deepEqual(plan.signalChanges, []);
+});
+
+test("Goal planning can complete after three minutes without a whole-run deadline", async (t) => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const clock = yield* TestClock.make();
+        const durable = { sessionId: "project", requestId: "long-planning-request" };
+        t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) => {
+          assert.equal(options.durable?.requestId, durable.requestId);
+          return Effect.succeed({
+            run: () =>
+              Effect.gen(function* () {
+                yield* Deferred.succeed(entered, undefined);
+                yield* Effect.sleep("4 minutes");
+                return { messages: [result] };
+              }),
+          } satisfies Agent);
+        });
+        const reasoner = yield* makeGoalReasoner("test", memory).pipe(Effect.provide(models));
+        const fiber = yield* reasoner
+          .plan({ ...input, durable })
+          .pipe(Effect.provideService(Clock.Clock, clock), Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* clock.adjust("4 minutes");
+        assert.equal((yield* Fiber.join(fiber)).progress, "done");
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
 test("Goal SDK callbacks retain the caller Clock and wait for transcript persistence before returning a plan", async (t) => {
   let toolTime: number | undefined;
   let transcriptTime: number | undefined;
@@ -245,6 +334,20 @@ test("Goal Agent returns Task proposals without calling the mutation boundary", 
               false,
             );
           const submit = options.tools!.find((tool) => tool.name === "submit_plan")!;
+          for (const operation of ["signal_create", "signal_update", "signal_delete"]) {
+            for (const id of ["/signals/watch", "Watch", "watch_progress", "", "监控进展"]) {
+              const invalidSignal = await submit.execute("invalid-signal-id", {
+                progress: "Watch progress",
+                completed: false,
+                evidence: [],
+                taskChanges: [],
+                signalChanges: [{ operation, id, revision: 1, definition: {} }],
+              });
+              assert.equal(invalidSignal.isError, true);
+              assert.notEqual(invalidSignal.terminate, true);
+              assert.match(JSON.stringify(invalidSignal.content), /Invalid Signal ID/);
+            }
+          }
           const oversized = await submit.execute("oversized", {
             progress: "Review",
             completed: false,

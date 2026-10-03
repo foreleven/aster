@@ -24,3 +24,4 @@ export * from "./shared/errors.js";
 
 export * from "./public-views.js";
 export * from "./im/writeback.js";
+export * from "./mail/window.js";

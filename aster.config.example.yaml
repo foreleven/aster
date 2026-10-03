@@ -27,7 +27,7 @@ config:
       apiKey: ${MINIMAX_API_KEY}
   goals:
     model: goal-reasoning
-    contextTokens: 48000
+    contextTokens: 200000
     reserveTokens: 8192
 
 agents:

@@ -1,3 +1,4 @@
+import { ReplyTo } from "@aster/actor";
 import { emailView } from "../public-views.js";
 import { Effect, Match, Layer, Schema } from "effect";
 
@@ -5,6 +6,7 @@ import { ContextActor, ContextRegistry, defineContext } from "@aster/core";
 import { EmailData } from "./model.js";
 const MailMessageCommand = Schema.TaggedStruct("SetEmail", {
   email: EmailData,
+  replyTo: ReplyTo<void>(),
 });
 export type MailMessageCommand = typeof MailMessageCommand.Type;
 
@@ -29,7 +31,7 @@ export class LarkMailMessageActor extends ContextActor.Service<LarkMailMessageAc
         started: (context) => context.receiveTimeout("5 minutes"),
         receive: (command) =>
           Match.value(command).pipe(
-            Match.tag("SetEmail", ({ email }) => {
+            Match.tag("SetEmail", ({ email, replyTo }) => {
               const path = `/lark/mail/${email.mailbox}/${email.messageId}`;
               return registry
                 .commit(
@@ -41,7 +43,7 @@ export class LarkMailMessageActor extends ContextActor.Service<LarkMailMessageAc
                   },
                   { expectedRevision: registry.get(path)?.revision ?? 0 },
                 )
-                .pipe(Effect.asVoid, Effect.orDie);
+                .pipe(Effect.orDie, Effect.andThen(replyTo.tell(undefined)));
             }),
             Match.exhaustive,
           ),
