@@ -26,7 +26,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { Schema } from "effect";
-import { admitExchange, completeExchange } from "./durable-exchange.js";
+import { admitExchange, completeExchange, lookupExchange } from "./durable-exchange.js";
 import { DurableAgentFailure } from "./durable-error.js";
 import { entriesFor, fenceTools, generationFence, hasUnknownToolOutcome } from "./durable-tools.js";
 import type { AgentMessage, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
@@ -123,6 +123,10 @@ export const DurableContextBudget = Schema.Struct({
 export interface DurableRunOptions {
   /** Bump when tool behavior or context transformation semantics change. */
   readonly catalogueId?: string;
+  /** Recover saved work without issuing a new provider request for an accepted exchange. */
+  readonly reconcile?: boolean;
+  /** Inspect a legacy request result only; never admit, resume, or call the provider. */
+  readonly replayOnly?: boolean;
   readonly owner?: "goals" | "personal";
   readonly sessionId: string;
   readonly requestId: string;
@@ -194,11 +198,21 @@ export const runDurableAgent = async (input: {
   });
   registry.install(extension);
   let harness: Harness;
+  let observingAccepted = false;
+  let providerBlocked = false;
   try {
     harness = await Harness.open(
       storage,
       {
-        models: durableModels(resolved, fence.beforeModel),
+        models: durableModels(resolved, async (signal) => {
+          if (observingAccepted) {
+            providerBlocked = true;
+            throw new Error(
+              "Accepted Agent outcome is uncertain; reconciliation cannot issue another provider request",
+            );
+          }
+          await fence.beforeModel(signal);
+        }),
         registry,
         // Let Pi compact at generation boundaries before preparing the request.
         // Keep half the input budget verbatim, leaving space for the summary
@@ -234,38 +248,71 @@ export const runDurableAgent = async (input: {
     const content = inputText(input.messages);
     // Pi deduplicates request IDs by submission type only. Aster additionally
     // freezes the complete input/configuration before any scheduler is resumed.
-    const admission = await admitExchange(
-      harness,
-      {
-        conversationId: conversation.id,
-        identity: JSON.stringify([input.durable.owner ?? "goals", input.durable.sessionId]),
-        requestId: input.durable.requestId,
-        input: JSON.stringify({
-          content,
-          instructions,
-          resultTool: input.resultTool,
-          catalogueId: input.durable.catalogueId ?? "aster.agent.v2",
-          contextBudget: budget,
-          configuration: createHash("sha256")
-            .update(
-              JSON.stringify({
-                model: input.resolved.model,
-                tools: input.tools.map(({ name, description, parameters, replay }) => ({
-                  name,
-                  description,
-                  parameters,
-                  replay,
-                })),
+    const existing =
+      input.durable.reconcile || input.durable.replayOnly
+        ? await lookupExchange(
+            harness,
+            JSON.stringify([input.durable.owner ?? "goals", input.durable.sessionId]),
+            input.durable.requestId,
+            context,
+          )
+        : undefined;
+    if (input.durable.replayOnly && !existing)
+      throw new DurableAgentFailure({
+        message:
+          "Legacy request has no durable session receipt; no work was resumed. Submit a new instruction after reviewing the retained history.",
+      });
+    if (input.durable.replayOnly && existing?.resultEntries == null)
+      throw new Error(
+        "Legacy request has an unsettled session receipt and no frozen snapshot. Restore the matching application version to reconcile it; no provider request was issued.",
+      );
+    const submitted =
+      existing &&
+      (await harness.commit(
+        (tx) =>
+          tx.submissionByRequest(
+            conversation.id,
+            JSON.stringify(["aster.agent.input", input.durable.requestId, "initial"]),
+          ),
+        context,
+      ));
+    observingAccepted =
+      submitted !== undefined && submitted !== null && submitted.status !== "queued";
+    const admission =
+      existing?.resultEntries !== null && existing?.resultEntries !== undefined
+        ? { entryIds: existing.resultEntries, error: existing.error }
+        : await admitExchange(
+            harness,
+            {
+              conversationId: conversation.id,
+              identity: JSON.stringify([input.durable.owner ?? "goals", input.durable.sessionId]),
+              requestId: input.durable.requestId,
+              input: JSON.stringify({
+                content,
+                instructions,
+                resultTool: input.resultTool,
+                catalogueId: input.durable.catalogueId ?? "aster.agent.v2",
+                contextBudget: budget,
+                configuration: createHash("sha256")
+                  .update(
+                    JSON.stringify({
+                      model: input.resolved.model,
+                      tools: input.tools.map(({ name, description, parameters, replay }) => ({
+                        name,
+                        description,
+                        parameters,
+                        replay,
+                      })),
+                    }),
+                  )
+                  .digest("hex"),
               }),
-            )
-            .digest("hex"),
-        }),
-        instructions,
-        model: { provider: input.resolved.model.provider, modelId: input.resolved.model.id },
-        extension,
-      },
-      context,
-    );
+              instructions,
+              model: { provider: input.resolved.model.provider, modelId: input.resolved.model.id },
+              extension,
+            },
+            context,
+          );
     if (admission.error !== null) throw new DurableAgentFailure({ message: admission.error });
     const resultEntries = admission.entryIds;
     if (resultEntries !== null) {
@@ -318,6 +365,8 @@ export const runDurableAgent = async (input: {
     };
     const collect = async (currentSubmission: Awaited<ReturnType<typeof conversation.submit>>) => {
       const settled = await currentSubmission.wait(context);
+      if (providerBlocked)
+        throw new Error("Agent outcome requires reconciliation; no provider request was retried");
       await assertKnownOutcome();
       if (settled.status === "unanswered") {
         const detail = typeof settled.detail === "string" ? `: ${settled.detail}` : "";

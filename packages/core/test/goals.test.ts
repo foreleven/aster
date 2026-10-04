@@ -1,11 +1,12 @@
+import { goalTestReply } from "./goal-fixtures.js";
 import { preparationLayer, fakeAgent } from "./fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem, ActorTestKit } from "@aster/actor";
+import { ActorSystem } from "@aster/actor";
 import { ContextRegistry, makeContextRegistry } from "../src/index.js";
-import { Deferred, Effect, Layer } from "effect";
+import { Effect, Layer } from "effect";
 import { GoalRuntime, GoalsRootActor } from "../src/index.js";
-import type { GoalPlan } from "../src/index.js";
+import type { StoredGoalPlan as GoalPlan } from "../src/goals/plan.js";
 import { ExternalAgents, DelegationActor } from "../src/index.js";
 import { SignalActor, SignalDefinitions, SignalRootActor, SignalRunActor } from "../src/index.js";
 
@@ -82,7 +83,12 @@ test("a user message during planning is retained for a second evaluation without
         yield* goals.tell({
           _tag: "Route",
           slug: "project",
-          command: { _tag: "UserMessage", text: "Prioritize frontend dependencies" },
+          command: {
+            _tag: "SubmitInput",
+            requestId: "test-3475",
+            input: { _tag: "UserInput", text: "Prioritize frontend dependencies" },
+            replyTo: goalTestReply,
+          },
         });
         yield* until(() =>
           JSON.stringify(registry.get("/goals/project")!.messages).includes(
@@ -104,71 +110,6 @@ test("a user message during planning is retained for a second evaluation without
           ),
         );
         assert.match(JSON.stringify(calls[1]), /Prioritize frontend dependencies/);
-      }),
-    ),
-  );
-});
-
-test("a pending Signal operation does not block Goal End, and queued edits recheck authorization", async () => {
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        const entered = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        let edits = 0;
-        let deactivated = false;
-        const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
-            preparationLayer,
-            Layer.succeed(ExternalAgents, {}),
-            Layer.succeed(GoalRuntime, {
-              definitions: [{ slug: "project", description: "project" }],
-              reasoner: {
-                plan: () => Effect.die(new Error("No reasoning expected")),
-              },
-              signals: () => [],
-              reconcile: () => Effect.succeed([]),
-              deactivate: () =>
-                Effect.sync(() => {
-                  deactivated = true;
-                }),
-              editSignal: () =>
-                Effect.gen(function* () {
-                  edits++;
-                  yield* Deferred.succeed(entered, undefined);
-                  yield* Deferred.await(release);
-                  return "saved";
-                }),
-            }),
-          ),
-        );
-        const root = yield* system.spawn("goals", GoalsRootActor);
-        const first = yield* ActorTestKit.probe<{ value?: unknown; error?: string }>();
-        const second = yield* ActorTestKit.probe<{ value?: unknown; error?: string }>();
-        for (const replyTo of [first.ref, second.ref])
-          yield* root.tell({
-            _tag: "Route",
-            slug: "project",
-            command: {
-              _tag: "Tool",
-              request: { operation: "signal_create", id: "watch", definition: {} },
-              replyTo,
-            },
-          });
-        yield* Deferred.await(entered);
-        yield* root.tell({ _tag: "Route", slug: "project", command: { _tag: "End" } });
-        yield* until(
-          () =>
-            (registry.get("/goals/project")?.state as { status?: string })?.status === "completed",
-        );
-        assert.equal(edits, 1);
-        yield* Deferred.succeed(release, undefined);
-        assert.equal((yield* first.take()).value, "saved");
-        assert.match((yield* second.take()).error!, /Goal has ended/);
-        yield* until(() => deactivated);
-        assert.equal(edits, 1);
       }),
     ),
   );

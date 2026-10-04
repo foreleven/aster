@@ -1,6 +1,6 @@
 import { RecoveryInput, ProcessingOwner, ProcessingSnapshot } from "./recovery.js";
 export * from "./recovery.js";
-import { GoalTimelinePage, RetryGoalSignalInput } from "./goal-timeline.js";
+import { GoalTimelinePage, RetryGoalSignalInput, RetryGoalTurnInput } from "./goal-timeline.js";
 export * from "./goal-timeline.js";
 export * from "./notification.js";
 export * from "./writeback.js";
@@ -123,6 +123,11 @@ export const ApplicationRpcs = RpcGroup.make(
     error: ApplicationError,
   }),
   Rpc.make("ListGoals", { success: Schema.Array(PublicContext), error: ApplicationError }),
+  Rpc.make("RetryGoalTurn", {
+    payload: RetryGoalTurnInput,
+    success: CommandReceipt,
+    error: ApplicationError,
+  }),
   Rpc.make("RetryGoalSignal", {
     payload: RetryGoalSignalInput,
     success: CommandReceipt,
@@ -158,7 +163,7 @@ export const ApplicationRpcs = RpcGroup.make(
     error: ApplicationError,
   }),
   Rpc.make("EndGoal", {
-    payload: { slug: Schema.String },
+    payload: { slug: Schema.String, requestId: Schema.optional(Schema.NonEmptyString) },
     success: Schema.Void,
     error: ApplicationError,
   }),

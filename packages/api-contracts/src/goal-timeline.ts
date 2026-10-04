@@ -47,6 +47,12 @@ export const GoalInputPayload = Schema.Union([
     terminal: Schema.Boolean,
     text: Schema.String,
   }),
+  Schema.TaggedStruct("GoalStarted", { pursuit: Schema.NonEmptyString }),
+  Schema.TaggedStruct("Continuation", {
+    objective: Schema.NonEmptyString,
+    previousResultId: Schema.NonEmptyString,
+  }),
+  // Historical startup records remain readable; new activations never create them.
   Schema.TaggedStruct("Startup", { reason: Schema.String }),
 ]);
 export type GoalInputPayload = typeof GoalInputPayload.Type;
@@ -58,6 +64,29 @@ export const GoalInput = Schema.Struct({
   payload: GoalInputPayload,
 });
 export type GoalInput = typeof GoalInput.Type;
+
+export const GoalNextStep = Schema.Union([
+  Schema.TaggedStruct("Continue", {
+    objective: Schema.NonEmptyString,
+    previousResultId: Schema.NonEmptyString,
+  }),
+  Schema.TaggedStruct("WaitForInput", {
+    questions: Schema.Array(Schema.NonEmptyString).check(Schema.isMinLength(1)),
+  }),
+  Schema.TaggedStruct("WaitForEvent", {
+    references: Schema.Array(Schema.NonEmptyString).check(Schema.isMinLength(1)),
+  }),
+  Schema.TaggedStruct("Complete", {
+    evidence: Schema.Array(Schema.NonEmptyString).check(Schema.isMinLength(1)),
+  }),
+]);
+export type GoalNextStep = typeof GoalNextStep.Type;
+export const RetryGoalTurnInput = Schema.Struct({
+  slug: Schema.NonEmptyString,
+  requestId: CommandIdentifier,
+  turnId: CommandIdentifier,
+});
+export type RetryGoalTurnInput = typeof RetryGoalTurnInput.Type;
 
 export const GoalTaskOutput = Schema.Struct({
   id: Schema.NonEmptyString,
@@ -104,6 +133,7 @@ export const GoalTimelineGroup = Schema.Struct({
   ),
   outputs: Schema.Array(GoalTimelineOutput),
   error: Schema.optional(Schema.String),
+  nextStep: Schema.optional(GoalNextStep),
   agentRun: Schema.Struct({ sessionId: Schema.String, requestId: Schema.String }),
 });
 export type GoalTimelineGroup = typeof GoalTimelineGroup.Type;

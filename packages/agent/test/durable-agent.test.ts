@@ -380,6 +380,8 @@ test("durable admission freezes input before submission and commits results befo
       instructions?: string;
       catalogueId?: string;
       callbackFailure?: boolean;
+      reconcile?: boolean;
+      replayOnly?: boolean;
       owner?: "goals" | "personal";
     } = {},
   ) =>
@@ -393,6 +395,8 @@ test("durable admission freezes input before submission and commits results befo
             storageDirectory: directory,
             catalogueId: options.catalogueId,
             owner: options.owner,
+            reconcile: options.reconcile,
+            replayOnly: options.replayOnly,
           },
           onMessage: () => {
             callbacks++;
@@ -415,12 +419,25 @@ test("durable admission freezes input before submission and commits results befo
     await assert.rejects(run("one", { catalogueId: "changed-tools" }), /frozen input/);
     await assert.rejects(run("one", { owner: "personal" }), /another Aster owner/);
     assert.equal(calls, 0);
-    await assert.rejects(run("one", { callbackFailure: true }), /lost its result/);
+    await assert.rejects(run("missing", { replayOnly: true }), /no durable session receipt/);
+    await assert.rejects(run("one", { replayOnly: true }), /unsettled session receipt/);
+    assert.equal(calls, 0);
+    await assert.rejects(run("one", { callbackFailure: true, reconcile: true }), /lost its result/);
     assert.equal(calls, 1);
     assert.equal(callbacks, 1);
     const replay = await run("one");
     assert.equal(calls, 1);
     assert.equal(replay.messages.length, 1);
+    assert.deepEqual(
+      await run("one", {
+        reconcile: true,
+        replayOnly: true,
+        text: "New prompt version",
+        catalogueId: "new-tools",
+      }),
+      replay,
+    );
+    assert.equal(calls, 1);
     await run("two");
     assert.equal(calls, 2);
     assert.deepEqual(await run("one"), replay);
@@ -1006,4 +1023,59 @@ test("Unknown ownerless Harness close retains storage fencing after the invocati
     Effect.scoped(PiStorageLease.acquire(directory, "replacement").pipe(Effect.flip)),
   );
   assert.equal(conflict._tag, "PiStorageLeaseError");
+});
+
+test("reconciliation observes an accepted uncertain request without issuing another provider call", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aster-pi-observe-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const originalOpen = Harness.open;
+  let loseReceipt = true;
+  let calls = 0;
+  t.mock.method(Harness, "open", async (...args: Parameters<typeof Harness.open>) => {
+    const harness = await originalOpen(...args);
+    const root = harness.root.bind(harness);
+    harness.root = async (...rootArgs) => {
+      const conversation = await root(...rootArgs);
+      const submit = conversation.submit.bind(conversation);
+      conversation.submit = async (...submitArgs) => {
+        const accepted = await submit(...submitArgs);
+        if (loseReceipt) {
+          loseReceipt = false;
+          throw new Error("Accepted input acknowledgement lost");
+        }
+        return accepted;
+      };
+      return conversation;
+    };
+    return harness;
+  });
+  const layer = Layer.succeed(Models, {
+    resolve: () =>
+      Effect.succeed({
+        model,
+        getApiKey: () => "test",
+        stream: () => {
+          calls++;
+          return createAssistantMessageEventStream();
+        },
+      }),
+  });
+  const run = (reconcile: boolean) =>
+    Effect.gen(function* () {
+      const agent = yield* Agent.make({
+        name: "test",
+        durable: {
+          sessionId: "uncertain",
+          requestId: "one",
+          storageDirectory: directory,
+          reconcile,
+        },
+      });
+      return yield* agent.run({ messages: [{ role: "user", content: "Research", timestamp: 0 }] });
+    }).pipe(Effect.provide(layer), Effect.timeout("5 seconds"));
+  await assert.rejects(Effect.runPromise(run(false)), /acknowledgement lost/);
+  const admittedCalls = calls;
+  const result = await Effect.runPromise(Effect.result(run(true)));
+  assert.equal(calls, admittedCalls, "Recovery must not submit another provider request");
+  assert.equal(result._tag, "Failure");
 });

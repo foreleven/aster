@@ -171,3 +171,7 @@ The Run mailbox verifies the persisted ApprovalQueue decision, saves authorizati
 ## Memory ownership
 
 `MemoryBackend` supplies capture, recall, drain, and public description/retrieval/model metadata. `AsterRuntime` assembles the Memory consumer internally; hosts do not install a Memory integration or construct its Actor graph. `memory/actor.ts` owns the durable pending/captured state, duplicate suppression, periodic recovery, and two concurrent captures. Capture replies follow the pending-state commit; successful backend results are committed through the mailbox. Typed backend failures remain pending, defects reach supervision, and local interruption preserves pending work. Shutdown stops producers and Actors before joining already-admitted backend operations and releasing infrastructure. No daemon credentials or backend configuration enter core.
+
+## Goal command boundary
+
+The public Goal requests are `SubmitInput`, `End`, `RetryTurn`, and `RetrySignalDelivery`, with stable request IDs and durable receipts. Runtime controls activation/readiness; private mailbox messages own turn admission and atomic result application. A turn freezes inputs and read models before invoking the durable session. `finish_turn` proposes Task/Signal changes and Continue, WaitForInput, WaitForEvent or Complete. See [the implemented design](../../docs/goal-command-redesign.md) for causal budgets and legacy reconciliation.

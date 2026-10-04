@@ -173,15 +173,23 @@ export class SignalActor extends ContextActor.Service<
             if (state()!.goal) {
               if (!subscriber) continue;
               delivery = subscriber
-                .ask<{ accepted: boolean }>((replyTo) => ({
-                  _tag: "Occurrence",
-                  id: occurrence.id,
-                  signalPath: path,
-                  causal: occurrence.causal,
-                  text: occurrence.text,
+                .ask<import("../goals/protocol.js").GoalCommandReply>((replyTo) => ({
+                  _tag: "SubmitInput",
+                  requestId: occurrence.id,
+                  input: {
+                    _tag: "SignalOccurrence",
+                    id: occurrence.id,
+                    signalPath: path,
+                    causal: occurrence.causal,
+                    text: occurrence.text,
+                  },
                   replyTo,
                 }))
-                .pipe(Effect.map((reply) => reply.accepted));
+                .pipe(
+                  Effect.map(
+                    (reply) => reply._tag === "Accepted" || reply.error.kind === "conflict",
+                  ),
+                );
             } else {
               const id = createHash("sha256").update(occurrence.id).digest("hex").slice(0, 32);
               const runPath = `${path}/runs/${id}`;

@@ -178,7 +178,14 @@ const acquireRuntime = Effect.gen(function* () {
     // Readiness includes Personal recovery, not only a transient mailbox enqueue.
     yield* personal.ask<PersonalReply>((replyTo) => ({ _tag: "Get", replyTo }));
     yield* Effect.forEach(handles, ({ handle }) => handle.ready, { concurrency: "unbounded" });
-    if (goals) yield* goals.tell({ _tag: "Initialize" });
+    if (goals) {
+      yield* goals.tell({ _tag: "Initialize" });
+      const reply = yield* goals.ask<import("../goals/protocol.js").GoalReadyReply>((replyTo) => ({
+        _tag: "AwaitReady",
+        replyTo,
+      }));
+      if (reply._tag === "Failed") return yield* reply.error;
+    }
   }).pipe(
     // Readiness is a completion contract, including defects and cancellation;
     // catching only typed errors strands waiters when startup never succeeds.

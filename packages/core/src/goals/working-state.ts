@@ -30,6 +30,9 @@ export const goalWorkingState = (
       delete (s as { pendingRequestId?: string }).pendingRequestId;
     if (Object.hasOwn(patch, "pendingHandoff") && patch.pendingHandoff === undefined)
       delete s.pendingHandoff;
+    if (Object.hasOwn(patch, "retryTurnId") && patch.retryTurnId === undefined)
+      delete s.retryTurnId;
+    if (Object.hasOwn(patch, "nextStep") && patch.nextStep === undefined) delete s.nextStep;
     // The public working window is bounded independently from the full feed on disk.
     const entries = yield* history
       .read(goal().slug, { after: s.historyThrough, limit: 200 })

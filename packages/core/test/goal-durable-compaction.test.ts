@@ -61,14 +61,14 @@ test("durable Goal compacts its native transcript and finishes the same request"
                   {
                     type: "toolCall",
                     id: `call-${generations}`,
-                    name: generations <= 24 ? "read_context" : "submit_plan",
+                    name: generations <= 24 ? "read_context" : "finish_turn",
                     arguments:
                       generations <= 24
                         ? { path: "/source" }
                         : {
                             disposition: "no_change",
                             progress: "Review completed",
-                            completed: false,
+                            nextStep: { _tag: "WaitForEvent", references: ["/source"] },
                             evidence: ["/source"],
                             taskChanges: [],
                             signalChanges: [],

@@ -290,18 +290,18 @@ test("Goal reasoning receives public current state and a projected Context catal
       const history = makeMemoryGoalHistory();
       let called = false;
       const result = yield* evaluateGoal({
-        registry,
         history,
-        definition: { slug: "project", description: "Project" },
-        generation: "generation",
         reason: "input",
         requestId: "evaluation",
-        historyThrough: 0,
-        self: {
-          path: "/user/goals/project",
-          incarnation: "test",
-          tell: () => Effect.void,
-          ask: () => Effect.die(new Error("Unexpected tool command")),
+        reconcile: false,
+        input: {
+          goal: { slug: "project", description: "Project" },
+          inputs: [],
+          current: registry.project(registry.get("/goals/project")!),
+          contexts: registry.publicSnapshot(),
+          signals: [],
+          historyAfter: 0,
+          historyThrough: 0,
         },
         runtime: {
           definitions: [],

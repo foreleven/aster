@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { Agent, AgentError, Models, type AgentMessage } from "@aster/agent";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
-import { GoalReasoningError, GoalToolError, makeGoalReasoner } from "../src/index.js";
+import { GoalReasoningError, makeGoalReasoner } from "../src/index.js";
 
 const input = {
   goal: { slug: "project", description: "Review" },
@@ -11,15 +11,24 @@ const input = {
   contexts: {},
   signals: [],
   reason: "test",
+  durable: { sessionId: "project", requestId: "test-turn" },
 };
 const result: AgentMessage = {
   role: "toolResult",
   toolCallId: "plan",
-  toolName: "submit_plan",
+  toolName: "finish_turn",
   isError: false,
   content: [{ type: "text", text: "done" }],
   timestamp: 0,
-  details: { progress: "done", completed: false, evidence: [], signals: [] },
+  details: {
+    version: 2,
+    turnId: "test-turn",
+    resultId: "test-turn",
+    disposition: "advance",
+    progress: "done",
+    nextStep: { _tag: "WaitForEvent", references: ["/source"] },
+    evidence: [],
+  },
 };
 const models = Layer.succeed(Models, {
   resolve: () => Effect.die(new Error("Agent.make is controlled by this test")),
@@ -46,11 +55,11 @@ test("Goal planning receives an independent relevance check and can ignore a hig
             /In a mixed batch, advance only the verified relevant inputs/,
           );
           assert.ok(messages.some((message) => JSON.stringify(message).includes("0.779")));
-          const submit = options.tools!.find((tool) => tool.name === "submit_plan")!;
+          const submit = options.tools!.find((tool) => tool.name === "finish_turn")!;
           const proposal = await submit.execute("ignore-unrelated", {
             disposition: "ignored",
             progress,
-            completed: false,
+            nextStep: { _tag: "WaitForEvent", references: ["/source"] },
             evidence: [],
             taskChanges: [],
             signalChanges: [],
@@ -75,7 +84,6 @@ test("Goal planning receives an independent relevance check and can ignore a hig
             timestamp: 0,
           },
         ],
-        tool: () => Effect.die("Ignoring an unrelated intent must not mutate Goal work"),
       });
     }).pipe(Effect.provide(models)),
   );
@@ -115,73 +123,51 @@ test("Goal planning can complete after three minutes without a whole-run deadlin
   );
 });
 
-test("Goal SDK callbacks retain the caller Clock and wait for transcript persistence before returning a plan", async (t) => {
-  let toolTime: number | undefined;
-  let transcriptTime: number | undefined;
-  let returned = false;
+test("Goal read callbacks retain the caller Clock and cancellation", async (t) => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
-        const persisted = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let observed = 0;
         t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
           Effect.succeed({
             run: () =>
-              Effect.tryPromise({
-                try: async () => {
-                  const taskList = options.tools!.find((tool) => tool.name === "task_list")!;
-                  await taskList.execute("list", {});
-                  await options.onMessage!(result);
-                  return { messages: [result] };
-                },
-                catch: (cause) => new AgentError(String(cause)),
+              Effect.promise(async () => {
+                assert.equal(options.onMessage, undefined);
+                await options
+                  .tools!.find((tool) => tool.name === "memory_search")!
+                  .execute("read", { query: "project" });
+                return { messages: [result] };
               }),
           } satisfies Agent),
         );
-        const reasoner = yield* makeGoalReasoner("test", memory).pipe(Effect.provide(models));
         const clock = yield* TestClock.make();
         yield* clock.adjust(12345);
+        const reasoner = yield* makeGoalReasoner("test", {
+          ...memory,
+          search: () =>
+            Effect.gen(function* () {
+              observed = yield* Clock.currentTimeMillis;
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+              return [];
+            }),
+        }).pipe(Effect.provide(models));
         const fiber = yield* reasoner
-          .plan({
-            ...input,
-            tool: () =>
-              Clock.currentTimeMillis.pipe(
-                Effect.tap((time) =>
-                  Effect.sync(() => {
-                    toolTime = time;
-                  }),
-                ),
-              ),
-            onMessage: () =>
-              Effect.gen(function* () {
-                transcriptTime = yield* Clock.currentTimeMillis;
-                yield* Deferred.succeed(entered, undefined);
-                yield* Deferred.await(persisted);
-              }),
-          })
-          .pipe(
-            Effect.tap(() =>
-              Effect.sync(() => {
-                returned = true;
-              }),
-            ),
-            Effect.provideService(Clock.Clock, clock),
-            Effect.forkScoped,
-          );
-        yield* Deferred.await(entered).pipe(Effect.timeout("2 seconds"));
-        assert.equal(toolTime, 12345);
-        assert.equal(transcriptTime, 12345);
-        assert.equal(returned, false);
-        yield* Deferred.succeed(persisted, undefined);
+          .plan(input)
+          .pipe(Effect.provideService(Clock.Clock, clock), Effect.forkScoped);
+        yield* Deferred.await(entered);
+        assert.equal(observed, 12345);
+        yield* Deferred.succeed(release, undefined);
         assert.equal((yield* Fiber.join(fiber)).progress, "done");
-        assert.equal(returned, true);
       }),
     ),
   );
 });
 
 test("cancelling a Goal releases SDK callback waits before the Agent idle finalizer", async (t) => {
-  for (const kind of ["transcript", "tool", "memory"]) {
+  for (const kind of ["memory"]) {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -197,9 +183,7 @@ test("cancelling a Goal releases SDK callback waits before the Agent idle finali
                       (value) => value.name === (kind === "memory" ? "memory_search" : "task_list"),
                     )!;
                     const work = Promise.resolve().then<unknown>(() =>
-                      kind === "transcript"
-                        ? options.onMessage!(result)
-                        : tool.execute("call", kind === "memory" ? { query: "test" } : {}),
+                      tool.execute("call", { query: "test" }),
                     );
                     // Like Agent.run, teardown waits until the SDK callback has settled.
                     const settled = work.then(
@@ -241,66 +225,13 @@ test("cancelling a Goal releases SDK callback waits before the Agent idle finali
                 }
               : memory,
           ).pipe(Effect.provide(models));
-          const fiber = yield* reasoner
-            .plan({ ...input, tool: () => blocked, onMessage: () => blocked })
-            .pipe(Effect.forkScoped);
+          const fiber = yield* reasoner.plan(input).pipe(Effect.forkScoped);
           yield* Deferred.await(entered).pipe(Effect.timeout("2 seconds"));
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"));
           assert.equal(idle, true);
           assert.equal(released, true);
         }),
       ),
-    );
-  }
-});
-
-test("Goal tools distinguish committed rejection from missing acknowledgement", async (t) => {
-  for (const unknown of [false, true]) {
-    t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
-      Effect.succeed({
-        run: () =>
-          Effect.promise(async () => {
-            assert.equal(options.tools!.find((tool) => tool.name === "task_list")!.replay, "safe");
-            assert.equal(
-              options.tools!.find((tool) => tool.name === "submit_plan")!.replay,
-              "safe",
-            );
-            const mutate = options.tools!.find((tool) => tool.name === "signal_get")!;
-            const call = mutate.execute("test", {
-              operation: "task_create",
-              id: "work",
-              definition: { when: "Changed", task: "Review" },
-            });
-            if (unknown) await assert.rejects(Promise.resolve(call), /Acknowledgement missing/);
-            else {
-              const rejected = await call;
-              assert.equal(rejected.isError, true);
-              assert.deepEqual(rejected.details, { aster: { outcome: "rejected" } });
-            }
-            return { messages: [result] };
-          }),
-      } satisfies Agent),
-    );
-    await Effect.runPromise(
-      Effect.gen(function* () {
-        const reasoner = yield* makeGoalReasoner("test", memory);
-        yield* reasoner.plan({
-          ...input,
-          tool: (request) => {
-            assert.equal(
-              request.operation,
-              "signal_get",
-              "the host owns the operation discriminator",
-            );
-            return Effect.fail(
-              new GoalToolError({
-                message: unknown ? "Acknowledgement missing" : "Stale revision",
-                ...(unknown ? { outcome: "unknown" as const } : {}),
-              }),
-            );
-          },
-        });
-      }).pipe(Effect.provide(models)),
     );
   }
 });
@@ -315,7 +246,6 @@ test("Goal Agent returns Task proposals without calling the mutation boundary", 
       evidence: [],
     },
   ];
-  let calls = 0;
   t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
     Effect.succeed({
       run: () =>
@@ -333,12 +263,13 @@ test("Goal Agent returns Task proposals without calling the mutation boundary", 
               options.tools!.some((tool) => tool.name === name),
               false,
             );
-          const submit = options.tools!.find((tool) => tool.name === "submit_plan")!;
+          const submit = options.tools!.find((tool) => tool.name === "finish_turn")!;
           for (const operation of ["signal_create", "signal_update", "signal_delete"]) {
             for (const id of ["/signals/watch", "Watch", "watch_progress", "", "监控进展"]) {
               const invalidSignal = await submit.execute("invalid-signal-id", {
+                disposition: "advance",
                 progress: "Watch progress",
-                completed: false,
+                nextStep: { _tag: "WaitForEvent", references: ["/source"] },
                 evidence: [],
                 taskChanges: [],
                 signalChanges: [{ operation, id, revision: 1, definition: {} }],
@@ -349,8 +280,9 @@ test("Goal Agent returns Task proposals without calling the mutation boundary", 
             }
           }
           const oversized = await submit.execute("oversized", {
+            disposition: "advance",
             progress: "Review",
-            completed: false,
+            nextStep: { _tag: "WaitForEvent", references: ["/source"] },
             evidence: [],
             taskChanges: [{ ...taskChanges[0], instructions: "x".repeat(20000) }],
           });
@@ -360,7 +292,7 @@ test("Goal Agent returns Task proposals without calling the mutation boundary", 
             const rejected = await submit.execute(`invalid-${disposition}`, {
               disposition,
               progress: "No action",
-              completed: false,
+              nextStep: { _tag: "WaitForEvent", references: ["/source"] },
               evidence: [],
               taskChanges,
             });
@@ -368,8 +300,9 @@ test("Goal Agent returns Task proposals without calling the mutation boundary", 
             assert.notEqual(rejected.terminate, true);
           }
           const proposal = await submit.execute("result", {
+            disposition: "advance",
             progress: "Proposed review",
-            completed: false,
+            nextStep: { _tag: "WaitForEvent", references: ["/source"] },
             evidence: [],
             taskChanges,
             signalChanges: [
@@ -390,15 +323,9 @@ test("Goal Agent returns Task proposals without calling the mutation boundary", 
       const reasoner = yield* makeGoalReasoner("test", memory);
       return yield* reasoner.plan({
         ...input,
-        tool: () =>
-          Effect.sync(() => {
-            calls++;
-            return {};
-          }),
       });
     }).pipe(Effect.provide(models)),
   );
-  assert.equal(calls, 0);
   assert.deepEqual(proposal.taskChanges, taskChanges);
   assert.equal(proposal.signalChanges?.[0]?.operation, "signal_create");
 });
@@ -432,19 +359,97 @@ test("SDK tool error handling cannot turn an Effect callback defect into a succe
     Effect.succeed({
       run: () =>
         Effect.promise(async () => {
-          const tool = options.tools!.find((value) => value.name === "task_list")!;
+          const tool = options.tools!.find((value) => value.name === "memory_search")!;
           // SDKs report a rejected tool as a model-visible error and may keep planning.
-          await tool.execute("call", {}).catch(() => undefined);
+          await tool.execute("call", { query: "test" }).catch(() => undefined);
           return { messages: [result] };
         }),
     } satisfies Agent),
   );
   const exit = await Effect.runPromise(
     Effect.gen(function* () {
-      const reasoner = yield* makeGoalReasoner("test", memory);
-      return yield* Effect.exit(reasoner.plan({ ...input, tool: () => Effect.die(defect) }));
+      const reasoner = yield* makeGoalReasoner("test", {
+        ...memory,
+        search: () => Effect.die(defect),
+      });
+      return yield* Effect.exit(reasoner.plan(input));
     }).pipe(Effect.provide(models)),
   );
   assert.ok(Exit.isFailure(exit));
   assert.equal(Cause.squash(exit.cause), defect);
+});
+
+test("Task and Signal tools read frozen snapshots including deleted entries", async (t) => {
+  const deletedTask = {
+    id: "retired",
+    title: "Previous work",
+    instructions: "Keep evidence",
+    revision: 3,
+    status: "deleted",
+    evidence: [],
+    createdAt: "2026-01-01",
+    updatedAt: "2026-01-02",
+  };
+  const deletedSignal = { slug: "project--retired", goal: "project", deleted: true, revision: 2 };
+  t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
+    Effect.succeed({
+      run: () =>
+        Effect.promise(async () => {
+          const read = async (name: string, args: object) => {
+            const response = await options
+              .tools!.find((tool) => tool.name === name)!
+              .execute("read", args);
+            assert.notEqual(response.isError, true);
+            return response.details;
+          };
+          assert.deepEqual(await read("task_list", {}), []);
+          assert.deepEqual(await read("task_get", { id: "retired" }), deletedTask);
+          assert.deepEqual(await read("signal_list", {}), []);
+          assert.deepEqual(await read("signal_get", { id: "retired" }), deletedSignal);
+          return { messages: [result] };
+        }),
+    } satisfies Agent),
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const reasoner = yield* makeGoalReasoner("test", memory);
+      yield* reasoner.plan({
+        ...input,
+        current: { ...input.current, state: { tasks: [deletedTask] } },
+        contexts: {
+          "/signals/project--retired": {
+            path: "/signals/project--retired",
+            description: "Archived monitor",
+            messages: [],
+            state: deletedSignal,
+          },
+        },
+      });
+    }).pipe(Effect.provide(models)),
+  );
+});
+
+test("replay-only inspection decodes a saved legacy result without the reconcile flag", async (t) => {
+  const legacy = {
+    progress: "Recovered old findings",
+    evidence: [],
+    signals: [],
+    completed: false,
+  };
+  t.mock.method(Agent, "make", () =>
+    Effect.succeed({
+      run: () =>
+        Effect.succeed({ messages: [{ ...result, toolName: "submit_plan", details: legacy }] }),
+    } satisfies Agent),
+  );
+  const restored = await Effect.runPromise(
+    Effect.gen(function* () {
+      const reasoner = yield* makeGoalReasoner("test", memory);
+      return yield* reasoner.plan({
+        ...input,
+        durable: { ...input.durable, replayOnly: true, reconcile: false },
+      });
+    }).pipe(Effect.provide(models)),
+  );
+  assert.deepEqual(restored, legacy);
 });

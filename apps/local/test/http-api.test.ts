@@ -15,19 +15,14 @@ const goalRef = (commands: GoalsRootCommand[]): ActorRef<GoalsRootCommand> => ({
     }),
   ask: <Response>(build: (reply: ActorRef<Response>) => GoalsRootCommand) =>
     Effect.gen(function* () {
-      // Build the request using a typed one-shot reply port, just like ActorRef.ask.
       const probe = yield* ActorTestKit.probe<Response>();
       const command = build(probe.ref);
-      commands.push(
-        command._tag === "Route" && command.command._tag === "UserMessage"
-          ? { ...command, command: { _tag: "UserMessage", text: command.command.text } }
-          : command,
-      );
-      if (
-        command._tag === "Route" &&
-        (command.command._tag === "UserMessage" || command.command._tag === "End")
-      )
-        yield* command.command.replyTo!.tell({ _tag: "Accepted" });
+      commands.push(command);
+      if (command._tag === "Route")
+        yield* command.command.replyTo.tell({
+          _tag: "Accepted",
+          receipt: { requestId: command.command.requestId, revision: 1 },
+        });
       return yield* probe.take();
     }).pipe(Effect.scoped),
 });
@@ -134,13 +129,13 @@ test("Goal HTTP API reads public messages, routes user input, and rejects cross-
     );
     assert.equal(commands.length, 0);
     assert.equal((await send(api.url)).status, 202);
-    assert.deepEqual(commands, [
-      {
-        _tag: "Route",
-        slug: "project",
-        command: { _tag: "UserMessage", text: "Focus on the frontend" },
-      },
-    ]);
+    assert.equal(commands.length, 1);
+    const routed = commands[0];
+    assert.equal(routed._tag, "Route");
+    assert.ok(routed._tag === "Route" && routed.command._tag === "SubmitInput");
+    assert.equal(routed.slug, "project");
+    assert.deepEqual(routed.command.input, { _tag: "UserInput", text: "Focus on the frontend" });
+    assert.ok(routed.command.requestId);
     assert.equal((await fetch(`${api.url}/api/context?path=/missing`)).status, 404);
   } finally {
     await api.close();

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { inspectProcessing } from "../context/processing-inspection.js";
 import { RecoveryInput, type ProcessingOwner, type CommandReceipt } from "@aster/api-contracts";
 import { goalTimeline } from "../goals/timeline.js";
@@ -5,6 +6,7 @@ import { Effect, Schema, Stream } from "effect";
 import {
   ApplicationError,
   RetryGoalSignalInput,
+  RetryGoalTurnInput,
   contextQueryKeys,
   RuntimeSnapshot,
 } from "@aster/api-contracts";
@@ -50,7 +52,9 @@ export const makeApplicationApi = (options: {
     );
   const route = Effect.fn("ApplicationApi.route")(function* (
     slug: string,
-    command: Extract<GoalCommand, { _tag: "UserMessage" | "End" }>,
+    command:
+      | Omit<Extract<GoalCommand, { _tag: "SubmitInput" }>, "replyTo">
+      | Omit<Extract<GoalCommand, { _tag: "End" }>, "replyTo">,
   ) {
     yield* requireGoal(slug);
     if (!options.goals)
@@ -72,8 +76,6 @@ export const makeApplicationApi = (options: {
         ),
       );
     if (reply._tag === "Rejected") return yield* reply.error;
-    if (reply._tag === "Unavailable")
-      return yield* new ApplicationError({ kind: "unavailable", message: reply.message });
   });
   return {
     inspectProcessing: (owner: ProcessingOwner) => inspectProcessing(registry, owner),
@@ -128,6 +130,41 @@ export const makeApplicationApi = (options: {
       };
     }),
     goals: {
+      retryTurn: Effect.fn("ApplicationApi.retryGoalTurn")(function* (raw: RetryGoalTurnInput) {
+        const input = yield* Schema.decodeUnknownEffect(RetryGoalTurnInput)(raw).pipe(
+          Effect.mapError(
+            () => new ApplicationError({ kind: "invalid-input", message: "Invalid turn retry" }),
+          ),
+        );
+        yield* requireGoal(input.slug);
+        if (!options.goals)
+          return yield* new ApplicationError({
+            kind: "unavailable",
+            message: "No Goals configured",
+          });
+        const reply = yield* options.goals
+          .ask<GoalCommandReply>((replyTo) => ({
+            _tag: "Route",
+            slug: input.slug,
+            command: {
+              _tag: "RetryTurn",
+              requestId: input.requestId,
+              turnId: input.turnId,
+              replyTo,
+            },
+          }))
+          .pipe(
+            Effect.mapError(
+              () =>
+                new ApplicationError({
+                  kind: "unavailable",
+                  message: "Retry acknowledgement missing; reuse the same request identity",
+                }),
+            ),
+          );
+        if (reply._tag === "Rejected") return yield* reply.error;
+        return reply.receipt;
+      }),
       retrySignal: Effect.fn("ApplicationApi.retryGoalSignal")(function* (
         raw: RetryGoalSignalInput,
       ) {
@@ -146,7 +183,7 @@ export const makeApplicationApi = (options: {
           .ask<GoalDeliveryReply>((replyTo) => ({
             _tag: "Route",
             slug: input.slug,
-            command: { _tag: "RetrySignal", input, replyTo },
+            command: { _tag: "RetrySignalDelivery", requestId: input.requestId, input, replyTo },
           }))
           .pipe(
             Effect.catchTag("AskTimeoutError", () =>
@@ -168,11 +205,16 @@ export const makeApplicationApi = (options: {
       ),
       sendMessage: (slug: string, text: string, requestId?: string) =>
         text.trim()
-          ? route(slug, { _tag: "UserMessage", text: text.trim(), requestId })
+          ? route(slug, {
+              _tag: "SubmitInput",
+              input: { _tag: "UserInput", text: text.trim() },
+              requestId: requestId ?? randomUUID(),
+            })
           : Effect.fail(
               new ApplicationError({ kind: "invalid-input", message: "Message text is required" }),
             ),
-      end: (slug: string) => route(slug, { _tag: "End" }),
+      end: (slug: string, requestId: string = randomUUID()) =>
+        route(slug, { _tag: "End", requestId }),
       history: (slug: string, page: { before?: number; limit?: number } = {}) =>
         Effect.gen(function* () {
           yield* requireGoal(slug);

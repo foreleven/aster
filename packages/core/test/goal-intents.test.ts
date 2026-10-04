@@ -125,21 +125,21 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
               ),
             );
             const root = yield* system.spawn("goals", GoalsRootActor);
-            // A mailbox read is a startup barrier, without waiting on model execution.
-            yield* root.ask((replyTo) => ({
-              _tag: "Route",
-              slug: "project",
-              command: {
-                _tag: "Tool",
-                request: { operation: "task_list" },
-                replyTo,
-              },
+            yield* root.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+              _tag: "AwaitReady",
+              stage: "restored",
+              replyTo,
             }));
             const send = (value: GoalIntentInput) =>
               root.ask<GoalDeliveryReply>((replyTo) => ({
                 _tag: "Route",
                 slug: "project",
-                command: { _tag: "Intent", input: value, replyTo },
+                command: {
+                  _tag: "SubmitInput",
+                  requestId: value.requestId,
+                  input: { _tag: "GoalIntent", delivery: value },
+                  replyTo: replyTo,
+                },
               }));
             if (!restart) {
               firstInput = {
@@ -176,6 +176,7 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
                 undefined,
                 "A failed acceptance never returns a success receipt",
               );
+              yield* root.tell({ _tag: "Initialize" });
               yield* Deferred.await(entered);
             }
             const accepted = yield* send(firstInput);
@@ -213,7 +214,7 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
               yield* root.ask<GoalCommandReply>((replyTo) => ({
                 _tag: "Route",
                 slug: "project",
-                command: { _tag: "End", replyTo },
+                command: { _tag: "End", requestId: "test-8862", replyTo: replyTo },
               }));
               assert.deepEqual(yield* send(firstInput), accepted);
               const closed = yield* send({
@@ -225,7 +226,12 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
               const unavailable = yield* root.ask<GoalDeliveryReply>((replyTo) => ({
                 _tag: "Route",
                 slug: "missing",
-                command: { _tag: "Intent", input: firstInput, replyTo },
+                command: {
+                  _tag: "SubmitInput",
+                  requestId: firstInput.requestId,
+                  input: { _tag: "GoalIntent", delivery: firstInput },
+                  replyTo: replyTo,
+                },
               }));
               assert.ok(unavailable._tag === "Rejected" && unavailable.error.kind === "not-found");
             }

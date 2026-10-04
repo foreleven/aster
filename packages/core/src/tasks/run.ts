@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { CausalChain } from "@aster/api-contracts";
 import { runNotifications } from "../notifications/run.js";
 import { GoalState } from "../goals/state.js";
@@ -177,16 +178,28 @@ export class SignalRunActor extends ContextActor.Service<
       };
       const notify = (text: string, terminal: boolean) =>
         subscriber
-          ? subscriber.tell({
-              _tag: "Execution",
-              runPath,
-              causal: state().admission?.input.causal ?? state().causal,
-              text,
-              terminal,
-              status: state().status,
-              taskId: state().goalTask?.taskId,
-              evaluationId: state().goalTask?.evaluationId,
-            })
+          ? subscriber
+              .ask<import("../goals/protocol.js").GoalCommandReply>((replyTo) => ({
+                _tag: "SubmitInput",
+                requestId: createHash("sha256")
+                  .update(JSON.stringify([runPath, state().status, text]))
+                  .digest("hex"),
+                replyTo,
+                input: {
+                  _tag: "ExecutionFeedback",
+                  runPath,
+                  causal: state().admission?.input.causal ?? state().causal,
+                  text,
+                  terminal,
+                  status: state().status,
+                  taskId: state().goalTask?.taskId,
+                  evaluationId: state().goalTask?.evaluationId,
+                },
+              }))
+              .pipe(
+                Effect.asVoid,
+                Effect.catchTag("AskTimeoutError", (error) => Effect.logWarning(error.message)),
+              )
           : Effect.void;
       const replayTerminal = Effect.fnUntraced(function* (includeUncertain = false) {
         const text = terminalRunText(state(), registry.get(runPath)!.messages, includeUncertain);

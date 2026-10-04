@@ -135,7 +135,12 @@ export const makeReactionPolicy = (options: {
               ? roots.goals.ask<ReactionReply>((replyTo) => ({
                   _tag: "Route",
                   slug: input.intent.goalSlug,
-                  command: { _tag: "Intent", input, replyTo },
+                  command: {
+                    _tag: "SubmitInput",
+                    requestId: input.requestId,
+                    input: { _tag: "GoalIntent", delivery: input },
+                    replyTo,
+                  },
                 }))
               : Effect.succeed({
                   _tag: "Rejected" as const,

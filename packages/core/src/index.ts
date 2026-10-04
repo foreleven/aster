@@ -3,7 +3,16 @@ export * from "./context/model.js";
 export * from "./context/registry.js";
 export * from "./context/storage.js";
 export * from "./config/schema.js";
-export * from "./goals/actors.js";
+export {
+  GoalActor,
+  GoalsRootActor,
+  GoalCommand,
+  GoalCommandReply,
+  GoalDeliveryReply,
+  GoalReadyReply,
+  GoalsRootCommand,
+  type GoalMessage,
+} from "./goals/actors.js";
 export * from "./signals/actors.js";
 export * from "./tasks/run.js";
 export * from "./goals/plan.js";

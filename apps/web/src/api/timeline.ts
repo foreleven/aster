@@ -1,6 +1,10 @@
 import { Effect } from "effect";
 import { Atom } from "effect/unstable/reactivity";
-import { QueryKeys, type RetryGoalSignalInput } from "@aster/api-contracts";
+import {
+  QueryKeys,
+  type RetryGoalTurnInput,
+  type RetryGoalSignalInput,
+} from "@aster/api-contracts";
 import { ApplicationClient } from "./client";
 
 export const goalTimeline = Atom.family((slug: string) => {
@@ -33,5 +37,9 @@ export const goalTimeline = Atom.family((slug: string) => {
 
 // Preserve an uncertain user authorization while navigating or refreshing live data.
 export const pendingSignalRetries = Atom.make<Record<string, RetryGoalSignalInput>>({}).pipe(
+  Atom.keepAlive,
+);
+
+export const pendingTurnRetries = Atom.make<Record<string, RetryGoalTurnInput>>({}).pipe(
   Atom.keepAlive,
 );

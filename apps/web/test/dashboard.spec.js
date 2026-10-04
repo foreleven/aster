@@ -2087,3 +2087,55 @@ test("Run publication shows separate approval and retained unknown outcome after
   await page.screenshot({ path: "/tmp/aster-publication-mobile.png", fullPage: true });
   expect(errors).toEqual([]);
 });
+
+test("Goal turn retry retains its request identity after an unknown acknowledgement", async ({
+  page,
+}) => {
+  const data = designFixture();
+  const group = data.timelines.engine.groups[1];
+  group.status = "failed";
+  group.error = "Provider failed before producing a result";
+  const { errors } = await setup(page, data);
+  const requests = [];
+  await page.route("**/api/rpc{,/}", async (route) => {
+    const rpc = JSON.parse(route.request().postData().trim());
+    if (rpc.tag !== "RetryGoalTurn") return route.fallback();
+    requests.push(rpc.payload);
+    const first = requests.length === 1;
+    if (!first) group.status = "running";
+    await route.fulfill({
+      contentType: "application/ndjson",
+      body:
+        JSON.stringify({
+          _tag: "Exit",
+          requestId: rpc.id,
+          exit: first
+            ? {
+                _tag: "Failure",
+                cause: [
+                  {
+                    _tag: "Fail",
+                    error: {
+                      _tag: "ApplicationError",
+                      kind: "unavailable",
+                      message: "Turn retry acknowledgement missing",
+                    },
+                  },
+                ],
+              }
+            : { _tag: "Success", value: { requestId: rpc.payload.requestId, revision: 42 } },
+        }) + "\n",
+    });
+  });
+  await page.getByRole("button", { name: "Retry turn", exact: true }).click();
+  await expect(page.getByText("Turn retry acknowledgement missing", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Notes", exact: true }).click();
+  await page.getByRole("tab", { name: "Timeline", exact: true }).click();
+  await page.evaluate(() => window.testEvents.emit("ready"));
+  await page.getByRole("button", { name: "Retry turn", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Retry turn", exact: true })).toHaveCount(0);
+  expect(requests).toHaveLength(2);
+  expect(requests[1]).toEqual(requests[0]);
+  expect(requests[0].turnId).toBe(group.evaluationId);
+  expect(errors).toEqual([]);
+});

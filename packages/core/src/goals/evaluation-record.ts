@@ -1,6 +1,6 @@
 import { GoalTaskOutput } from "@aster/api-contracts";
 import { Schema } from "effect";
-import { GoalPlan } from "./plan.js";
+import { StoredGoalPlan } from "./plan.js";
 
 const Identity = {
   evaluationId: Schema.NonEmptyString,
@@ -18,14 +18,14 @@ export const GoalEvaluationRecord = Schema.Union([
     ...Identity,
     status: Schema.Literals(["failed", "reconciliation_required"]),
     error: Schema.String,
-    result: Schema.optional(GoalPlan),
+    result: Schema.optional(StoredGoalPlan),
     observedAt: Schema.NonEmptyString,
   }),
   Schema.Struct({
     ...Identity,
     status: Schema.Literals(["completed", "partially_applied"]),
     resultId: Schema.NonEmptyString,
-    result: GoalPlan,
+    result: StoredGoalPlan,
     appliedAt: Schema.NonEmptyString,
     taskOutputs: Schema.optional(Schema.Array(GoalTaskOutput)),
   }),

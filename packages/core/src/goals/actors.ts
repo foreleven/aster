@@ -1,96 +1,46 @@
-import { goalEvaluationSchedule, compactionRetry } from "./evaluation-schedule.js";
+import { goalEvaluationSchedule } from "./evaluation-schedule.js";
 import { planSignalChanges } from "./signal-proposals.js";
-import { goalInputs, inputMessage } from "./inputs.js";
+import { goalInputs, inputMessage, newGoalInput } from "./inputs.js";
 import { goalSignalOutbox } from "./signal-outbox.js";
 import { goalTaskExecution } from "./task-execution.js";
 import { GoalState } from "./state.js";
 import { goalWorkingState } from "./working-state.js";
 import { GoalOperationError } from "./errors.js";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { ReplyTo, Actor, type ActorRef } from "@aster/actor";
 import { ContextActor } from "../context/actor.js";
 import { defineContext } from "../context/model.js";
 import { ContextRegistry } from "../context/registry.js";
-import { DateTime, Effect, Layer, Match, Schema, Semaphore } from "effect";
+import { DateTime, Deferred, Effect, Layer, Match, Schema, Semaphore } from "effect";
 import { evaluationIdentity, type GoalEvaluationRecord } from "./evaluation-record.js";
-import type { AgentMessage } from "@aster/agent";
 import type { GoalDefinition } from "../config/schema.js";
 import { GoalRuntime } from "./runtime.js";
 import { evaluateGoal } from "./evaluation.js";
-import { GoalPlan } from "./plan.js";
-import { FrozenGoalEvaluation } from "./frozen-evaluation.js";
-import { isSignalToolRequest, GoalToolError, GoalToolRequest } from "./tasks.js";
-import { contextSize, makeMemoryGoalHistory, repairGoalHistory } from "./history.js";
+import { GoalPlan, StoredGoalPlan } from "./plan.js";
+import { GoalToolError } from "./tasks.js";
+import { contextSize, makeMemoryGoalHistory } from "./history.js";
 import { TaskPreparation, ExternalAgents } from "../tasks/model.js";
-import { GoalIntentInput } from "./intent.js";
-import {
-  RetryGoalSignalInput,
-  CommandReceipt,
-  CausalChain,
-  ApplicationError,
-  GoalDeliveryInput,
-  GoalDeliveryReceipt,
-} from "@aster/api-contracts";
-import { goalInbox } from "./inbox.js";
-import { goalIntentInbox } from "./intent-inbox.js";
+import { CommandReceipt, ApplicationError } from "@aster/api-contracts";
+import { isDeepStrictEqual } from "node:util";
+import { goalAdmission } from "./admission.js";
+import { GoalCommand, GoalControl, GoalReadyReply, GoalRequestData } from "./protocol.js";
+export { GoalCommand, GoalCommandReply, GoalDeliveryReply, GoalReadyReply } from "./protocol.js";
 
-export const GoalDeliveryReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", { receipt: GoalDeliveryReceipt }),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-]);
-export type GoalDeliveryReply = typeof GoalDeliveryReply.Type;
-
-export const GoalCommandReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", {}),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-  Schema.TaggedStruct("Unavailable", { message: Schema.String }),
-]);
-export type GoalCommandReply = typeof GoalCommandReply.Type;
-
-const ReadyCommand = Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() });
-export const GoalCommand = Schema.Union([
-  ReadyCommand,
-  Schema.TaggedStruct("RetrySignal", {
-    input: RetryGoalSignalInput,
-    replyTo: ReplyTo<GoalDeliveryReply>(),
+const GoalMailbox = Schema.Union([
+  GoalCommand,
+  GoalControl,
+  Schema.TaggedStruct("RunNext", {}),
+  Schema.TaggedStruct("TurnSettled", {
+    turnId: Schema.String,
+    resultId: Schema.String,
+    generation: Schema.String,
+    through: Schema.optional(Schema.Number),
+    result: Schema.Union([
+      Schema.TaggedStruct("Success", { value: StoredGoalPlan }),
+      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
+    ]),
   }),
-  Schema.TaggedStruct("Deliver", {
-    input: GoalDeliveryInput,
-    replyTo: ReplyTo<GoalDeliveryReply>(),
-  }),
-  Schema.TaggedStruct("Evaluate", { reason: Schema.String }),
-  Schema.TaggedStruct("Intent", {
-    input: GoalIntentInput,
-    replyTo: ReplyTo<GoalDeliveryReply>(),
-  }),
-  Schema.TaggedStruct("UserMessage", {
-    requestId: Schema.optional(Schema.NonEmptyString),
-    text: Schema.String,
-    replyTo: Schema.optional(ReplyTo<GoalCommandReply>()),
-  }),
-  Schema.TaggedStruct("End", { replyTo: Schema.optional(ReplyTo<GoalCommandReply>()) }),
-  Schema.TaggedStruct("Occurrence", {
-    causal: Schema.optional(CausalChain),
-    id: Schema.String,
-    signalPath: Schema.String,
-    text: Schema.String,
-    replyTo: ReplyTo<{ accepted: boolean }>(),
-  }),
-  Schema.TaggedStruct("Execution", {
-    causal: Schema.optional(CausalChain),
-    runPath: Schema.String,
-    evaluationId: Schema.optional(Schema.String),
-    text: Schema.String,
-    terminal: Schema.Boolean,
-    status: Schema.optional(Schema.String),
-    taskId: Schema.optional(Schema.String),
-  }),
-  Schema.TaggedStruct("Tool", {
-    generation: Schema.optional(Schema.String),
-    request: GoalToolRequest,
-    replyTo: ReplyTo<{ value?: unknown; error?: string }>(),
-  }),
-  Schema.TaggedStruct("SignalDelivered", {
+  Schema.TaggedStruct("SignalDeliverySettled", {
     requestId: Schema.String,
     generation: Schema.String,
     result: Schema.Union([
@@ -98,46 +48,15 @@ export const GoalCommand = Schema.Union([
       Schema.TaggedStruct("Failure", { error: ApplicationError }),
     ]),
   }),
-  Schema.TaggedStruct("SignalEdited", {
-    replyTo: ReplyTo<{ value?: unknown; error?: string }>(),
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: Schema.Unknown }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(GoalToolError) }),
-    ]),
-  }),
-  Schema.TaggedStruct("Transcript", {
+  Schema.TaggedStruct("RecoverySettled", {
     generation: Schema.String,
-    message: Schema.Unknown,
-    replyTo: ReplyTo<void>(),
-  }),
-  Schema.TaggedStruct("Compacted", {
-    generation: Schema.String,
-    summary: Schema.String,
-    through: Schema.Number,
-    replyTo: ReplyTo<void>(),
-  }),
-  Schema.TaggedStruct("Planned", {
-    generation: Schema.String,
-    through: Schema.optional(Schema.Number),
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: GoalPlan }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
-    ]),
-  }),
-  Schema.TaggedStruct("FreezeEvaluation", {
-    generation: Schema.String,
-    requestId: Schema.String,
-    input: FrozenGoalEvaluation,
-    replyTo: ReplyTo<FrozenGoalEvaluation | undefined>(),
-  }),
-  Schema.TaggedStruct("Reconciled", {
     result: Schema.Union([
       Schema.TaggedStruct("Success", { value: Schema.Array(ReplyTo<unknown>()) }),
       Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
     ]),
   }),
 ]);
-export type GoalCommand = typeof GoalCommand.Type;
+export type GoalMailbox = typeof GoalMailbox.Type;
 export interface GoalMessage {
   readonly type: "user" | "assistant" | "execution" | "error";
   readonly at: string;
@@ -149,7 +68,7 @@ export class GoalActor extends ContextActor.Service<
   GoalActor,
   GoalRuntime | TaskPreparation | ExternalAgents
 >()("goals/Actor", {
-  command: GoalCommand,
+  command: GoalMailbox,
   context: defineContext({
     identity: "Ongoing work goal",
     state: GoalState,
@@ -177,12 +96,34 @@ export class GoalActor extends ContextActor.Service<
         runtime.contextTokens ?? 200000,
       );
       const { current, state, save, append, event } = working;
+      const behaviorGeneration = randomUUID();
+      let recoveryError: ApplicationError | undefined;
+      const readyWaiters: { replyTo: ReplyTo<GoalReadyReply>; stage?: "restored" | "activated" }[] =
+        [];
+      const ready = Effect.fnUntraced(function* () {
+        for (let index = readyWaiters.length - 1; index >= 0; index--) {
+          const waiter = readyWaiters[index]!;
+          if (
+            !recoveryError &&
+            !(waiter.stage === "restored" ? schedule.isRecovered() : schedule.isReady())
+          )
+            continue;
+          readyWaiters.splice(index, 1);
+          yield* waiter.replyTo.tell(
+            recoveryError ? { _tag: "Failed", error: recoveryError } : { _tag: "Ready" },
+          );
+        }
+      });
       const inputs = goalInputs(working, history);
-      const signalOutbox = goalSignalOutbox(working, runtime);
+      const signalOutbox = goalSignalOutbox(working, {
+        ...runtime,
+        applySignal:
+          runtime.applySignal &&
+          ((input, subscriber) =>
+            runtime.applySignal!(input, subscriber).pipe(signalOperations.withPermit)),
+      });
       let signalsRecovered = false;
-      const inbox = goalInbox(registry, working, history);
-      const intents = goalIntentInbox(registry, working, history);
-      const taskById = (id?: string) => state().tasks.find((t) => t.id === id);
+      const acceptInput = goalAdmission(registry, working, history);
       const active = () => state().status === "active";
       const execution = goalTaskExecution(
         registry,
@@ -190,6 +131,28 @@ export class GoalActor extends ContextActor.Service<
         () => definition,
         () => path,
       );
+      const deactivate = Effect.fn("Goal.deactivate")(function* (
+        context: import("./task-execution.js").GoalActorContext,
+      ) {
+        const operation = state().deactivation;
+        if (!operation || operation.status === "delivered") return;
+        yield* save({ deactivation: { ...operation, status: "sending" } });
+        yield* context.pipeToSelf(
+          runtime.deactivate(definition.slug).pipe(
+            signalOperations.withPermit,
+            Effect.as({ requestId: operation.requestId, revision: current().revision ?? 0 }),
+            Effect.mapError(
+              (error) => new ApplicationError({ kind: "unavailable", message: error.message }),
+            ),
+          ),
+          (result) => ({
+            _tag: "SignalDeliverySettled",
+            requestId: operation.requestId,
+            generation: behaviorGeneration,
+            result,
+          }),
+        );
+      });
       return GoalActor.of({
         started: (context) =>
           Effect.gen(function* () {
@@ -206,8 +169,9 @@ export class GoalActor extends ContextActor.Service<
                     state: {
                       ...definition,
                       status: "active",
-                      summary: "Not yet evaluated",
-                      progress: "Not yet evaluated",
+                      activated: false,
+                      summary: "Ready to begin",
+                      progress: "Ready to begin",
                       tasks: [],
                       evaluations: [],
                       historyThrough: 0,
@@ -222,12 +186,15 @@ export class GoalActor extends ContextActor.Service<
                   { expectedRevision: 0 },
                 )
                 .pipe(Effect.asVoid, Effect.orDie);
-            // Preserve actual recorded calls and explicitly mark results lost to interruption.
-            yield* repairGoalHistory(history, slug, state().historyThrough).pipe(Effect.orDie);
             // Refresh display metadata on restart without replacing durable Goal progress.
             yield* save({ title: definition.title ?? definition.description });
             yield* inputs.project();
             yield* execution.recover(context);
+            // Root-scoped activation survives child supervision but starts closed on process boot.
+            const activation = context.metadata.goalActivation as
+              Deferred.Deferred<void> | undefined;
+            if (activation)
+              yield* context.pipeToSelf(Deferred.await(activation), () => ({ _tag: "Activate" }));
             yield* context.pipeToSelf(
               runtime.reconcile(slug, context.self).pipe(
                 signalOperations.withPermit,
@@ -241,323 +208,253 @@ export class GoalActor extends ContextActor.Service<
                     }),
                 ),
               ),
-              (result) => ({ _tag: "Reconciled", result }),
+              (result) => ({ _tag: "RecoverySettled", generation: behaviorGeneration, result }),
             );
           }),
         receive: (command, context) =>
           Match.value(command).pipe(
-            Match.tag("RetrySignal", (command) =>
+            Match.tag("SubmitInput", "End", "RetryTurn", "RetrySignalDelivery", (command) =>
               Effect.gen(function* () {
-                const result = yield* signalOutbox.retry(command.input).pipe(Effect.result);
+                const request = Schema.decodeUnknownSync(GoalRequestData)(command);
+                const previous = state().requests?.find(
+                  (item) => item.request.requestId === request.requestId,
+                );
+                if (previous) {
+                  return yield* command.replyTo.tell(
+                    isDeepStrictEqual(previous.request, request)
+                      ? { _tag: "Accepted", receipt: previous.receipt }
+                      : {
+                          _tag: "Rejected",
+                          error: new ApplicationError({
+                            kind: "conflict",
+                            message: "Goal request identity belongs to another payload",
+                          }),
+                        },
+                  );
+                }
+                const receipt = {
+                  requestId: request.requestId,
+                  revision: (current().revision ?? 0) + 1,
+                };
+                const admission = { request, receipt };
+                const requests = [...(state().requests ?? []), admission];
+                const result = yield* Match.value(request).pipe(
+                  Match.tag("SubmitInput", () => acceptInput(admission)),
+                  Match.tag("RetrySignalDelivery", (request) =>
+                    Effect.gen(function* () {
+                      if (request.requestId !== request.input.requestId)
+                        return yield* new ApplicationError({
+                          kind: "invalid-input",
+                          message: "Signal retry identity mismatch",
+                        });
+                      return yield* signalOutbox.retry(request.input, admission);
+                    }),
+                  ),
+                  Match.tag("RetryTurn", (request) =>
+                    Effect.gen(function* () {
+                      const failed = state().evaluations?.find(
+                        (item) => item.evaluationId === request.turnId,
+                      );
+                      if (
+                        !active() ||
+                        state().pendingRequestId ||
+                        state().retryTurnId ||
+                        failed?.status !== "failed" ||
+                        !failed.inputIds?.length ||
+                        !failed.inputIds.every((id) =>
+                          state().inputs?.some((input) => input.inputId === id),
+                        )
+                      )
+                        return yield* new ApplicationError({
+                          kind: "conflict",
+                          message:
+                            "Only a definitively failed idle Goal turn can be retried; unknown outcomes need reconciliation",
+                        });
+                      yield* save({
+                        requests,
+                        retryTurnId: request.turnId,
+                        pendingEvaluation: true,
+                        causal: { rootRequestId: request.requestId, remainingAgentTurns: 4 },
+                      }).pipe(Effect.orDie);
+                      return receipt;
+                    }),
+                  ),
+                  Match.tag("End", () =>
+                    Effect.gen(function* () {
+                      const observedAt = DateTime.formatIso(yield* DateTime.now);
+                      yield* save({
+                        requests,
+                        status: "completed",
+                        completionOrigin: "user",
+                        pendingEvaluation: false,
+                        nextStep: undefined,
+                        retryTurnId: undefined,
+                        deactivation: state().deactivation ?? {
+                          requestId: request.requestId,
+                          status: "pending",
+                        },
+                        evaluations: state().evaluations?.map((evaluation): GoalEvaluationRecord =>
+                          evaluation.status === "running" || evaluation.status === "pending"
+                            ? {
+                                ...evaluationIdentity(evaluation),
+                                status: "reconciliation_required",
+                                error:
+                                  "Goal ended before result application; external outcome is not confirmed cancelled",
+                                observedAt,
+                              }
+                            : evaluation,
+                        ),
+                      }).pipe(Effect.orDie);
+                      // Closure and uncertain handoff survive even if interruption or acknowledgement is lost.
+                      yield* schedule.cancel();
+                      return receipt;
+                    }),
+                  ),
+                  Match.exhaustive,
+                  Effect.result,
+                );
                 if (result._tag === "Failure")
                   return yield* command.replyTo.tell({ _tag: "Rejected", error: result.failure });
                 yield* command.replyTo.tell({ _tag: "Accepted", receipt: result.success });
-                yield* signalOutbox.dispatch(context);
+                if (request._tag === "End") {
+                  yield* execution.cancelPending(context);
+                  yield* deactivate(context);
+                } else if (request._tag === "RetrySignalDelivery")
+                  yield* signalOutbox.dispatch(context);
+                else if (state().pendingEvaluation) yield* schedule.enqueue(context);
               }),
             ),
-            Match.tag("SignalDelivered", (command) => signalOutbox.delivered(command)),
-            Match.tag("Ready", (command) => command.replyTo.tell(undefined)),
-            Match.tag("Deliver", (command) =>
+            Match.tag("Activate", () =>
               Effect.gen(function* () {
-                const accepted = yield* inbox.accept(command.input).pipe(Effect.result);
-                if (accepted._tag === "Failure")
-                  return yield* command.replyTo.tell({ _tag: "Rejected", error: accepted.failure });
-                yield* command.replyTo.tell({
-                  _tag: "Accepted",
-                  receipt: accepted.success.receipt,
-                });
-                if (accepted.success.created && active())
-                  yield* schedule.enqueue(context, "Personal Agent provided a message");
-              }),
-            ),
-            Match.tag("Transcript", (command) =>
-              Effect.gen(function* () {
-                if (command.generation !== schedule.generation()) {
-                  yield* command.replyTo.tell(undefined);
-                  return;
-                }
-                yield* append(command.message as AgentMessage);
-                yield* command.replyTo.tell(undefined);
-                return;
-              }),
-            ),
-            Match.tag("Compacted", (command) =>
-              Effect.gen(function* () {
-                if (command.generation !== schedule.generation()) {
-                  yield* command.replyTo.tell(undefined);
-                  return;
-                }
-                if (command.through > state().historyThrough)
-                  yield* save({ summary: command.summary, historyThrough: command.through });
-                yield* command.replyTo.tell(undefined);
-                return;
-              }),
-            ),
-            Match.tag("FreezeEvaluation", (command) =>
-              Effect.gen(function* () {
-                const handoff = state().pendingHandoff;
-                if (
-                  command.generation !== schedule.generation() ||
-                  handoff?.requestId !== command.requestId
-                )
-                  return yield* command.replyTo.tell(undefined);
-                if (!handoff.input)
-                  yield* save({
-                    pendingHandoff: { ...handoff, input: command.input },
-                    evaluations: state().evaluations?.map((evaluation) =>
-                      evaluation.evaluationId === command.requestId &&
-                      evaluation.status === "pending"
-                        ? { ...evaluation, status: "running" as const }
-                        : evaluation,
-                    ),
-                  });
-                yield* command.replyTo.tell(state().pendingHandoff!.input);
-              }),
-            ),
-            Match.tag("Intent", (command) =>
-              Effect.gen(function* () {
-                const accepted = yield* intents.accept(command.input).pipe(Effect.result);
-                if (accepted._tag === "Failure")
-                  return yield* command.replyTo.tell({ _tag: "Rejected", error: accepted.failure });
-                yield* command.replyTo.tell({
-                  _tag: "Accepted",
-                  receipt: accepted.success.receipt,
-                });
-                if (accepted.success.created && active())
-                  yield* schedule.enqueue(
-                    context,
-                    `Goal intent from ${command.input.intent.source.actorPath}`,
-                  );
-              }),
-            ),
-            Match.tag("UserMessage", (command) =>
-              Effect.gen(function* () {
-                const requestId = command.requestId ?? randomUUID();
-                const accepted = yield* inputs
-                  .accept({ _tag: "UserInput", text: command.text }, requestId, {
-                    pendingEvaluation: active() || state().pendingEvaluation,
-                    causal: { rootRequestId: requestId, remainingAgentTurns: 4 },
-                  })
-                  .pipe(Effect.result);
-                if (accepted._tag === "Failure") {
-                  if (command.replyTo)
-                    yield* command.replyTo.tell({ _tag: "Rejected", error: accepted.failure });
-                  return;
-                }
-                if (command.replyTo) yield* command.replyTo.tell({ _tag: "Accepted" });
-                if (accepted.success && active())
-                  yield* schedule.enqueue(context, "User provided additional information");
-                return;
-              }),
-            ),
-            Match.tag("End", (command) =>
-              Effect.gen(function* () {
-                yield* schedule.cancel();
-                const observedAt = DateTime.formatIso(yield* DateTime.now);
-                yield* save({
-                  evaluations: state().evaluations?.map((evaluation): GoalEvaluationRecord =>
-                    evaluation.status === "running" || evaluation.status === "pending"
-                      ? {
-                          ...evaluationIdentity(evaluation),
-                          status: "reconciliation_required",
-                          error:
-                            "Goal ended before evaluation application; the Agent outcome is not confirmed cancelled",
-                          observedAt,
-                        }
-                      : evaluation,
-                  ),
-                  status: "completed",
-                  pendingEvaluation: false,
-                  pendingRequestId: undefined,
-                  pendingHandoff: undefined,
-                });
-                yield* event("User ended the Goal");
-                if (command.replyTo) yield* command.replyTo.tell({ _tag: "Accepted" });
-                yield* execution.cancelPending(context);
-                yield* context.pipeToSelf(
-                  runtime.deactivate(definition.slug).pipe(
-                    signalOperations.withPermit,
-                    Effect.as([]),
-                    Effect.mapError(
-                      (cause) =>
-                        new GoalOperationError({
-                          goal: definition.slug,
-                          operation: "deactivate",
-                          cause,
-                          message: cause.message,
-                        }),
-                    ),
-                  ),
-                  (result) => ({ _tag: "Reconciled", result }),
-                );
-                return;
-              }),
-            ),
-            Match.tag("Occurrence", (command) =>
-              Effect.gen(function* () {
-                if (!state().receivedEvents.includes(command.id)) {
-                  yield* inputs.accept(
-                    {
-                      _tag: "SignalOccurrence",
-                      occurrenceId: command.id,
-                      signalPath: command.signalPath,
-                      evidence: command.text,
-                    },
-                    command.id,
-                    {
-                      receivedEvents: [...state().receivedEvents, command.id],
-                      causal: command.causal ?? {
-                        rootRequestId: command.id,
+                if (!state().activated) {
+                  // An absent marker identifies legacy state; never invent a startup for an existing pursuit.
+                  if (active() && state().activated === false) {
+                    yield* inputs.accept({ _tag: "GoalStarted", pursuit: "initial" }, "initial", {
+                      activated: true,
+                      pendingEvaluation: true,
+                      causal: {
+                        rootRequestId: `goal:${definition.slug}:initial`,
                         remainingAgentTurns: 4,
                       },
-                      pendingEvaluation: active(),
-                    },
-                  );
-                  if (active())
-                    yield* schedule.enqueue(context, `Signal matched: ${command.signalPath}`);
+                    });
+                  } else yield* save({ activated: true });
                 }
-                yield* command.replyTo.tell({ accepted: true });
-                return;
+                yield* schedule.activate;
+                yield* ready();
+                if (state().pendingEvaluation || state().pendingRequestId)
+                  yield* schedule.enqueue(context);
               }),
             ),
-            Match.tag("Execution", (command) =>
+            Match.tag("AwaitReady", (command) =>
               Effect.gen(function* () {
-                const eventId = createHash("sha256")
-                  .update(
-                    `${command.runPath}:${command.status ?? command.terminal}:${command.text}`,
-                  )
-                  .digest("hex");
-                if (state().receivedEvents.includes(eventId)) return;
-                const task = taskById(command.taskId);
-                yield* inputs.accept(
-                  {
-                    _tag: "ExecutionFeedback",
-                    runPath: command.runPath,
-                    taskId: command.taskId,
-                    evaluationId: command.evaluationId,
-                    status: command.status ?? (command.terminal ? "completed" : "running"),
-                    terminal: command.terminal,
-                    text: command.text,
-                  },
-                  eventId,
-                  {
-                    ...(task && (!task.execution || task.execution.runPath === command.runPath)
-                      ? {
-                          tasks: state().tasks.map((t) =>
-                            t.id === task.id
-                              ? {
-                                  ...t,
-                                  execution: {
-                                    ...t.execution,
-                                    runPath: command.runPath,
-                                    status:
-                                      command.status ??
-                                      (command.terminal ? "completed" : "running"),
-                                  },
-                                  ...(command.terminal ? { result: command.text } : {}),
-                                }
-                              : t,
-                          ),
-                        }
-                      : {}),
-                    receivedEvents: [...state().receivedEvents, eventId],
-                    causal: command.causal ?? state().causal,
-                    pendingEvaluation: (command.terminal && active()) || state().pendingEvaluation,
-                  },
-                );
-                if (command.terminal && active())
-                  yield* schedule.enqueue(context, `Execution result: ${command.runPath}`);
-                return;
+                readyWaiters.push(command);
+                yield* ready();
               }),
             ),
-            Match.tag("SignalEdited", (command) =>
-              Effect.gen(function* () {
-                yield* command.replyTo.tell(
-                  command.result._tag === "Success"
-                    ? { value: command.result.value }
-                    : { error: command.result.error.message },
-                );
-                return;
-              }),
-            ),
-            Match.tag("Tool", (command) =>
+            Match.tag("SignalDeliverySettled", (command) =>
               Effect.gen(function* () {
                 if (
-                  command.generation !== undefined &&
-                  command.generation !== schedule.generation()
+                  command.requestId === state().deactivation?.requestId &&
+                  command.generation === behaviorGeneration
                 ) {
-                  yield* command.replyTo.tell({ error: "Goal evaluation is no longer active" });
-                  return;
-                }
-                const req = command.request;
-                if (isSignalToolRequest(req)) {
-                  yield* context.pipeToSelf(
-                    Effect.gen(function* () {
-                      // A queued operation may begin after End or a newer evaluation.
-                      if (!active()) return yield* new GoalToolError({ message: "Goal has ended" });
-                      if (
-                        command.generation !== undefined &&
-                        command.generation !== schedule.generation()
-                      )
-                        return yield* new GoalToolError({
-                          message: "Goal evaluation is no longer active",
-                        });
-                      if (!runtime.editSignal)
-                        return yield* new GoalToolError({ message: "Signal tools unavailable" });
-                      return yield* runtime.editSignal(definition.slug, req, context.self);
-                    }).pipe(
-                      signalOperations.withPermit,
-                      Effect.catchTag("AskTimeoutError", Effect.die),
-                    ),
-                    (result) => ({ _tag: "SignalEdited", replyTo: command.replyTo, result }),
-                  );
-                  return;
-                }
-                const operation = execution.execute(context, req);
-                yield* operation.pipe(
-                  Effect.flatMap((value) => command.replyTo.tell({ value })),
-                  Effect.catchTags({
-                    GoalToolError: (error) => command.replyTo.tell({ error: error.message }),
-                    ContextConflict: (error) =>
-                      command.replyTo.tell({
-                        error: `Goal revision changed from ${error.expectedRevision} to ${error.actualRevision}; read the Goal and retry the operation`,
-                      }),
-                  }),
-                );
-                return;
+                  yield* save({
+                    deactivation: {
+                      requestId: command.requestId,
+                      status: command.result._tag === "Success" ? "delivered" : "unknown",
+                      ...(command.result._tag === "Failure"
+                        ? { error: command.result.error.message }
+                        : {}),
+                    },
+                  });
+                } else yield* signalOutbox.delivered(command);
               }),
             ),
-            Match.tag("Evaluate", (command) =>
+            Match.tag("RunNext", () =>
               Effect.gen(function* () {
                 yield* schedule.dequeue;
                 if (!active()) return;
-                const started = yield* schedule.start(command.reason);
+                const started = yield* schedule.start();
                 if (!started) {
                   yield* save({ pendingEvaluation: true });
                   return;
                 }
                 const { generation: currentGeneration, cancelled } = started;
                 let handoff = state().pendingHandoff;
+                const reconcile = handoff !== undefined || state().pendingRequestId !== undefined;
                 if (
-                  runtime.reasoner.durableSessions &&
                   state().pendingRequestId &&
                   (!handoff || handoff.requestId !== state().pendingRequestId)
                 ) {
-                  // An old request may already have reached Pi. Reconstructing a larger
-                  // input prefix would let its replay consume unrelated later inputs.
-                  yield* schedule.finish(currentGeneration);
-                  yield* save({
-                    lastError:
-                      "Pending Goal handoff has no matching frozen input range; reconciliation required",
-                  });
-                  return;
+                  // Only the old identity is trustworthy. Replay-only inspection below
+                  // cannot use current state to submit or resume this legacy request.
+                  handoff = {
+                    requestId: state().pendingRequestId!,
+                    reason: "Inspect retained legacy session result",
+                    through:
+                      state().evaluations?.find(
+                        (item) => item.evaluationId === state().pendingRequestId,
+                      )?.historyThrough ??
+                      state().agentThrough ??
+                      0,
+                  };
                 }
                 if (!handoff) {
                   const requestId = randomUUID();
-                  const causal = state().causal ?? {
-                    rootRequestId: requestId,
-                    remainingAgentTurns: 4,
-                  };
+                  const previousEvaluation = state().evaluations?.find(
+                    (item) => item.evaluationId === state().retryTurnId,
+                  );
+                  const assigned = new Set(
+                    state().evaluations?.flatMap((evaluation) => evaluation.inputIds ?? []),
+                  );
+                  const retrying = previousEvaluation?.status === "failed";
+                  let selected = (state().inputs ?? []).filter((input) =>
+                    retrying
+                      ? previousEvaluation.inputIds?.includes(input.inputId)
+                      : !assigned.has(input.inputId),
+                  );
+                  if (!selected.length) {
+                    yield* schedule.finish(currentGeneration);
+                    yield* save({ pendingEvaluation: false });
+                    return;
+                  }
+                  if (!retrying) {
+                    const inputBudget = Math.max(
+                      1,
+                      Math.floor(
+                        ((runtime.contextTokens ?? 200000) - (runtime.reserveTokens ?? 8192)) / 3,
+                      ),
+                    );
+                    // Reserve space for an actual user instruction so exhausted older
+                    // continuations cannot starve it or borrow authority without admitting it.
+                    const instruction = selected.find(
+                      (input) => input.payload._tag === "UserInput",
+                    );
+                    let size = instruction ? contextSize(inputMessage(instruction)) : 0;
+                    let admitted = instruction ? 1 : 0;
+                    selected = selected.filter((input) => {
+                      if (input === instruction) return true;
+                      const cost = contextSize(inputMessage(input));
+                      if (admitted > 0 && size + cost > inputBudget) return false;
+                      size += cost;
+                      admitted++;
+                      return true;
+                    });
+                  }
+                  const retryRequest =
+                    retrying &&
+                    state().requests?.findLast(
+                      (item) =>
+                        item.request._tag === "RetryTurn" &&
+                        item.request.turnId === previousEvaluation.evaluationId,
+                    );
+                  const causal = (retrying && retryRequest
+                    ? { rootRequestId: retryRequest.request.requestId, remainingAgentTurns: 4 }
+                    : (selected.find((input) => input.payload._tag === "UserInput")?.causal ??
+                      selected[0]?.causal)) ??
+                    state().causal ?? {
+                      rootRequestId: requestId,
+                      remainingAgentTurns: 4,
+                    };
                   const admissions = state().agentAdmissions ?? [];
                   const count =
                     admissions.find((entry) => entry.rootRequestId === causal.rootRequestId)
@@ -572,50 +469,30 @@ export class GoalActor extends ContextActor.Service<
                     });
                     return;
                   }
-                  yield* event(`Starting evaluation: ${started.reason}`);
+
                   handoff = {
                     causal,
                     requestId,
-                    reason: started.reason,
+                    reason: "Pursue the Goal using the admitted inputs",
                     through: yield* history.count(definition.slug).pipe(Effect.orDie),
                   };
-                  const previousEvaluation = state().evaluations?.at(-1);
-                  const assigned = new Set(
-                    state().evaluations?.flatMap((evaluation) => evaluation.inputIds ?? []),
-                  );
-                  let selected =
-                    state().inputs?.filter((input) => !assigned.has(input.inputId)) ?? [];
-                  const retrying =
-                    selected.length === 0 &&
-                    previousEvaluation?.status === "failed" &&
-                    !!previousEvaluation.inputIds?.length;
-                  if (retrying)
-                    selected =
-                      state().inputs?.filter((input) =>
-                        previousEvaluation.inputIds!.includes(input.inputId),
-                      ) ?? [];
-                  if (!selected.length) {
-                    yield* inputs.accept({ _tag: "Startup", reason: started.reason }, requestId);
-                    selected = [state().inputs!.at(-1)!];
-                    handoff = {
-                      ...handoff,
-                      through: yield* history.count(definition.slug).pipe(Effect.orDie),
-                    };
-                  }
-                  if (!retrying) {
-                    const inputBudget = Math.max(
-                      1,
-                      Math.floor(
-                        ((runtime.contextTokens ?? 200000) - (runtime.reserveTokens ?? 8192)) / 3,
+                  handoff = {
+                    ...handoff,
+                    causal,
+                    through: selected.at(-1)!.historySequence!,
+                    input: {
+                      inputs: selected,
+                      goal: definition,
+                      current: registry.project(current()),
+                      contexts: registry.publicSnapshot(),
+                      signals: runtime.signals(definition.slug),
+                      historyAfter: Math.min(
+                        selected[0]!.historySequence! - 1,
+                        selected.at(-1)!.historySequence!,
                       ),
-                    );
-                    let size = 0;
-                    selected = selected.filter((input, index) => {
-                      size += contextSize(inputMessage(input));
-                      return index === 0 || size <= inputBudget;
-                    });
-                  }
-                  handoff = { ...handoff, through: selected.at(-1)!.historySequence! };
+                      historyThrough: selected.at(-1)!.historySequence!,
+                    },
+                  };
                   const evaluation: GoalEvaluationRecord = {
                     evaluationId: requestId,
                     inputIds: selected.map((input) => input.inputId),
@@ -623,11 +500,12 @@ export class GoalActor extends ContextActor.Service<
                     reason: handoff.reason,
                     historyThrough: handoff.through,
                     startedAt: DateTime.formatIso(yield* DateTime.now),
-                    status: runtime.reasoner.durableSessions ? "pending" : "running",
+                    status: "running",
                   };
                   yield* save({
                     evaluations: [...(state().evaluations ?? []), evaluation],
-                    causal,
+                    causal: handoff.causal,
+                    retryTurnId: undefined,
                     agentAdmissions: [
                       ...admissions.filter((entry) => entry.rootRequestId !== causal.rootRequestId),
                       { rootRequestId: causal.rootRequestId, count: count + 1 },
@@ -641,20 +519,31 @@ export class GoalActor extends ContextActor.Service<
                     ),
                   });
                 }
+                const turnId = handoff.requestId;
                 yield* context.pipeToSelf(
                   evaluateGoal({
                     runtime,
-                    registry,
-                    definition,
                     history,
-                    self: context.self,
-                    generation: currentGeneration,
+                    reconcile,
+                    // These values are only tool/decoder context for legacy result reads.
+                    // replayOnly forbids turning this fallback into a new session admission.
+                    replayOnly: !handoff.input,
+                    input: handoff.input ?? {
+                      goal: definition,
+                      current: registry.project(current()),
+                      contexts: {},
+                      signals: [],
+                      inputs: [],
+                      historyAfter: handoff.through,
+                      historyThrough: handoff.through,
+                    },
                     reason: handoff.reason,
-                    requestId: handoff.requestId,
-                    historyThrough: handoff.through,
+                    requestId: turnId,
                   }).pipe(Effect.raceFirst(cancelled)),
                   (result) => ({
-                    _tag: "Planned",
+                    _tag: "TurnSettled",
+                    turnId,
+                    resultId: turnId,
                     result:
                       result._tag === "Success"
                         ? { _tag: "Success", value: result.value.plan }
@@ -663,20 +552,20 @@ export class GoalActor extends ContextActor.Service<
                     generation: currentGeneration,
                   }),
                 );
-                return;
               }),
             ),
-            Match.tag("Planned", (command) =>
+            Match.tag("TurnSettled", (command) =>
               Effect.gen(function* () {
+                if (
+                  command.turnId !== state().pendingRequestId ||
+                  command.resultId !== command.turnId
+                )
+                  return;
                 if (!(yield* schedule.finish(command.generation))) return;
                 const evaluation = state().evaluations?.find(
                   (item) => item.evaluationId === state().pendingRequestId,
                 );
                 if (command.result._tag === "Failure") {
-                  // The original partial transcript is already durable; close only missing results.
-                  yield* repairGoalHistory(history, definition.slug, state().historyThrough).pipe(
-                    Effect.orDie,
-                  );
                   const failed =
                     command.result.error instanceof GoalOperationError &&
                     command.result.error.outcome === "failed";
@@ -697,16 +586,30 @@ export class GoalActor extends ContextActor.Service<
                         }
                       : {}),
                   });
-                  yield* event(
-                    `Evaluation failed; retry is possible: ${command.result.error.message}`,
-                  );
-                  if (active() && (yield* schedule.retryBudget(command.result.error.message))) {
-                    yield* schedule.enqueue(context, compactionRetry);
-                    return;
-                  }
+                  yield* event(`Agent turn outcome: ${command.result.error.message}`);
                 } else if (active()) {
-                  const plan = command.result.value,
-                    completed = plan.completed && !!definition.completionCriteria;
+                  const original = command.result.value;
+                  const plan: GoalPlan =
+                    "nextStep" in original
+                      ? original
+                      : {
+                          version: 2,
+                          turnId: command.turnId,
+                          resultId: command.resultId,
+                          disposition: original.disposition ?? "advance",
+                          progress: original.progress,
+                          evidence: original.evidence,
+                          taskChanges: original.taskChanges,
+                          signalChanges: original.signalChanges,
+                          nextStep:
+                            original.completed &&
+                            definition.completionCriteria &&
+                            original.evidence.length
+                              ? { _tag: "Complete", evidence: original.evidence }
+                              : { _tag: "WaitForEvent", references: [path] },
+                        };
+                  const completed =
+                    plan.nextStep._tag === "Complete" && !!definition.completionCriteria;
                   const appliedAt = DateTime.formatIso(yield* DateTime.now);
                   const proposals = yield* Effect.gen(function* () {
                     yield* Schema.decodeUnknownEffect(GoalPlan)(plan).pipe(
@@ -717,6 +620,21 @@ export class GoalActor extends ContextActor.Service<
                           }),
                       ),
                     );
+                    if (plan.turnId !== command.turnId || plan.resultId !== command.resultId)
+                      return yield* new GoalToolError({
+                        message: "Result belongs to another turn",
+                      });
+                    if (plan.nextStep._tag === "Complete" && !definition.completionCriteria)
+                      return yield* new GoalToolError({
+                        message: "Ongoing Goals cannot complete without user End",
+                      });
+                    if (
+                      plan.nextStep._tag === "Continue" &&
+                      plan.nextStep.previousResultId !== plan.resultId
+                    )
+                      return yield* new GoalToolError({
+                        message: "Continuation must reference its preceding result",
+                      });
                     const tasks = yield* execution.planChanges(
                       plan.taskChanges ?? [],
                       state().pendingRequestId!,
@@ -740,7 +658,7 @@ export class GoalActor extends ContextActor.Service<
                       ...evaluationIdentity(evaluation),
                       status: "failed",
                       error: proposals.failure.message,
-                      result: plan,
+                      result: original,
                       observedAt: appliedAt,
                     };
                     yield* save({
@@ -756,17 +674,14 @@ export class GoalActor extends ContextActor.Service<
                         : {}),
                     });
                     if (schedule.hasPending() || state().pendingEvaluation)
-                      yield* schedule.enqueue(
-                        context,
-                        "Re-evaluate after rejected result proposals",
-                      );
+                      yield* schedule.enqueue(context);
                     return;
                   }
                   const resultRecord: GoalEvaluationRecord | undefined = evaluation && {
                     ...evaluationIdentity(evaluation),
                     status: proposals.success.signals.length ? "partially_applied" : "completed",
                     resultId: evaluation.evaluationId,
-                    result: plan,
+                    result: original,
                     appliedAt,
                     taskOutputs: (plan.taskChanges ?? []).map((change, index) => {
                       const task = proposals.success.tasks.find((item) => item.id === change.id)!;
@@ -781,7 +696,37 @@ export class GoalActor extends ContextActor.Service<
                       };
                     }),
                   };
+                  const continuation =
+                    plan.nextStep._tag === "Continue"
+                      ? newGoalInput(
+                          state(),
+                          { ...plan.nextStep, _tag: "Continuation" },
+                          plan.resultId,
+                          appliedAt,
+                        )
+                      : undefined;
+                  const cause = state().pendingHandoff?.causal;
+                  const continuationCause = cause && {
+                    ...cause,
+                    remainingAgentTurns: Math.max(0, cause.remainingAgentTurns - 1),
+                  };
                   yield* save({
+                    ...(continuation
+                      ? {
+                          inputs: [
+                            ...(state().inputs ?? []),
+                            { ...continuation, causal: continuationCause },
+                          ],
+                          causal: continuationCause,
+                        }
+                      : {}),
+                    nextStep: plan.nextStep,
+                    ...(completed
+                      ? {
+                          completionOrigin: "criteria",
+                          deactivation: { requestId: `end:${plan.resultId}`, status: "pending" },
+                        }
+                      : {}),
                     tasks: proposals.success.tasks,
                     signalOutbox: [...(state().signalOutbox ?? []), ...proposals.success.signals],
                     ...(resultRecord
@@ -791,17 +736,17 @@ export class GoalActor extends ContextActor.Service<
                           ),
                         }
                       : {}),
-                    ...(runtime.reasoner.durableSessions && command.through !== undefined
-                      ? { agentThrough: command.through }
-                      : {}),
+                    ...(command.through !== undefined ? { agentThrough: command.through } : {}),
                     pendingRequestId: undefined,
                     pendingHandoff: undefined,
                     lastError: undefined,
                     summary: plan.progress,
                     progress: plan.progress,
                     status: completed ? "completed" : "active",
-                    pendingEvaluation: state().pendingEvaluation || schedule.hasPending(),
+                    pendingEvaluation:
+                      !!continuation || state().pendingEvaluation || schedule.hasPending(),
                   });
+                  yield* inputs.project();
                   yield* signalOutbox.dispatch(context);
                   // Reservations and Task revisions are durable before any Run is created or cancelled.
                   if (plan.taskChanges?.length) yield* execution.recover(context, false);
@@ -809,48 +754,41 @@ export class GoalActor extends ContextActor.Service<
                     `Evaluation conclusions: ${plan.progress}\nEvidence: ${plan.evidence.join(", ")}`,
                   );
                   if (completed) yield* execution.cancelPending(context);
-                  if (completed)
-                    yield* context.pipeToSelf(
-                      runtime.deactivate(definition.slug).pipe(
-                        signalOperations.withPermit,
-                        Effect.as([]),
-                        Effect.mapError(
-                          (cause) =>
-                            new GoalOperationError({
-                              goal: definition.slug,
-                              operation: "deactivate",
-                              cause,
-                              message: cause.message,
-                            }),
-                        ),
-                      ),
-                      (result) => ({ _tag: "Reconciled", result }),
-                    );
+                  if (completed) yield* deactivate(context);
                 }
                 if (
-                  (schedule.hasPending() ||
-                    (command.result._tag === "Success" && state().pendingEvaluation)) &&
+                  (schedule.hasPending() || state().pendingEvaluation) &&
+                  !state().pendingRequestId &&
                   active()
                 )
-                  yield* schedule.enqueue(context, "Process changes received during evaluation");
+                  yield* schedule.enqueue(context);
                 return;
               }),
             ),
-            Match.tag("Reconciled", (command) =>
+            Match.tag("RecoverySettled", (command) =>
               Effect.gen(function* () {
-                // Startup restoration only; tool completions never release the planning lock.
-                if (command.result._tag === "Failure") yield* event(command.result.error.message);
+                if (command.generation !== behaviorGeneration) return;
+                if (command.result._tag === "Failure") {
+                  recoveryError = new ApplicationError({
+                    kind: "unavailable",
+                    message: command.result.error.message,
+                  });
+                  yield* save({
+                    lastError: `Goal recovery failed: ${command.result.error.message}`,
+                  });
+                  yield* ready();
+                  return;
+                }
                 if (!signalsRecovered) {
                   signalsRecovered = true;
                   yield* signalOutbox.recover(context);
                 }
                 yield* schedule.reconciled;
-                if (
-                  !schedule.isQueued() &&
-                  (schedule.hasPending() || state().pendingEvaluation || state().pendingRequestId)
-                )
-                  yield* schedule.enqueue(context, "Recover pending changes");
-                return;
+                yield* ready();
+                if (state().deactivation && state().deactivation?.status !== "delivered")
+                  yield* deactivate(context);
+                if (state().pendingEvaluation || state().pendingRequestId)
+                  yield* schedule.enqueue(context);
               }),
             ),
             Match.exhaustive,
@@ -863,43 +801,50 @@ export class GoalActor extends ContextActor.Service<
 }
 
 export const GoalsRootCommand = Schema.Union([
-  ReadyCommand,
+  Schema.TaggedStruct("AwaitReady", {
+    stage: Schema.optional(Schema.Literals(["restored", "activated"])),
+    replyTo: ReplyTo<GoalReadyReply>(),
+  }),
   Schema.TaggedStruct("Route", { slug: Schema.String, command: GoalCommand }),
   Schema.TaggedStruct("Initialize", {}),
+]);
+const GoalsRootMailbox = Schema.Union([
+  GoalsRootCommand,
+  Schema.TaggedStruct("ReadinessSettled", {
+    replyTo: ReplyTo<GoalReadyReply>(),
+    result: Schema.Union([
+      Schema.TaggedStruct("Success", { value: GoalReadyReply }),
+      Schema.TaggedStruct("Failure", { error: ApplicationError }),
+    ]),
+  }),
 ]);
 export type GoalsRootCommand = typeof GoalsRootCommand.Type;
 export class GoalsRootActor extends Actor.Service<
   GoalsRootActor,
   ContextRegistry | GoalRuntime | TaskPreparation | ExternalAgents
->()("goals/RootActor", { command: GoalsRootCommand }) {
+>()("goals/RootActor", { command: GoalsRootMailbox }) {
   static readonly layer = Layer.effect(
     GoalsRootActor,
     Effect.gen(function* () {
       const runtime = yield* GoalRuntime;
+      const activation = yield* Deferred.make<void>();
       return GoalsRootActor.of({
         started: (context) =>
           Effect.gen(function* () {
             for (const goal of runtime.definitions)
-              if (!(yield* context.child(goal.slug))) yield* context.spawn(goal.slug, GoalActor);
+              if (!(yield* context.child(goal.slug)))
+                yield* context.spawn(goal.slug, GoalActor, {
+                  metadata: { goalActivation: activation },
+                });
           }),
         receive: (command, context) =>
           Effect.gen(function* () {
-            if (command._tag === "Ready") {
-              for (const child of yield* context.children())
-                yield* (child as ActorRef<GoalCommand>)
-                  .ask<void>((replyTo) => ({ _tag: "Ready", replyTo }))
-                  .pipe(Effect.orDie);
-              return yield* command.replyTo.tell(undefined);
-            }
             if (command._tag === "Route") {
-              const configured = runtime.definitions.some((goal) => goal.slug === command.slug);
-              const child = configured ? yield* context.child(command.slug) : undefined;
-              if (child) yield* (child as ActorRef<GoalCommand>).tell(command.command);
-              else if (
-                command.command._tag === "Deliver" ||
-                command.command._tag === "Intent" ||
-                command.command._tag === "RetrySignal"
-              )
+              const child = runtime.definitions.some((goal) => goal.slug === command.slug)
+                ? yield* context.child(command.slug)
+                : undefined;
+              if (child) yield* (child as ActorRef<GoalMailbox>).tell(command.command);
+              else
                 yield* command.command.replyTo.tell({
                   _tag: "Rejected",
                   error: new ApplicationError({
@@ -907,24 +852,45 @@ export class GoalsRootActor extends Actor.Service<
                     message: "Goal Actor unavailable",
                   }),
                 });
-              else if (
-                (command.command._tag === "UserMessage" || command.command._tag === "End") &&
-                command.command.replyTo
-              )
-                yield* command.command.replyTo.tell({
-                  _tag: "Unavailable",
-                  message: "Goal Actor unavailable",
-                });
               return;
             }
-            for (const goal of runtime.definitions) {
-              const child = yield* context.child(goal.slug);
-              if (child)
-                yield* (child as ActorRef<GoalCommand>).tell({
-                  _tag: "Evaluate",
-                  reason: "Start Goal evaluation",
-                });
+            if (command._tag === "ReadinessSettled") {
+              yield* command.replyTo.tell(
+                command.result._tag === "Success"
+                  ? command.result.value
+                  : { _tag: "Failed", error: command.result.error },
+              );
+              return;
             }
+            const children = (yield* context.children()) as readonly ActorRef<GoalMailbox>[];
+            if (command._tag === "Initialize") {
+              yield* Deferred.succeed(activation, undefined);
+              for (const goal of children) yield* goal.tell({ _tag: "Activate" });
+              return;
+            }
+            // Child recovery must never hold the routing mailbox or block Initialize.
+            yield* context.pipeToSelf(
+              Effect.gen(function* () {
+                for (const goal of children) {
+                  const result = yield* goal.ask<GoalReadyReply>((replyTo) => ({
+                    _tag: "AwaitReady",
+                    stage: command.stage,
+                    replyTo,
+                  }));
+                  if (result._tag === "Failed") return result;
+                }
+                return { _tag: "Ready" } as const;
+              }).pipe(
+                Effect.mapError(
+                  (error) =>
+                    new ApplicationError({
+                      kind: "unavailable",
+                      message: error.message,
+                    }),
+                ),
+              ),
+              (result) => ({ _tag: "ReadinessSettled", replyTo: command.replyTo, result }),
+            );
           }),
       });
     }),

@@ -24,7 +24,12 @@ export const startContextReactions = <Services>(roots: {
     const internal = yield* InternalAgent;
     // Source ingestion needs the restored target catalogue, not partially started roots.
     yield* roots.signals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
-    if (roots.goals) yield* roots.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+    if (roots.goals) {
+      const ready = yield* roots.goals.ask<import("../goals/protocol.js").GoalReadyReply>(
+        (replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }),
+      );
+      if (ready._tag === "Failed") return yield* ready.error;
+    }
     const changes = yield* registry.subscribe;
     const notifications = yield* roots.system.spawn("notifications", NotificationsActor);
     yield* notifications.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));

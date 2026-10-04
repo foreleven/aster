@@ -10,44 +10,41 @@ type Phase =
       readonly generation: string;
       readonly cancellation: Deferred.Deferred<void>;
     };
-export const compactionRetry = "Continue after context compaction";
 
 /** Private Behavior state. Only mailbox handlers call mutators; background work only checks generation. */
 export const goalEvaluationSchedule = () => {
   let phase: Phase = { _tag: "Restoring" };
-  let pending: string[] = [];
+  let pending = false;
+  let activated = false;
   let queued = false;
-  let budgetRetries = 0;
+
   const generation = () => (phase._tag === "Running" ? phase.generation : undefined);
-  const enqueue = Effect.fnUntraced(function* (context: GoalActorContext, reason: string) {
+  const enqueue = Effect.fnUntraced(function* (context: GoalActorContext) {
     if (queued) {
-      pending.push(reason);
+      pending = true;
       return;
     }
     queued = true;
-    yield* context.self.tell({ _tag: "Evaluate", reason });
+    yield* context.self.tell({ _tag: "RunNext" });
   });
-  const start = Effect.fnUntraced(function* (reason: string) {
-    if (phase._tag !== "Idle") {
-      pending.push(reason);
+  const start = Effect.fnUntraced(function* () {
+    if (phase._tag !== "Idle" || !activated) {
+      pending = true;
       return undefined;
     }
     const cancellation = yield* Deferred.make<void>();
     const currentGeneration = randomUUID();
     phase = { _tag: "Running", generation: currentGeneration, cancellation };
-    if (reason !== compactionRetry) budgetRetries = 0;
-    const combined = [...pending, reason].join("\n");
-    pending = [];
+    pending = false;
     return {
       generation: currentGeneration,
-      reason: combined,
       cancelled: Deferred.await(cancellation).pipe(Effect.andThen(Effect.interrupt)),
     };
   });
   const cancel = Effect.fnUntraced(function* () {
     const previous = phase;
-    phase = { _tag: "Idle" };
-    pending = [];
+    if (phase._tag !== "Restoring") phase = { _tag: "Idle" };
+    pending = false;
     if (previous._tag === "Running") yield* Deferred.succeed(previous.cancellation, undefined);
   });
   return {
@@ -58,7 +55,7 @@ export const goalEvaluationSchedule = () => {
     dequeue: Effect.sync(() => {
       queued = false;
     }),
-    hasPending: () => pending.length > 0,
+    hasPending: () => pending,
     isQueued: () => queued,
     finish: (id: string) =>
       Effect.sync(() => {
@@ -69,12 +66,10 @@ export const goalEvaluationSchedule = () => {
     reconciled: Effect.sync(() => {
       if (phase._tag === "Restoring") phase = { _tag: "Idle" };
     }),
-    retryBudget: (message: string) =>
-      Effect.sync(() => {
-        if (!/context budget/i.test(message) || budgetRetries >= 1 || pending.length > 0)
-          return false;
-        budgetRetries++;
-        return true;
-      }),
+    activate: Effect.sync(() => {
+      activated = true;
+    }),
+    isRecovered: () => phase._tag !== "Restoring",
+    isReady: () => activated && phase._tag !== "Restoring",
   };
 };

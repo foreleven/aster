@@ -1,9 +1,10 @@
 import { Schema } from "effect";
-import { PublicContext } from "@aster/api-contracts";
+import { PublicContext, GoalInput } from "@aster/api-contracts";
 import { SignalDefinition } from "../config/schema.js";
 
 /** Public evidence only. Native messages remain in the immutable GoalHistory prefix. */
 export const FrozenGoalEvaluation = Schema.Struct({
+  inputs: Schema.optional(Schema.Array(GoalInput)),
   goal: Schema.Struct({
     slug: Schema.String,
     title: Schema.optional(Schema.String),

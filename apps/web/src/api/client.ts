@@ -23,6 +23,7 @@ export const runtimeQuery = ApplicationClient.query("InspectRuntime", undefined,
 export const approvalsQuery = ApplicationClient.query("ListApprovals", undefined, {
   reactivityKeys: [QueryKeys.all, QueryKeys.approvals],
 });
+export const retryGoalTurn = ApplicationClient.mutation("RetryGoalTurn");
 export const retryGoalSignal = ApplicationClient.mutation("RetryGoalSignal");
 export const sendGoalMessage = ApplicationClient.mutation("SendGoalMessage");
 export const sendPersonalMessage = ApplicationClient.mutation("SendPersonalMessage");

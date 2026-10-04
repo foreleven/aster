@@ -140,8 +140,8 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         assert.equal(signalReady._tag, "Ready");
         if (signalReady._tag === "Ready") yield* signalReady.replyTo.tell(undefined);
         const goalReady = yield* goalProbe.take();
-        assert.equal(goalReady._tag, "Ready");
-        if (goalReady._tag === "Ready") yield* goalReady.replyTo.tell(undefined);
+        assert.equal(goalReady._tag, "AwaitReady");
+        if (goalReady._tag === "AwaitReady") yield* goalReady.replyTo.tell({ _tag: "Ready" });
         yield* Fiber.join(starting);
         // The subscription is acquired before this returns, even without yieldNow.
         yield* registry.commit(record("/source", { summary: "A relevant source summary" }), {
@@ -159,10 +159,14 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         }
         const delivered = yield* goalProbe.take();
         goals.push(delivered);
-        if (delivered._tag === "Route" && delivered.command._tag === "Intent")
+        if (
+          delivered._tag === "Route" &&
+          delivered.command._tag === "SubmitInput" &&
+          delivered.command.input._tag === "GoalIntent"
+        )
           yield* delivered.command.replyTo.tell({
             _tag: "Accepted",
-            receipt: { requestId: delivered.command.input.requestId, revision: 2 },
+            receipt: { requestId: delivered.command.requestId, revision: 2 },
           });
         assert.equal(signals.length, 2);
         assert.deepEqual(
@@ -171,9 +175,16 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         );
         const intent = goals[0];
         assert.equal(intent?._tag, "Route");
-        if (intent?._tag === "Route" && intent.command._tag === "Intent") {
-          assert.equal(intent.command.input.intent.relevance.score, 8 / 9);
-          assert.equal(intent.command.input.intent.relevance.rationale, "Relevant evidence");
+        if (
+          intent?._tag === "Route" &&
+          intent.command._tag === "SubmitInput" &&
+          intent.command.input._tag === "GoalIntent"
+        ) {
+          assert.equal(intent.command.input.delivery.intent.relevance.score, 8 / 9);
+          assert.equal(
+            intent.command.input.delivery.intent.relevance.rationale,
+            "Relevant evidence",
+          );
         }
         assert.equal(screened.length, 1);
         assert.match(screened[0]!, /other/);

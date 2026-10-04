@@ -7,14 +7,14 @@ import {
   type GoalInput,
   type GoalTimelineGroup,
 } from "@aster/api-contracts";
-import { goalTimeline, pendingSignalRetries } from "../api/timeline";
-import { resultError, resultValue, retryGoalSignal } from "../api/client";
+import { goalTimeline, pendingSignalRetries, pendingTurnRetries } from "../api/timeline";
+import { resultError, resultValue, retryGoalSignal, retryGoalTurn } from "../api/client";
 import { clockLabel, dateLabel, EmptyState } from "./presentation";
 
 type Inspect = (path: string) => void;
 const labels: Record<GoalTimelineGroup["status"], string> = {
   pending: "Queued",
-  running: "Evaluating",
+  running: "Working",
   failed: "Failed",
   reconciliation_required: "Needs reconciliation",
   completed: "Applied",
@@ -85,6 +85,18 @@ function InputCard({ input, inspect }: { input: GoalInput; inspect: Inspect }) {
             <p>{text}</p>
             {link(runPath, "View execution")}
             {evaluationId && <p className="quiet-message">From evaluation {evaluationId}</p>}
+          </>
+        )),
+        Match.tag("GoalStarted", () => (
+          <>
+            <strong>Goal started</strong>
+            <p>Begin pursuing the Goal.</p>
+          </>
+        )),
+        Match.tag("Continuation", ({ objective }) => (
+          <>
+            <strong>Continue research</strong>
+            <p>{objective}</p>
           </>
         )),
         Match.tag("Startup", ({ reason }) => (
@@ -163,6 +175,43 @@ function RetrySignal({
   );
 }
 
+function RetryTurn({ slug, turnId }: { slug: string; turnId: string }) {
+  const pending = useAtomValue(pendingTurnRetries);
+  const setPending = useAtomSet(pendingTurnRetries);
+  const retry = useAtomSet(retryGoalTurn, { mode: "promiseExit" });
+  const busy = useAtomValue(retryGoalTurn).waiting;
+  const [error, setError] = useState("");
+  const key = `${slug}:${turnId}`;
+  async function submit() {
+    if (busy) return;
+    const input = pending[key] ?? { slug, turnId, requestId: crypto.randomUUID() };
+    setPending((previous) => ({ ...previous, [key]: input }));
+    setError("");
+    const result = await retry({
+      payload: input,
+      reactivityKeys: contextQueryKeys(`/goals/${slug}`),
+    });
+    if (Exit.isFailure(result)) {
+      const failure = Cause.squash(result.cause);
+      setError(failure instanceof Error ? failure.message : String(failure));
+      if (!Schema.is(ApplicationError)(failure) || failure.kind === "unavailable") return;
+    }
+    setPending((previous) => {
+      const next = { ...previous };
+      delete next[key];
+      return next;
+    });
+  }
+  return (
+    <div>
+      <button className="outline-action" disabled={busy} onClick={() => void submit()}>
+        {busy ? "Retrying…" : "Retry turn"}
+      </button>
+      {error && <p className="goals-error">{error}</p>}
+    </div>
+  );
+}
+
 function EvaluationCard({
   slug,
   group,
@@ -184,7 +233,7 @@ function EvaluationCard({
     <article className="timeline-event evaluation-card" id={`evaluation-${group.evaluationId}`}>
       <header className="evaluation-header">
         <div>
-          <strong>Evaluation {group.ordinal}</strong>
+          <strong>Agent turn {group.ordinal}</strong>
           <time dateTime={group.startedAt}>
             {dateLabel(group.startedAt)} · {clockLabel(group.startedAt)}
           </time>
@@ -195,6 +244,7 @@ function EvaluationCard({
           {labels[group.status]}
         </span>
       </header>
+      {group.status === "failed" && <RetryTurn slug={slug} turnId={group.evaluationId} />}
       {group.retryOf && <p className="quiet-message">Retry of {group.retryOf}</p>}
       <div className="evaluation-inputs">
         {inputs.map((input) => (
@@ -220,6 +270,38 @@ function EvaluationCard({
                 </button>
               ))}
             </details>
+          )}
+        </section>
+      )}
+      {group.nextStep && (
+        <section className="evaluation-next-step">
+          {Match.value(group.nextStep).pipe(
+            Match.tag("Continue", ({ objective }) => (
+              <p>
+                <strong>Next work:</strong> {objective}
+              </p>
+            )),
+            Match.tag("WaitForInput", ({ questions }) => (
+              <>
+                <strong>Needs your input</strong>
+                <ul>
+                  {questions.map((question, index) => (
+                    <li key={index}>{question}</li>
+                  ))}
+                </ul>
+              </>
+            )),
+            Match.tag("WaitForEvent", ({ references }) => (
+              <p>
+                <strong>Waiting for:</strong> {references.join(", ")}
+              </p>
+            )),
+            Match.tag("Complete", ({ evidence }) => (
+              <p>
+                <strong>Goal criteria satisfied:</strong> {evidence.join(", ")}
+              </p>
+            )),
+            Match.exhaustive,
           )}
         </section>
       )}

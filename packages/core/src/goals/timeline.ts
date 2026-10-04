@@ -60,6 +60,7 @@ export const goalTimeline = Effect.fn("Goal.timeline")(function* (
       ),
       ...(result
         ? {
+            ...("nextStep" in result ? { nextStep: result.nextStep } : {}),
             disposition: result.disposition ?? "advance",
             conclusion: { text: result.progress, evidence: result.evidence, applied },
           }

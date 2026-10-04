@@ -1,3 +1,4 @@
+import type { GoalRequestRecord } from "./protocol.js";
 import { goalInputs, newGoalInput } from "./inputs.js";
 import { ApplicationError, type CommandReceipt } from "@aster/api-contracts";
 import { DateTime, Effect, Schema } from "effect";
@@ -16,6 +17,7 @@ export const goalIntentInbox = (
   const project = goalInputs(working, history).project;
   const accept = Effect.fn("GoalIntentInbox.accept")(function* (
     raw: GoalIntentInput,
+    admission?: GoalRequestRecord,
   ): Effect.fn.Return<
     { readonly receipt: CommandReceipt; readonly created: boolean },
     ApplicationError
@@ -62,6 +64,8 @@ export const goalIntentInbox = (
         kind: "invalid-input",
         message: "Goal intent does not meet its screening threshold",
       });
+    if (state.status !== "active")
+      return yield* new ApplicationError({ kind: "conflict", message: "Goal has ended" });
     const receipt = { requestId: input.requestId, revision: (current.revision ?? 0) + 1 };
     yield* registry
       .commit(
@@ -69,16 +73,20 @@ export const goalIntentInbox = (
           ...current,
           state: {
             ...state,
+            requests: admission ? [...(state.requests ?? []), admission] : state.requests,
             causal: { rootRequestId: input.causationId, remainingAgentTurns: 4 },
             intents: [...(state.intents ?? []), { input, receipt }],
             inputs: [
               ...(state.inputs ?? []),
-              newGoalInput(
-                state,
-                { _tag: "GoalIntent", intent: input.intent },
-                input.intent.intentId,
-                DateTime.formatIso(yield* DateTime.now),
-              ),
+              {
+                ...newGoalInput(
+                  state,
+                  { _tag: "GoalIntent", intent: input.intent },
+                  input.intent.intentId,
+                  DateTime.formatIso(yield* DateTime.now),
+                ),
+                causal: { rootRequestId: input.causationId, remainingAgentTurns: 4 },
+              },
             ],
             pendingEvaluation: true,
           },

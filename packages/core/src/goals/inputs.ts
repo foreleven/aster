@@ -1,7 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { createHash } from "node:crypto";
 import { DateTime, Effect, Match, Schema } from "effect";
-import { ApplicationError, GoalInput, type GoalInputPayload } from "@aster/api-contracts";
+import {
+  ApplicationError,
+  CausalChain,
+  GoalInput,
+  type GoalInputPayload,
+} from "@aster/api-contracts";
 import type { AgentMessage } from "@aster/agent";
 import type { goalWorkingState } from "./working-state.js";
 import type { GoalHistory } from "./history.js";
@@ -10,6 +15,7 @@ import type { GoalState } from "./state.js";
 
 export const StoredGoalInput = Schema.Struct({
   ...GoalInput.fields,
+  causal: Schema.optional(CausalChain),
   historySequence: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
 });
 export type StoredGoalInput = typeof StoredGoalInput.Type;
@@ -32,6 +38,17 @@ export const newGoalInput = (
 export const inputMessage = (input: StoredGoalInput): AgentMessage =>
   Match.value(input.payload).pipe(
     Match.tag("GoalIntent", ({ intent }) => goalIntentMessage(intent)),
+    Match.tag("GoalStarted", () => ({
+      role: "user" as const,
+      content:
+        "Begin pursuing the configured Goal now. Use relevant read-only tools, gather evidence and provide useful findings before asking about optional preferences.",
+      timestamp: Date.parse(input.receivedAt),
+    })),
+    Match.tag("Continuation", ({ objective, previousResultId }) => ({
+      role: "user" as const,
+      content: `[Goal continuation of ${previousResultId}]\n${objective}`,
+      timestamp: Date.parse(input.receivedAt),
+    })),
     Match.tag("UserInput", ({ text }) => ({
       role: "user" as const,
       content: text,
@@ -96,7 +113,7 @@ export const goalInputs = (working: ReturnType<typeof goalWorkingState>, history
       });
     if (!prior)
       yield* working
-        .save({ ...patch, inputs: [...(state.inputs ?? []), input] })
+        .save({ ...patch, inputs: [...(state.inputs ?? []), { ...input, causal: patch.causal }] })
         .pipe(Effect.orDie);
     yield* project();
     return !prior;

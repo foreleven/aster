@@ -1,8 +1,11 @@
+import type { StoredGoalPlan as GoalPlan } from "../src/goals/plan.js";
+import { GoalTaskChange, GoalSignalChange } from "../src/goals/tasks.js";
+import { goalTestReply } from "./goal-fixtures.js";
 import { TaskPreparationError } from "../src/index.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit, type ActorRef } from "@aster/actor";
-import { Cause, Clock, Deferred, Effect, Exit, Layer, Schema, Stream } from "effect";
+import { Clock, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import { ApplicationError, GoalDelivery, PersonalState } from "@aster/api-contracts";
 import { TestClock } from "effect/testing";
 import {
@@ -24,7 +27,6 @@ import {
   makeGoalRuntime,
   makeMemoryGoalHistory,
   type GoalReasoner,
-  type GoalPlan,
   type GoalTask,
   type GoalToolRequest,
   type SignalRootCommand,
@@ -66,6 +68,28 @@ const setup = (
       tell: (cmd) => root.tell(cmd),
       ask: (cmd, timeout) => root.ask(cmd, timeout),
     };
+    const proposals = new Map<string, GoalToolRequest>();
+    const replies = new Map<string, GoalPlan>();
+    const session: GoalReasoner = {
+      plan: (input) =>
+        Effect.gen(function* () {
+          const replay = replies.get(input.durable.requestId);
+          if (replay) return replay;
+          const queued = [...proposals].find(([key]) =>
+            JSON.stringify(input.messages).includes(key),
+          );
+          const result = queued
+            ? {
+                ...plan,
+                taskChanges: Schema.is(GoalTaskChange)(queued[1]) ? [queued[1]] : [],
+                signalChanges: Schema.is(GoalSignalChange)(queued[1]) ? [queued[1]] : [],
+              }
+            : yield* reasoner.plan(input);
+          replies.set(input.durable.requestId, result);
+          if (queued) proposals.delete(queued[0]);
+          return result;
+        }),
+    };
     const runtime = makeGoalRuntime(
       {
         reasoning: { model: "test", contextTokens: options.contextTokens },
@@ -73,7 +97,7 @@ const setup = (
       },
       registry,
       proxy,
-      reasoner,
+      session,
       history,
     );
     const clock = options.clock ?? (yield* Clock.Clock);
@@ -129,12 +153,89 @@ const setup = (
     const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
     const root = yield* system.spawn("signals", SignalRootActor);
     const goals = yield* system.spawn("goals", GoalsRootActor);
-    const operate = (request: GoalToolRequest) =>
-      goals.ask<{ value?: unknown; error?: string }>((replyTo) => ({
-        _tag: "Route",
-        slug: "project",
-        command: { _tag: "Tool", request, replyTo },
-      }));
+    yield* goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+      _tag: "AwaitReady",
+      stage: "restored",
+      replyTo,
+    }));
+    if ((registry.get("/goals/project")!.state as GoalState).activated)
+      yield* goals.tell({ _tag: "Initialize" });
+    let operationNumber = 0;
+    const operate = Effect.fnUntraced(function* (
+      request: GoalToolRequest,
+    ): Effect.fn.Return<{ value?: unknown; error?: string }> {
+      yield* goals
+        .ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+          _tag: "AwaitReady",
+          stage: "restored",
+          replyTo,
+        }))
+        .pipe(Effect.orDie);
+      const state = () =>
+        Schema.decodeUnknownSync(GoalState)(registry.get("/goals/project")!.state);
+      const read = () => {
+        if (request.operation.startsWith("task_")) {
+          if (request.operation === "task_list")
+            return state().tasks.filter((task) => task.status !== "deleted");
+          return "id" in request ? state().tasks.find((task) => task.id === request.id) : undefined;
+        }
+        const signals = Object.values(registry.snapshot()).filter((record) =>
+          record.path.startsWith("/signals/project--"),
+        );
+        if (request.operation === "signal_list") return signals.map((record) => record.state);
+        return "id" in request
+          ? registry.get(
+              `/signals/${request.id.startsWith("project--") ? request.id : `project--${request.id}`}`,
+            )?.state
+          : undefined;
+      };
+      if (!Schema.is(GoalTaskChange)(request) && !Schema.is(GoalSignalChange)(request))
+        return { value: read() };
+      const requestId = `proposal-${++operationNumber}`;
+      proposals.set(requestId, request);
+      const reply = yield* goals
+        .ask<GoalCommandReply>((replyTo) => ({
+          _tag: "Route",
+          slug: "project",
+          command: {
+            _tag: "SubmitInput",
+            requestId,
+            input: { _tag: "UserInput", text: requestId },
+            replyTo,
+          },
+        }))
+        .pipe(Effect.orDie);
+      if (reply._tag === "Rejected") return { error: reply.error.message };
+      yield* goals.tell({ _tag: "Initialize" });
+      yield* until(
+        () =>
+          state().evaluations?.some(
+            (evaluation) =>
+              evaluation.inputIds?.some((id) =>
+                state().inputs?.some(
+                  (input) =>
+                    input.inputId === id &&
+                    input.payload._tag === "UserInput" &&
+                    input.payload.text === requestId,
+                ),
+              ) &&
+              (evaluation.status === "failed" ||
+                evaluation.status === "completed" ||
+                evaluation.status === "partially_applied"),
+          ) ?? false,
+      ).pipe(Effect.orDie);
+      if (state().lastError) return { error: state().lastError };
+      if (Schema.is(GoalSignalChange)(request))
+        yield* until(
+          () =>
+            state().signalOutbox?.every(
+              (operation) => !["pending", "sending"].includes(operation.status),
+            ) ?? true,
+        ).pipe(Effect.orDie);
+      const value = read();
+      if (request.operation === "task_execute") return { value: (value as GoalTask)?.execution };
+      return { value };
+    });
     return { registry, history, goals, root, approvals, operate, system };
   });
 const plan = {
@@ -149,7 +250,6 @@ test("Goal rejects the whole Task proposal batch when a later revision conflicts
     Effect.scoped(
       Effect.gen(function* () {
         const env = yield* setup({
-          durableSessions: true,
           plan: () =>
             Effect.succeed({
               ...plan,
@@ -159,13 +259,17 @@ test("Goal rejects the whole Task proposal batch when a later revision conflicts
               ],
             }),
         });
-        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+          _tag: "AwaitReady",
+          stage: "restored",
+          replyTo,
+        }));
         yield* env.goals.tell({ _tag: "Initialize" });
         const state = () =>
           Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
         yield* until(() => state().evaluations?.at(-1)?.status === "failed");
         assert.deepEqual(state().tasks, []);
-        assert.equal(state().summary, "Not yet evaluated");
+        assert.equal(state().summary, "Ready to begin");
         assert.equal(state().pendingHandoff, undefined);
         assert.match(state().lastError!, /revision changed/);
         const rejected = state().evaluations!.at(-1)!;
@@ -196,7 +300,6 @@ test("Task result reservations survive lost Goal commit acknowledgement and crea
       Effect.gen(function* () {
         const env = yield* setup(
           {
-            durableSessions: true,
             plan: () =>
               Effect.sync(() => {
                 generations++;
@@ -261,7 +364,6 @@ for (const running of [false, true]) {
           const executing = yield* Deferred.make<void>();
           const env = yield* setup(
             {
-              durableSessions: true,
               plan: () =>
                 Effect.suspend(() =>
                   ++plans === 1
@@ -305,7 +407,16 @@ for (const running of [false, true]) {
             yield* env.approvals.tell({ _tag: "Deliver" });
             yield* Deferred.await(executing);
           }
-          yield* env.goals.tell({ _tag: "Initialize" });
+          yield* env.goals.tell({
+            _tag: "Route",
+            slug: "project",
+            command: {
+              _tag: "SubmitInput",
+              requestId: "update-review",
+              input: { _tag: "UserInput", text: "Update the review evidence" },
+              replyTo: goalTestReply,
+            },
+          });
           yield* until(
             () =>
               Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state)
@@ -334,7 +445,6 @@ for (const outcome of ["failed", "unknown"] as const) {
         Effect.gen(function* () {
           const inputs: Parameters<GoalReasoner["plan"]>[0][] = [];
           const env = yield* setup({
-            durableSessions: true,
             plan: (input) =>
               Effect.suspend(() => {
                 inputs.push(input);
@@ -350,7 +460,11 @@ for (const outcome of ["failed", "unknown"] as const) {
               }),
           });
           yield* env.goals.tell({ _tag: "Initialize" });
-          yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+          yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+            _tag: "AwaitReady",
+            stage: "restored",
+            replyTo,
+          }));
           const state = () =>
             Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
           yield* until(() => state().lastError === "Retained failure");
@@ -360,15 +474,21 @@ for (const outcome of ["failed", "unknown"] as const) {
             outcome === "failed" ? "failed" : "reconciliation_required",
           );
           assert.equal(state().pendingRequestId, outcome === "failed" ? undefined : first);
-          yield* env.goals.tell({
+          const retried = yield* env.goals.ask<GoalCommandReply>((replyTo) => ({
             _tag: "Route",
             slug: "project",
-            command: { _tag: "Evaluate", reason: "Retry admitted work" },
-          });
+            command: { _tag: "RetryTurn", requestId: "retry", turnId: first!, replyTo },
+          }));
+          if (outcome === "unknown") {
+            assert.equal(retried._tag, "Rejected");
+            assert.equal(inputs.length, 1);
+            return;
+          }
+          assert.equal(retried._tag, "Accepted");
           yield* until(() => state().evaluations?.at(-1)?.status === "completed");
           const completed = state().evaluations!.at(-1)!;
           assert.equal(inputs.length, 2);
-          assert.equal(inputs[1].durable!.requestId === first, outcome === "unknown");
+          assert.notEqual(inputs[1].durable!.requestId, first);
           assert.equal(completed.retryOf, outcome === "failed" ? first : undefined);
           assert.deepEqual(completed.inputIds, state().evaluations![0].inputIds);
           assert.equal(state().inputs?.length, 1);
@@ -412,7 +532,6 @@ for (const committed of [false, true]) {
         Effect.gen(function* () {
           const env = yield* setup(
             {
-              durableSessions: true,
               plan: (input) =>
                 Effect.sync(() => {
                   const id = input.durable!.requestId;
@@ -434,8 +553,10 @@ for (const committed of [false, true]) {
                 "completed"
             );
           });
-          // A mailbox query crosses the recovery boundary after the failed commit.
-          yield* env.operate({ operation: "task_list" });
+          yield* until(
+            () =>
+              (env.registry.get("/goals/project")!.state as GoalState).pendingHandoff === undefined,
+          );
           const state = Schema.decodeUnknownSync(GoalState)(
             env.registry.get("/goals/project")!.state,
           );
@@ -455,23 +576,30 @@ test("Goal Task feedback consumes its frozen causal budget and restart does not 
   const history = makeMemoryGoalHistory();
   let calls = 0;
   const reasoner: GoalReasoner = {
-    plan: (input) =>
-      Effect.gen(function* () {
+    plan: () =>
+      Effect.sync(() => {
         calls++;
         const id = `work-${calls}`;
-        yield* input.tool!({
-          operation: "task_create",
-          id,
-          title: `Review ${calls}`,
-          instructions: "Review the evidence",
-        }).pipe(Effect.orDie);
-        yield* input.tool!({
-          operation: "signal_create",
-          id,
-          definition: { when: `Evidence for ${id} changes`, task: "Read the evidence" },
-        }).pipe(Effect.orDie);
-        yield* input.tool!({ operation: "task_execute", id, revision: 1 }).pipe(Effect.orDie);
-        return { ...plan, progress: `Reviewed evidence ${calls}` };
+        return {
+          ...plan,
+          progress: `Reviewed evidence ${calls}`,
+          taskChanges: [
+            {
+              operation: "task_create" as const,
+              id,
+              title: `Review ${calls}`,
+              instructions: "Review the evidence",
+            },
+            { operation: "task_execute" as const, id, revision: 1 },
+          ],
+          signalChanges: [
+            {
+              operation: "signal_create" as const,
+              id,
+              definition: { when: `Evidence for ${id} changes`, task: "Read the evidence" },
+            },
+          ],
+        };
       }),
   };
   for (const restart of [false, true]) {
@@ -502,7 +630,11 @@ test("Goal Task feedback consumes its frozen causal budget and restart does not 
                   Stream.runDrain,
                 );
           };
-          yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+          yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+            _tag: "AwaitReady",
+            stage: "restored",
+            replyTo,
+          }));
           if (!restart) {
             yield* env.goals.tell({ _tag: "Initialize" });
             yield* waitForLimit();
@@ -543,9 +675,10 @@ test("Goal Task feedback consumes its frozen causal budget and restart does not 
               _tag: "Route",
               slug: "project",
               command: {
-                _tag: "UserMessage",
-                text: "Continue the review with new evidence",
-                replyTo,
+                _tag: "SubmitInput",
+                requestId: "test-20828",
+                input: { _tag: "UserInput", text: "Continue the review with new evidence" },
+                replyTo: replyTo,
               },
             }));
             yield* changes.pipe(
@@ -611,7 +744,12 @@ test("Personal outbox recovers a lost Goal acknowledgement without duplicating i
                 .ask<GoalDeliveryReply>((replyTo) => ({
                   _tag: "Route",
                   slug: "project",
-                  command: { _tag: "Deliver", input, replyTo },
+                  command: {
+                    _tag: "SubmitInput",
+                    requestId: input.requestId,
+                    input: { _tag: "PersonalMessage", delivery: input },
+                    replyTo: replyTo,
+                  },
                 }))
                 .pipe(Effect.orDie);
               if (reply._tag === "Rejected") return yield* reply.error;
@@ -711,7 +849,12 @@ test("Goal inbox recovers after history append but before projection acknowledge
           env.goals.ask<GoalDeliveryReply>((replyTo) => ({
             _tag: "Route",
             slug: "project",
-            command: { _tag: "Deliver", input: value, replyTo },
+            command: {
+              _tag: "SubmitInput",
+              requestId: value.requestId,
+              input: { _tag: "PersonalMessage", delivery: value },
+              replyTo: replyTo,
+            },
           }));
         const changes = yield* env.registry.subscribe;
         yield* deliver().pipe(Effect.forkScoped);
@@ -750,7 +893,6 @@ test("a durable Goal applies its answer and consumed cursor in one Context commi
       Effect.gen(function* () {
         const env = yield* setup(
           {
-            durableSessions: true,
             plan: () => Effect.succeed(plan),
           },
           {
@@ -813,7 +955,6 @@ test("a recovered durable Goal replays only its frozen input prefix before consu
         Effect.gen(function* () {
           const env = yield* setup(
             {
-              durableSessions: true,
               plan: (input) =>
                 Deferred.succeed(firstStarted, input).pipe(Effect.andThen(Effect.never)),
             },
@@ -824,7 +965,12 @@ test("a recovered durable Goal replays only its frozen input prefix before consu
           const accepted = yield* env.goals.ask<GoalCommandReply>((replyTo) => ({
             _tag: "Route",
             slug: "project",
-            command: { _tag: "UserMessage", text: "New input received after the handoff", replyTo },
+            command: {
+              _tag: "SubmitInput",
+              requestId: "test-32101",
+              input: { _tag: "UserInput", text: "New input received after the handoff" },
+              replyTo: replyTo,
+            },
           }));
           assert.equal(accepted._tag, "Accepted");
           const state = Schema.decodeUnknownSync(GoalState)(records.get("/goals/project")!.state);
@@ -842,7 +988,6 @@ test("a recovered durable Goal replays only its frozen input prefix before consu
           let calls = 0;
           const env = yield* setup(
             {
-              durableSessions: true,
               plan: (input) =>
                 Effect.gen(function* () {
                   calls++;
@@ -884,67 +1029,6 @@ test("a recovered durable Goal replays only its frozen input prefix before consu
   );
 });
 
-test("durable compaction cannot absorb inputs received after its frozen handoff", async () => {
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const history = makeMemoryGoalHistory();
-        for (let index = 0; index < 205; index++)
-          yield* history.append("project", {
-            role: "user",
-            content: `Original input ${index}`,
-            timestamp: 1,
-          });
-        const compacting = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        const nextStarted = yield* Deferred.make<void>();
-        let calls = 0;
-        const env = yield* setup(
-          {
-            durableSessions: true,
-            compact: (_summary, messages) =>
-              Effect.gen(function* () {
-                assert.ok(
-                  !messages.some(
-                    (message) => message.role === "user" && message.content === "Later input",
-                  ),
-                );
-                yield* Deferred.succeed(compacting, undefined);
-                yield* Deferred.await(release);
-                return "Compacted original inputs";
-              }),
-            plan: (input) =>
-              Effect.gen(function* () {
-                calls++;
-                const containsLater = input.messages?.some(
-                  (message) => message.role === "user" && message.content === "Later input",
-                );
-                if (calls === 1) {
-                  assert.equal(containsLater, false);
-                  return plan;
-                }
-                assert.equal(containsLater, true);
-                yield* Deferred.succeed(nextStarted, undefined);
-                return yield* Effect.never;
-              }),
-          },
-          { history },
-        );
-        yield* env.goals.tell({ _tag: "Initialize" });
-        yield* Deferred.await(compacting);
-        yield* env.goals.ask<GoalCommandReply>((replyTo) => ({
-          _tag: "Route",
-          slug: "project",
-          command: { _tag: "UserMessage", text: "Later input", replyTo },
-        }));
-        yield* Deferred.succeed(release, undefined);
-        yield* Deferred.await(nextStarted);
-        assert.equal(calls, 2);
-      }),
-    ).pipe(Effect.timeout("5 seconds")),
-  );
-});
-
 test("legacy unresolved Goal handoffs are fenced instead of guessing a new input range", async () => {
   const record: ContextRecord = {
     path: "/goals/project",
@@ -973,11 +1057,15 @@ test("legacy unresolved Goal handoffs are fenced instead of guessing a new input
       Effect.gen(function* () {
         const env = yield* setup(
           {
-            durableSessions: true,
-            plan: () =>
-              Effect.sync(() => {
+            plan: (input) =>
+              Effect.gen(function* () {
                 calls++;
-                return plan;
+                assert.equal(input.durable.replayOnly, true);
+                return yield* new GoalReasoningError({
+                  operation: "plan",
+                  outcome: "unknown",
+                  message: "Legacy session requires reconciliation",
+                });
               }),
           },
           {
@@ -990,6 +1078,7 @@ test("legacy unresolved Goal handoffs are fenced instead of guessing a new input
           },
         );
         const changes = yield* env.registry.subscribe;
+        yield* env.goals.tell({ _tag: "Initialize" });
         const state = () =>
           Schema.decodeUnknownSync(GoalState)(env.registry.get(record.path)!.state);
         if (!state().lastError)
@@ -1002,10 +1091,10 @@ test("legacy unresolved Goal handoffs are fenced instead of guessing a new input
             Stream.take(1),
             Stream.runDrain,
           );
-        assert.match(state().lastError!, /frozen input range; reconciliation required/);
+        assert.match(state().lastError!, /requires reconciliation/);
         assert.equal(state().pendingRequestId, "legacy-request");
         assert.equal(state().agentThrough, 0);
-        assert.equal(calls, 0);
+        assert.equal(calls, 1);
       }),
     ).pipe(Effect.timeout("5 seconds")),
   );
@@ -1062,7 +1151,7 @@ test("Goal-owned Signal wakes assessment without delegating and task tools enfor
           Object.keys(env.registry.snapshot()).some((p) => p.includes("/runs/")),
           false,
         );
-        assert.match(JSON.stringify(yield* env.history.read("project")), /Signal matched/);
+        assert.match(JSON.stringify(yield* env.history.read("project")), /SignalOccurrence/);
         yield* env.operate({
           operation: "task_create",
           id: "analysis",
@@ -1080,7 +1169,10 @@ test("Goal-owned Signal wakes assessment without delegating and task tools enfor
           id: "analysis",
           revision: 1,
         });
-        assert.equal((again.value as { reused?: boolean }).reused, true);
+        assert.equal(
+          (again.value as { runPath: string }).runPath,
+          (first.value as { runPath: string }).runPath,
+        );
         yield* until(() => approvalEntries(env.registry).some((e) => e.status === "pending"));
         const old = approvalEntries(env.registry)[0]!;
         const updated = yield* env.operate({
@@ -1209,67 +1301,6 @@ test("once timer waits, survives restart overdue once, and deleted/revised timer
         }),
       ),
     );
-});
-
-test("compaction retains original history and restart loads summary plus a bounded native window", async () => {
-  const history = makeMemoryGoalHistory(),
-    records = new Map<string, any>();
-  const store: ContextStore = {
-    loadAll: () => structuredClone([...records.values()]),
-    save: (record) => {
-      records.set(record.path, structuredClone(record));
-    },
-  };
-  for (let i = 0; i < 20; i++)
-    await Effect.runPromise(
-      history.append("project", {
-        role: "user",
-        content: `Evidence ${i} ${"x".repeat(1200)}`,
-        timestamp: i,
-      }),
-    );
-  let calls = 0,
-    compacted = 0;
-  const reasoner: GoalReasoner = {
-    compact: (_summary, messages) =>
-      Effect.sync(() => {
-        compacted++;
-        assert.ok(messages.length);
-        return "Key evidence and conclusions retained";
-      }),
-    plan: (input) =>
-      Effect.sync(() => {
-        calls++;
-        assert.ok(JSON.stringify(input.messages).length < 14000);
-        assert.ok(input.current.state);
-        return plan;
-      }),
-  };
-  for (let i = 0; i < 2; i++)
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const env = yield* setup(reasoner, { store, history, contextTokens: 48000 });
-          yield* env.goals.tell({ _tag: "Initialize" });
-          yield* until(() => calls > i);
-          yield* until(
-            () =>
-              (env.registry.get("/goals/project")!.state as { summary: string }).summary ===
-              plan.progress,
-          );
-          assert.ok(
-            (env.registry.get("/goals/project")!.state as { historyThrough: number })
-              .historyThrough > 0,
-          );
-        }),
-      ),
-    );
-  assert.ok(compacted > 0);
-  assert.equal(
-    (await Effect.runPromise(history.read("project", { limit: 1 })))[0]!.message.role,
-    "user",
-  );
-  assert.ok((await Effect.runPromise(history.count("project"))) > 20);
 });
 
 test("deleting during preparation ignores late results; deleting during execution preserves its result", async () => {
@@ -1531,14 +1562,10 @@ test("a tool storage defect restarts Goal once and reuses its pending Run", asyn
           _tag: "Route",
           slug: "project",
           command: {
-            _tag: "Tool",
-            request: {
-              operation: "task_create",
-              id: "failed",
-              title: "failed",
-              instructions: "read",
-            },
-            replyTo: probe.ref,
+            _tag: "SubmitInput",
+            requestId: "disk-failure",
+            input: { _tag: "UserInput", text: "Research after disk recovery" },
+            replyTo: goalTestReply,
           },
         });
         yield* until(() =>
@@ -1566,108 +1593,6 @@ test("a tool storage defect restarts Goal once and reuses its pending Run", asyn
           "awaiting-confirmation",
         );
         yield* probe.expectNoMessage(10);
-      }),
-    ),
-  );
-});
-
-test("old Goal callbacks and queued generation messages cannot mutate a restarted evaluation", async () => {
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const plans: { input: Parameters<GoalReasoner["plan"]>[0]; cancelled: boolean }[] = [];
-        let fail = false;
-        const durable = new Map<string, ContextRecord>();
-        const env = yield* setup(
-          {
-            plan: (input) =>
-              Effect.suspend(() => {
-                const pending = { input, cancelled: false };
-                plans.push(pending);
-                return Effect.never.pipe(
-                  Effect.ensuring(
-                    Effect.sync(() => {
-                      pending.cancelled = true;
-                    }),
-                  ),
-                );
-              }),
-          },
-          {
-            store: {
-              loadAll: () => [...durable.values()],
-              save: (r) => {
-                if (fail && r.path === "/goals/project") {
-                  fail = false;
-                  throw new Error("restart");
-                }
-                durable.set(r.path, structuredClone(r));
-              },
-            },
-          },
-        );
-        yield* env.goals.tell({ _tag: "Initialize" });
-        yield* until(() => plans.length === 1);
-        fail = true;
-        yield* env.goals.tell({
-          _tag: "Route",
-          slug: "project",
-          command: { _tag: "UserMessage", text: "restart" },
-        });
-        yield* until(() => plans.length === 2);
-        assert.equal(plans[0]!.cancelled, true);
-        const lateTool = yield* Effect.exit(
-          plans[0]!.input.tool!({
-            operation: "task_create",
-            id: "late",
-            title: "late",
-            instructions: "late",
-          }),
-        );
-        const lateMessage = yield* Effect.exit(
-          plans[0]!.input.onMessage!({
-            role: "user",
-            content: "stale transcript",
-            timestamp: 0,
-          }),
-        );
-        assert.ok(Exit.isFailure(lateTool));
-        assert.ok(Cause.hasInterruptsOnly(lateTool.cause));
-        assert.ok(Exit.isFailure(lateMessage));
-        assert.ok(Cause.hasInterruptsOnly(lateMessage.cause));
-        const stale = yield* env.goals.ask<{ error?: string }>((replyTo) => ({
-          _tag: "Route",
-          slug: "project",
-          command: {
-            _tag: "Tool",
-            generation: "retired-generation",
-            request: {
-              operation: "task_create",
-              id: "queued",
-              title: "queued",
-              instructions: "queued",
-            },
-            replyTo,
-          },
-        }));
-        assert.match(stale.error!, /no longer active/);
-        yield* env.goals.ask<void>((replyTo) => ({
-          _tag: "Route",
-          slug: "project",
-          command: {
-            _tag: "Compacted",
-            generation: "retired-generation",
-            summary: "stale",
-            through: 99999,
-            replyTo,
-          },
-        }));
-        assert.deepEqual((yield* env.operate({ operation: "task_list" })).value, []);
-        assert.notEqual(
-          (env.registry.get("/goals/project")!.state as { summary: string }).summary,
-          "stale",
-        );
-        assert.doesNotMatch(JSON.stringify(yield* env.history.read("project")), /stale transcript/);
       }),
     ),
   );
@@ -1763,7 +1688,11 @@ test("Goal End interrupts in-flight reasoning without waiting for its callback",
         });
         yield* env.goals.tell({ _tag: "Initialize" });
         yield* until(() => entered);
-        yield* env.goals.tell({ _tag: "Route", slug: "project", command: { _tag: "End" } });
+        yield* env.goals.tell({
+          _tag: "Route",
+          slug: "project",
+          command: { _tag: "End", requestId: "test-65536", replyTo: goalTestReply },
+        });
         yield* until(
           () =>
             cancelled &&
@@ -1774,51 +1703,6 @@ test("Goal End interrupts in-flight reasoning without waiting for its callback",
           JSON.stringify(yield* env.history.read("project")),
           /Evaluation failed/,
         );
-      }),
-    ),
-  );
-});
-
-test("failed compaction keeps the previous history boundary and does not start planning", async () => {
-  const history = makeMemoryGoalHistory();
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        for (let i = 0; i < 4; i++)
-          yield* history.append("project", {
-            role: "user",
-            content: "evidence".repeat(150),
-            timestamp: i,
-          });
-        let plans = 0;
-        const env = yield* setup(
-          {
-            plan: () =>
-              Effect.sync(() => {
-                plans++;
-                return plan;
-              }),
-            compact: () =>
-              Effect.fail(
-                new GoalReasoningError({ operation: "compact", message: "compaction failed" }),
-              ),
-          },
-          { history, contextTokens: 12000 },
-        );
-        yield* env.goals.tell({ _tag: "Initialize" });
-        yield* until(
-          () =>
-            (env.registry.get("/goals/project")?.state as { lastError?: string } | undefined)
-              ?.lastError === "compaction failed",
-        );
-        const state = env.registry.get("/goals/project")!.state as {
-          historyThrough: number;
-          summary: string;
-        };
-        assert.equal(state.historyThrough, 0);
-        assert.equal(state.summary, "Not yet evaluated");
-        assert.equal(plans, 0);
-        assert.ok((yield* history.count("project")) >= 4);
       }),
     ),
   );
@@ -1883,7 +1767,6 @@ test("Goal Signal proposals commit with Tasks and reconcile a lost receipt after
   const history = makeMemoryGoalHistory();
   let generations = 0;
   const reasoner: GoalReasoner = {
-    durableSessions: true,
     plan: () =>
       Effect.sync(() => {
         generations++;
@@ -1925,7 +1808,11 @@ test("Goal Signal proposals commit with Tasks and reconcile a lost receipt after
       Effect.gen(function* () {
         const env = yield* setup(reasoner, { store, history, loseSignalAck: true });
         const changes = yield* env.registry.subscribe;
-        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+          _tag: "AwaitReady",
+          stage: "restored",
+          replyTo,
+        }));
         yield* env.goals.tell({ _tag: "Initialize" });
         const state = () =>
           Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
@@ -1959,7 +1846,11 @@ test("Goal Signal proposals commit with Tasks and reconcile a lost receipt after
       Effect.gen(function* () {
         const env = yield* setup(reasoner, { store, history });
         const changes = yield* env.registry.subscribe;
-        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+          _tag: "AwaitReady",
+          stage: "restored",
+          replyTo,
+        }));
         const state = () =>
           Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
         if (state().signalOutbox?.[0]?.status !== "delivered")
@@ -1983,7 +1874,6 @@ test("Invalid Signal proposal rejects the entire Goal result before applying its
     Effect.scoped(
       Effect.gen(function* () {
         const env = yield* setup({
-          durableSessions: true,
           plan: () =>
             Effect.succeed({
               ...plan,
@@ -2001,7 +1891,11 @@ test("Invalid Signal proposal rejects the entire Goal result before applying its
             }),
         });
         const changes = yield* env.registry.subscribe;
-        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+          _tag: "AwaitReady",
+          stage: "restored",
+          replyTo,
+        }));
         yield* env.goals.tell({ _tag: "Initialize" });
         const state = () =>
           Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
@@ -2013,7 +1907,7 @@ test("Invalid Signal proposal rejects the entire Goal result before applying its
           );
         assert.deepEqual(state().tasks, []);
         assert.deepEqual(state().signalOutbox ?? [], []);
-        assert.equal(state().summary, "Not yet evaluated");
+        assert.equal(state().summary, "Ready to begin");
         assert.match(state().lastError!, /missing or deleted/);
         assert.equal(env.registry.get("/signals/project--watch"), undefined);
       }),
@@ -2027,7 +1921,6 @@ test("Signal outbox survives lost Goal result acknowledgement and stops replay a
   let generations = 0;
   let loseCommit = true;
   const reasoner: GoalReasoner = {
-    durableSessions: true,
     plan: () =>
       Effect.sync(() => {
         generations++;
@@ -2063,7 +1956,11 @@ test("Signal outbox survives lost Goal result acknowledgement and stops replay a
         Effect.gen(function* () {
           const env = yield* setup(reasoner, { store, history, loseSignalAck: true });
           const changes = yield* env.registry.subscribe;
-          yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+          yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+            _tag: "AwaitReady",
+            stage: "restored",
+            replyTo,
+          }));
           if (generations === 0) yield* env.goals.tell({ _tag: "Initialize" });
           const state = () =>
             Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
@@ -2108,14 +2005,23 @@ test("Signal outbox survives lost Goal result acknowledgement and stops replay a
             },
           },
         });
-        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+          _tag: "AwaitReady",
+          stage: "restored",
+          replyTo,
+        }));
         const reply =
           yield* ActorTestKit.probe<import("../src/goals/actors.js").GoalDeliveryReply>();
         const changes = yield* env.registry.subscribe;
         yield* env.goals.tell({
           _tag: "Route",
           slug: "project",
-          command: { _tag: "RetrySignal", input: retryInput, replyTo: reply.ref },
+          command: {
+            _tag: "RetrySignalDelivery",
+            requestId: retryInput.requestId,
+            input: retryInput,
+            replyTo: reply.ref,
+          },
         });
         const current = () =>
           Schema.decodeUnknownSync(GoalState)(env.registry.get("/goals/project")!.state);
@@ -2159,7 +2065,6 @@ test("Goal Timeline freezes ordered inputs, keeps pending arrivals separate and 
         const release = [yield* Deferred.make<void>(), yield* Deferred.make<void>()];
         const calls: Parameters<GoalReasoner["plan"]>[0][] = [];
         const env = yield* setup({
-          durableSessions: true,
           plan: (input) =>
             Effect.gen(function* () {
               const index = calls.length;
@@ -2176,7 +2081,11 @@ test("Goal Timeline freezes ordered inputs, keeps pending arrivals separate and 
               };
             }),
         });
-        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+          _tag: "AwaitReady",
+          stage: "restored",
+          replyTo,
+        }));
         const api = makeApplicationApi({
           registry: env.registry,
           goals: env.goals,
@@ -2184,17 +2093,21 @@ test("Goal Timeline freezes ordered inputs, keeps pending arrivals separate and 
           inspect: Effect.succeed(null),
         });
         yield* api.goals.sendMessage("project", "Unrelated evidence", "user-one");
+        yield* env.goals.tell({ _tag: "Initialize" });
         yield* Deferred.await(entered[0]!);
         yield* api.goals.sendMessage("project", "New requirement", "user-two");
+        yield* env.goals.tell({ _tag: "Initialize" });
         yield* api.goals.sendMessage("project", "Supporting evidence", "user-three");
+        yield* env.goals.tell({ _tag: "Initialize" });
         yield* api.goals.sendMessage("project", "Supporting evidence", "user-three");
+        yield* env.goals.tell({ _tag: "Initialize" });
         const conflict = yield* api.goals
           .sendMessage("project", "Changed payload", "user-three")
           .pipe(Effect.flip);
         assert.equal(conflict.kind, "conflict");
         const during = yield* api.goals.timeline("project");
         assert.equal(during.groups.length, 1);
-        assert.equal(during.groups[0].inputs.length, 1);
+        assert.equal(during.groups[0].inputs.length, 2);
         assert.deepEqual(
           during.pendingInputs.map((input) =>
             input.payload._tag === "UserInput" ? input.payload.text : "",
@@ -2239,7 +2152,6 @@ test("New user evidence after a failed evaluation gets its own group instead of 
       Effect.gen(function* () {
         let count = 0;
         const env = yield* setup({
-          durableSessions: true,
           plan: () =>
             ++count === 1
               ? Effect.fail(
@@ -2251,7 +2163,11 @@ test("New user evidence after a failed evaluation gets its own group instead of 
                 )
               : Effect.succeed(plan),
         });
-        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+          _tag: "AwaitReady",
+          stage: "restored",
+          replyTo,
+        }));
         const api = makeApplicationApi({
           registry: env.registry,
           goals: env.goals,
@@ -2259,6 +2175,7 @@ test("New user evidence after a failed evaluation gets its own group instead of 
         });
         const changes = yield* env.registry.subscribe;
         yield* api.goals.sendMessage("project", "Original input", "first");
+        yield* env.goals.tell({ _tag: "Initialize" });
         yield* changes.pipe(
           Stream.filter(
             () =>
@@ -2270,6 +2187,7 @@ test("New user evidence after a failed evaluation gets its own group instead of 
         );
         const later = yield* env.registry.subscribe;
         yield* api.goals.sendMessage("project", "Corrected instructions", "correction");
+        yield* env.goals.tell({ _tag: "Initialize" });
         yield* later.pipe(
           Stream.filter(
             () =>
@@ -2297,7 +2215,6 @@ test("Task execution feedback names the evaluation that reserved its Run", async
       Effect.gen(function* () {
         let calls = 0;
         const env = yield* setup({
-          durableSessions: true,
           plan: () =>
             Effect.sync(() =>
               ++calls === 1
@@ -2321,9 +2238,14 @@ test("Task execution feedback names the evaluation that reserved its Run", async
           goals: env.goals,
           inspect: Effect.succeed(null),
         });
-        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+          _tag: "AwaitReady",
+          stage: "restored",
+          replyTo,
+        }));
         const changes = yield* env.registry.subscribe;
         yield* api.goals.sendMessage("project", "Review the current evidence", "start-review");
+        yield* env.goals.tell({ _tag: "Initialize" });
         const approved = () => approvalEntries(env.registry).length > 0;
         if (!approved())
           yield* changes.pipe(Stream.filter(approved), Stream.take(1), Stream.runDrain);
@@ -2372,8 +2294,6 @@ test("Goal input admission splits oversized batches without losing or reassignin
         let calls = 0;
         const env = yield* setup(
           {
-            durableSessions: true,
-            compact: () => Effect.succeed("Earlier evidence"),
             plan: () =>
               Effect.gen(function* () {
                 const index = calls++;
@@ -2384,16 +2304,23 @@ test("Goal input admission splits oversized batches without losing or reassignin
           },
           { contextTokens: 12000 },
         );
-        yield* env.goals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.goals.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
+          _tag: "AwaitReady",
+          stage: "restored",
+          replyTo,
+        }));
         const api = makeApplicationApi({
           registry: env.registry,
           goals: env.goals,
           inspect: Effect.succeed(null),
         });
         yield* api.goals.sendMessage("project", "Start", "batch-start");
+        yield* env.goals.tell({ _tag: "Initialize" });
         yield* Deferred.await(entered[0]!);
         yield* api.goals.sendMessage("project", "A".repeat(1000), "batch-a");
+        yield* env.goals.tell({ _tag: "Initialize" });
         yield* api.goals.sendMessage("project", "B".repeat(1000), "batch-b");
+        yield* env.goals.tell({ _tag: "Initialize" });
         yield* Deferred.succeed(release[0]!, undefined);
         yield* Deferred.await(entered[1]!);
         const partial = yield* api.goals.timeline("project");
@@ -2407,7 +2334,7 @@ test("Goal input admission splits oversized batches without losing or reassignin
         assert.equal(last.pendingInputs.length, 0);
         assert.equal(
           new Set(last.groups.flatMap((group) => group.inputs.map((input) => input.inputId))).size,
-          3,
+          4,
         );
         yield* Deferred.succeed(release[2]!, undefined);
       }),

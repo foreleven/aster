@@ -1,5 +1,7 @@
 # Goal Agent Session, Evaluation, and Timeline design
 
+Implementation update (2026-10-04): [Goal command redesign](goal-command-redesign.md) is the authoritative implemented protocol. This document retains the original session-boundary rationale. The implementation reuses `GoalReasoner.plan` and `Agent.make({ durable })`, without a separate session Actor/Layer. `GoalStarted` is persisted only on first activation; `RetryTurn` explicitly retries known failure with identical input IDs. Unknown outcomes require session reconciliation. Task/Signal writes use `finish_turn` proposals, and native transcript/compaction belong entirely to Agent Session. See the redesign's compatibility procedure for legacy pending requests without frozen snapshots.
+
 This document is the target design for the boundary between a GoalActor, its durable Agent session, and the Goal Timeline. It completes the decisions recorded in ADR 0042 through ADR 0044 and records the first `pi-durable` implementation boundary.
 
 ## 1. Domain topology
@@ -283,15 +285,15 @@ The first implementation keeps `GoalHistory` as the Goal input queue and compati
 
 ## 9. Failure, retry, and recovery rules
 
-| Failure point                                 | Durable fact                                               | Recovery                                                             |
-| --------------------------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------- |
-| Before Goal input commit                      | No accepted input                                          | Caller may retry using its source dedupe key.                        |
-| After Goal commit, before Pi handoff          | Input and pending group exist                              | GoalActor recovery submits the same request id.                      |
-| Unknown Pi submission result                  | Request may have been accepted                             | Reconcile by request id; never blind-resubmit.                       |
-| Agent Run failure                             | Partial native transcript and failed group exist           | Manual or bounded policy retry creates a new group with `retryOf`.   |
-| Pi result persisted, GoalActor callback lost  | Result exists under evaluation id                          | GoalActor reads and applies the result idempotently.                 |
-| Goal application partially reaches SignalRoot | Local Goal result is applied; operation receipt is durable | Retry the operation id, then show `partially_applied` until settled. |
-| Process restart during compaction             | Previous summary/boundary remain valid                     | Resume only from the last durable checkpoint.                        |
+| Failure point                                 | Durable fact                                               | Recovery                                                                        |
+| --------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Before Goal input commit                      | No accepted input                                          | Caller may retry using its source dedupe key.                                   |
+| After Goal commit, before Pi handoff          | Input and pending group exist                              | GoalActor recovery submits the same request id.                                 |
+| Unknown Pi submission result                  | Request may have been accepted                             | Reconcile by request id; never blind-resubmit.                                  |
+| Agent Run failure                             | Partial native transcript and failed group exist           | Explicit `RetryTurn` creates a new group with `retryOf` and the same input IDs. |
+| Pi result persisted, GoalActor callback lost  | Result exists under evaluation id                          | GoalActor reads and applies the result idempotently.                            |
+| Goal application partially reaches SignalRoot | Local Goal result is applied; operation receipt is durable | Retry the operation id, then show `partially_applied` until settled.            |
+| Process restart during compaction             | Previous summary/boundary remain valid                     | Resume only from the last durable checkpoint.                                   |
 
 Agent Run retries never reuse a model call identity after a known failure. They reuse the logical input identities, create a new Run and Evaluation Group, and preserve the failed transcript for evaluation. A retry budget and backoff belong to the handoff/recovery service, not to Timeline rendering.
 

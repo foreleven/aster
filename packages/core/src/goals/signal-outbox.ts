@@ -1,3 +1,4 @@
+import type { GoalRequestRecord } from "./protocol.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { Effect } from "effect";
@@ -42,7 +43,7 @@ export const goalSignalOutbox = (
               }),
             ),
         (result) => ({
-          _tag: "SignalDelivered",
+          _tag: "SignalDeliverySettled",
           requestId: operation.input.requestId,
           generation,
           result,
@@ -113,7 +114,10 @@ export const goalSignalOutbox = (
       }),
     });
   });
-  const retry = Effect.fn("Goal.retrySignal")(function* (input: RetryGoalSignalInput) {
+  const retry = Effect.fn("Goal.retrySignal")(function* (
+    input: RetryGoalSignalInput,
+    admission?: GoalRequestRecord,
+  ) {
     if (input.slug !== state().slug)
       return yield* new ApplicationError({
         kind: "invalid-input",
@@ -144,6 +148,7 @@ export const goalSignalOutbox = (
       });
     const receipt = { requestId: input.requestId, revision: (working.current().revision ?? 0) + 1 };
     yield* save({
+      requests: admission ? [...(state().requests ?? []), admission] : state().requests,
       signalOutbox: operations.map((item) =>
         item === operation
           ? {

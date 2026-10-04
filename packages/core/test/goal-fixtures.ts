@@ -1,0 +1,11 @@
+import type { ReplyTo } from "@aster/actor";
+import { Effect } from "effect";
+import type { GoalCommandReply } from "../src/goals/protocol.js";
+
+/** Tests that observe committed state can discard an explicit admission acknowledgement. */
+export const goalTestReply: ReplyTo<GoalCommandReply> = {
+  path: "/test/goal-reply",
+  incarnation: "test",
+  tell: () => Effect.void,
+  ask: () => Effect.die("The reply sink cannot receive requests"),
+};

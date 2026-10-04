@@ -46,6 +46,8 @@ export const applicationRpcHandlers = (api: ApplicationApi) =>
     ListContexts: (_, options) => traced("ListContexts", options.requestId, api.contexts),
     GetContext: ({ path }, options) => traced("GetContext", options.requestId, api.context(path)),
     ListGoals: (_, options) => traced("ListGoals", options.requestId, api.goals.list),
+    RetryGoalTurn: (input, options) =>
+      traced("RetryGoalTurn", options.requestId, api.goals.retryTurn(input)),
     RetryGoalSignal: (input, options) =>
       traced("RetryGoalSignal", options.requestId, api.goals.retrySignal(input)),
     GetGoalTimeline: ({ slug, before, limit }, options) =>
@@ -56,7 +58,8 @@ export const applicationRpcHandlers = (api: ApplicationApi) =>
     InspectRuntime: (_, options) => traced("InspectRuntime", options.requestId, api.inspect),
     SendGoalMessage: ({ slug, text, requestId }, options) =>
       traced("SendGoalMessage", options.requestId, api.goals.sendMessage(slug, text, requestId)),
-    EndGoal: ({ slug }, options) => traced("EndGoal", options.requestId, api.goals.end(slug)),
+    EndGoal: ({ slug, requestId }, options) =>
+      traced("EndGoal", options.requestId, api.goals.end(slug, requestId)),
     RespondToApproval: ({ id, response }, options) =>
       traced("RespondToApproval", options.requestId, api.approvals.respond(id, response)),
   });

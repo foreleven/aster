@@ -237,7 +237,12 @@ export class PersonalActions extends Context.Service<
             .ask<GoalDeliveryReply>((replyTo) => ({
               _tag: "Route",
               slug: input.target.slice("/goals/".length),
-              command: { _tag: "Deliver", input, replyTo },
+              command: {
+                _tag: "SubmitInput",
+                requestId: input.requestId,
+                input: { _tag: "PersonalMessage", delivery: input },
+                replyTo,
+              },
             }))
             .pipe(
               Effect.mapError(

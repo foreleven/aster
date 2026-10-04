@@ -130,3 +130,17 @@ export const completeExchange = async (
       },
     });
   }, context);
+
+/** Inspect without admitting or resuming a provider request. */
+export const lookupExchange = async (
+  harness: Harness,
+  identity: string,
+  requestId: string,
+  context: Context,
+) =>
+  harness.commit(async (tx) => {
+    const state = Schema.decodeUnknownSync(State)(await tx.doc(DurableExchanges));
+    if (state.identity !== "" && state.identity !== identity)
+      throw new Error("Durable conversation storage belongs to another Aster owner");
+    return state.exchanges.find((exchange) => exchange.requestId === requestId);
+  }, context);

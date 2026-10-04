@@ -172,11 +172,15 @@ test("every persisted Run terminal outcome is replayed on restart and parent rea
             const parent = yield* ActorTestKit.probe<GoalCommand>();
             yield* actor.tell({ _tag: "Resume", path: "/runs/review", subscriber: parent.ref });
             const update = yield* parent.take().pipe(Effect.timeout("2 seconds"));
-            assert.equal(update._tag, "Execution");
-            if (update._tag === "Execution") {
-              assert.equal(update.status, status);
-              assert.equal(update.text, `Original ${status}`);
-              assert.equal(update.terminal, true);
+            assert.equal(update._tag, "SubmitInput");
+            if (update._tag === "SubmitInput" && update.input._tag === "ExecutionFeedback") {
+              yield* update.replyTo.tell({
+                _tag: "Accepted",
+                receipt: { requestId: update.requestId, revision: 1 },
+              });
+              assert.equal(update.input.status, status);
+              assert.equal(update.input.text, `Original ${status}`);
+              assert.equal(update.input.terminal, true);
             }
           }
           assert.equal(saves, 0);

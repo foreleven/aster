@@ -1,3 +1,5 @@
+import { GoalRequestRecord } from "./protocol.js";
+import { GoalNextStep } from "@aster/api-contracts";
 import { StoredGoalInput } from "./inputs.js";
 import { Schema } from "effect";
 import { ReceivedGoalIntent } from "./intent.js";
@@ -23,6 +25,18 @@ export const GoalHandoff = Schema.Struct({
 export type GoalHandoff = typeof GoalHandoff.Type;
 
 export const GoalState = Schema.Struct({
+  requests: Schema.optional(Schema.Array(GoalRequestRecord)),
+  activated: Schema.optional(Schema.Boolean),
+  nextStep: Schema.optional(GoalNextStep),
+  completionOrigin: Schema.optional(Schema.Literals(["user", "criteria"])),
+  retryTurnId: Schema.optional(Schema.String),
+  deactivation: Schema.optional(
+    Schema.Struct({
+      requestId: Schema.NonEmptyString,
+      status: Schema.Literals(["pending", "sending", "delivered", "unknown"]),
+      error: Schema.optional(Schema.String),
+    }),
+  ),
   inputs: Schema.optional(Schema.Array(StoredGoalInput)),
   signalOutbox: Schema.optional(Schema.Array(GoalSignalOperation)),
   evaluations: Schema.optional(Schema.Array(GoalEvaluationRecord)),
@@ -61,6 +75,9 @@ export const GoalState = Schema.Struct({
   Schema.makeFilter(
     (state) =>
       validEvaluationJournal(state.evaluations ?? []) &&
+      new Set(state.requests?.map((item) => item.request.requestId)).size ===
+        (state.requests?.length ?? 0) &&
+      (state.requests ?? []).every((item) => item.request.requestId === item.receipt.requestId) &&
       (state.inputs ?? []).every(
         (input, index, inputs) =>
           input.goalSlug === state.slug &&

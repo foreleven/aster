@@ -162,6 +162,9 @@ const SignalView = Schema.Struct({
   ),
 });
 const GoalView = Schema.Struct({
+  nextStep: GoalState.fields.nextStep,
+  completionOrigin: GoalState.fields.completionOrigin,
+  deactivation: GoalState.fields.deactivation,
   signalOutbox: Schema.optional(
     Schema.Array(
       Schema.Struct({

@@ -1,3 +1,4 @@
+import type { GoalRequestRecord } from "./protocol.js";
 import { goalInputs, newGoalInput } from "./inputs.js";
 import {
   ApplicationError,
@@ -19,6 +20,7 @@ export const goalInbox = (
   const project = goalInputs(working, history).project;
   const accept = Effect.fn("GoalInbox.accept")(function* (
     raw: GoalDeliveryInput,
+    admission?: GoalRequestRecord,
   ): Effect.fn.Return<
     { readonly receipt: GoalDeliveryReceipt; readonly created: boolean },
     ApplicationError
@@ -51,6 +53,8 @@ export const goalInbox = (
       yield* project().pipe(Effect.orDie);
       return { receipt: previous.receipt, created: false };
     }
+    if (state.status !== "active")
+      return yield* new ApplicationError({ kind: "conflict", message: "Goal has ended" });
     const receipt = { requestId: input.requestId, revision: (current.revision ?? 0) + 1 };
     yield* registry
       .commit(
@@ -58,20 +62,27 @@ export const goalInbox = (
           ...current,
           state: {
             ...state,
-            causal: input.causal,
+            requests: admission ? [...(state.requests ?? []), admission] : state.requests,
+            causal: input.causal ?? { rootRequestId: input.causationId, remainingAgentTurns: 4 },
             inputs: [
               ...(state.inputs ?? []),
-              newGoalInput(
-                state,
-                {
-                  _tag: "PersonalMessage",
-                  source: "/personal",
-                  requestId: input.requestId,
-                  text: input.text,
+              {
+                ...newGoalInput(
+                  state,
+                  {
+                    _tag: "PersonalMessage",
+                    source: "/personal",
+                    requestId: input.requestId,
+                    text: input.text,
+                  },
+                  input.requestId,
+                  DateTime.formatIso(yield* DateTime.now),
+                ),
+                causal: input.causal ?? {
+                  rootRequestId: input.causationId,
+                  remainingAgentTurns: 4,
                 },
-                input.requestId,
-                DateTime.formatIso(yield* DateTime.now),
-              ),
+              },
             ],
             deliveries: [...(state.deliveries ?? []), { input, receipt }],
             pendingEvaluation: state.status === "active" || state.pendingEvaluation,

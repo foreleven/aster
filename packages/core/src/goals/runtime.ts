@@ -1,5 +1,4 @@
 import { ApplicationError, CommandReceipt, CausalChain } from "@aster/api-contracts";
-import { GoalState, goalOutputCause } from "./state.js";
 import { GoalToolError } from "./tasks.js";
 import { Context, Effect, Schema } from "effect";
 import { createHash } from "node:crypto";
@@ -9,12 +8,7 @@ import type { ContextRegistry } from "../context/registry.js";
 import type { GoalSettings } from "../config/settings.js";
 import type { GoalReasoner } from "./reasoner.js";
 import type { GoalCommand } from "./actors.js";
-import {
-  SignalDefinition,
-  validateSignalTime,
-  type CoreConfig,
-  type GoalDefinition,
-} from "../config/schema.js";
+import { SignalDefinition, type CoreConfig, type GoalDefinition } from "../config/schema.js";
 import type { GoalSignalInput } from "../signals/goal-command.js";
 import type {
   SignalCommandReply,
@@ -23,7 +17,6 @@ import type {
 } from "../signals/actors.js";
 import type { SystemOneClient } from "../decisions/system-one.js";
 import type { GoalHistory } from "./history.js";
-import type { SignalToolRequest } from "./tasks.js";
 import {
   GoalScreeningStore,
   screeningDecision,
@@ -49,11 +42,6 @@ export class GoalRuntime extends Context.Service<
       input: GoalSignalInput,
       subscriber: ActorRef<GoalCommand>,
     ) => Effect.Effect<CommandReceipt, ApplicationError>;
-    readonly editSignal?: (
-      goal: string,
-      request: SignalToolRequest,
-      subscriber: ActorRef<GoalCommand>,
-    ) => Effect.Effect<unknown, GoalToolError | AskTimeoutError>;
     readonly deactivate: (goal: string) => Effect.Effect<void, GoalToolError | AskTimeoutError>;
   }
 >()("goals/Runtime") {}
@@ -153,74 +141,6 @@ export const makeGoalRuntime = (
             result._tag === "Accepted" ? Effect.succeed(result.receipt) : Effect.fail(result.error),
           ),
         ),
-    editSignal: (goal, request, subscriber) =>
-      Effect.gen(function* () {
-        const all = records(goal);
-        if (request.operation === "signal_list")
-          return all.filter((r) => !r.state.deleted).map((r) => registry.project(r).state);
-        if (!request.id || !/^[a-z0-9][a-z0-9-]*$/.test(request.id))
-          return yield* new GoalToolError({ message: "Invalid Signal ID" });
-        const slug = request.id.startsWith(`${goal}--`) ? request.id : `${goal}--${request.id}`;
-        const existing = all.find((r) => r.state.slug === slug);
-        if (request.operation === "signal_get") {
-          if (!existing) return yield* new GoalToolError({ message: "Signal not found" });
-          return registry.project(existing).state;
-        }
-        if (request.operation === "signal_create" && existing)
-          return registry.project(existing).state;
-        if (
-          request.operation !== "signal_create" &&
-          (!existing || existing.state.deleted || request.revision !== existing.state.revision)
-        )
-          return yield* new GoalToolError({
-            message: "Signal missing, deleted or revision changed",
-          });
-        const deleting = request.operation === "signal_delete";
-        const patch = request.operation === "signal_delete" ? {} : request.definition;
-        const raw: Record<string, unknown> = {
-          ...existing?.state,
-          ...patch,
-          slug,
-          when: patch.when ?? existing?.state.when ?? "Check the latest Goal progress on schedule",
-          task:
-            patch.task ??
-            existing?.state.task ??
-            "Evaluate changes, record conclusions, or advance tasks",
-          agent: "doubao-delegate",
-          mode: "confirm",
-        };
-        if (raw.schedule === null) delete raw.schedule;
-        if (raw.notBefore === null) delete raw.notBefore;
-        if (raw.taskId === null) delete raw.taskId;
-        if (
-          patch.taskId &&
-          !(registry.get(`/goals/${goal}`)?.state as { tasks?: { id: string }[] })?.tasks?.some(
-            (task) => task.id === patch.taskId,
-          )
-        )
-          return yield* new GoalToolError({
-            message: "Signal taskId must reference a task in this Goal",
-          });
-        let definition: SignalDefinition;
-        try {
-          definition = Schema.decodeUnknownSync(SignalDefinition)(raw);
-          validateSignalTime(definition);
-        } catch (cause) {
-          return yield* new GoalToolError({ message: String(cause) });
-        }
-        if (!definition.when.trim() || !definition.task.trim())
-          return yield* new GoalToolError({ message: "Signal condition must not be empty" });
-        const currentGoal = registry.get(`/goals/${goal}`);
-        yield* upsert(
-          definition,
-          goal,
-          !deleting,
-          subscriber,
-          deleting,
-          currentGoal && goalOutputCause(Schema.decodeUnknownSync(GoalState)(currentGoal.state)),
-        );
-        return registry.project(registry.get(`/signals/${slug}`)!).state;
-      }),
   };
 };
 
