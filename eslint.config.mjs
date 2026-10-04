@@ -60,6 +60,29 @@ export default defineConfig([
     files: ["apps/web/test/**/*.js"],
     languageOptions: { globals: globals.browser },
   },
+  // Enforce the dependency direction recorded in ADR 0046.
+  ...[
+    { owner: "core", excluded: ["infra", "integrations"] },
+    { owner: "infra", excluded: ["integrations"] },
+    { owner: "integrations", excluded: ["infra"] },
+    { owner: "agent", excluded: ["core", "infra", "integrations"] },
+  ].map(({ owner, excluded }) => ({
+    files: [`packages/${owner}/**/*.ts`],
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [
+            {
+              group: excluded.flatMap((name) => [`@aster/${name}`, `@aster/${name}/*`]),
+              message:
+                "Keep the package boundary: consume core contracts and assemble implementations in the host.",
+            },
+          ],
+        },
+      ],
+    },
+  })),
   // Formatting belongs to Prettier, not ESLint's stylistic rules.
   prettier,
 ]);

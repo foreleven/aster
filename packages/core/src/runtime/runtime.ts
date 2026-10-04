@@ -1,3 +1,4 @@
+import { memoryLayer } from "../memory/services.js";
 import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster/api-contracts";
 import type { ReactionCommand } from "../context/reaction-actor.js";
 import type { NotificationCommand } from "../notifications/actor.js";
@@ -268,8 +269,9 @@ export class AsterRuntime extends Context.Service<
       RuntimeIntegrations.layer,
       Layer.effect(SignalDefinitions, signalSettings),
     );
+    const consumers = memoryLayer.pipe(Layer.provideMerge(foundation));
     const installed = Layer.mergeAll(Layer.empty, ...options.integrations).pipe(
-      Layer.provideMerge(foundation),
+      Layer.provideMerge(consumers),
     );
     const domain = Layer.mergeAll(
       taskPreparationLayer.pipe(Layer.provideMerge(InternalAgent.layer)),

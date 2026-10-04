@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { Effect, Fiber, Layer } from "effect";
-import { LocalConfig, acquireActorStoreLock, storageSettings } from "@aster/integrations";
+import { LocalConfig, acquireActorStoreLock, storageSettings } from "@aster/infra";
 import { localRuntimeLayer } from "./services.js";
 import { LocalHttpApi } from "./http-api.js";
 import { waitForShutdown } from "./shutdown.js";

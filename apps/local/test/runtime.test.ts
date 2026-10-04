@@ -19,7 +19,8 @@ import {
   contextPath,
   makeMemoryGoalHistory,
 } from "@aster/core";
-import { Models, MemoryIntegration, MemoryRuntime } from "@aster/integrations";
+import { Models } from "@aster/agent";
+import { MemoryBackend } from "@aster/core";
 
 class Source extends ContextActor.Service<Source>()("test/Source", {
   command: Schema.TaggedStruct("Ping", {}),
@@ -94,7 +95,7 @@ const sourceLayer = (
     }),
   );
 
-const infrastructure = (events: string[]) =>
+const infrastructure = (events: string[], overrides: Partial<MemoryBackend["Service"]> = {}) =>
   Layer.mergeAll(
     Layer.succeed(ConfigLocation, { baseDir: "/tmp", projectRoot: "/tmp", envPath: "/tmp/.env" }),
     Layer.effect(DurableContext, LocalDurableContext.fromStore()),
@@ -117,23 +118,22 @@ const infrastructure = (events: string[]) =>
     }),
     Layer.succeed(ExternalAgents, {}),
     Layer.effect(
-      MemoryRuntime,
+      MemoryBackend,
       Effect.acquireRelease(
         Effect.sync(() => {
           events.push("memory:acquired");
-          return MemoryRuntime.of({
-            config: { description: "Memory", dataDir: "/tmp", port: 3111, autoCompress: false },
-            client: {
-              capture: async (input) => {
+          return MemoryBackend.of({
+            description: "Memory",
+            retrieval: "bm25",
+            capture: (input) =>
+              Effect.sync(() => {
                 events.push(`capture:${input.sessionId}`);
-              },
-              search: async () => ({ mode: "compact", results: [] }),
-              expand: async () => ({ mode: "expanded", results: [], truncated: false }),
-              drain: async () => {
-                events.push("memory:drained");
-              },
-              close: () => {},
-            },
+              }),
+            recall: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
+            drain: Effect.sync(() => {
+              events.push("memory:drained");
+            }),
+            ...overrides,
           });
         }),
         () =>
@@ -155,7 +155,6 @@ test("runtime installs multiple sources, captures first changes, exposes API bef
         const ready = yield* Deferred.make<void>();
         const live = AsterRuntime.layer({
           integrations: [
-            MemoryIntegration.layer,
             sourceLayer("one", events, Deferred.await(ready)),
             sourceLayer("two", events),
           ],
@@ -191,11 +190,7 @@ test("runtime installs multiple sources, captures first changes, exposes API bef
 test("activation failure stops earlier integrations and releases the shared backend", async () => {
   const events: string[] = [];
   const live = AsterRuntime.layer({
-    integrations: [
-      MemoryIntegration.layer,
-      sourceLayer("one", events),
-      sourceLayer("broken", events, Effect.void, true),
-    ],
+    integrations: [sourceLayer("one", events), sourceLayer("broken", events, Effect.void, true)],
   }).pipe(Layer.provide(infrastructure(events)), Layer.provide(config));
   await assert.rejects(
     Effect.runPromise(Effect.scoped(AsterRuntime.pipe(Effect.provide(live)))),
@@ -212,7 +207,7 @@ test("cancelling while a source is not ready closes the runtime without waiting 
       Effect.gen(function* () {
         const acquired = yield* Deferred.make<void>();
         const live = AsterRuntime.layer({
-          integrations: [MemoryIntegration.layer, sourceLayer("pending", events, Effect.never)],
+          integrations: [sourceLayer("pending", events, Effect.never)],
         }).pipe(Layer.provide(infrastructure(events)), Layer.provide(config));
         const fiber = yield* Effect.gen(function* () {
           const runtime = yield* AsterRuntime;
@@ -236,7 +231,7 @@ test("cancelling integration Layer acquisition releases resources before runtime
         const acquiring = yield* Deferred.make<void>();
         const pending = Layer.effectDiscard(
           Effect.gen(function* () {
-            yield* MemoryRuntime;
+            yield* MemoryBackend;
             yield* Effect.acquireRelease(
               Effect.sync(() => {
                 events.push("module:acquired");
@@ -250,7 +245,7 @@ test("cancelling integration Layer acquisition releases resources before runtime
             yield* Effect.never;
           }),
         );
-        const live = AsterRuntime.layer({ integrations: [MemoryIntegration.layer, pending] }).pipe(
+        const live = AsterRuntime.layer({ integrations: [pending] }).pipe(
           Layer.provide(infrastructure(events)),
           Layer.provide(config),
         );
@@ -266,4 +261,55 @@ test("cancelling integration Layer acquisition releases resources before runtime
     "module:released",
     "memory:released",
   ]);
+});
+
+test("runtime stops capture observers before draining admitted work and releases the backend last", async () => {
+  const events: string[] = [];
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>();
+        const draining = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const live = AsterRuntime.layer({ integrations: [sourceLayer("one", events)] }).pipe(
+          Layer.provide(
+            infrastructure(events, {
+              capture: () =>
+                Deferred.succeed(started, undefined).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.ensuring(
+                    Effect.sync(() => {
+                      events.push("capture:stopped");
+                    }),
+                  ),
+                ),
+              drain: Effect.gen(function* () {
+                events.push("memory:draining");
+                yield* Deferred.succeed(draining, undefined);
+                yield* Deferred.await(release);
+                events.push("memory:drained");
+              }),
+            }),
+          ),
+          Layer.provide(config),
+        );
+        const running = yield* Effect.gen(function* () {
+          yield* (yield* AsterRuntime).ready;
+          yield* Effect.never;
+        }).pipe(Effect.provide(live), Effect.forkScoped);
+        yield* Deferred.await(started);
+        // Unblock finalization even if an assertion fails.
+        yield* Effect.addFinalizer(() => Deferred.succeed(release, undefined));
+        const stopping = yield* Fiber.interrupt(running).pipe(Effect.forkScoped);
+        yield* Deferred.await(draining);
+        assert.ok(events.indexOf("stop:one") < events.indexOf("capture:stopped"));
+        assert.ok(events.indexOf("capture:stopped") < events.indexOf("memory:draining"));
+        assert.equal(events.includes("memory:released"), false);
+        yield* Deferred.succeed(release, undefined);
+        yield* Fiber.join(stopping);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+  assert.equal(events.at(-1), "memory:released");
+  assert.ok(events.indexOf("memory:drained") < events.indexOf("memory:released"));
 });

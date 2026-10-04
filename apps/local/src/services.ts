@@ -4,17 +4,15 @@ import {
   ConfiguredDurableInfrastructure,
   FileGoalHistory,
   FileGoalScreening,
-  LarkIntegration,
-  MailIntegration,
-  MemoryIntegration,
-  Models,
   SystemOneClientLive,
-} from "@aster/integrations";
+} from "@aster/infra";
+import { LarkIntegration, MailIntegration } from "@aster/integrations";
+import { Models } from "@aster/agent";
 import { Layer } from "effect";
 
 /** Product choices only: modules own their dependency graphs and lifecycle. */
 export const localRuntimeLayer = AsterRuntime.layer({
-  integrations: [MemoryIntegration.layer, LarkIntegration.layer, MailIntegration.layer],
+  integrations: [LarkIntegration.layer, MailIntegration.layer],
 }).pipe(
   Layer.provide(
     Layer.mergeAll(

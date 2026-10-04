@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { MemoryRecallError } from "@aster/integrations";
+import { MemoryRecallError } from "@aster/core";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,7 +11,7 @@ import {
   configuredMemoryReader,
   storageSettings,
   migrateContextStorage,
-} from "@aster/integrations";
+} from "@aster/infra";
 import { startApplication } from "./application.js";
 
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));

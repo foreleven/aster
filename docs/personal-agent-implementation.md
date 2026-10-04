@@ -26,7 +26,7 @@ New command handlers use `ContextRegistry.commit(record, { expectedRevision })`.
 
 Unversioned persisted Contexts read as revision zero. All registry writes now require an explicit expectedRevision; legacy `set` has been removed. Owner-derived transitions bind their revision to the snapshot used for computation. Versioning every caller-facing domain command and propagating shared receipts/causation remain outstanding. Recovery notifications currently suppress source evaluation like bootstrap; a durable outbox must ultimately recover undelivered reaction intents.
 
-Tests: `packages/core/test/context-commit.test.ts` covers competing writers, stale/no-op writes, validation, storage fencing, legacy recovery, and lost commit acknowledgement. `packages/integrations/test/storage.test.ts` checks persisted revision and pending-file replay. Goal restart fixtures now implement an actual retained store so recovery tests can read their committed state.
+Tests: `packages/core/test/context-commit.test.ts` covers competing writers, stale/no-op writes, validation, storage fencing, legacy recovery, and lost commit acknowledgement. `packages/infra/test/storage.test.ts` checks persisted revision and pending-file replay. Goal restart fixtures now implement an actual retained store so recovery tests can read their committed state.
 
 ## Pi prototype gaps to resolve
 

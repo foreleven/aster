@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { makeMemoryClient } from "@aster/integrations";
+import { makeMemoryClient } from "@aster/infra";
 
 test("CLI returns compact candidates, then expands only the requested memory", async () => {
   const dir = await mkdtemp(join(tmpdir(), "signals-memory-cli-"));

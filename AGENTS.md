@@ -47,8 +47,9 @@ Do not expand a focused change into an unrelated migration. When a required nati
 
 - `packages/actor`: Domain-neutral Actor runtime, mailbox processing, supervision, persistence, and Behavior scopes. Do not add Goal, Signal, Lark, or memory policy here.
 - `packages/agent`: Effect adapter for model/agent execution and SDK callback boundaries.
-- `packages/core`: Domain contracts, Contexts, Goals, Signals, approvals, and execution workflows. It never imports concrete integrations. `AsterRuntime` assembles internal services and owns root Actors, integration activation, readiness, and shutdown.
-- `packages/lark-integration`, `packages/memory`, `packages/integrations`: Concrete adapters, transports, storage, and infrastructure Layers.
+- `packages/core`: Domain contracts, Contexts, Goals, Signals, approvals, execution workflows, and backend-independent Memory orchestration. It never imports concrete integrations. `AsterRuntime` assembles internal services and owns root Actors, integration activation, readiness, and shutdown.
+- `packages/infra`: Concrete storage, decision transport, executor, configuration-source, and agentmemory backend Layers. It does not import or re-export integrations.
+- `packages/integrations`: External business connections such as Lark and mail. It consumes core contracts and does not import or re-export infra.
 - `apps/local`: Configuration source selection, adapter selection, CLI, HTTP/SSE, and process boundary. Do not make it assemble core's internal services or start integrations independently of runtime.
 - `apps/web`: Presentation and calls to the public application API; no Actor/persistence internals.
 

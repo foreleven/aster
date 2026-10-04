@@ -162,7 +162,7 @@ Add Goals to the local Context and Signal system, explore functionality inspired
 - Memory capture and compact search followed by selective expansion are implemented. Source activity is captured after a Signal triggers; ordinary Context updates do not automatically write memory.
 - Application Contexts and runs currently remain in memory. Durable Actor primitives exist, but persistence of these domain Contexts has not been wired into the local slice.
 
-Sources: `apps/local/src/config.ts`, `processing.ts`, `detect.ts`, `signals.ts`, `packages/lark-integration/src/index.ts`, and the existing core design.
+Sources: `apps/local/src/config.ts`, `processing.ts`, `detect.ts`, `signals.ts`, `packages/integrations/src/lark/index.ts`, and the existing core design.
 
 ## Design areas covered
 

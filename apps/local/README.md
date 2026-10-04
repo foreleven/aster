@@ -4,7 +4,7 @@ The local application observes Lark mail and work IM, evaluates Signals, pursues
 
 ## Application composition
 
-`src/cli.ts` parses commands. `src/services.ts` selects `MemoryIntegration.layer`, `LarkIntegration.layer` and concrete infrastructure Layers for `AsterRuntime.layer`. `src/application.ts` installs the configuration provider, owns process signals and the store lock, and runs the HTTP/runtime graph in a Scope. Cancellation covers Layer acquisition as well as the running application.
+`src/cli.ts` parses commands. `src/services.ts` selects `LarkIntegration.layer`, `MailIntegration.layer` from `@aster/integrations` and concrete Layers from `@aster/infra` for `AsterRuntime.layer`. `src/application.ts` installs the configuration provider, owns process signals and the store lock, and runs the HTTP/runtime graph in a Scope. Cancellation covers Layer acquisition as well as the running application.
 
 `AsterRuntime` in core owns domain service construction, root Actors, Context reactions, integration activation, readiness and shutdown. Lark owns IM readiness; memory owns its capture consumer. Local does not inspect IM state, bind ActorRefs, select Signals or initialize Goals. HTTP calls `runtime.api` use cases and maps their errors; it does not construct domain Commands or assemble history. The API remains available while integrations catch up. During shutdown HTTP closes first, then runtime stops sources, subscriptions and Actors, drains captures and releases infrastructure. The process lock remains held until cleanup completes.
 

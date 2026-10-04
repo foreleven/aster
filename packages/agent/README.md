@@ -1,6 +1,6 @@
 # Agent
 
-A thin Effect wrapper around pi 1.0.0. Message and tool types are re-exported from pi; integrations own prompts, tools and business-result validation. Goal evaluations can opt into `pi-durable` 1.0.0 by passing a stable `sessionId` and `requestId` to `Agent.make`. The adapter stores one JSONL conversation per Goal, resumes unfinished work, and deduplicates retried submissions; calls without that option retain the isolated `pi-agent-core` path.
+A thin Effect wrapper around pi 1.0.0. Message and tool types are re-exported from pi; core and business integrations own their respective prompts, tools and business-result validation. Goal evaluations can opt into `pi-durable` 1.0.0 by passing a stable `sessionId` and `requestId` to `Agent.make`. The adapter stores one JSONL conversation per Goal, resumes unfinished work, and deduplicates retried submissions; calls without that option retain the isolated `pi-agent-core` path.
 
 Durable Goal sessions use `~/.aster/goals/<sessionId>/pi` by default. Tests and hosts can provide `storageDirectory` to place the conversation elsewhere. The Goal Actor persists accepted business inputs before invoking the adapter, so a failed handoff can be retried with the same request identity.
 

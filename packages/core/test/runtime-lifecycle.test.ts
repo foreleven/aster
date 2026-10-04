@@ -7,12 +7,11 @@ import { Models, PiStorageLease } from "@aster/agent";
 import { Cause, ConfigProvider, Context, Effect, Exit, Layer } from "effect";
 import {
   AsterRuntime,
-  ContextCaptureSink,
+  MemoryBackend,
   DurableContext,
   LocalDurableContext,
   ExternalAgents,
   GoalHistoryStore,
-  MemoryRecall,
   RuntimeIntegrations,
   SystemOneClient,
   defineIntegration,
@@ -57,11 +56,13 @@ const infrastructure = (drain = Effect.void) =>
       systemOne: () => Effect.die(new Error("No model calls expected")),
     }),
     Layer.succeed(ExternalAgents, {}),
-    Layer.succeed(MemoryRecall, {
-      search: () => Effect.sync(() => []),
-      expand: () => Effect.sync(() => []),
+    Layer.succeed(MemoryBackend, {
+      description: "Memory",
+      retrieval: "bm25",
+      capture: () => Effect.void,
+      drain,
+      recall: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
     }),
-    Layer.succeed(ContextCaptureSink, { capture: () => Effect.void, drain }),
   );
 const config = ConfigProvider.layer(
   ConfigProvider.fromUnknown({ config: { agent: { model: "test" } } }),

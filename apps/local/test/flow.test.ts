@@ -1,6 +1,6 @@
 import { gateStub, summaryStub } from "./summary-fixtures.js";
 import { ApprovalQueueActor, ExternalAgents, TaskPreparation } from "@aster/core";
-import { Models } from "@aster/integrations";
+import { Models } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";

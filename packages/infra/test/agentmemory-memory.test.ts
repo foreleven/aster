@@ -8,7 +8,7 @@ import {
   makeMemoryReader,
   memoryEnvironment,
   parseMemoryConfig,
-} from "../src/index.js";
+} from "../src/agentmemory/index.js";
 
 test("explicit provider selection masks inherited keys and keeps embeddings opt-in", () => {
   const config = parseMemoryConfig(

@@ -25,7 +25,7 @@ The local composition is intentionally small:
 
 ```ts
 const RuntimeLive = AsterRuntime.layer({
-  integrations: [MemoryIntegration.layer, LarkIntegration.layer],
+  integrations: [LarkIntegration.layer, MailIntegration.layer],
 }).pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -40,17 +40,17 @@ const RuntimeLive = AsterRuntime.layer({
 );
 ```
 
-| External capability                                | Local implementation                  | Internal consumer                                                      |
-| -------------------------------------------------- | ------------------------------------- | ---------------------------------------------------------------------- |
-| ConfigProvider, ConfigLocation, ProcessEnvironment | LocalConfig.layer                     | Module Config declarations and adapters                                |
-| DurableContext                                     | ConfiguredDurableInfrastructure.layer | ContextRegistry.layer                                                  |
-| GoalHistoryStore                                   | FileGoalHistory.layer                 | Goal runtime and application history API                               |
-| Models                                             | Models.configured                     | Internal Agent, Goal reasoner, Lark summarizer                         |
-| SystemOneClient                                    | SystemOneClientLive.layer             | Signal/Goal policies and Lark summary gate                             |
-| MemoryRuntime                                      | AgentMemoryBackend.layer              | MemoryIntegration supplies MemoryRecall and ContextCaptureSink to core |
-| ExternalAgents                                     | ConfiguredDurableInfrastructure.layer | Task preparation and Delegation Actors                                 |
+| External capability                                | Local implementation                  | Internal consumer                                                  |
+| -------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
+| ConfigProvider, ConfigLocation, ProcessEnvironment | LocalConfig.layer                     | Module Config declarations and adapters                            |
+| DurableContext                                     | ConfiguredDurableInfrastructure.layer | ContextRegistry.layer                                              |
+| GoalHistoryStore                                   | FileGoalHistory.layer                 | Goal runtime and application history API                           |
+| Models                                             | Models.configured                     | Internal Agent, Goal reasoner, Lark summarizer                     |
+| SystemOneClient                                    | SystemOneClientLive.layer             | Signal/Goal policies and Lark summary gate                         |
+| MemoryBackend                                      | AgentMemoryBackend.layer              | Core builds MemoryRecall, ContextCaptureSink, and the Memory Actor |
+| ExternalAgents                                     | ConfiguredDurableInfrastructure.layer | Task preparation and Delegation Actors                             |
 
-`ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. A host without MemoryIntegration can supply MemoryRecall and ContextCaptureSink directly. Local never supplies the internal registry, command endpoint, reasoner or TaskPreparation separately.
+`ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. Every host supplies MemoryBackend; core internally assembles MemoryRecall and ContextCaptureSink. Local never supplies the internal registry, command endpoint, reasoner or TaskPreparation separately.
 
 Startup phases: acquire and validate dependencies; prepare roots and command endpoints; subscribe consumers; activate integrations; asynchronously await required initial readiness; initialize Goals once. Lark readiness means initial retrieval catch-up, preserving current behavior; it does not mean all summaries have completed. Without IM it completes immediately. Sources continue to be selected in code.
 
@@ -60,7 +60,7 @@ Readiness is completed with the startup Exit, not only its typed error channel. 
 
 Internal domain operations also preserve the caller's Effect execution. Goal Signal reconciliation/edits/deactivation return Effects rather than starting independent Promise runtimes. Mailbox handlers use `pipeToSelf` for remote acknowledgements; per-Goal Signal operations remain serialized without preventing the Goal mailbox from accepting End or UserMessage. The shared Run workflow lives in `core/tasks`, below both Goals and Signals.
 
-Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluation performs history reads and generation-tagged mailbox acknowledgements directly. Only the Agent adapter bridges SDK Promise callbacks, preserving the calling Context and cancelling pending callbacks before Agent cleanup waits for idle. Goal End signals cancellation through a Deferred; restart and shutdown use the Behavior scope. Expected reasoning failures remain tagged, while defects enter supervision. MemoryRecall, Signal extraction and Context description also expose Effect ports. MemoryIntegration owns the Promise-to-Effect adapter and forwards cancellation to the backend HTTP request, including expansion fallbacks. Goal and InternalAgent share the SDK callback lifecycle helper; no additional host Layer is needed.
+Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluation performs history reads and generation-tagged mailbox acknowledgements directly. Only the Agent adapter bridges SDK Promise callbacks, preserving the calling Context and cancelling pending callbacks before Agent cleanup waits for idle. Goal End signals cancellation through a Deferred; restart and shutdown use the Behavior scope. Expected reasoning failures remain tagged, while defects enter supervision. MemoryRecall, Signal extraction and Context description also expose Effect ports. The agentmemory adapter in infra owns the Promise-to-Effect adapter and forwards cancellation to the backend HTTP request, including expansion fallbacks. Goal and InternalAgent share the SDK callback lifecycle helper; no additional host Layer is needed.
 
 ## Configuration
 
@@ -101,3 +101,9 @@ The process captures LocalConfig once before resolving and locking `config.durab
 Every production Pi directory opener uses `PiStorageLease` from the Agent adapter, including ownerless Goal/Personal runs and the shared Context/execution backend. The host holds a SQLite exclusive transaction on a permanent lock file in the canonical directory. This local-filesystem kernel lock survives symlink aliases and competing recovery processes; a paused live owner cannot be evicted, while process death releases the lock. No stale PID file is deleted to acquire Pi ownership. This is not a distributed lease protocol.
 
 The lease outlives all Pi writers and callbacks in its Scope. SDK close failure quarantines ownership until process exit; accepted mutations and cancellation cleanup drain before a normal release. Session/Harness reopen retains the same lease and rejects a retired or quarantined owner. Logical owner identity is still validated against Pi documents; acquiring an OS lock does not authorize adopting another owner's conversation. Runtime inspection includes redacted storage owner identities, lease identities and held/quarantined status. Lock descriptors on disk are diagnostics only, and lock database files are never removed by acquisition or release.
+
+## Package boundaries
+
+[ADR 0046](adr/0046-separate-business-integrations-from-infrastructure.md) separates business integrations (`lark/`, `mail/`) from infrastructure (`config/`, `storage/`, `system-one/`, `pi/`, `codex/`, `doubao/`, `agentmemory/`, `process/`). These sibling packages do not import or re-export one another. Local imports each directly; core imports neither. The existing Agent package stays independent of core.
+
+Memory is an internal consumer owned by core. Its startup acknowledgement follows Actor initialization and precedes business source activation. Source capture handoffs wait for the Memory pending queue commit. Stopping the Actor interrupts local capture observers while retaining unacknowledged queue entries; runtime then drains admitted backend operations before releasing adapter resources. The agentmemory capture protocol cannot cancel already-submitted observations, so that Promise boundary remains in infra. Capture state paths, formats, provenance, and daemon ownership remain compatible.

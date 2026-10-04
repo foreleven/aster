@@ -3,7 +3,8 @@ import { ApprovalQueueActor, ExternalAgents, TaskPreparation } from "@aster/core
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { MemoryActor, MemoryRuntime, type MemoryCapture } from "@aster/integrations";
+import { MemoryActor } from "@aster/core";
+import { MemoryBackend, type ContextCapture as MemoryCapture } from "@aster/core";
 import { ContextRegistry, makeContextRegistry, type ContextRecord } from "@aster/core";
 import { LarkRootActor, LarkEmailChannelActor, LarkMailMessageActor } from "@aster/integrations";
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect";
@@ -62,17 +63,15 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
               ready: () => Effect.sync(() => true),
             }),
             Layer.succeed(SignalDefinitions, definitions),
-            Layer.succeed(MemoryRuntime, {
-              config: { description: "Memory", dataDir: "/tmp", port: 3111, autoCompress: false },
-              client: {
-                capture: async (input) => {
+            Layer.succeed(MemoryBackend, {
+              description: "Memory",
+              retrieval: "bm25",
+              capture: (input) =>
+                Effect.sync(() => {
                   captures.push(structuredClone(input));
-                },
-                search: async () => ({ mode: "compact", results: [] }),
-                expand: async () => ({ mode: "expanded", results: [], truncated: false }),
-                drain: async () => {},
-                close: () => {},
-              },
+                }),
+              recall: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
+              drain: Effect.void,
             }),
           ),
         );
@@ -86,7 +85,11 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
           registry,
           (input) =>
             Deferred.await(newerSourceWritten).pipe(
-              Effect.andThen(memory.tell({ _tag: "Capture", input })),
+              Effect.andThen(
+                memory
+                  .ask<void>((replyTo) => ({ _tag: "Capture", input, replyTo }))
+                  .pipe(Effect.orDie),
+              ),
             ),
           (record, snapshot) =>
             detectSignals(
@@ -175,24 +178,23 @@ test("discovered account and mailbox identities use separate sessions; no captur
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
-            Layer.succeed(MemoryRuntime, {
-              config: { description: "Memory", dataDir: "/tmp", port: 3111, autoCompress: false },
-              client: {
-                capture: async (input) => {
+            Layer.succeed(MemoryBackend, {
+              description: "Memory",
+              retrieval: "bm25",
+              capture: (input) =>
+                Effect.sync(() => {
                   captures.push(structuredClone(input));
-                },
-                search: async () => ({ mode: "compact", results: [] }),
-                expand: async () => ({ mode: "expanded", results: [], truncated: false }),
-                drain: async () => {},
-                close: () => {},
-              },
+                }),
+              recall: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
+              drain: Effect.void,
             }),
           ),
         );
         const memory = yield* system.spawn("memory", MemoryActor);
         const processChange = makeContextProcessor(
           registry,
-          (input) => memory.tell({ _tag: "Capture", input }),
+          (input) =>
+            memory.ask<void>((replyTo) => ({ _tag: "Capture", input, replyTo })).pipe(Effect.orDie),
           () => Effect.void,
           () => Effect.die(new Error("Descriptions are provided by this fixture")),
         );

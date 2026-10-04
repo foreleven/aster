@@ -18,20 +18,13 @@
   "dependencies": {
     "@aster/agent": "workspace:*",
     "@aster/core": "workspace:*",
-    "@aster/lark-integration": "workspace:*",
-    "@aster/memory": "workspace:*",
-    "@earendil-works/chord": "1.0.0",
-    "@earendil-works/pi-durable": "1.0.0",
-    "@typesafe-ai/sdk": "^0.6.0",
     "effect": "4.0.0-rc.117",
     "imapflow": "^2.1.2",
     "mailparser": "^3.9.31",
     "node-pop3": "^0.15.3",
-    "yaml": "2.8.3"
+    "@aster/actor": "workspace:*"
   },
   "devDependencies": {
-    "@aster/actor": "workspace:*",
-    "@earendil-works/pi-ai": "1.0.0",
     "@types/mailparser": "^3.9.0"
   }
 }

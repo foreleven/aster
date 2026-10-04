@@ -8,10 +8,9 @@ Runtime ownership, integration installation and Effect configuration are specifi
 
 - `packages/agent` — thin Effect wrapper around pi with named models and isolated runs.
 - `packages/actor` — the Effect 4 RC Actor runtime, SQLite persistence, and tests.
-- `packages/core` — configuration, Contexts, Signals, Goals, decision processing, and durable domain state.
-- `packages/lark-integration` — Lark account, mail and user-identity IM polling actors.
-- `packages/memory` — managed agentmemory, capture/recall, and durable Context provenance.
-- `packages/integrations` — YAML/filesystem, System One transport, Codex/Doubao adapters, and Lark/memory assembly.
+- `packages/core` — configuration, Contexts, Signals, Goals, decision processing, Memory capture workflows, and durable domain state.
+- `packages/infra` — configuration sources, storage, System One, Pi/Codex/Doubao executors, and the agentmemory backend.
+- `packages/integrations` — external business connections: Lark account/IM/mail and generic mail.
 - `apps/local` — CLI, startup composition, process lifecycle, and the local HTTP/SSE interface.
 - `apps/web` — independently replaceable React/Vite Goal conversation client.
 

@@ -71,6 +71,12 @@ importers:
       effect:
         specifier: 4.0.0-rc.117
         version: 4.0.0-rc.117
+      '@aster/infra':
+        specifier: workspace:*
+        version: link:../../packages/infra
+      '@aster/agent':
+        specifier: workspace:*
+        version: link:../../packages/agent
     devDependencies:
       vite:
         specifier: ^7.3.1
@@ -182,27 +188,15 @@ importers:
 
   packages/integrations:
     dependencies:
+      '@aster/actor':
+        specifier: workspace:*
+        version: link:../actor
       '@aster/agent':
         specifier: workspace:*
         version: link:../agent
       '@aster/core':
         specifier: workspace:*
         version: link:../core
-      '@aster/lark-integration':
-        specifier: workspace:*
-        version: link:../lark-integration
-      '@aster/memory':
-        specifier: workspace:*
-        version: link:../memory
-      '@earendil-works/chord':
-        specifier: 1.0.0
-        version: 1.0.0
-      '@earendil-works/pi-durable':
-        specifier: 1.0.0
-        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.30.1(zod@4.6.5))(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.5)
-      '@typesafe-ai/sdk':
-        specifier: ^0.6.0
-        version: 0.6.0
       effect:
         specifier: 4.0.0-rc.117
         version: 4.0.0-rc.117
@@ -215,6 +209,33 @@ importers:
       node-pop3:
         specifier: ^0.15.3
         version: 0.15.3
+    devDependencies:
+      '@types/mailparser':
+        specifier: ^3.9.0
+        version: 3.9.0
+  packages/infra:
+    dependencies:
+      '@agentmemory/agentmemory':
+        specifier: 0.9.29
+        version: 0.9.29(@modelcontextprotocol/sdk@1.30.1(zod@4.6.5))(@types/node@24.13.6)
+      '@aster/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@aster/core':
+        specifier: workspace:*
+        version: link:../core
+      '@earendil-works/chord':
+        specifier: 1.0.0
+        version: 1.0.0
+      '@earendil-works/pi-durable':
+        specifier: 1.0.0
+        version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.30.1(zod@4.6.5))(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.5)
+      '@typesafe-ai/sdk':
+        specifier: ^0.6.0
+        version: 0.6.0
+      effect:
+        specifier: 4.0.0-rc.117
+        version: 4.0.0-rc.117
       yaml:
         specifier: 2.8.3
         version: 2.8.3
@@ -225,42 +246,6 @@ importers:
       '@earendil-works/pi-ai':
         specifier: 1.0.0
         version: 1.0.0(@aws-sdk/credential-provider-node@3.972.84)(@modelcontextprotocol/sdk@1.30.1(zod@4.6.5))(@smithy/signature-v4@5.7.4)(undici@8.11.2)(ws@8.22.0)(zod@4.6.5)
-      '@types/mailparser':
-        specifier: ^3.9.0
-        version: 3.9.0
-
-  packages/lark-integration:
-    dependencies:
-      '@aster/actor':
-        specifier: workspace:*
-        version: link:../actor
-      '@aster/agent':
-        specifier: workspace:*
-        version: link:../agent
-      '@aster/core':
-        specifier: workspace:*
-        version: link:../core
-      effect:
-        specifier: 4.0.0-rc.117
-        version: 4.0.0-rc.117
-
-  packages/memory:
-    dependencies:
-      '@agentmemory/agentmemory':
-        specifier: 0.9.29
-        version: 0.9.29(@modelcontextprotocol/sdk@1.30.1(zod@4.6.5))(@types/node@24.13.6)
-      '@aster/actor':
-        specifier: workspace:*
-        version: link:../actor
-      '@aster/core':
-        specifier: workspace:*
-        version: link:../core
-      effect:
-        specifier: 4.0.0-rc.117
-        version: 4.0.0-rc.117
-      yaml:
-        specifier: 2.8.3
-        version: 2.8.3
 
 packages:
 

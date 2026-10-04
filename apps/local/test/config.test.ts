@@ -4,9 +4,9 @@ import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { parseMailboxProfile, parseAccount, parseLarkConfig } from "@aster/integrations";
-import { parseMemoryConfig } from "@aster/integrations";
-import { loadConfig } from "@aster/integrations";
-import { agentEnvironment } from "@aster/integrations";
+import { parseMemoryConfig } from "@aster/infra";
+import { loadConfig } from "@aster/infra";
+import { agentEnvironment } from "@aster/infra";
 
 test("YAML preserves descriptions and multiline prompts and resolves dataDir beside config", async () => {
   const dir = await mkdtemp(join(tmpdir(), "signals-config-test-"));

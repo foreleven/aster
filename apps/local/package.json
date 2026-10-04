@@ -19,7 +19,9 @@
     "@aster/integrations": "workspace:*",
     "effect": "4.0.0-rc.117",
     "@aster/api-contracts": "workspace:*",
-    "@effect/platform-node": "4.0.0-rc.117"
+    "@effect/platform-node": "4.0.0-rc.117",
+    "@aster/infra": "workspace:*",
+    "@aster/agent": "workspace:*"
   },
   "devDependencies": {
     "vite": "^7.3.1"

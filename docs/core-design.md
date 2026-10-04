@@ -94,7 +94,7 @@ contexts:
           pollIntervalMs: 30000
 ```
 
-The local slice integrates [agentmemory](https://www.agent-memory.dev/) as the memory implementation. It retains useful information learned from Contexts for later recall, with every submitted memory associated with its source Context path. Contexts retain responsibility for exact structured state, Messages, and actor recovery; agentmemory provides memory capture, recall, and consolidation. The memory adapter and global Memory Actor are implemented in `packages/memory`.
+The local slice integrates [agentmemory](https://www.agent-memory.dev/) as the memory implementation. It retains useful information learned from Contexts for later recall, with every submitted memory associated with its source Context path. Contexts retain responsibility for exact structured state, Messages, and actor recovery; agentmemory provides memory capture, recall, and consolidation. The agentmemory adapter is implemented in `packages/infra/src/agentmemory`; core owns the global Memory Actor and its durable capture workflow.
 
 Upstream capture behavior and Agent adapters are recorded in [agentmemory integration findings](./agentmemory-integration-notes.md). The memory integration adopts the upstream automatic observation flow through the common Context processing mechanism.
 
@@ -264,15 +264,15 @@ Public Context paths are determined at spawn time. Ordinary paths follow the Act
 
 The former `context` package is now `@aster/core`. Core owns configuration schemas and validation, Context registry/actors, Signal and Goal actors, delegation lifecycle, description policy, and state-driven processing. Configuration is named CoreConfig. It depends on Actor, Agent and Effect, plus Node built-ins for value comparison and identifiers.
 
-`@aster/integrations` implements infrastructure: YAML loading, file storage and process locking, System One transport, Codex execution, Doubao execution and readiness capability descriptions. Lark and memory retain their own implementation packages and are re-exported by integrations for application assembly. Core consumes interfaces/callbacks instead of importing these implementations; memory capture remains an injected operation.
+`@aster/infra` implements configuration-source loading, file storage and process locking, System One transport, Pi/Codex/Doubao execution, and the agentmemory backend. `@aster/integrations` owns Lark and generic mail. Neither package imports or re-exports the other; the local host selects their Layers separately. Core owns Memory contracts, the Actor and capture workflow, while infra provides its `MemoryBackend`. See [ADR 0046](adr/0046-separate-business-integrations-from-infrastructure.md).
 
 The local application now contains only CLI/startup assembly, HTTP/SSE/static-file delivery, and process shutdown. App-specific `.env` and CLI executable paths are explicitly supplied to Codex adapters; package-relative paths are not used. Core's Signal screening accepts ContextRecord for any source rather than importing Lark's EmailData.
 
-Domain tests live with core, file/transport/CLI adapter tests with integrations, and cross-integration and HTTP tests with the local app. All imports, package names and build ordering use core; no compatibility context package is retained.
+Domain tests live with core, infrastructure adapter tests with infra, business transport tests with integrations, and cross-integration and HTTP tests with the local app. All imports, package names and build ordering use core; no compatibility context package is retained.
 
 ### Business policy versus adapters
 
-Goal planning prompts/tools and completion validation, Signal extraction prompts/result validation, and whole-Signal execution decisions belong to core. Depending on the shared Agent abstraction does not turn business policy into infrastructure. Integrations owns SDK transport, subprocesses, filesystem access and executor capability descriptions. Core does not import integrations. The app assembles the Goal runtime directly; there is no second integration-owned Goal runtime. Source folders group files by capability, retaining root package exports.
+Goal planning prompts/tools and completion validation, Signal extraction prompts/result validation, and whole-Signal execution decisions belong to core. Depending on the shared Agent abstraction does not turn business policy into infrastructure. Infra owns execution/decision SDK transport, subprocesses, filesystem access and executor capability descriptions. Integrations owns business-system transports and workflows. Core does not import integrations. The app assembles the Goal runtime directly; there is no second integration-owned Goal runtime. Source folders group files by capability, retaining root package exports.
 
 ## Explicit Context revision admission
 

@@ -1,7 +1,8 @@
-import { LarkConfig } from "../../../packages/lark-integration/dist/index.js";
+import { Models } from "@aster/agent";
+import { LocalConfig, SystemOneClientLive } from "@aster/infra";
+import { LarkConfig } from "@aster/integrations";
 import { makeGoalReasoner } from "@aster/core";
 import {
-  Models,
   ImAgentQueue,
   ImSummaryGate,
   makeImSummaryGate,
@@ -9,8 +10,6 @@ import {
   makeImStorage,
   ChatSummarizer,
   LarkChatActor,
-  LocalConfig,
-  SystemOneClientLive,
 } from "@aster/integrations";
 // Synthetic evidence only; real configured models, isolated actors, no external delegation.
 import { mkdtempSync, rmSync } from "node:fs";

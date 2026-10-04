@@ -1,15 +1,15 @@
 # agentmemory integration
 
-This package owns the pinned upstream CLI lifecycle, config/environment translation, REST observation protocol, durable source provenance, and the global Memory Actor. It has no Lark or Signal detection dependencies.
+This package owns the pinned upstream CLI lifecycle, config/environment translation, REST observation protocol, durable source provenance, and the implementation of core’s `MemoryBackend`. It has no Lark or Signal detection dependencies.
 
 - `parseMemoryConfig` validates the `/memory` YAML entry and resolves its data directory.
 - `memorySettings` reads the typed `/memory` Config declaration with config-relative path resolution.
-- `AgentMemoryBackend.layer` provides `MemoryRuntime`, owns the daemon/connection file and resolves credentials through the captured ConfigProvider.
-- `MemoryIntegration.layer` provides core `MemoryRecall`/`ContextCaptureSink` and registers a consumer capability. `AsterRuntime` activates and stops its root; the backend is supplied externally.
+- `AgentMemoryBackend.layer` provides `MemoryBackend`, owns the daemon/connection file and resolves credentials through the captured ConfigProvider.
+- Core internally provides `MemoryRecall`/`ContextCaptureSink` and owns the Memory Actor. `AsterRuntime` installs it before source activation; the host supplies only `AgentMemoryBackend.layer`.
 - `managedMemory` acquires the worker and engine in an Effect Scope; `launchMemory` exposes the same lifecycle for integration checks.
 - `makeMemoryClient` captures a batch in one session, waits for each observation's compression, and ends the session. Recall follows upstream progressive disclosure: `search(query, { limit: 10 })` returns `{ mode: "compact", results }`; `expand(selectedIds)` returns `{ mode: "expanded", results, truncated }` with full details only for selected records.
 - `openMemoryReader` owns scoped connection-file decoding and `makeMemoryReader`; `configuredMemoryReader` also resolves the module settings. Readers expose search and expansion with a read-only provenance database for the CLI. Both retain available durable Context paths. Consolidated memory hits resolve their original observation IDs to Context paths when expanded, without fetching their content during search. Expansion accepts observation IDs or `{ obsId, sessionId }` references and follows upstream's 20-record batch cap.
-- `MemoryActor` accepts `Capture` commands and routes completion back through its mailbox with `pipeToSelf`.
+- Core’s `MemoryActor` acknowledges capture only after queue persistence and routes backend results through its mailbox with `pipeToSelf`. No Actor or capture retry policy is implemented in this adapter.
 
 Core Context reactions decide capture eligibility. This package never subscribes to every Context or captures source activity by itself.
 

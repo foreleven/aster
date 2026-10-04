@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber } from "effect";
 import { MemoryRecallError } from "@aster/core";
-import { makeMemoryClient, makeMemoryRecall } from "../src/index.js";
+import { makeMemoryClient, makeMemoryRecall } from "../src/agentmemory/index.js";
 
 const connection = (dataDir: string) => ({
   url: "http://memory.invalid",

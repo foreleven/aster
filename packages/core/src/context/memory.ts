@@ -6,6 +6,11 @@ export class MemoryRecallError extends Data.TaggedError("MemoryRecallError")<{
   readonly cause?: unknown;
 }> {}
 
+export class MemoryCaptureError extends Data.TaggedError("MemoryCaptureError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+}> {}
+
 /** Backend connections and daemon settings stay in the adapter. */
 export class MemoryRecall extends Context.Service<
   MemoryRecall,
@@ -16,6 +21,20 @@ export class MemoryRecall extends Context.Service<
     ) => Effect.Effect<unknown, MemoryRecallError>;
   }
 >()("memory/Recall") {}
+
+/** Backend capabilities and public metadata, independent of transport and daemon settings. */
+export class MemoryBackend extends Context.Service<
+  MemoryBackend,
+  {
+    readonly description: string;
+    readonly retrieval: "bm25" | "hybrid";
+    readonly llm?: { readonly provider: string; readonly model: string };
+    readonly recall: MemoryRecall["Service"];
+    readonly capture: (input: ContextCapture) => Effect.Effect<void, MemoryCaptureError>;
+    /** Join admitted backend operations after Actor workers stop; interruption is not cancellation. */
+    readonly drain: Effect.Effect<void>;
+  }
+>()("memory/Backend") {}
 
 export class ContextCaptureSink extends Context.Service<
   ContextCaptureSink,

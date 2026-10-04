@@ -4,7 +4,7 @@ Status: implemented and verified.
 
 ## Accepted ownership direction
 
-- Move chat summarization into `packages/lark-integration`. Its prompts, rolling-summary inputs, output validation, and summary-specific tools belong to Lark integration.
+- Move chat summarization into `packages/integrations/src/lark`. Its prompts, rolling-summary inputs, output validation, and summary-specific tools belong to Lark integration.
 - Introduce a separate `packages/agent` package providing reusable Agent capabilities. Model-provider wiring and generic Agent execution belong here rather than in the app or Lark-specific code.
 - The application supplies configured models. Integrations depend on the Agent capability, not application configuration types or application modules.
 - The chat summarizer creates an Agent through `Agent.make({ name, tools })`, then supplies messages when calling `agent.run({ messages })`.
