@@ -1,6 +1,6 @@
 # Reactive application API
 
-Status: implemented with Effect `4.0.0-rc.117`. AtomRpc supplies typed queries and mutations over HTTP; SSE carries query invalidation keys. Existing REST endpoints remain available. The SSE event is now `invalidate`, replacing the old `context` event.
+Status: implemented with Effect `4.0.0`. AtomRpc supplies typed queries and mutations over HTTP; SSE carries query invalidation keys. Existing REST endpoints remain available. The SSE event is now `invalidate`, replacing the old `context` event.
 
 ```text
 Actor mailbox -> durable Context commit -> ContextChange
@@ -64,13 +64,13 @@ The server acquires its Context subscription before emitting `ready`; the subseq
 
 Each SSE response owns a scoped producer, a 64-frame queue and a heartbeat stream. A full queue fails the response so the browser reconnects and refreshes. Disconnect and HTTP shutdown interrupt subscriptions and await cleanup. Native HTTP socket and EventSource boundaries are isolated; request handlers and background streams stay in Effect.
 
-RPC uses `RpcServer.layerHttp` with explicit `protocol: "http"` and NDJSON serialization. Effect rc.117 has no SSE RPC serializer: native GET EventSource frames and the POST RPC protocol are distinct. Loopback binding, same-origin checks and durable mutation acknowledgement remain in place. The host rejects advertised oversized bodies before parsing, and the platform enforces its 32 KiB body limit while reading.
+RPC uses `RpcServer.layerHttp` with explicit `protocol: "http"` and NDJSON serialization. Effect 4.0.0 has no SSE RPC serializer: native GET EventSource frames and the POST RPC protocol are distinct. Loopback binding, same-origin checks and durable mutation acknowledgement remain in place. The host rejects advertised oversized bodies before parsing, and the platform enforces its 32 KiB body limit while reading.
 
 ## Future server-side reactive snapshots
 
 Add runtime-owned `ApplicationQueries` only when a consumer needs pushed snapshots. It should own one Reactivity instance, invalidate it from committed changes, and expose scoped `Reactivity.stream(queryEffect, keys)` queries. AsterRuntime constructs it internally; apps/local only provides transports. A new Reactivity layer per request would isolate subscribers from the runtime's invalidations.
 
-AtomRpc stream queries in rc.117 use `runtime.pull`: subsequent chunks require pulls and accumulate by default. For endless pushed snapshots, consume the raw RPC Stream through `ApplicationClient.runtime.atom(...)` to retain the latest value and scope its lifetime to the mounted view. Use supported NDJSON HTTP or WebSocket transport explicitly if replacing SSE.
+AtomRpc stream queries in 4.0.0 use `runtime.pull`: subsequent chunks require pulls and accumulate by default. For endless pushed snapshots, consume the raw RPC Stream through `ApplicationClient.runtime.atom(...)` to retain the latest value and scope its lifetime to the mounted view. Use supported NDJSON HTTP or WebSocket transport explicitly if replacing SSE.
 
 ## Verification
 

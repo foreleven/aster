@@ -70,7 +70,7 @@ The Pi recovery slice was verified locally on 2026-10-02 with `pnpm build`, `pnp
 
 The goal remains open until all design requirements have direct evidence: replayable snapshots and messages; conflict detection; request/outbox dedupe; owner restart without unsafe replay; auditable Aster/Pi mappings; approved external writes with outcomes; no raw Pi frames or credentials in public Contexts; backend selection and rollback; and full Personal Agent/API/UI integration. Run local fake-transport tests only, then workspace build/check/test, Effect diagnostics for affected packages, and browser tests for the UI.
 
-The vendored Effect source currently identifies rc.118 while workspace dependencies pin rc.117, and `repos/effect-source.json` is absent. Until reference provenance is repaired separately, verify used APIs against the installed rc.117 source. No dependency or vendored source was changed for this implementation.
+At implementation time, the vendored Effect source identified rc.118 while workspace dependencies pinned rc.117, and `repos/effect-source.json` was absent. Used APIs were verified against the installed rc.117 source; that implementation did not change dependencies or vendored source. The subsequent Effect 4.0.0 upgrade aligned the dependencies and reference snapshot and recorded provenance in `repos/effect-source.json`.
 
 ## Verification of the revision slice
 

@@ -1,6 +1,6 @@
 # Actor module
 
-The Actor API and runtime semantics are specified in [docs/actor-design.md](../../docs/actor-design.md). This package implements them with `effect@4.0.0-rc.117` on Node 24 or later.
+The Actor API and runtime semantics are specified in [docs/actor-design.md](../../docs/actor-design.md). This package implements them with `effect@4.0.0` on Node 24 or later.
 
 It exports `Actor`, `PersistentActor`, `ActorSystem`, `ActorPersistence`, SQLite and in-memory persistence Layers, and `ActorTestKit`. Actor definitions provide a static Effect Layer. `Actor.Service<Self, Services>()(key, { command })` and `PersistentActor.Service<Self, Services>()(key, { command, event, state })` infer protocol and state types from Effect Schemas. The `ReplyTo<Response>` type and `ReplyTo<Response>()` Schema helper describe response references in Commands. All repository Actor implementations and tests use the Schema forms; `Services` is optional and declares required dependencies. Command aliases use `typeof CommandSchema.Type`. The Schema argument is required. Command Schemas provide types only; Commands are not decoded or persisted. `ActorSystem.make().pipe(ActorSystem.provide(...layers))` acquires the service environment in a Scope; `system.spawn` creates top-level actors and `ActorContext.spawn` creates children.
 

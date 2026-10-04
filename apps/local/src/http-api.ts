@@ -1,8 +1,8 @@
 import { Config, Context, Effect, Exit, FileSystem, Layer, Scope } from "effect";
 import { NodeFileSystem, NodeHttpServer } from "@effect/platform-node";
-import { HttpRouter } from "effect/unstable/http";
-import { NetAddress } from "effect/unstable/net";
-import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
+import { HttpRouter } from "effect/http";
+import { NetAddress } from "effect/net";
+import { RpcSerialization, RpcServer } from "effect/rpc";
 import { ApplicationRpcs } from "@aster/api-contracts";
 import { createServer } from "node:http";
 import { resolve } from "node:path";

@@ -1,6 +1,6 @@
 # Effect patterns for Aster
 
-Read this after [AGENTS.md](../AGENTS.md) and the pinned [upstream guide](../repos/effect/LLMS.md). These are project conventions, not a replacement for reading the relevant implementation and tests. Examples target Effect `4.0.0-rc.117`.
+Read this after [AGENTS.md](../AGENTS.md) and the pinned [upstream guide](../repos/effect/LLMS.md). These are project conventions, not a replacement for reading the relevant implementation and tests. Examples target Effect `4.0.0`.
 
 ## Locate the authoritative examples
 

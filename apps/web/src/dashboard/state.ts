@@ -1,5 +1,5 @@
 import type { PersonalApprovalResponseInput } from "@aster/api-contracts";
-import { Atom, AsyncResult } from "effect/unstable/reactivity";
+import { Atom, AsyncResult } from "effect/reactivity";
 import {
   contextsQuery,
   runtimeQuery,

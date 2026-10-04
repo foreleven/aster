@@ -1,8 +1,8 @@
 import { imChannelView } from "../public-views.js";
 import { ImPollError } from "../shared/errors.js";
 import { LarkConfig } from "../config.js";
-import { Clock, Effect, Match, Layer, Schema } from "effect";
-import { type ActorRef } from "@aster/actor";
+import { Clock, Effect, Match, Layer, Ref, Schema } from "effect";
+import { type ActorContext, type ActorRef } from "@aster/actor";
 import {
   ContextActor,
   childActorName,
@@ -39,10 +39,22 @@ const ImCommand = Schema.Union([
     ]),
   }),
 ]);
-export class LarkImActor extends ContextActor.Service<
-  LarkImActor,
-  LarkConfig | ChatSummarizer | ImStorage | ImSearch | ImAgentQueue | ImSummaryGate
->()("lark/ImActor", {
+type ImCommand = typeof ImCommand.Type;
+type ImServices = LarkConfig | ChatSummarizer | ImStorage | ImSearch | ImAgentQueue | ImSummaryGate;
+
+// This channel owns every child at this name; the generic Actor lookup cannot
+// recover its command type. Keep that assertion at the lookup boundary.
+const chatActor = Effect.fnUntraced(function* (
+  context: ActorContext<ImCommand, ImServices | ContextRegistry>,
+  id: string,
+) {
+  const relative = `chats/${id}`;
+  const existing = yield* context.child(childActorName(relative));
+  if (existing) return existing as ActorRef<ChatCommand>;
+  return yield* spawnContextChild(context, relative, LarkChatActor).pipe(Effect.orDie);
+});
+
+export class LarkImActor extends ContextActor.Service<LarkImActor, ImServices>()("lark/ImActor", {
   command: ImCommand,
   context: defineContext({
     view: imChannelView,
@@ -65,20 +77,33 @@ export class LarkImActor extends ContextActor.Service<
       const policy = parseImPolicy(entry);
       const interval = policy.pollIntervalMs;
       const cli = yield* ImSearch;
-      let busy = false;
-      let startup = true;
       const sessionTime = yield* Clock.currentTimeMillis;
       const sessionStart = imDayStart(imDate(sessionTime));
-      let cursor = storage.progress(imDate(sessionTime))?.through;
-      const poll = Clock.currentTimeMillis.pipe(
-        Effect.flatMap((now) =>
-          Effect.tryPromise({
-            try: (signal) =>
-              pollIm(cli, cursor, now, signal, startup, sessionStart, policy.catchUpWindowMs),
-            catch: (cause) => new ImPollError({ cause, message: String(cause) }),
-          }),
-        ),
-      );
+      // Only mailbox handlers update this state. Each worker receives one snapshot.
+      const polling = yield* Ref.make({
+        busy: false,
+        startup: true,
+        cursor: storage.progress(imDate(sessionTime))?.through,
+      });
+      const poll = Effect.fn("LarkImActor.poll")(function* (progress: {
+        readonly cursor: string | undefined;
+        readonly startup: boolean;
+      }) {
+        const now = yield* Clock.currentTimeMillis;
+        return yield* Effect.tryPromise({
+          try: (signal) =>
+            pollIm(
+              cli,
+              progress.cursor,
+              now,
+              signal,
+              progress.startup,
+              sessionStart,
+              policy.catchUpWindowMs,
+            ),
+          catch: (cause) => new ImPollError({ cause, message: String(cause) }),
+        });
+      });
       return LarkImActor.of({
         started: (context) =>
           Effect.gen(function* () {
@@ -86,9 +111,10 @@ export class LarkImActor extends ContextActor.Service<
             const today = imDate(yield* Clock.currentTimeMillis);
             for (const record of Object.values(registry.snapshot())) {
               if (!record.path.startsWith("/lark/im/chats/")) continue;
-              const messages = (record.messages as readonly ImMessage[]).filter(
-                (message) => imDate(message.at) === today,
-              );
+              const restored = yield* Schema.decodeUnknownEffect(Schema.Array(ImMessage))(
+                record.messages,
+              ).pipe(Effect.orDie);
+              const messages = restored.filter((message) => imDate(message.at) === today);
               if (messages.length)
                 storage.ingest(
                   { chat: Schema.decodeUnknownSync(ImChat)(object(record.state).chat), messages },
@@ -97,10 +123,7 @@ export class LarkImActor extends ContextActor.Service<
             }
             for (const day of storage.list(today)) {
               if (!day.pending.length && !day.commit) continue;
-              if (yield* context.child(childActorName(`chats/${day.chat.id}`))) continue;
-              yield* spawnContextChild(context, `chats/${day.chat.id}`, LarkChatActor).pipe(
-                Effect.orDie,
-              );
+              yield* chatActor(context, day.chat.id);
             }
             const previous = registry.get("/lark/im");
             yield* registry
@@ -120,10 +143,13 @@ export class LarkImActor extends ContextActor.Service<
           Match.value(command).pipe(
             Match.tag("Poll", (_command) =>
               Effect.gen(function* () {
-                if (busy) return;
-                busy = true;
+                const previous = yield* Ref.getAndUpdate(polling, (state) => ({
+                  ...state,
+                  busy: true,
+                }));
+                if (previous.busy) return;
                 yield* Effect.logInfo(JSON.stringify({ event: "lark.im.poll.started" }));
-                yield* context.pipeToSelf(poll, (result) => ({
+                yield* context.pipeToSelf(poll(previous), (result) => ({
                   _tag: "Polled",
                   result,
                 }));
@@ -131,9 +157,8 @@ export class LarkImActor extends ContextActor.Service<
             ),
             Match.tag("Polled", (command) =>
               Effect.gen(function* () {
-                busy = false;
-                let continueCatchUp = false;
-                yield* Match.value(command.result).pipe(
+                yield* Ref.update(polling, (state) => ({ ...state, busy: false }));
+                const continueCatchUp = yield* Match.value(command.result).pipe(
                   Match.tag("Failure", (result) =>
                     Effect.gen(function* () {
                       yield* Effect.logWarning(result.error.message);
@@ -154,6 +179,7 @@ export class LarkImActor extends ContextActor.Service<
                           { expectedRevision: previous?.revision ?? 0 },
                         )
                         .pipe(Effect.asVoid, Effect.orDie);
+                      return false;
                     }),
                   ),
                   Match.tag("Success", (result) =>
@@ -161,21 +187,17 @@ export class LarkImActor extends ContextActor.Service<
                       // Durable handoff precedes the cursor: tell() only enqueues a command.
                       for (const batch of result.value.batches) storage.ingest(batch);
                       storage.markRetrieved(result.value.start, result.value.through);
-                      cursor = result.value.through;
-                      startup = false;
-                      continueCatchUp = !result.value.caughtUp;
+                      yield* Ref.update(polling, (state) => ({
+                        ...state,
+                        cursor: result.value.through,
+                        startup: false,
+                      }));
                       for (const batch of result.value.batches) {
                         const update = {
                           _tag: "Update" as const,
                           ...batch,
                         };
-                        const relative = `chats/${update.chat.id}`;
-                        const existing = yield* context.child(childActorName(relative));
-                        const child =
-                          (existing as ActorRef<ChatCommand> | undefined) ??
-                          (yield* spawnContextChild(context, relative, LarkChatActor).pipe(
-                            Effect.orDie,
-                          ));
+                        const child = yield* chatActor(context, update.chat.id);
                         yield* child.tell(update);
                       }
                       // Only close days covered during this process lifetime; never revive old backlogs on restart.
@@ -191,13 +213,7 @@ export class LarkImActor extends ContextActor.Service<
                           continue;
                         for (const day of storage.list(date)) {
                           if (!day.pending.length && !day.stage && !day.commit) continue;
-                          const relative = `chats/${day.chat.id}`;
-                          const existing = yield* context.child(childActorName(relative));
-                          const child =
-                            (existing as ActorRef<ChatCommand> | undefined) ??
-                            (yield* spawnContextChild(context, relative, LarkChatActor).pipe(
-                              Effect.orDie,
-                            ));
+                          const child = yield* chatActor(context, day.chat.id);
                           yield* child.tell({ _tag: "Flush", date });
                         }
                       }
@@ -225,6 +241,7 @@ export class LarkImActor extends ContextActor.Service<
                           { expectedRevision: registry.get("/lark/im")?.revision ?? 0 },
                         )
                         .pipe(Effect.asVoid, Effect.orDie);
+                      return !result.value.caughtUp;
                     }),
                   ),
                   Match.exhaustive,

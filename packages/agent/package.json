@@ -23,6 +23,6 @@
     "@earendil-works/pi-agent-core": "1.0.0",
     "@earendil-works/pi-ai": "1.0.0",
     "@earendil-works/pi-durable": "1.0.0",
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.0"
   }
 }

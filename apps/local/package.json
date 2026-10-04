@@ -17,9 +17,9 @@
     "@aster/actor": "workspace:*",
     "@aster/core": "workspace:*",
     "@aster/integrations": "workspace:*",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0",
     "@aster/api-contracts": "workspace:*",
-    "@effect/platform-node": "4.0.0-rc.117",
+    "@effect/platform-node": "4.0.0",
     "@aster/infra": "workspace:*",
     "@aster/agent": "workspace:*"
   },

@@ -19,7 +19,7 @@
     "@aster/actor": "workspace:*",
     "@aster/agent": "workspace:*",
     "@aster/api-contracts": "workspace:*",
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.0"
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.0.0"

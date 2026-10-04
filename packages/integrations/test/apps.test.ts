@@ -25,7 +25,7 @@ import {
   Stream,
 } from "effect";
 import { TestClock } from "effect/testing";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/process";
 import { AppsIntegration } from "../src/apps/integration.js";
 import { AppsSettings, type AppsConfiguration } from "../src/apps/config.js";
 import { AppState } from "../src/apps/contexts.js";
@@ -282,7 +282,7 @@ const fakeSpawner = (
     wait?: Effect.Effect<void>;
     acquired?: () => void;
     released?: () => void;
-    inspect?: (command: import("effect/unstable/process/ChildProcess").Command) => void;
+    inspect?: (command: import("effect/process/ChildProcess").Command) => void;
   } = {},
 ) =>
   ChildProcessSpawner.make((command) =>

@@ -6,7 +6,7 @@ These instructions apply to the entire Aster workspace. Read this file before ma
 
 **All code implementations must prioritize Effect and its idioms.** Before introducing an abstraction, dependency, or handwritten utility, inspect the matching Effect module and its tests. Do not write imperative application logic first and merely wrap the result in an Effect afterward.
 
-The workspace uses **Effect 4**, currently pinned to **`4.0.0-rc.117`**, TypeScript, Node 24+, and pnpm. Do not copy Effect 3 examples or assume that an API from another release exists here. Existing non-idiomatic code is not a precedent to reproduce.
+The workspace uses **Effect 4**, currently pinned to **`4.0.0`**, TypeScript, Node 24+, and pnpm. Do not copy Effect 3 examples or assume that an API from another release exists here. Existing non-idiomatic code is not a precedent to reproduce.
 
 ## Read the source before implementing
 

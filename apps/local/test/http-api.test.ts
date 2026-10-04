@@ -5,7 +5,7 @@ import { Server } from "node:http";
 import { createConnection } from "node:net";
 import { Deferred, Effect, Option } from "effect";
 import { NodeHttpServerRequest } from "@effect/platform-node";
-import { HttpServerRequest } from "effect/unstable/http";
+import { HttpServerRequest } from "effect/http";
 import { makeApplicationApi, ApplicationError, makeContextRegistry } from "@aster/core";
 import { GoalActor, type GoalsRootCommand } from "@aster/core";
 import { ActorTestKit, type ActorRef } from "@aster/actor";

@@ -1,5 +1,5 @@
 import { Data, Effect, Queue, Stream } from "effect";
-import { HttpServerResponse } from "effect/unstable/http";
+import { HttpServerResponse } from "effect/http";
 import type { ApplicationApi } from "@aster/core";
 
 class SlowEventClient extends Data.TaggedError("SlowEventClient") {}

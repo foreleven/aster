@@ -191,7 +191,7 @@ Restart replaces only the parent's behavior instance; its active children surviv
 
 ## Mailbox
 
-Mailbox is an Actor Model concept; Effect `4.0.0-rc.117` provides the underlying `Queue` primitive rather than a public `Mailbox` module. Each Actor uses an internal `Queue.unbounded<Envelope<Command>>()`, where an Envelope carries either a Command or Runtime Signal for serial processing. `ActorRef` has only the Queue's `Enqueue` capability, while the Actor loop exclusively owns `Dequeue`; neither capability is exposed by the public Actor API.
+Mailbox is an Actor Model concept; Effect `4.0.0` provides the underlying `Queue` primitive rather than a public `Mailbox` module. Each Actor uses an internal `Queue.unbounded<Envelope<Command>>()`, where an Envelope carries either a Command or Runtime Signal for serial processing. `ActorRef` has only the Queue's `Enqueue` capability, while the Actor loop exclusively owns `Dequeue`; neither capability is exposed by the public Actor API.
 
 The initial module provides no configured capacity, overflow strategy, or public mailbox-selection API. `ActorRef.tell` uses `Queue.offer`, completes after enqueueing, and does not wait for command processing. If the Queue has already ended, the runtime routes the Command to `DeadLetters` while `tell` itself remains fire-and-forget. Actor stop uses `Queue.shutdown`, which discards buffered messages and releases the consumer fiber. Backlog visibility and source-side flow control are operational concerns rather than alternate Mailbox behavior in this version.
 

@@ -1,7 +1,7 @@
 import { Cause, Layer, Option } from "effect";
-import { FetchHttpClient } from "effect/unstable/http";
-import { AsyncResult, AtomRpc, Reactivity } from "effect/unstable/reactivity";
-import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
+import { FetchHttpClient } from "effect/http";
+import { AsyncResult, AtomRpc, Reactivity } from "effect/reactivity";
+import { RpcClient, RpcSerialization } from "effect/rpc";
 import { ApplicationRpcs, QueryKeys } from "@aster/api-contracts";
 
 export class ApplicationClient extends AtomRpc.Service<ApplicationClient>()(

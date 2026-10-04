@@ -1,5 +1,5 @@
 import { Effect, Option } from "effect";
-import { AsyncResult, Atom } from "effect/unstable/reactivity";
+import { AsyncResult, Atom } from "effect/reactivity";
 import { QueryKeys, type HistoryPage } from "@aster/api-contracts";
 import { ApplicationClient } from "./client";
 

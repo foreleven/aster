@@ -21,7 +21,7 @@
     "@earendil-works/chord": "1.0.0",
     "@earendil-works/pi-durable": "1.0.0",
     "@typesafe-ai/sdk": "^0.6.0",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.0",
     "yaml": "2.8.3",
     "@agentmemory/agentmemory": "0.9.29"
   },

@@ -1,5 +1,5 @@
 import { Data, Effect, Match, Queue, Schema, Stream } from "effect";
-import { Atom, Reactivity } from "effect/unstable/reactivity";
+import { Atom, Reactivity } from "effect/reactivity";
 import { QueryInvalidation, QueryKeys } from "@aster/api-contracts";
 import { ApplicationClient } from "./client";
 

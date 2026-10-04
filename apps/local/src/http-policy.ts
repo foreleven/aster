@@ -1,5 +1,5 @@
 import { ByteSize, Effect } from "effect";
-import { HttpIncomingMessage, HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
+import { HttpIncomingMessage, HttpServerRequest, HttpServerResponse } from "effect/http";
 
 export const json = (body: unknown, status = 200) =>
   HttpServerResponse.jsonUnsafe(body, {

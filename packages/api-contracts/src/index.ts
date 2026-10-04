@@ -19,7 +19,7 @@ export * from "./approval-command.js";
 import { PersonalSignalCommandInput, SignalDeliveryReceipt } from "./signal-command.js";
 export * from "./signal-command.js";
 import { Schema } from "effect";
-import { Rpc, RpcGroup } from "effect/unstable/rpc";
+import { Rpc, RpcGroup } from "effect/rpc";
 import {
   PersonalInput,
   PersonalReceipt,

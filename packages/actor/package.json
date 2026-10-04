@@ -19,6 +19,6 @@
     "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.0"
   }
 }

@@ -65,11 +65,11 @@ Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluat
 
 ## Configuration
 
-Use the installed Effect version, currently `4.0.0-rc.117`, and the [v4 configuration guide](https://effect.website/docs/v4/configuration). Config describes decoding, ConfigProvider supplies values, and module Settings Services retain the resolved result. Do not retain a globally parsed application configuration as a service locator.
+Use the installed Effect version, currently `4.0.0`, and the [v4 configuration guide](https://effect.website/docs/v4/configuration). Config describes decoding, ConfigProvider supplies values, and module Settings Services retain the resolved result. Do not retain a globally parsed application configuration as a service locator.
 
 Precedence: explicit configuration overrides > `ASTER_*` process values > `.env` application values > YAML > module defaults. Provider fallback handles absent paths only; validation errors must not fall back. Structural overlays merge YAML/override record keys, while environment trie keys never rename or truncate those records. Environment values override declared dynamic entries; new Signal/Goal keys must be declared in YAML or structured overrides. Numeric model indices can override array entries. Missing optional `.env` is allowed, but read errors and malformed YAML are not hidden. `preserveEmptyStrings: true` lets field schemas distinguish invalid explicit emptiness from absence.
 
-Keep current YAML keys, including `contexts./lark.children./im`, models, signals and goals. Read path segments with `Config.schema(schema, path)` or supported nesting APIs. In rc.117 `Config.nested` accepts one string, while `Config.schema` accepts a path array. Relative paths resolve beside the config file, not the process working directory.
+Keep current YAML keys, including `contexts./lark.children./im`, models, signals and goals. Read path segments with `Config.schema(schema, path)` or supported nesting APIs. In 4.0.0 `Config.nested` accepts one string, while `Config.schema` accepts a path array. Relative paths resolve beside the config file, not the process working directory.
 
 Each module owns defaults and validation. A settings acquisition may consult another service for cross-module checks (for example, a selected model alias). Validate required settings before starting producers. Disabled capabilities must not demand their unused credentials. Keep configuration and credentials out of public Context snapshots.
 

@@ -20,5 +20,5 @@ minimumReleaseAgeExclude:
   - "@earendil-works/pi-durable@1.0.0"
   - "@earendil-works/pi-telemetry@1.0.0"
 overrides:
-  # Keep the platform transitive package on the same Effect prerelease API.
-  "@effect/platform-node-shared": "4.0.0-rc.117"
+  # Keep the platform transitive package on the same Effect release.
+  "@effect/platform-node-shared": "4.0.0"

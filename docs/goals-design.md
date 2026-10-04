@@ -143,7 +143,7 @@ type SignalSchedule =
 
 Store this data object on the Signal; construct the Effect Schedule only at runtime. Validate `at` as an absolute timestamp with an explicit offset or UTC designation, and validate Cron expressions and time zones before saving. Natural-language conditions remain separate from `schedule`; an optional structured `notBefore` is a lower-bound guard, not an active timer. Agent Signal tools accept the same serializable configuration. Timer updates invalidate the old schedule revision; deletion stops scheduling. First-version scheduling does not expose arbitrary Effect combinators or fixed/spaced interval configurations.
 
-The installed Effect version is `4.0.0-rc.117`. Its local source and a runtime probe confirm:
+The installed Effect version is `4.0.0`. Its local source and a runtime probe confirm:
 
 - `Schedule.duration(delay)` with `Effect.schedule` runs once after the delay. An absolute one-time deadline requires computing the remaining delay from a persisted timestamp, then checking the deadline again on delivery.
 - `Schedule.spaced` waits after the previous action completes; `Schedule.fixed` aligns to a regular cadence and does not replay every missed interval. If the scheduled action merely enqueues an Actor command, completion means enqueue completion, not completion of downstream Agent work.

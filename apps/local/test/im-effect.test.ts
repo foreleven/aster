@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { Clock, Deferred, Effect, Fiber, Layer, Stream } from "effect";
+import { Clock, Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ActorSystem } from "@aster/actor";
 import { ContextRegistry, contextSpawnOptions, makeContextRegistry } from "@aster/core";
@@ -16,6 +16,7 @@ import {
   makeImStorage,
   makeImSummaryGate,
   imDate,
+  type ChatSummaryInput,
 } from "@aster/integrations";
 
 const chat = { id: "review", name: "Review", mode: "group", description: "" };
@@ -106,6 +107,22 @@ test("Chat stop interrupts model work and stale checkpoint commands cannot mutat
         yield* Deferred.await(entered);
         const date = imDate(message.at);
         const before = storage.get(date, chat.id);
+        yield* actor.tell({
+          _tag: "Summarized",
+          date,
+          generation: "retired",
+          result: {
+            _tag: "Success",
+            value: {
+              batch: [message],
+              daily: { text: "Stale daily", references: [] },
+              rolling: { text: "Stale rolling", references: [] },
+              evaluate: true,
+              updatedAt: message.at,
+            },
+          },
+        });
+        // This mailbox acknowledgement also fences the preceding stale completion.
         const reply = yield* actor.ask((replyTo) => ({
           _tag: "Checkpoint",
           date,
@@ -115,12 +132,108 @@ test("Chat stop interrupts model work and stale checkpoint commands cannot mutat
         }));
         assert.equal(reply, undefined);
         assert.deepEqual(storage.get(date, chat.id), before);
+        assert.deepEqual(registry.get(path)?.state, { chat });
         yield* system.stop(actor);
         assert.equal(released, true);
         assert.equal(storage.get(date, chat.id)!.stage!.daily, undefined);
         assert.equal(storage.get(date, chat.id)!.pending.length, 1);
       }),
     ),
+  );
+});
+
+test("concurrent Chat Actors keep summary state isolated and retain arrivals during execution", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "aster-im-isolation-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const clock = yield* TestClock.make();
+        const at = "2026-10-04T00:00:00.000Z";
+        yield* clock.adjust(Date.parse(at));
+        const date = imDate(at);
+        const other = { ...chat, id: "other" };
+        const otherPath = "/lark/im/chats/other";
+        const first = { ...message, at };
+        const second = { ...first, id: "two", content: "Arrived during execution" };
+        const otherMessage = { ...first, id: "other-one" };
+        const firstStarted = yield* Deferred.make<void>();
+        const otherStarted = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const firstFinished = yield* Deferred.make<void>();
+        const otherFinished = yield* Deferred.make<void>();
+        const inputs = yield* Ref.make<ReadonlyArray<ChatSummaryInput>>([]);
+        const base = makeImStorage(dir);
+        base.ingest({ chat, messages: [first] });
+        base.ingest({ chat: other, messages: [otherMessage] });
+        const storage: ImStorage["Service"] = {
+          ...base,
+          finish: (date, id, commit) => {
+            base.finish(date, id, commit);
+            if (base.get(date, id)?.pending.length === 0)
+              Deferred.doneUnsafe(id === chat.id ? firstFinished : otherFinished, Effect.void);
+          },
+        };
+        const registry = yield* makeContextRegistry();
+        const system = yield* ActorSystem.make().pipe(
+          ActorSystem.provide(
+            Layer.succeed(Clock.Clock, clock),
+            Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(ImStorage, storage),
+            Layer.succeed(ImAgentQueue, { run: (_id, work) => work }),
+            Layer.succeed(ImSummaryGate, { needed: () => Effect.succeed(true) }),
+            Layer.succeed(ChatSummarizer, {
+              summarize: Effect.fnUntraced(function* (input) {
+                yield* Ref.update(inputs, (current) => [...current, input]);
+                yield* Deferred.succeed(
+                  input.chat.id === chat.id ? firstStarted : otherStarted,
+                  undefined,
+                );
+                yield* Deferred.await(release);
+                return { text: input.chat.id, references: [] };
+              }),
+            }),
+          ),
+        );
+        const actor = yield* system.spawn("chat", LarkChatActor, contextSpawnOptions(path));
+        yield* system.spawn("other", LarkChatActor, contextSpawnOptions(otherPath));
+        yield* Deferred.await(firstStarted);
+        yield* Deferred.await(otherStarted);
+        yield* actor.tell({ _tag: "Update", chat, messages: [second] });
+        yield* actor.ask((replyTo) => ({
+          _tag: "Checkpoint",
+          date,
+          generation: "mailbox-barrier",
+          change: { _tag: "Stage" },
+          replyTo,
+        }));
+        assert.equal(base.get(date, chat.id)?.pending.length, 2);
+        yield* Deferred.succeed(release, undefined);
+        yield* Deferred.await(firstFinished);
+        yield* Deferred.await(otherFinished);
+        const completed = yield* Ref.get(inputs);
+        assert.deepEqual(
+          completed
+            .filter((input) => input.path === path)
+            .map((input) => input.messages.map((message) => message.id)),
+          [[first.id], [first.id], [second.id], [second.id]],
+        );
+        assert.deepEqual(
+          completed
+            .filter((input) => input.path === otherPath)
+            .map((input) => input.messages.map((message) => message.id)),
+          [[otherMessage.id], [otherMessage.id]],
+        );
+        assert.deepEqual(registry.get(path)?.state, {
+          chat,
+          summary: { text: chat.id, references: [] },
+        });
+        assert.deepEqual(registry.get(otherPath)?.state, {
+          chat: other,
+          summary: { text: other.id, references: [] },
+        });
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
   );
 });
 

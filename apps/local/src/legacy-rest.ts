@@ -1,5 +1,5 @@
 import { Data, Effect, Schema } from "effect";
-import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
+import { HttpRouter, HttpServerRequest } from "effect/http";
 import { ApplicationError, ApprovalResponse, type ApplicationApi } from "@aster/core";
 import { json } from "./http-policy.js";
 

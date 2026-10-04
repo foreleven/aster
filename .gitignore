@@ -13,7 +13,10 @@ aster.config.yml
 .aster/
 .signals/
 /data/
-/repos/
+/repos/*
+!/repos/effect/
+!/repos/README.md
+!/repos/effect-source.json
 
 # Legacy local configuration remains private.
 signals.config.json
