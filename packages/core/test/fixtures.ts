@@ -1,6 +1,7 @@
+import { taskExecutionLayer } from "./workflow-fixtures.js";
 import { Effect, Layer } from "effect";
-import { ExternalAgents, TaskPreparation, type ExternalAgent } from "../src/index.js";
-export const preparationLayer = Layer.succeed(TaskPreparation, {
+import { ExternalAgents, type ExternalAgent } from "../src/index.js";
+export const preparationLayer = taskExecutionLayer({
   prepare: (definition, source) =>
     Effect.sync(() => ({
       instructions: definition.task,

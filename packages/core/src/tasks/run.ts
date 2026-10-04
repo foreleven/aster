@@ -1,3 +1,4 @@
+import { makeTaskExecution, type TaskExecutionServices } from "./execution.js";
 import { createHash } from "node:crypto";
 import { CausalChain } from "@aster/api-contracts";
 import { runNotifications } from "../notifications/run.js";
@@ -24,7 +25,7 @@ import {
   DelegationUpdate,
   type ResumeExecutionReply,
 } from "../delegation/actor.js";
-import { Task, TaskPreparation, ExternalAgents, taskPrompt } from "./model.js";
+import { Task, ExternalAgents, taskPrompt } from "./model.js";
 import { ApprovalResolved, sendApproval } from "../approvals/actor.js";
 import type { GoalCommand } from "../goals/actors.js";
 
@@ -89,46 +90,46 @@ export const RunCommand = Schema.Union([
   }),
 ]);
 export type RunCommand = typeof RunCommand.Type;
-export class SignalRunActor extends ContextActor.Service<
-  SignalRunActor,
-  TaskPreparation | ExternalAgents
->()("signals/RunActor", {
-  command: RunCommand,
-  context: defineContext({
-    identity: "An occurrence of a Signal",
-    state: RunState,
-    message: Schema.Unknown,
-    capture: (record) => {
-      const trigger = record.messages.find(
-        (message) =>
-          typeof message === "object" &&
-          message !== null &&
-          "type" in message &&
-          message.type === "Triggered",
-      ) as Triggered | undefined;
-      const terminal = [
-        "completed",
-        "uncertain",
-        "failed",
-        "cancelled",
-        "rejected",
-        "preparation-failed",
-        "blocked",
-      ].includes(String(record.state.status));
-      return trigger
-        ? {
-            sessionId: `${record.path}:${terminal ? `outcome:${record.state.status}` : "trigger"}`,
-            records: [record, trigger.sourceContext],
-          }
-        : undefined;
-    },
-  }),
-}) {
+export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExecutionServices>()(
+  "signals/RunActor",
+  {
+    command: RunCommand,
+    context: defineContext({
+      identity: "An occurrence of a Signal",
+      state: RunState,
+      message: Schema.Unknown,
+      capture: (record) => {
+        const trigger = record.messages.find(
+          (message) =>
+            typeof message === "object" &&
+            message !== null &&
+            "type" in message &&
+            message.type === "Triggered",
+        ) as Triggered | undefined;
+        const terminal = [
+          "completed",
+          "uncertain",
+          "failed",
+          "cancelled",
+          "rejected",
+          "preparation-failed",
+          "blocked",
+        ].includes(String(record.state.status));
+        return trigger
+          ? {
+              sessionId: `${record.path}:${terminal ? `outcome:${record.state.status}` : "trigger"}`,
+              records: [record, trigger.sourceContext],
+            }
+          : undefined;
+      },
+    }),
+  },
+) {
   static readonly layer = Layer.effect(
     SignalRunActor,
     Effect.gen(function* () {
       const registry = yield* ContextRegistry;
-      const preparation = yield* TaskPreparation;
+      const execution = yield* makeTaskExecution();
       const agents = yield* ExternalAgents;
       let resumptionInFlight: string | undefined;
       let runPath = "";
@@ -208,7 +209,7 @@ export class SignalRunActor extends ContextActor.Service<
         return true;
       });
       const cancel = (
-        context: ActorContext<RunCommand, TaskPreparation | ExternalAgents | ContextRegistry>,
+        context: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>,
         reason: string,
       ) =>
         Effect.gen(function* () {
@@ -228,7 +229,7 @@ export class SignalRunActor extends ContextActor.Service<
           yield* notify(reason, true);
         });
       const launch = (
-        context: ActorContext<RunCommand, TaskPreparation | ExternalAgents | ContextRegistry>,
+        context: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>,
         recovering = false,
       ) =>
         Effect.gen(function* () {
@@ -257,7 +258,7 @@ export class SignalRunActor extends ContextActor.Service<
           });
         });
       const requestConfirmation = (
-        context: ActorContext<RunCommand, TaskPreparation | ExternalAgents | ContextRegistry>,
+        context: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>,
       ) =>
         sendApproval(context, {
           _tag: "Enqueue",
@@ -274,11 +275,13 @@ export class SignalRunActor extends ContextActor.Service<
             },
           },
         });
-      const check = (
-        context: ActorContext<RunCommand, TaskPreparation | ExternalAgents | ContextRegistry>,
-      ) =>
+      const check = (context: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>) =>
         context.pipeToSelf(
-          preparation.ready(state().definition, registry.project(state().source), state().task!),
+          execution.checkReadiness(
+            state().definition,
+            registry.project(state().source),
+            state().task!,
+          ),
           (result) =>
             result._tag === "Success"
               ? { _tag: "Ready", ready: result.value }
@@ -286,7 +289,7 @@ export class SignalRunActor extends ContextActor.Service<
         );
       const admitPersonal = Effect.fn("Run.admitPersonal")(function* (
         raw: TaskDeliveryInput,
-        actor: ActorContext<RunCommand, TaskPreparation | ExternalAgents | ContextRegistry>,
+        actor: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>,
       ) {
         const input = yield* Schema.decodeUnknownEffect(TaskDeliveryInput)(raw).pipe(
           Effect.mapError(
@@ -448,7 +451,7 @@ export class SignalRunActor extends ContextActor.Service<
         return receipt;
       });
       const deliverResumption = Effect.fn("Run.deliverResumption")(function* (
-        actor: ActorContext<RunCommand, TaskPreparation | ExternalAgents | ContextRegistry>,
+        actor: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>,
       ) {
         if (resumptionInFlight) return;
         const pending = state().resumptions?.find((item) => item.status === "pending");
@@ -615,7 +618,7 @@ export class SignalRunActor extends ContextActor.Service<
                   JSON.stringify({ event: "task.preparation.started", runPath }),
                 );
                 yield* context.pipeToSelf(
-                  preparation.prepare(
+                  execution.buildExecutionInput(
                     command.definition,
                     registry.project(command.sourceContext),
                     registry.publicSnapshot(),

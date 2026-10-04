@@ -9,13 +9,13 @@ import {
 } from "@aster/api-contracts";
 import type { GoalActorContext } from "./task-execution.js";
 import type { goalWorkingState } from "./working-state.js";
-import type { GoalRuntime } from "./runtime.js";
+import type { GoalSignals } from "./signal-coordination.js";
 import { signalAttemptLimit, type GoalSignalOperation } from "../signals/goal-command.js";
 
 /** Only mailbox handlers mutate the journal. Replay always uses the original receiver identity. */
 export const goalSignalOutbox = (
   working: ReturnType<typeof goalWorkingState>,
-  runtime: GoalRuntime["Service"],
+  signals: GoalSignals["Service"],
 ) => {
   const generation = randomUUID();
   const { state, save } = working;
@@ -34,8 +34,8 @@ export const goalSignalOutbox = (
         ),
       });
       yield* context.pipeToSelf(
-        runtime.applySignal
-          ? runtime.applySignal(operation.input, context.self)
+        signals.applySignal
+          ? signals.applySignal(operation.input, context.self)
           : Effect.fail(
               new ApplicationError({
                 kind: "unavailable",

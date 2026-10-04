@@ -28,7 +28,7 @@ import { Clock, Effect, Layer, Match, Schema } from "effect";
 import { ContextActor, contextPath } from "../context/actor.js";
 import { defineContext } from "../context/model.js";
 import { ContextRegistry } from "../context/registry.js";
-import { PersonalProcessor, PersonalProcessingError } from "./processor.js";
+import { makePersonalReasoner, PersonalProcessingError } from "./reasoner.js";
 import { PersonalActions } from "./actions.js";
 import { personalOutbox } from "./outbox.js";
 
@@ -121,7 +121,7 @@ export class PersonalAgentActor extends ContextActor.Service<PersonalAgentActor>
     PersonalAgentActor,
     Effect.gen(function* () {
       const registry = yield* ContextRegistry;
-      const processor = yield* PersonalProcessor;
+      const reasoner = yield* makePersonalReasoner();
       const actions = yield* PersonalActions;
       const outbox = personalOutbox(registry, actions);
       let generation: string | undefined;
@@ -211,7 +211,7 @@ export class PersonalAgentActor extends ContextActor.Service<PersonalAgentActor>
       const process = Effect.fn("PersonalAgent.process")(function* (
         actor: ActorContext<PersonalCommand>,
       ) {
-        if (!processor.enabled || generation) return;
+        if (!reasoner.enabled || generation) return;
         const current = snapshot();
         const state = Schema.decodeUnknownSync(PersonalState)(current.state);
         const requestId = state.pendingRequestIds[0];
@@ -253,7 +253,7 @@ export class PersonalAgentActor extends ContextActor.Service<PersonalAgentActor>
         generation = activeGeneration;
         const readApi = makePersonalApi(actor.self);
         yield* actor.pipeToSelf(
-          processor.run(
+          reasoner.run(
             input,
             {
               read: readApi.readContext,

@@ -1,5 +1,6 @@
+import { taskExecutionLayer } from "./workflow-fixtures.js";
 import { ContextDescriptionError } from "@aster/core";
-import { ApprovalQueueActor, ExternalAgents, TaskPreparation } from "@aster/core";
+import { ApprovalQueueActor, ExternalAgents } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -57,11 +58,7 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(ExternalAgents, {}),
-            Layer.succeed(TaskPreparation, {
-              prepare: (definition) =>
-                Effect.sync(() => ({ instructions: definition.task, input: [] })),
-              ready: () => Effect.sync(() => true),
-            }),
+            taskExecutionLayer,
             Layer.succeed(SignalDefinitions, definitions),
             Layer.succeed(MemoryBackend, {
               description: "Memory",

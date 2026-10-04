@@ -3,9 +3,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Models } from "@aster/agent";
+import { AgentRunner, Models } from "@aster/agent";
 import { ConfigProvider, Effect, Layer } from "effect";
-import { PersonalProcessor, type PersonalReadPort } from "../src/index.js";
+import { makePersonalReasoner, type PersonalReadPort } from "../src/index.js";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 
 test("Personal processor uses controlled reads and replays a durable structured reply without another model call", async () => {
@@ -127,9 +127,9 @@ test("Personal processor uses controlled reads and replays a durable structured 
   };
   try {
     for (let restart = 0; restart < 2; restart++) {
-      const layer = PersonalProcessor.layer.pipe(
+      const layer = AgentRunner.layer.pipe(
         Layer.provide(models),
-        Layer.provide(
+        Layer.provideMerge(
           ConfigProvider.layer(
             ConfigProvider.fromUnknown({
               config: { personal: { model: "test", storageDirectory: directory } },
@@ -139,7 +139,7 @@ test("Personal processor uses controlled reads and replays a durable structured 
       );
       const text = await Effect.runPromise(
         Effect.gen(function* () {
-          const processor = yield* PersonalProcessor;
+          const processor = yield* makePersonalReasoner();
           return yield* processor.run(
             {
               requestId: "one",

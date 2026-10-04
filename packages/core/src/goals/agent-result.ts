@@ -1,6 +1,6 @@
 import { Type, rejectedToolResult, type AgentMessage, type AgentTool } from "@aster/agent";
 import { Data, Effect, Schema } from "effect";
-import type { AgentCallbackInvoker } from "../reasoning/agent-callbacks.js";
+import type { AgentCallbackInvoker } from "@aster/agent";
 import { GoalReasoningError } from "./errors.js";
 import { contextSize } from "./history.js";
 import { GoalPlan, StoredGoalPlan } from "./plan.js";

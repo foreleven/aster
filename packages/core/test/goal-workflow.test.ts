@@ -1,7 +1,8 @@
+import { taskExecutionLayer, goalWorkflowLayer, personalDisabled } from "./workflow-fixtures.js";
 import type { StoredGoalPlan as GoalPlan } from "../src/goals/plan.js";
 import { GoalTaskChange, GoalSignalChange } from "../src/goals/tasks.js";
 import { goalTestReply } from "./goal-fixtures.js";
-import { TaskPreparationError } from "../src/index.js";
+import { DEFAULT_EXECUTOR_PROMPT, TaskPreparationError } from "../src/index.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit, type ActorRef } from "@aster/actor";
@@ -11,11 +12,9 @@ import { TestClock } from "effect/testing";
 import {
   ContextRegistry,
   makeContextRegistry,
-  GoalRuntime,
   GoalReasoningError,
   GoalsRootActor,
   PersonalActions,
-  PersonalProcessor,
   PersonalAgentActor,
   makeApplicationApi,
   type GoalDeliveryReply,
@@ -24,7 +23,7 @@ import {
   ExternalAgents,
   ApprovalQueueActor,
   approvalEntries,
-  makeGoalRuntime,
+  makeGoalSignalCommands,
   makeMemoryGoalHistory,
   type GoalReasoner,
   type GoalTask,
@@ -32,7 +31,6 @@ import {
   type SignalRootCommand,
   type ContextStore,
   type ContextRecord,
-  TaskPreparation,
   type Task,
   type ExecutionStatus,
   type ExternalAgent,
@@ -90,26 +88,23 @@ const setup = (
           return result;
         }),
     };
-    const runtime = makeGoalRuntime(
-      {
-        reasoning: { model: "test", contextTokens: options.contextTokens },
-        definitions: [{ slug: "project", description: "Observe the project" }],
-      },
-      registry,
-      proxy,
-      session,
+    const runtime = {
+      ...makeGoalSignalCommands(registry, proxy),
+      definitions: [{ slug: "project", description: "Observe the project" }],
+      reasoner: session,
       history,
-    );
+      contextTokens: options.contextTokens,
+    };
     const clock = options.clock ?? (yield* Clock.Clock);
     const base = ActorSystem.make().pipe(
       ActorSystem.provide(
         options.personalActions
           ? Layer.succeed(PersonalActions, options.personalActions)
           : PersonalActions.unavailable,
-        PersonalProcessor.disabled,
+        personalDisabled,
         Layer.succeed(Clock.Clock, clock),
         Layer.succeed(ContextRegistry, registry),
-        Layer.succeed(GoalRuntime, {
+        goalWorkflowLayer({
           ...runtime,
           applySignal: (input, subscriber) =>
             runtime.applySignal!(input, subscriber).pipe(
@@ -127,7 +122,7 @@ const setup = (
         }),
         Layer.succeed(SignalDefinitions, []),
         options.prepare
-          ? Layer.succeed(TaskPreparation, {
+          ? taskExecutionLayer({
               prepare: () =>
                 Effect.tryPromise({
                   try: options.prepare!,
@@ -425,7 +420,7 @@ for (const running of [false, true]) {
           if (!running) yield* until(() => approvalEntries(env.registry)[0].status === "revoked");
           const run = env.registry.get(runPath)!.state as { status: string; task: Task };
           assert.equal(run.status, running ? "running" : "cancelled");
-          assert.equal(run.task.instructions, "Original evidence");
+          assert.equal(run.task.instructions, `${DEFAULT_EXECUTOR_PROMPT}\n\nOriginal evidence`);
           assert.equal(
             Object.keys(env.registry.snapshot()).filter((path) =>
               path.startsWith("/goals/project/runs/"),
@@ -497,7 +492,15 @@ for (const outcome of ["failed", "unknown"] as const) {
           assert.equal(state().pendingRequestId, undefined);
           assert.equal(completed.status, "completed");
           if (completed.status === "completed") {
-            assert.deepEqual(completed.result, plan);
+            assert.deepEqual(completed.result, {
+              version: 2,
+              turnId: completed.resultId,
+              resultId: completed.resultId,
+              disposition: "advance",
+              progress: plan.progress,
+              evidence: [],
+              nextStep: { _tag: "WaitForEvent", references: ["/goals/project"] },
+            });
             assert.equal(completed.resultId, inputs[1].durable!.requestId);
           }
         }),

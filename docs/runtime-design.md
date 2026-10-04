@@ -17,9 +17,11 @@ Local must not select Signal candidates, inspect Goal state, construct mailbox C
 
 ## Effect composition
 
-External Layers supply storage, history, Models, SystemOneClient, memory backend and external agents. Internal Layers construct ContextRegistry, domain settings, internal reasoning, TaskPreparation, Goal services and Context reactions. ConfigProvider is installed over the complete acquisition graph, including adapters and integrations.
+External Layers supply storage, history, Models, SystemOneClient, memory backend and external agents. Internal Layers construct shared Context registries, domain settings, command endpoints, AgentRunner and Goal/Signal coordination. Task, Goal and Personal Actors construct their business workflows within their Behavior scopes; those workflows are not globally supplied services. ConfigProvider is installed over the complete acquisition graph, including adapters and integrations.
 
 Integration Layers acquire dependencies and return runtime-managed installation capabilities. Multiple modules must coexist without overwriting a shared service tag. The runtime uses one graph/memoization scope and passes acquired services into Actors without acquiring duplicate clients or copying Scope. Integration metadata is not a second configuration-driven dependency injection system.
+
+`AsterRuntime.layer` composes `contextAndCommandServices`, `memoryLayer`, `AgentRunner.layer`, integration registration and `GoalSignals.layer`. `AgentRunner` owns per-invocation SDK execution and callback lifetime; it never holds a shared business session. `GoalSignals` coordinates persisted Signal subscriptions and commands, with the caller's ActorRef passed explicitly. `makeTaskExecution`, `makeGoalReasoner` and `makePersonalReasoner` are local workflow constructors. Only `acquireRuntime` creates root Actors and activates integrations. It captures ConfigProvider and shared capabilities for Actors without copying an ambient Scope; model execution begins only when work invokes the runner.
 
 The local composition is intentionally small:
 
@@ -51,7 +53,7 @@ const RuntimeLive = AsterRuntime.layer({
 | MemoryBackend                                      | AgentMemoryBackend.layer              | Core builds MemoryRecall, ContextCaptureSink, and the Memory Actor |
 | ExternalAgents                                     | ConfiguredDurableInfrastructure.layer | Task preparation and Delegation Actors                             |
 
-`ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. Every host supplies MemoryBackend; core internally assembles MemoryRecall and ContextCaptureSink. Local never supplies the internal registry, command endpoint, reasoner or TaskPreparation separately.
+`ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. Every host supplies MemoryBackend; core internally assembles MemoryRecall and ContextCaptureSink. Local never supplies the internal registry, command endpoint, business reasoning workflows separately.
 
 Startup phases: acquire and validate dependencies; prepare roots and command endpoints; subscribe consumers; activate integrations; asynchronously await required initial readiness; initialize Goals once. Lark readiness means initial retrieval catch-up, preserving current behavior; it does not mean all summaries have completed. Without IM it completes immediately. Sources continue to be selected in code.
 
@@ -61,7 +63,7 @@ Readiness is completed with the startup Exit, not only its typed error channel. 
 
 Internal domain operations also preserve the caller's Effect execution. Goal Signal reconciliation/edits/deactivation return Effects rather than starting independent Promise runtimes. Mailbox handlers use `pipeToSelf` for remote acknowledgements; per-Goal Signal operations remain serialized without preventing the Goal mailbox from accepting End or UserMessage. The shared Run workflow lives in `core/tasks`, below both Goals and Signals.
 
-Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluation performs history reads and generation-tagged mailbox acknowledgements directly. Only the Agent adapter bridges SDK Promise callbacks, preserving the calling Context and cancelling pending callbacks before Agent cleanup waits for idle. Goal End signals cancellation through a Deferred; restart and shutdown use the Behavior scope. Expected reasoning failures remain tagged, while defects enter supervision. MemoryRecall, Signal extraction and Context description also expose Effect ports. The agentmemory adapter in infra owns the Promise-to-Effect adapter and forwards cancellation to the backend HTTP request, including expansion fallbacks. Goal and InternalAgent share the SDK callback lifecycle helper; no additional host Layer is needed.
+Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluation performs history reads and generation-tagged mailbox acknowledgements directly. Only the Agent adapter bridges SDK Promise callbacks, preserving the calling Context and cancelling pending callbacks before Agent cleanup waits for idle. Goal End signals cancellation through a Deferred; restart and shutdown use the Behavior scope. Expected reasoning failures remain tagged, while defects enter supervision. MemoryRecall, Signal extraction and Context description also expose Effect ports. The agentmemory adapter in infra owns the Promise-to-Effect adapter and forwards cancellation to the backend HTTP request, including expansion fallbacks. Goal, Personal and structured reasoning use AgentRunner from @aster/agent, which owns their SDK callback lifecycle; no additional host Layer is needed.
 
 ## Configuration
 

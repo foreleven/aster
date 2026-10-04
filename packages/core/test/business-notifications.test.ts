@@ -1,3 +1,8 @@
+import {
+  taskExecutionLayer,
+  personalReasoningLayer,
+  personalDisabled,
+} from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit } from "@aster/actor";
@@ -14,9 +19,7 @@ import {
   GoalActor,
   PersonalActions,
   PersonalAgentActor,
-  PersonalProcessor,
   RunRootActor,
-  TaskPreparation,
   defineContext,
   makeContextRegistry,
   makeApplicationApi,
@@ -186,7 +189,7 @@ test("Goal progress publishes atomically, omits bookkeeping, and reaches Persona
             ActorSystem.provide(
               Layer.succeed(ContextRegistry, registry),
               PersonalActions.unavailable,
-              PersonalProcessor.disabled,
+              personalDisabled,
             ),
           );
           const personal = yield* system.spawn("personal", PersonalAgentActor);
@@ -260,7 +263,7 @@ for (const loss of [false, true]) {
               ActorSystem.provide(
                 Layer.succeed(ContextRegistry, registry),
                 PersonalActions.unavailable,
-                PersonalProcessor.disabled,
+                personalDisabled,
               ),
             );
             const personal = yield* system.spawn("personal", PersonalAgentActor);
@@ -326,7 +329,7 @@ test("Personal retains over-budget progress while admitting at most eight automa
             ActorSystem.provide(
               Layer.succeed(ContextRegistry, registry),
               PersonalActions.unavailable,
-              PersonalProcessor.disabled,
+              personalDisabled,
             ),
           );
           const personal = yield* system.spawn("personal", PersonalAgentActor);
@@ -421,11 +424,11 @@ test("Run outcomes and Personal task proposals form a bounded durable feedback c
               Layer.succeed(ContextRegistry, registry),
               Layer.succeed(PersonalActions, actions),
               Layer.succeed(ExternalAgents, agents),
-              Layer.succeed(TaskPreparation, {
+              taskExecutionLayer({
                 prepare: () => Effect.die(new Error("Task input is already frozen")),
                 ready: () => Effect.succeed(false),
               }),
-              Layer.succeed(PersonalProcessor, {
+              personalReasoningLayer({
                 enabled: true,
                 run: (input) =>
                   Effect.sync(() => {
@@ -560,7 +563,7 @@ test("notification recovery commits authorization before replay and deduplicates
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
             PersonalActions.unavailable,
-            PersonalProcessor.disabled,
+            personalDisabled,
           ),
         );
         const personal = yield* system.spawn("personal", PersonalAgentActor);

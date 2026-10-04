@@ -1,12 +1,14 @@
+import type { GoalSettings } from "../config/settings.js";
+import type { GoalHistoryStore } from "./history.js";
+import type { TaskExecutionServices } from "../tasks/execution.js";
 import { Effect, Schema } from "effect";
 import type { ActorContext, ActorRef } from "@aster/actor";
 import { childActorName, spawnContextChild } from "../context/actor.js";
 import type { ContextRegistry } from "../context/registry.js";
 import type { GoalDefinition } from "../config/schema.js";
-import type { TaskPreparation, ExternalAgents } from "../tasks/model.js";
 import { SignalRunActor, type RunCommand } from "../tasks/run.js";
 import { RunState } from "../tasks/run-state.js";
-import type { GoalRuntime } from "./runtime.js";
+import type { GoalSignals } from "./signal-coordination.js";
 import type { GoalMailbox } from "./actors.js";
 import type { goalWorkingState } from "./working-state.js";
 import { goalOutputCause } from "./state.js";
@@ -15,7 +17,7 @@ import { activeExecution, startedExecution, type GoalTask, type GoalTaskChange }
 
 export type GoalActorContext = ActorContext<
   GoalMailbox,
-  GoalRuntime | TaskPreparation | ExternalAgents | ContextRegistry
+  GoalSignals | GoalSettings | GoalHistoryStore | TaskExecutionServices | ContextRegistry
 >;
 
 /** Called only by the Goal mailbox. Persist a proposal before creating its Run or revoking approval. */

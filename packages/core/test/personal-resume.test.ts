@@ -1,3 +1,4 @@
+import { taskExecutionLayer, personalDisabled } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -10,9 +11,7 @@ import {
   ExternalAgentError,
   PersonalActions,
   PersonalAgentActor,
-  PersonalProcessor,
   RunRootActor,
-  TaskPreparation,
   makeApplicationApi,
   makeContextRegistry,
   type ContextRecord,
@@ -107,8 +106,8 @@ const fixture = (
       ActorSystem.provide(
         agents,
         Layer.succeed(ContextRegistry, registry),
-        PersonalProcessor.disabled,
-        Layer.succeed(TaskPreparation, {
+        personalDisabled,
+        taskExecutionLayer({
           prepare: () => Effect.die("Must not re-prepare"),
           ready: () => Effect.die("Must not repeat readiness"),
         }),

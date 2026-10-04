@@ -1,10 +1,10 @@
+import type { TaskExecutionServices } from "./execution.js";
 import { runActorPath } from "./address.js";
 import { ApplicationError, TaskDeliveryInput, ResumeRunDeliveryInput } from "@aster/api-contracts";
 import { Effect, Layer, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ContextRegistry } from "../context/registry.js";
 import { defineContext } from "../context/model.js";
-import { ExternalAgents, TaskPreparation } from "./model.js";
 import { RunState } from "./run-state.js";
 import { personalTaskPath } from "./admission.js";
 import { SignalRunActor, StartPersonalTask, ResumePersonalRun } from "./run.js";
@@ -14,17 +14,17 @@ import type { RunCommand } from "./run.js";
 const Command = Schema.Union([StartPersonalTask, ResumePersonalRun]);
 export type RunRootCommand = typeof Command.Type;
 /** Owns only independent Personal Runs; Goal and Signal children keep their original owners. */
-export class RunRootActor extends ContextActor.Service<
-  RunRootActor,
-  TaskPreparation | ExternalAgents
->()("tasks/Root", {
-  command: Command,
-  context: defineContext({
-    identity: "One-time tasks",
-    state: Schema.Struct({}),
-    message: Schema.Never,
-  }),
-}) {
+export class RunRootActor extends ContextActor.Service<RunRootActor, TaskExecutionServices>()(
+  "tasks/Root",
+  {
+    command: Command,
+    context: defineContext({
+      identity: "One-time tasks",
+      state: Schema.Struct({}),
+      message: Schema.Never,
+    }),
+  },
+) {
   static readonly layer = Layer.effect(
     RunRootActor,
     Effect.gen(function* () {

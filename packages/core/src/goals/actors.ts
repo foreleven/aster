@@ -1,3 +1,4 @@
+import type { TaskExecutionServices } from "../tasks/execution.js";
 import { goalEvaluationSchedule } from "./evaluation-schedule.js";
 import { planSignalChanges } from "./signal-proposals.js";
 import { goalInputs, inputMessage, newGoalInput } from "./inputs.js";
@@ -11,15 +12,20 @@ import { ReplyTo, Actor, type ActorRef } from "@aster/actor";
 import { ContextActor } from "../context/actor.js";
 import { defineContext } from "../context/model.js";
 import { ContextRegistry } from "../context/registry.js";
-import { DateTime, Deferred, Effect, Layer, Match, Schema, Semaphore } from "effect";
+import { DateTime, Deferred, Effect, Layer, Option, Match, Schema, Semaphore } from "effect";
 import { evaluationIdentity, type GoalEvaluationRecord } from "./evaluation-record.js";
 import type { GoalDefinition } from "../config/schema.js";
-import { GoalRuntime } from "./runtime.js";
+import { GoalSignals } from "./signal-coordination.js";
+import { GoalSettings } from "../config/settings.js";
+import { GoalHistoryStore } from "./history.js";
+import { MemoryRecall } from "../context/memory.js";
+import { ContextQueries } from "../context/queries.js";
+import { makeGoalReasoner } from "./agent-reasoner.js";
 import { evaluateGoal } from "./evaluation.js";
 import { GoalPlan, StoredGoalPlan } from "./plan.js";
 import { GoalToolError } from "./tasks.js";
-import { contextSize, makeMemoryGoalHistory } from "./history.js";
-import { TaskPreparation, ExternalAgents } from "../tasks/model.js";
+import { contextSize } from "./history.js";
+import { ExternalAgents } from "../tasks/model.js";
 import { CommandReceipt, ApplicationError } from "@aster/api-contracts";
 import { isDeepStrictEqual } from "node:util";
 import { goalAdmission } from "./admission.js";
@@ -66,7 +72,7 @@ export interface GoalMessage {
 
 export class GoalActor extends ContextActor.Service<
   GoalActor,
-  GoalRuntime | TaskPreparation | ExternalAgents
+  GoalSignals | GoalSettings | GoalHistoryStore | TaskExecutionServices
 >()("goals/Actor", {
   command: GoalMailbox,
   context: defineContext({
@@ -78,10 +84,15 @@ export class GoalActor extends ContextActor.Service<
   static readonly layer = Layer.effect(
     GoalActor,
     Effect.gen(function* () {
-      const registry = yield* ContextRegistry,
-        runtime = yield* GoalRuntime;
+      const registry = yield* ContextRegistry;
+      const settings = yield* GoalSettings;
+      const signals = yield* GoalSignals;
+      const history = yield* GoalHistoryStore;
+      const reasoner = yield* makeGoalReasoner(settings.reasoning!.model, yield* MemoryRecall, {
+        ...settings.reasoning,
+        queries: Option.getOrUndefined(yield* Effect.serviceOption(ContextQueries)),
+      });
       const agents = yield* ExternalAgents;
-      const history = runtime.history ?? makeMemoryGoalHistory();
       // Preserve ordered Signal revisions without making remote asks block this mailbox.
       // End/UserMessage must remain processable while another Actor is unresponsive.
       const signalOperations = yield* Semaphore.make(1);
@@ -93,7 +104,7 @@ export class GoalActor extends ContextActor.Service<
         history,
         () => definition,
         () => path,
-        runtime.contextTokens ?? 200000,
+        settings.reasoning?.contextTokens ?? 200000,
       );
       const { current, state, save, append, event } = working;
       const behaviorGeneration = randomUUID();
@@ -116,11 +127,11 @@ export class GoalActor extends ContextActor.Service<
       });
       const inputs = goalInputs(working, history);
       const signalOutbox = goalSignalOutbox(working, {
-        ...runtime,
+        ...signals,
         applySignal:
-          runtime.applySignal &&
+          signals.applySignal &&
           ((input, subscriber) =>
-            runtime.applySignal!(input, subscriber).pipe(signalOperations.withPermit)),
+            signals.applySignal!(input, subscriber).pipe(signalOperations.withPermit)),
       });
       let signalsRecovered = false;
       const acceptInput = goalAdmission(registry, working, history);
@@ -138,7 +149,7 @@ export class GoalActor extends ContextActor.Service<
         if (!operation || operation.status === "delivered") return;
         yield* save({ deactivation: { ...operation, status: "sending" } });
         yield* context.pipeToSelf(
-          runtime.deactivate(definition.slug).pipe(
+          signals.deactivate(definition.slug, context.self).pipe(
             signalOperations.withPermit,
             Effect.as({ requestId: operation.requestId, revision: current().revision ?? 0 }),
             Effect.mapError(
@@ -157,7 +168,7 @@ export class GoalActor extends ContextActor.Service<
         started: (context) =>
           Effect.gen(function* () {
             const slug = context.path.split("/").at(-1)!;
-            definition = runtime.definitions.find((g) => g.slug === slug)!;
+            definition = settings.definitions.find((g) => g.slug === slug)!;
             if (!definition) return yield* Effect.die(new Error(`Unknown Goal ${slug}`));
             path = `/goals/${slug}`;
             if (!registry.get(path))
@@ -196,7 +207,7 @@ export class GoalActor extends ContextActor.Service<
             if (activation)
               yield* context.pipeToSelf(Deferred.await(activation), () => ({ _tag: "Activate" }));
             yield* context.pipeToSelf(
-              runtime.reconcile(slug, context.self).pipe(
+              signals.reconcile(slug, context.self).pipe(
                 signalOperations.withPermit,
                 Effect.mapError(
                   (cause) =>
@@ -421,7 +432,9 @@ export class GoalActor extends ContextActor.Service<
                     const inputBudget = Math.max(
                       1,
                       Math.floor(
-                        ((runtime.contextTokens ?? 200000) - (runtime.reserveTokens ?? 8192)) / 3,
+                        ((settings.reasoning?.contextTokens ?? 200000) -
+                          (settings.reasoning?.reserveTokens ?? 8192)) /
+                          3,
                       ),
                     );
                     // Reserve space for an actual user instruction so exhausted older
@@ -485,7 +498,7 @@ export class GoalActor extends ContextActor.Service<
                       goal: definition,
                       current: registry.project(current()),
                       contexts: registry.publicSnapshot(),
-                      signals: runtime.signals(definition.slug),
+                      signals: signals.signals(definition.slug),
                       historyAfter: Math.min(
                         selected[0]!.historySequence! - 1,
                         selected.at(-1)!.historySequence!,
@@ -522,7 +535,7 @@ export class GoalActor extends ContextActor.Service<
                 const turnId = handoff.requestId;
                 yield* context.pipeToSelf(
                   evaluateGoal({
-                    runtime,
+                    reasoner,
                     history,
                     reconcile,
                     // These values are only tool/decoder context for legacy result reads.
@@ -821,17 +834,17 @@ const GoalsRootMailbox = Schema.Union([
 export type GoalsRootCommand = typeof GoalsRootCommand.Type;
 export class GoalsRootActor extends Actor.Service<
   GoalsRootActor,
-  ContextRegistry | GoalRuntime | TaskPreparation | ExternalAgents
+  ContextRegistry | GoalSignals | GoalSettings | GoalHistoryStore | TaskExecutionServices
 >()("goals/RootActor", { command: GoalsRootMailbox }) {
   static readonly layer = Layer.effect(
     GoalsRootActor,
     Effect.gen(function* () {
-      const runtime = yield* GoalRuntime;
+      const settings = yield* GoalSettings;
       const activation = yield* Deferred.make<void>();
       return GoalsRootActor.of({
         started: (context) =>
           Effect.gen(function* () {
-            for (const goal of runtime.definitions)
+            for (const goal of settings.definitions)
               if (!(yield* context.child(goal.slug)))
                 yield* context.spawn(goal.slug, GoalActor, {
                   metadata: { goalActivation: activation },
@@ -840,7 +853,7 @@ export class GoalsRootActor extends Actor.Service<
         receive: (command, context) =>
           Effect.gen(function* () {
             if (command._tag === "Route") {
-              const child = runtime.definitions.some((goal) => goal.slug === command.slug)
+              const child = settings.definitions.some((goal) => goal.slug === command.slug)
                 ? yield* context.child(command.slug)
                 : undefined;
               if (child) yield* (child as ActorRef<GoalMailbox>).tell(command.command);

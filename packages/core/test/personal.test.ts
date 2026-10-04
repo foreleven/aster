@@ -1,3 +1,4 @@
+import { personalReasoningLayer, personalDisabled } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -6,7 +7,6 @@ import { Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import {
   ContextRegistry,
   PersonalAgentActor,
-  PersonalProcessor,
   PersonalActions,
   PersonalProcessingError,
   defineContext,
@@ -33,7 +33,7 @@ test("Personal processes one durable input at a time and commits only its own re
         const secondEntered = yield* Deferred.make<void>();
         const secondRelease = yield* Deferred.make<void>();
         const seen: string[] = [];
-        const processor = Layer.succeed(PersonalProcessor, {
+        const processor = personalReasoningLayer({
           enabled: true,
           run: (message, reads) =>
             Effect.gen(function* () {
@@ -128,7 +128,7 @@ test("Personal commits a model reply and proposed Goal operations before startin
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
-            Layer.succeed(PersonalProcessor, {
+            personalReasoningLayer({
               enabled: true,
               run: () =>
                 Effect.succeed({
@@ -206,7 +206,7 @@ test("Personal processing failure is visible and is not resubmitted by duplicate
             ActorSystem.provide(
               PersonalActions.unavailable,
               Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(PersonalProcessor, {
+              personalReasoningLayer({
                 enabled: true,
                 run: () =>
                   Effect.suspend(() => {
@@ -267,7 +267,7 @@ test("Personal recovers a persisted run after the model result cannot be applied
           ActorSystem.provide(
             PersonalActions.unavailable,
             Layer.succeed(ContextRegistry, registry),
-            Layer.succeed(PersonalProcessor, {
+            personalReasoningLayer({
               enabled: true,
               run: (message) =>
                 Effect.sync(() => {
@@ -319,7 +319,7 @@ test("an explicit Personal retry has its own durable identity and a duplicate do
           ActorSystem.provide(
             PersonalActions.unavailable,
             Layer.succeed(ContextRegistry, registry),
-            Layer.succeed(PersonalProcessor, {
+            personalReasoningLayer({
               enabled: true,
               run: (_input, _reads, executionId) =>
                 Effect.suspend(() => {
@@ -392,7 +392,7 @@ test("Personal input and retry receipt survive a complete runtime restart withou
             ActorSystem.provide(
               PersonalActions.unavailable,
               Layer.succeed(ContextRegistry, registry),
-              PersonalProcessor.disabled,
+              personalDisabled,
             ),
           );
           const personal = yield* system.spawn("personal", PersonalAgentActor);
@@ -447,7 +447,7 @@ test("Personal acknowledgement waits for the state and ordered message commit", 
           ActorSystem.provide(
             PersonalActions.unavailable,
             Layer.succeed(ContextRegistry, gated),
-            PersonalProcessor.disabled,
+            personalDisabled,
           ),
         );
         const personal = yield* system.spawn("personal", PersonalAgentActor);
@@ -474,7 +474,7 @@ test("Personal mailbox serializes new inputs and rejects stale or invalid comman
           ActorSystem.provide(
             PersonalActions.unavailable,
             Layer.succeed(ContextRegistry, registry),
-            PersonalProcessor.disabled,
+            personalDisabled,
           ),
         );
         const personal = yield* system.spawn("personal", PersonalAgentActor);
@@ -509,7 +509,7 @@ test("Personal reads public snapshots by command and does not ingest ContextChan
           ActorSystem.provide(
             PersonalActions.unavailable,
             Layer.succeed(ContextRegistry, registry),
-            PersonalProcessor.disabled,
+            personalDisabled,
           ),
         );
         const personal = yield* system.spawn("personal", PersonalAgentActor);
@@ -573,7 +573,7 @@ test("a Personal commit with a lost acknowledgement is reconciled after owner re
           ActorSystem.provide(
             PersonalActions.unavailable,
             Layer.succeed(ContextRegistry, registry),
-            PersonalProcessor.disabled,
+            personalDisabled,
           ),
         );
         const personal = yield* system.spawn("personal", PersonalAgentActor);
@@ -605,7 +605,7 @@ test("a Personal commit with a lost acknowledgement is reconciled after owner re
           ActorSystem.provide(
             PersonalActions.unavailable,
             Layer.succeed(ContextRegistry, registry),
-            PersonalProcessor.disabled,
+            personalDisabled,
           ),
         );
         const personal = yield* system.spawn("personal", PersonalAgentActor);

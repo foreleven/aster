@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Agent, AgentError, Models, type AgentMessage, type AgentTool } from "@aster/agent";
+import {
+  AgentRunner,
+  Agent,
+  AgentError,
+  Models,
+  type AgentMessage,
+  type AgentTool,
+} from "@aster/agent";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { GoalReasoningError, makeGoalReasoner } from "../src/index.js";
@@ -79,7 +86,7 @@ test("Goal planning receives an independent relevance check and can ignore a hig
           },
         ],
       });
-    }).pipe(Effect.provide(models)),
+    }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models)))),
   );
   assert.equal(plan.disposition, "ignored");
   assert.equal(plan.progress, progress);
@@ -105,7 +112,9 @@ test("Goal planning can complete after three minutes without a whole-run deadlin
               }),
           } satisfies Agent);
         });
-        const reasoner = yield* makeGoalReasoner("test", memory).pipe(Effect.provide(models));
+        const reasoner = yield* makeGoalReasoner("test", memory).pipe(
+          Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))),
+        );
         const fiber = yield* reasoner
           .plan({ ...input, durable })
           .pipe(Effect.provideService(Clock.Clock, clock), Effect.forkScoped);
@@ -147,7 +156,7 @@ test("Goal read callbacks retain the caller Clock and cancellation", async (t) =
               yield* Deferred.await(release);
               return [];
             }),
-        }).pipe(Effect.provide(models));
+        }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))));
         const fiber = yield* reasoner
           .plan(input)
           .pipe(Effect.provideService(Clock.Clock, clock), Effect.forkScoped);
@@ -218,7 +227,7 @@ test("cancelling a Goal releases SDK callback waits before the Agent idle finali
                   search: () => blocked,
                 }
               : memory,
-          ).pipe(Effect.provide(models));
+          ).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))));
           const fiber = yield* reasoner.plan(input).pipe(Effect.forkScoped);
           yield* Deferred.await(entered).pipe(Effect.timeout("2 seconds"));
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"));
@@ -318,7 +327,7 @@ test("Goal Agent returns Task proposals without calling the mutation boundary", 
       return yield* reasoner.plan({
         ...input,
       });
-    }).pipe(Effect.provide(models)),
+    }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models)))),
   );
   assert.deepEqual(proposal.taskChanges, taskChanges);
   assert.equal(proposal.signalChanges?.[0]?.operation, "signal_create");
@@ -334,7 +343,7 @@ test("model failures are tagged while a reasoning defect retains its original ca
       Effect.gen(function* () {
         const reasoner = yield* makeGoalReasoner("test", memory);
         return yield* Effect.exit(reasoner.plan(input));
-      }).pipe(Effect.provide(models)),
+      }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models)))),
     );
     assert.ok(Exit.isFailure(exit));
     if (broken) assert.equal(Cause.squash(exit.cause), defect);
@@ -367,7 +376,7 @@ test("SDK tool error handling cannot turn an Effect callback defect into a succe
         search: () => Effect.die(defect),
       });
       return yield* Effect.exit(reasoner.plan(input));
-    }).pipe(Effect.provide(models)),
+    }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models)))),
   );
   assert.ok(Exit.isFailure(exit));
   assert.equal(Cause.squash(exit.cause), defect);
@@ -424,7 +433,7 @@ test("Goal reasoner can query a Context and cite its path without delegated exec
           [path]: { path, description: "Ctrip travel queries", state: {}, messages: [] },
         },
       });
-    }).pipe(Effect.provide(models)),
+    }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models)))),
   );
   assert.ok(queried);
   assert.deepEqual(plan.evidence, [path]);
@@ -476,7 +485,7 @@ test("Task and Signal tools read frozen snapshots including deleted entries", as
           },
         },
       });
-    }).pipe(Effect.provide(models)),
+    }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models)))),
   );
 });
 
@@ -500,7 +509,7 @@ test("replay-only inspection decodes a saved legacy result without the reconcile
         ...input,
         durable: { ...input.durable, replayOnly: true, reconcile: false },
       });
-    }).pipe(Effect.provide(models)),
+    }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models)))),
   );
   assert.deepEqual(restored, legacy);
 });
@@ -562,7 +571,7 @@ test("invalid Goal proposals are recoverable tool rejections before a valid resu
     Effect.gen(function* () {
       const reasoner = yield* makeGoalReasoner("test", memory);
       return yield* reasoner.plan(input);
-    }).pipe(Effect.provide(models)),
+    }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models)))),
   );
   assert.equal(plan.progress, "Findings recorded");
 });
@@ -585,7 +594,7 @@ test("fresh Goal evaluations reject legacy, missing and malformed results", asyn
       Effect.gen(function* () {
         const reasoner = yield* makeGoalReasoner("test", memory);
         return yield* Effect.exit(reasoner.plan(input));
-      }).pipe(Effect.provide(models)),
+      }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models)))),
     );
     assert.ok(Exit.isFailure(exit));
     const error = Cause.squash(exit.cause);
@@ -628,7 +637,7 @@ test("Goal system policy and tool definitions stay stable while current facts ch
       t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) => {
         assert.equal(options.durable?.sessionId, "project");
         assert.deepEqual(JSON.parse(options.durable!.catalogueId!), [
-          "aster.goal.v10",
+          "aster.goal.v11",
           200000,
           8192,
         ]);
@@ -726,7 +735,7 @@ test("Goal system policy and tool definitions stay stable while current facts ch
       }
       assert.equal(prompts[0], prompts[1]);
       assert.equal(catalogues[0], catalogues[1]);
-    }).pipe(Effect.provide(models), Effect.scoped),
+    }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))), Effect.scoped),
   );
 });
 
@@ -756,6 +765,44 @@ test("goal_current paginates large Unicode and escaped snapshots without losing 
         goal: { ...input.goal, description },
         current: { ...input.current, state: { summary } },
       });
-    }).pipe(Effect.provide(models)),
+    }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(models)))),
   );
+});
+
+test("Goal Context pages remain valid and complete after JSON escaping inside the tool limit", async () => {
+  const source = {
+    ...input.current,
+    state: { nested: JSON.stringify({ text: '\\"\n中文'.repeat(12000) }) },
+    messages: [],
+  };
+  let pages = 0;
+  const runner = AgentRunner.make((invocation) =>
+    Effect.promise(async () => {
+      const tool = invocation.tools!.find((tool) => tool.name === "read_context")!;
+      let offset = 0;
+      let text = "";
+      while (true) {
+        const response = await tool.execute("context", { path: source.path, offset });
+        assert.ok(Buffer.byteLength(JSON.stringify(response.content), "utf8") <= 14000);
+        const content = response.content[0]!;
+        assert.equal(content.type, "text");
+        if (content.type !== "text") throw new Error("Expected a text tool result");
+        const page = JSON.parse(content.text);
+        text += page.content;
+        pages++;
+        if (page.nextOffset === null) break;
+        assert.ok(page.nextOffset > offset);
+        offset = page.nextOffset;
+      }
+      assert.deepEqual(JSON.parse(text), source);
+      return { messages: [result] };
+    }),
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const reasoner = yield* makeGoalReasoner("test", memory);
+      yield* reasoner.plan({ ...input, contexts: { [source.path]: source } });
+    }).pipe(Effect.provideService(AgentRunner, runner)),
+  );
+  assert.ok(pages > 1);
 });

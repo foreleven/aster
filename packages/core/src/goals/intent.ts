@@ -3,7 +3,7 @@ import { Schema } from "effect";
 import { CommandReceipt } from "@aster/api-contracts";
 import type { AgentMessage } from "@aster/agent";
 import type { ContextRecord } from "../context/model.js";
-import type { GoalRelevance } from "./runtime.js";
+import type { GoalRelevance } from "./relevance.js";
 import { chatSummaryText } from "./screening.js";
 
 import { GoalIntent } from "@aster/api-contracts";

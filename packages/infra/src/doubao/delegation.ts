@@ -6,7 +6,7 @@ import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { taskPrompt, DEFAULT_DOUBAO_PROMPT } from "@aster/core";
+import { DEFAULT_EXECUTOR_PROMPT, taskPrompt } from "@aster/core";
 import type { ExecutionSession } from "@aster/core";
 import { respondDoubaoNative } from "./native-response.js";
 import { agentEnvironment } from "../process/environment.js";
@@ -18,7 +18,7 @@ export const makeDoubaoAgent = (
   envPath?: string,
   command?: DoubaoCommand,
   respond = respondDoubaoNative,
-  prompt = DEFAULT_DOUBAO_PROMPT,
+  prompt = DEFAULT_EXECUTOR_PROMPT,
   environment: NodeJS.ProcessEnv = process.env,
 ): ManagedExternalAgent => {
   let queue: Promise<unknown> = Promise.resolve();
@@ -57,6 +57,7 @@ export const makeDoubaoAgent = (
     ...(session.runId ? ["--run", session.runId] : []),
   ];
   return adaptExternalAgent({
+    executorPrompt: prompt,
     capabilities:
       "Execute a self-contained Task in a Doubao Work session with a local workspace. Requests for additional authorization or information are surfaced for human handling.",
     async submit(task, signal) {

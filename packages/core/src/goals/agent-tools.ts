@@ -4,7 +4,7 @@ import { contextCatalogue, contextTools } from "../context/discovery.js";
 import type { MemoryRecall } from "../context/memory.js";
 import type { ContextQueries } from "../context/queries.js";
 import { contextQueryTools } from "../context/query-tools.js";
-import type { AgentCallbackInvoker } from "../reasoning/agent-callbacks.js";
+import type { AgentCallbackInvoker } from "@aster/agent";
 import { contextSize } from "./history.js";
 import type { GoalReasoningInput } from "./reasoner.js";
 import { GoalTask, goalSignalIdPattern } from "./tasks.js";
@@ -96,7 +96,8 @@ export const makeGoalReadTools = Effect.fnUntraced(function* (
         });
       },
     }),
-    ...contextTools(input.contexts),
+    // Leave room for JSON escaping inside the 14 KB tool-result envelope.
+    ...contextTools(input.contexts, 2000),
     ...contextQueryTools(queries, invoke),
     tool({
       name: "memory_search",

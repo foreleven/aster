@@ -1,3 +1,4 @@
+import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -5,7 +6,6 @@ import { ConfigProvider, Deferred, Effect, Layer, Schema } from "effect";
 import {
   ContextRegistry,
   ExternalAgents,
-  GoalRuntime,
   GoalSettings,
   GoalState,
   GoalsRootActor,
@@ -77,7 +77,7 @@ test("Goal startup persists titles and refreshes restored titles without losing 
               Layer.succeed(ContextRegistry, registry),
               preparationLayer,
               Layer.succeed(ExternalAgents, {}),
-              Layer.succeed(GoalRuntime, {
+              goalWorkflowLayer({
                 definitions: [
                   { slug: "project", description, ...(title === undefined ? {} : { title }) },
                 ],

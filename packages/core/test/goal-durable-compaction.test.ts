@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
-import { Models, type ResolvedModel } from "@aster/agent";
+import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
 import { Effect, Layer } from "effect";
 import { makeGoalReasoner } from "../src/index.js";
 
@@ -57,24 +57,28 @@ test("durable Goal compacts its native transcript and finishes the same request"
                     text: "Retained work checkpoint: continue reviewing the source; no actions were executed.",
                   },
                 ]
-              : [
-                  {
-                    type: "toolCall",
-                    id: `call-${generations}`,
-                    name: generations <= 24 ? "read_context" : "finish_turn",
-                    arguments:
-                      generations <= 24
-                        ? { path: "/source" }
-                        : {
-                            disposition: "no_change",
-                            progress: "Review completed",
-                            nextStep: { _tag: "WaitForEvent", references: ["/source"] },
-                            evidence: ["/source"],
-                            taskChanges: [],
-                            signalChanges: [],
-                          },
-                  },
-                ],
+              : generations <= 24
+                ? Array.from({ length: 6 }, (_, page) => ({
+                    type: "toolCall" as const,
+                    id: `call-${generations}-${page}`,
+                    name: "read_context",
+                    arguments: { path: "/source", offset: page * 2000 },
+                  }))
+                : [
+                    {
+                      type: "toolCall",
+                      id: `call-${generations}`,
+                      name: "finish_turn",
+                      arguments: {
+                        disposition: "no_change",
+                        progress: "Review completed",
+                        nextStep: { _tag: "WaitForEvent", references: ["/source"] },
+                        evidence: ["/source"],
+                        taskChanges: [],
+                        signalChanges: [],
+                      },
+                    },
+                  ],
             usage: {
               input: inputTokens,
               output: 100,
@@ -114,7 +118,10 @@ test("durable Goal compacts its native transcript and finishes the same request"
       reason: "Review",
       durable: { sessionId: "test", requestId: "review", storageDirectory: directory },
     });
-  }).pipe(Effect.provide(models), Effect.timeout("15 seconds"));
+  }).pipe(
+    Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))),
+    Effect.timeout("15 seconds"),
+  );
   const result = await Effect.runPromise(run);
   assert.equal(result.progress, "Review completed");
   assert.ok(summaries > 0, "Native compaction must run before the Goal gives up");

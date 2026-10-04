@@ -1,3 +1,6 @@
+import { internalAgentSettings } from "../config/settings.js";
+import { MemoryRecall } from "../context/memory.js";
+import { makeStructuredReasoning } from "../reasoning/structured.js";
 import { Effect, Schema } from "effect";
 import { SignalDetectionError } from "./errors.js";
 import type { SignalExtractor } from "./detect.js";
@@ -61,3 +64,16 @@ export const makeSignalExtractor =
           }),
       ),
     );
+
+export const makeConfiguredSignalExtractor = Effect.fn("makeConfiguredSignalExtractor")(
+  function* () {
+    const settings = yield* internalAgentSettings;
+    const run = yield* makeStructuredReasoning(settings.model, yield* MemoryRecall);
+    return makeSignalExtractor({
+      accessInstructions: [
+        "Use read_context to inspect source and relevant Contexts. Use memory_search and memory_expand when needed.",
+      ],
+      run,
+    });
+  },
+);

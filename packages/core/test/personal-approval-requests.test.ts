@@ -1,3 +1,5 @@
+import { personalReasoningLayer, personalDisabled } from "./workflow-fixtures.js";
+import type { PersonalReasoner } from "../src/index.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -16,7 +18,6 @@ import {
   ExternalAgents,
   PersonalActions,
   PersonalAgentActor,
-  PersonalProcessor,
   approvalEntries,
   makeApplicationApi,
   makeContextRegistry,
@@ -71,7 +72,7 @@ const delivery: ApprovalRequestDeliveryInput = {
 };
 const fixture = (
   records: Map<string, ContextRecord>,
-  options: { loseAck?: boolean; processor?: PersonalProcessor["Service"] } = {},
+  options: { loseAck?: boolean; processor?: PersonalReasoner } = {},
 ) =>
   Effect.gen(function* () {
     const registry = yield* makeContextRegistry({
@@ -87,9 +88,7 @@ const fixture = (
     const system = yield* ActorSystem.make().pipe(
       ActorSystem.provide(
         Layer.succeed(ContextRegistry, registry),
-        options.processor
-          ? Layer.succeed(PersonalProcessor, options.processor)
-          : PersonalProcessor.disabled,
+        options.processor ? personalReasoningLayer(options.processor) : personalDisabled,
         Layer.succeed(PersonalActions, {
           ...actions,
           requestApproval: (command) =>

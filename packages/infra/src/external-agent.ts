@@ -12,6 +12,7 @@ import { Effect } from "effect";
 /** Promise drivers belong to infrastructure; the domain sees only execution Effects. */
 export interface ExternalAgentDriver {
   readonly capabilities: string;
+  readonly executorPrompt?: string;
   submit(task: Task, signal: AbortSignal): Promise<ExecutionSession>;
   status(session: ExecutionSession, signal: AbortSignal): Promise<ExecutionStatus>;
   resume(session: ExecutionSession, signal: AbortSignal): Promise<ExecutionSession>;
@@ -46,6 +47,7 @@ export const adaptExternalAgent = (driver: ExternalAgentDriver): ManagedExternal
     });
   return {
     capabilities: driver.capabilities,
+    ...(driver.executorPrompt === undefined ? {} : { executorPrompt: driver.executorPrompt }),
     submit: (task) => operation("submit", (signal) => driver.submit(task, signal)),
     status: (session) => operation("status", (signal) => driver.status(session, signal)),
     resume: (session) => operation("resume", (signal) => driver.resume(session, signal)),

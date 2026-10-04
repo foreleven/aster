@@ -1,3 +1,6 @@
+import { internalAgentSettings } from "../config/settings.js";
+import { MemoryRecall } from "../context/memory.js";
+import { makeStructuredReasoning } from "../reasoning/structured.js";
 import { Effect, Schema } from "effect";
 import { ContextDescriptionError } from "./errors.js";
 export interface ContextIdentity {
@@ -48,3 +51,11 @@ export const makeDescriptionInitializer =
             }),
       ),
     );
+
+export const makeConfiguredDescriptionInitializer = Effect.fn(
+  "makeConfiguredDescriptionInitializer",
+)(function* () {
+  const settings = yield* internalAgentSettings;
+  const run = yield* makeStructuredReasoning(settings.model, yield* MemoryRecall);
+  return makeDescriptionInitializer((prompt, schema) => run(prompt, schema, {}));
+});

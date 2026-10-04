@@ -1,4 +1,4 @@
-import { Models } from "@aster/agent";
+import { AgentRunner, Models } from "@aster/agent";
 import { LocalConfig, SystemOneClientLive } from "@aster/infra";
 import { LarkConfig } from "@aster/integrations";
 import { makeGoalReasoner } from "@aster/core";
@@ -22,13 +22,11 @@ import {
   contextSpawnOptions,
   makeContextRegistry,
   relevantGoals,
-  GoalRuntime,
-  GoalsRootActor,
   SystemOneClient,
   GoalSettings,
 } from "@aster/core";
 
-import { ConfigProvider, Effect, Layer, Stream } from "effect";
+import { ConfigProvider, Deferred, Effect, Layer, Stream } from "effect";
 
 const root = new URL("../../../", import.meta.url);
 const env = fileURLToPath(new URL(".env", root));
@@ -51,18 +49,29 @@ const report = await Effect.runPromise(
       if (!model) throw new Error("Configure config.goals.model before this verification");
       const underlying = yield* SystemOneClient;
       const client = {
-        systemOne: async (request) => {
-          const result = await underlying.systemOne(request);
-          console.log(JSON.stringify({ event: "verification.system-one.response", result }));
-          return result;
-        },
+        systemOne: (request) =>
+          underlying
+            .systemOne(request)
+            .pipe(
+              Effect.tap((result) =>
+                Effect.sync(() =>
+                  console.log(
+                    JSON.stringify({ event: "verification.system-one.response", result }),
+                  ),
+                ),
+              ),
+            ),
       };
       const dir = yield* Effect.acquireRelease(
         Effect.sync(() => mkdtempSync(join(tmpdir(), "aster-summary-"))),
         (dir) => Effect.sync(() => rmSync(dir, { recursive: true, force: true })),
       );
       const registry = yield* makeContextRegistry();
-      const plans = [];
+      const completed = yield* Deferred.make();
+      const reasoner = yield* makeGoalReasoner(model, {
+        search: () => Effect.succeed({ results: [] }),
+        expand: () => Effect.succeed({ results: [] }),
+      }).pipe(Effect.provide(AgentRunner.layer.pipe(Layer.provide(Models.configured))));
       let systemOneMatched = false;
       const system = yield* ActorSystem.make().pipe(
         ActorSystem.provide(
@@ -74,36 +83,15 @@ const report = await Effect.runPromise(
           ImAgentQueue.layer,
           Layer.succeed(ImSummaryGate, makeImSummaryGate(client)),
           Layer.succeed(ImStorage, makeImStorage(dir)),
-          Layer.effect(
-            GoalRuntime,
-            Effect.gen(function* () {
-              return {
-                definitions: [goal],
-                reasoner: yield* makeGoalReasoner(model, {
-                  search: async () => ({ results: [] }),
-                  expand: async () => ({ results: [] }),
-                }),
-                signals: () => [],
-                deactivate: async () => {},
-                reconcile: async (_goal, plan) => {
-                  plans.push(plan);
-                  return [];
-                },
-              };
-            }),
-          ),
         ),
       );
-      const goals = yield* system.spawn("goals", GoalsRootActor);
-      yield* Stream.runForEach(registry.changes, (change) =>
+      yield* Stream.runForEach(yield* registry.subscribe, (change) =>
         Effect.gen(function* () {
           if (change.path !== path || !change.stateChanged || change.evaluate === false) return;
           console.log(
             JSON.stringify({ event: "verification.summary", summary: change.record.state.summary }),
           );
-          const matches = yield* Effect.tryPromise(() =>
-            relevantGoals(client, change.record, [goal]),
-          );
+          const matches = yield* relevantGoals(client, change.record, [goal]);
           systemOneMatched = matches.length > 0;
           if (!systemOneMatched)
             console.warn(
@@ -113,16 +101,29 @@ const report = await Effect.runPromise(
                 note: "Production routing stops here. The isolated diagnostic will test Goal reasoning separately; no execution is authorized by this result.",
               }),
             );
-          yield* goals.tell({
-            _tag: "Route",
-            slug: goal.slug,
-            command: {
-              _tag: "Evaluate",
-              reason: systemOneMatched
-                ? `Context state changed: ${path}`
-                : `Independently verify Goal reasoning: read the summary at ${path} and propose a read-only risk analysis plan. Do not execute actions or send any messages.`,
-            },
-          });
+          if (yield* Deferred.isDone(completed)) return;
+          yield* reasoner
+            .plan({
+              goal,
+              current: {
+                path: `/goals/${goal.slug}`,
+                description: goal.description,
+                state: {},
+                messages: [],
+              },
+              contexts: registry.publicSnapshot(),
+              signals: [],
+              reason: `Independently verify Goal reasoning from the summary at ${path}`,
+              durable: { sessionId: goal.slug, requestId: "verification", storageDirectory: dir },
+              messages: [
+                {
+                  role: "user",
+                  timestamp: 0,
+                  content: `Read the summary at ${path} and propose a read-only risk analysis plan. Do not execute actions or send any messages.`,
+                },
+              ],
+            })
+            .pipe((effect) => Deferred.complete(completed, effect));
         }),
       ).pipe(Effect.forkScoped);
       yield* Effect.yieldNow;
@@ -156,9 +157,7 @@ const report = await Effect.runPromise(
           },
         ],
       });
-      yield* Effect.gen(function* () {
-        while (!plans.length) yield* Effect.sleep(100);
-      }).pipe(Effect.timeout("5 minutes"));
+      const plan = yield* Deferred.await(completed).pipe(Effect.timeout("5 minutes"));
       const record = registry.get(path);
       return {
         systemOneMatched,
@@ -166,7 +165,7 @@ const report = await Effect.runPromise(
         sourcePath: path,
         remainingMessages: record.messages.length,
         state: record.state,
-        plan: plans[0],
+        plan,
         delegated: false,
       };
     }),

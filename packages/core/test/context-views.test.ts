@@ -1,3 +1,4 @@
+import { taskExecutionLayer, personalReasoningLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -12,7 +13,6 @@ import {
   makeMemoryGoalHistory,
   PersonalActions,
   PersonalAgentActor,
-  PersonalProcessor,
   type ContextRecord,
 } from "../src/index.js";
 
@@ -179,7 +179,7 @@ test("Personal mailbox and processor read tools expose only public snapshots", a
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
             PersonalActions.unavailable,
-            Layer.succeed(PersonalProcessor, {
+            personalReasoningLayer({
               enabled: true,
               run: (_message, reads) =>
                 Effect.gen(function* () {
@@ -303,21 +303,15 @@ test("Goal reasoning receives public current state and a projected Context catal
           historyAfter: 0,
           historyThrough: 0,
         },
-        runtime: {
-          definitions: [],
-          signals: () => [],
-          reconcile: () => Effect.succeed([]),
-          deactivate: () => Effect.void,
-          reasoner: {
-            plan: (input) =>
-              Effect.sync(() => {
-                assertPublic(input.current);
-                assertPublic(input.contexts);
-                assert.equal(input.contexts["/unknown"]?.projection?.visibility, "restricted");
-                called = true;
-                return { progress: "Reviewed", completed: false, evidence: [], signals: [] };
-              }),
-          },
+        reasoner: {
+          plan: (input) =>
+            Effect.sync(() => {
+              assertPublic(input.current);
+              assertPublic(input.contexts);
+              assert.equal(input.contexts["/unknown"]?.projection?.visibility, "restricted");
+              called = true;
+              return { progress: "Reviewed", completed: false, evidence: [], signals: [] };
+            }),
         },
       });
       assert.equal(result.plan.progress, "Reviewed");
@@ -327,8 +321,7 @@ test("Goal reasoning receives public current state and a projected Context catal
 });
 
 test("Run preparation and readiness receive projected frozen evidence", async () => {
-  const { ExternalAgents, SignalRunActor, TaskPreparation, contextSpawnOptions } =
-    await import("../src/index.js");
+  const { ExternalAgents, SignalRunActor, contextSpawnOptions } = await import("../src/index.js");
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -339,7 +332,7 @@ test("Run preparation and readiness receive projected frozen evidence", async ()
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(ExternalAgents, {}),
-            Layer.succeed(TaskPreparation, {
+            taskExecutionLayer({
               prepare: (_definition, evidence, snapshot) =>
                 Effect.sync(() => {
                   assertPublic(evidence);

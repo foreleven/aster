@@ -2,11 +2,11 @@ import { createHash } from "node:crypto";
 import type { ActorRef } from "@aster/actor";
 import { ApplicationError } from "@aster/api-contracts";
 import { Clock, Context, Effect, Match, Ref, Schema } from "effect";
-import type { InternalAgent } from "../tasks/services.js";
+import type { SignalExtractor } from "../signals/detect.js";
 import type { SystemOneClient } from "../decisions/system-one.js";
 import { makeSystemOneGate } from "../signals/detect.js";
 import { sourceSignals } from "../signals/policy.js";
-import { relevantGoals } from "../goals/runtime.js";
+import { relevantGoals } from "../goals/relevance.js";
 import type { GoalScreeningStore, GoalScreeningRecord } from "../goals/screening.js";
 import { makeGoalIntent } from "../goals/intent.js";
 import type { GoalsRootCommand } from "../goals/actors.js";
@@ -39,7 +39,7 @@ export class ReactionPolicy extends Context.Service<
 /** Planning only reads frozen evidence. No domain delivery occurs until the plan commits. */
 export const makeReactionPolicy = (options: {
   client: SystemOneClient;
-  internal: InternalAgent["Service"];
+  extract: SignalExtractor;
   screening?: GoalScreeningStore["Service"] | undefined;
 }): Effect.Effect<ReactionPolicy["Service"]> =>
   Effect.gen(function* () {
@@ -55,7 +55,7 @@ export const makeReactionPolicy = (options: {
           const snapshot = work.snapshot;
           const definitions = sourceSignals(snapshot, Date.parse(work.admittedAt));
           const candidates = yield* makeSystemOneGate(options.client)(record, definitions);
-          const extracted = yield* options.internal.extract(record.path, candidates, snapshot);
+          const extracted = yield* options.extract(record.path, candidates, snapshot);
           // An extractor cannot invent targets that were not screened as candidates.
           const selected = candidates.filter((item) => extracted.includes(item.slug));
           const commands: ReactionDeliveryInput[] = [];

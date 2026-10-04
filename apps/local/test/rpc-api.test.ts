@@ -1,3 +1,4 @@
+import { personalDisabled } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Layer, Schema, Stream } from "effect";
@@ -13,7 +14,6 @@ import {
   makeContextRegistry,
   ContextRegistry,
   PersonalAgentActor,
-  PersonalProcessor,
   PersonalActions,
 } from "@aster/core";
 import { startGoalApi } from "../src/http-api.js";
@@ -40,7 +40,7 @@ test("Personal RPC returns the same durable receipt for duplicate business reque
           ActorSystem.provide(
             PersonalActions.unavailable,
             Layer.succeed(ContextRegistry, registry),
-            PersonalProcessor.disabled,
+            personalDisabled,
           ),
         );
         const personal = yield* system.spawn("personal", PersonalAgentActor);

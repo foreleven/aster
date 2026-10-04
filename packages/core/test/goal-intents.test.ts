@@ -1,3 +1,4 @@
+import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import { goalInputId } from "../src/goals/inputs.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -6,7 +7,6 @@ import { Deferred, Effect, Layer, Schema, Stream } from "effect";
 import {
   ContextRegistry,
   ExternalAgents,
-  GoalRuntime,
   GoalState,
   GoalsRootActor,
   makeContextRegistry,
@@ -83,7 +83,7 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
                 Layer.succeed(ContextRegistry, registry),
                 preparationLayer,
                 Layer.succeed(ExternalAgents, {}),
-                Layer.succeed(GoalRuntime, {
+                goalWorkflowLayer({
                   definitions: [{ slug: "project", description: "Monitor release" }],
                   history: {
                     ...history,

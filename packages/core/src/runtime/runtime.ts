@@ -9,11 +9,12 @@ import { RunRootActor } from "../tasks/root.js";
 import type { RuntimeEvent, RuntimePhase } from "@aster/api-contracts";
 import { RuntimeConfigurationError } from "./errors.js";
 import { ActorSystem, type ActorRef } from "@aster/actor";
-import { Models, PiStorageLease } from "@aster/agent";
+import { AgentRunner, PiStorageLease } from "@aster/agent";
 import {
   Cause,
   Clock,
   Context,
+  ConfigProvider,
   Deferred,
   Effect,
   Exit,
@@ -32,13 +33,12 @@ import { SignalDefinitions, SignalRootActor } from "../signals/actors.js";
 import { SystemOneClient } from "../decisions/system-one.js";
 import { GoalHistoryStore } from "../goals/history.js";
 import { GoalsRootActor } from "../goals/actors.js";
-import { GoalRuntime } from "../goals/runtime.js";
-import { goalRuntimeLayer } from "../goals/services.js";
-import { ExternalAgents, TaskPreparation } from "../tasks/model.js";
-import { InternalAgent, taskPreparationLayer } from "../tasks/services.js";
+import { GoalSignals } from "../goals/signal-coordination.js";
+import { ExternalAgents } from "../tasks/model.js";
+import { makeConfiguredSignalExtractor } from "../signals/extractor.js";
+import { MemoryRecall } from "../context/memory.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
 import { PersonalAgentActor, type PersonalReply } from "../personal/actor.js";
-import { PersonalProcessor } from "../personal/processor.js";
 import { PersonalActions } from "../personal/actions.js";
 import { startContextReactions } from "../context/reactions.js";
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
@@ -50,15 +50,17 @@ type RuntimeDiagnostics = {
 };
 
 type ActorServices =
-  | Models
+  | AgentRunner
+  | MemoryRecall
+  | ContextQueries
+  | GoalHistoryStore
+  | GoalSettings
   | ContextRegistry
   | SignalDefinitions
   | SystemOneClient
   | ExternalAgents
-  | TaskPreparation
-  | PersonalProcessor
   | PersonalActions
-  | GoalRuntime;
+  | GoalSignals;
 
 const acquireRuntime = Effect.gen(function* () {
   const registry = yield* ContextRegistry;
@@ -75,19 +77,21 @@ const acquireRuntime = Effect.gen(function* () {
   const modules = (yield* RuntimeIntegrations).installed();
   const reactionPolicy = yield* makeReactionPolicy({
     client: decisions,
-    internal: yield* InternalAgent,
+    extract: yield* makeConfiguredSignalExtractor(),
     screening: Option.getOrUndefined(yield* Effect.serviceOption(GoalScreeningStore)),
   });
   const shared = Context.pick(
-    Models,
+    AgentRunner,
+    MemoryRecall,
+    ContextQueries,
+    GoalHistoryStore,
+    GoalSettings,
     ContextRegistry,
     SignalDefinitions,
     SystemOneClient,
     ExternalAgents,
-    TaskPreparation,
-    PersonalProcessor,
     PersonalActions,
-    GoalRuntime,
+    GoalSignals,
   )(yield* Effect.context<ActorServices>());
   // Integration environments are captured by their own Layers. Never inject an ambient Scope.
   const actorServices = modules
@@ -98,6 +102,7 @@ const acquireRuntime = Effect.gen(function* () {
     .pipe(
       Context.omit(Scope.Scope),
       Context.add(Clock.Clock, yield* Clock.Clock),
+      Context.add(ConfigProvider.ConfigProvider, yield* ConfigProvider.ConfigProvider),
       Context.add(ReactionPolicy, reactionPolicy),
       Context.add(GoalSettings, settings),
     );
@@ -270,7 +275,7 @@ export class AsterRuntime extends Context.Service<
   static layer<const Layers extends readonly Layer.Layer<never, any, any>[]>(options: {
     readonly integrations: Layers;
   }) {
-    const foundation = Layer.mergeAll(
+    const contextAndCommandServices = Layer.mergeAll(
       ContextRegistry.layer,
       ContextQueries.layer,
       GoalSettings.layer,
@@ -279,15 +284,14 @@ export class AsterRuntime extends Context.Service<
       RuntimeIntegrations.layer,
       Layer.effect(SignalDefinitions, signalSettings),
     );
-    const consumers = memoryLayer.pipe(Layer.provideMerge(foundation));
-    const installed = Layer.mergeAll(Layer.empty, ...options.integrations).pipe(
-      Layer.provideMerge(consumers),
+    // Registration captures integration services; acquireRuntime activates their Actors.
+    const registerIntegrations = Layer.mergeAll(Layer.empty, ...options.integrations);
+    const runtimeServices = GoalSignals.layer.pipe(
+      Layer.provideMerge(registerIntegrations),
+      Layer.provideMerge(memoryLayer),
+      Layer.provideMerge(AgentRunner.layer),
+      Layer.provideMerge(contextAndCommandServices),
     );
-    const domain = Layer.mergeAll(
-      taskPreparationLayer.pipe(Layer.provideMerge(InternalAgent.layer)),
-      goalRuntimeLayer,
-      PersonalProcessor.layer,
-    ).pipe(Layer.provideMerge(installed));
-    return Layer.effect(AsterRuntime, acquireRuntime).pipe(Layer.provide(domain));
+    return Layer.effect(AsterRuntime, acquireRuntime).pipe(Layer.provide(runtimeServices));
   }
 }

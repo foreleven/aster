@@ -1,3 +1,4 @@
+import { personalDisabled } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -16,7 +17,6 @@ import {
   ExternalAgents,
   PersonalActions,
   PersonalAgentActor,
-  PersonalProcessor,
   approvalEntries,
   makeApplicationApi,
   makeContextRegistry,
@@ -54,7 +54,7 @@ const fixture = (records = new Map<string, ContextRecord>(), loseAck = false) =>
     const system = yield* ActorSystem.make().pipe(
       ActorSystem.provide(
         Layer.succeed(ContextRegistry, registry),
-        PersonalProcessor.disabled,
+        personalDisabled,
         Layer.succeed(PersonalActions, {
           ...actions,
           respondApproval: (command) =>

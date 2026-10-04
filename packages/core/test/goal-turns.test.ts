@@ -1,3 +1,4 @@
+import { goalWorkflowLayer, type GoalScenario } from "./workflow-fixtures.js";
 import { GoalToolError } from "../src/goals/tasks.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -9,7 +10,6 @@ import {
   type ContextRecord,
   type ContextStore,
 } from "../src/index.js";
-import { GoalRuntime } from "../src/goals/runtime.js";
 import { GoalState } from "../src/goals/state.js";
 import { GoalReasoningError } from "../src/goals/errors.js";
 import { GoalsRootActor, type GoalCommandReply, type GoalReadyReply } from "../src/goals/actors.js";
@@ -39,8 +39,8 @@ const setup = Effect.fnUntraced(function* (
     waitForRestore?: boolean;
     contextTokens?: number;
     history?: ReturnType<typeof makeMemoryGoalHistory>;
-    reconcile?: GoalRuntime["Service"]["reconcile"];
-    deactivate?: GoalRuntime["Service"]["deactivate"];
+    reconcile?: GoalScenario["reconcile"];
+    deactivate?: GoalScenario["deactivate"];
   } = {},
 ) {
   const registry = yield* makeContextRegistry(options.store);
@@ -49,7 +49,7 @@ const setup = Effect.fnUntraced(function* (
       Layer.succeed(ContextRegistry, registry),
       preparationLayer,
       Layer.succeed(ExternalAgents, {}),
-      Layer.succeed(GoalRuntime, {
+      goalWorkflowLayer({
         contextTokens: options.contextTokens,
         reserveTokens: options.contextTokens ? 0 : undefined,
         definitions: [{ slug: "travel", description: "Research travel options" }],

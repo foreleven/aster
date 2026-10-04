@@ -1,3 +1,4 @@
+import { taskExecutionLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -7,7 +8,6 @@ import {
   ExternalAgents,
   SignalDefinitions,
   SignalRootActor,
-  TaskPreparation,
   makeContextRegistry,
   type ContextRecord,
   type SignalCommandReply,
@@ -55,7 +55,7 @@ test("Signal commits a reaction receipt and occurrence together; restart and lat
               Layer.succeed(ContextRegistry, registry),
               Layer.succeed(SignalDefinitions, [definition]),
               Layer.succeed(ExternalAgents, {}),
-              Layer.succeed(TaskPreparation, {
+              taskExecutionLayer({
                 prepare: () => Effect.never,
                 ready: () => Effect.succeed(true),
               }),
@@ -136,7 +136,7 @@ test("a scheduled Signal rejects source reactions without creating an occurrence
               { ...definition, schedule: { type: "once" as const, at: "2099-01-01T00:00:00Z" } },
             ]),
             Layer.succeed(ExternalAgents, {}),
-            Layer.succeed(TaskPreparation, {
+            taskExecutionLayer({
               prepare: () => Effect.never,
               ready: () => Effect.succeed(true),
             }),

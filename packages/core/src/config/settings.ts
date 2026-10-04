@@ -107,5 +107,4 @@ export const signalSettings = Config.schema(
 
 export const internalAgentSettings = Config.all({
   model: Config.NonEmptyString("model").pipe(Config.nested("agent"), Config.nested("config")),
-  executorPrompt: Config.schema(Schema.optional(Schema.String), ["agents", "doubao", "prompt"]),
 });

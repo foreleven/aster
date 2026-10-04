@@ -39,6 +39,8 @@ const program = Effect.gen(function* () {
 // ActorSystem.make().pipe(ActorSystem.provide(Models.layer(config.models)))
 ```
 
+`AgentRunner` is the injectable execution capability used by core workflows. Its `layer` captures Models; `run` creates a fresh Agent for each invocation. The invocation factory receives a scoped callback invoker so tool callbacks retain the caller's Clock and cancellation. Callback defects propagate out of SDK tool recovery, and cancellation releases pending callbacks before waiting for SDK idle. Prompts, tool catalogues, result validation and durable request identities remain in the business modules. Tests can use `AgentRunner.make(execute)` to replace SDK execution while exercising the same callback lifetime.
+
 `Agent.make` resolves `name` through the Models Effect service. Every `run` creates a fresh pi instance, including concurrent runs on the same handle. Returned `{ messages }` contains only generated messages, not the supplied input. Business outputs can be returned in a native pi tool's `details`, with `terminate: true` when appropriate, then read from the resulting `toolResult` message.
 
 A terminal pi error becomes `AgentError` with the generated messages. Ordinary tool failures remain in pi's loop and can be corrected by the model. Effect interruption calls `abort()` and waits for pi to become idle; it remains interruption rather than becoming an ordinary failure. Callers apply `Effect.timeout` for their own execution limits.

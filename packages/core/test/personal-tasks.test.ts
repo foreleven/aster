@@ -1,3 +1,9 @@
+import {
+  taskExecutionLayer,
+  personalReasoningLayer,
+  personalDisabled,
+} from "./workflow-fixtures.js";
+import type { PersonalReasoner } from "../src/index.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -15,9 +21,7 @@ import {
   ExternalAgents,
   PersonalActions,
   PersonalAgentActor,
-  PersonalProcessor,
   RunRootActor,
-  TaskPreparation,
   approvalEntries,
   makeApplicationApi,
   makeContextRegistry,
@@ -44,7 +48,7 @@ const fixture = (
     loseAck?: boolean;
     ready?: Effect.Effect<boolean>;
     submit?: () => void;
-    processor?: PersonalProcessor["Service"];
+    processor?: PersonalReasoner;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -72,13 +76,11 @@ const fixture = (
       ActorSystem.provide(
         agents,
         Layer.succeed(ContextRegistry, registry),
-        Layer.succeed(TaskPreparation, {
+        taskExecutionLayer({
           prepare: () => Effect.die(new Error("An exact Task must not be rewritten")),
           ready: () => options.ready ?? Effect.succeed(true),
         }),
-        options.processor
-          ? Layer.succeed(PersonalProcessor, options.processor)
-          : PersonalProcessor.disabled,
+        options.processor ? personalReasoningLayer(options.processor) : personalDisabled,
         Layer.succeed(PersonalActions, {
           ...actions,
           startTask: (command) =>

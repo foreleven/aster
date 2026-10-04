@@ -1,5 +1,6 @@
+import { taskExecutionLayer } from "./workflow-fixtures.js";
 import { gateStub, summaryStub } from "./summary-fixtures.js";
-import { ApprovalQueueActor, ExternalAgents, TaskPreparation } from "@aster/core";
+import { ApprovalQueueActor, ExternalAgents } from "@aster/core";
 import { Models } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -183,11 +184,7 @@ test("Signal actor creates an independent run Context with a triggering message"
               }),
             }),
             Layer.succeed(ExternalAgents, {}),
-            Layer.succeed(TaskPreparation, {
-              prepare: (definition) =>
-                Effect.sync(() => ({ instructions: definition.task, input: [] })),
-              ready: () => Effect.sync(() => true),
-            }),
+            taskExecutionLayer,
             Layer.succeed(SignalDefinitions, definitions),
           ),
         );

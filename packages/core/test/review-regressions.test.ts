@@ -1,3 +1,4 @@
+import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit } from "@aster/actor";
@@ -9,7 +10,6 @@ import {
   ApplicationError,
   ContextRegistry,
   ExternalAgents,
-  GoalRuntime,
   GoalsRootActor,
   SignalRunActor,
   SignalActor,
@@ -65,7 +65,7 @@ test("Goal API waits for durable history and evaluation intent; stopped roots fa
             Layer.succeed(ContextRegistry, registry),
             preparationLayer,
             Layer.succeed(ExternalAgents, {}),
-            Layer.succeed(GoalRuntime, {
+            goalWorkflowLayer({
               definitions: [{ slug: "project", description: "Project" }],
               history,
               reasoner: { plan: () => Effect.never },

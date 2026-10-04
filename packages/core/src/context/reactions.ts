@@ -5,7 +5,7 @@ import { Effect, Schema, Stream } from "effect";
 import { ContextRegistry } from "./registry.js";
 import { ContextCaptureSink } from "./memory.js";
 import { makeContextProcessor, isolateContextChange } from "./processing.js";
-import { InternalAgent } from "../tasks/services.js";
+import { makeConfiguredDescriptionInitializer } from "./description.js";
 import { GoalSettings } from "../config/settings.js";
 import type { GoalsRootCommand } from "../goals/actors.js";
 import type { SignalRootCommand } from "../signals/actors.js";
@@ -21,7 +21,7 @@ export const startContextReactions = <Services>(roots: {
   Effect.gen(function* () {
     const registry = yield* ContextRegistry;
     const capture = yield* ContextCaptureSink;
-    const internal = yield* InternalAgent;
+    const describe = yield* makeConfiguredDescriptionInitializer();
     // Source ingestion needs the restored target catalogue, not partially started roots.
     yield* roots.signals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
     if (roots.goals) {
@@ -37,7 +37,7 @@ export const startContextReactions = <Services>(roots: {
     yield* reactions.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
     // Description and Memory keep their own policy. They never directly deliver Goal/Signal work.
     const process = isolateContextChange(
-      makeContextProcessor(registry, capture.capture, () => Effect.void, internal.describe),
+      makeContextProcessor(registry, capture.capture, () => Effect.void, describe),
     );
     return yield* Stream.runForEach(changes, (change) =>
       Effect.gen(function* () {

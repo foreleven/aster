@@ -36,7 +36,7 @@ const project = (status: PiExecutionStatus): ExecutionStatus => {
   return { state: status.state, error: status.error, resumable: false };
 };
 
-/** TaskPreparation supplies the frozen Task; Delegation owns its business history.
+/** Task execution input construction supplies the frozen Task; Delegation owns its business history.
  * This adapter returns persisted execution results, never the native Pi transcript. */
 export const makePiRuntime = Effect.fn("PiExternalAgent.runtime")(function* (options: {
   readonly model: string;

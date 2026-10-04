@@ -1,3 +1,4 @@
+import { reasoningConfig, emptyRecall, modelReplyLayer, agentResult } from "./workflow-fixtures.js";
 import { ReactionPolicy, makeReactionPolicy } from "../src/context/reaction-policy.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -6,7 +7,6 @@ import { Effect, Fiber, Layer, Schema } from "effect";
 import {
   ContextRegistry,
   ContextCaptureSink,
-  InternalAgent,
   GoalSettings,
   SystemOneClient,
   makeContextRegistry,
@@ -92,11 +92,11 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
     Layer.succeed(GoalSettings, {
       definitions: ["owned", "other", "done"].map((slug) => ({ slug, description: slug })),
     }),
-    Layer.succeed(InternalAgent, {
-      extract: (_path, candidates) => Effect.sync(() => candidates.map((s) => s.slug)),
-      describe: () => Effect.sync(() => "test"),
-      prepare: () => Effect.sync(() => ({ instructions: "test", input: [] })),
-    }),
+    reasoningConfig,
+    emptyRecall,
+    modelReplyLayer("submit_result", () =>
+      Effect.succeed(agentResult("submit_result", { description: "test" })),
+    ),
     Layer.succeed(SystemOneClient, {
       systemOne: (request) =>
         Effect.sync(() => {
@@ -121,7 +121,7 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         const signalProbe = yield* ActorTestKit.probe<SignalRootCommand>();
         const policy = yield* makeReactionPolicy({
           client: yield* SystemOneClient,
-          internal: yield* InternalAgent,
+          extract: (_path, candidates) => Effect.succeed(candidates.map((s) => s.slug)),
         });
         yield* policy.bind(signalProbe.ref, goalProbe.ref);
         const system = yield* ActorSystem.make().pipe(

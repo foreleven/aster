@@ -1,3 +1,5 @@
+import { personalReasoningLayer, personalDisabled } from "./workflow-fixtures.js";
+import type { PersonalReasoner } from "../src/index.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit } from "@aster/actor";
@@ -16,7 +18,6 @@ import {
   ExternalAgents,
   PersonalActions,
   PersonalAgentActor,
-  PersonalProcessor,
   SignalDefinitions,
   SignalRootActor,
   makeApplicationApi,
@@ -53,7 +54,7 @@ const fixture = (
   clock?: Clock.Clock,
   options: {
     definitions?: readonly SignalDefinition[];
-    processor?: PersonalProcessor["Service"];
+    processor?: PersonalReasoner;
   } = {},
 ) =>
   Effect.gen(function* () {
@@ -81,9 +82,7 @@ const fixture = (
         agents,
         preparationLayer,
         Layer.succeed(SignalDefinitions, options.definitions ?? []),
-        options.processor
-          ? Layer.succeed(PersonalProcessor, options.processor)
-          : PersonalProcessor.disabled,
+        options.processor ? personalReasoningLayer(options.processor) : personalDisabled,
         Layer.succeed(Clock.Clock, clock ?? (yield* Clock.Clock)),
         Layer.succeed(PersonalActions, {
           ...actions,

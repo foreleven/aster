@@ -33,6 +33,8 @@ test("Doubao retains session/run IDs, checks existing work, and routes native co
       input: [{ content: "Evidence", sources: ["/source"] }],
     }),
   );
+  assert.match(agent.executorPrompt!, /Do not repeat completed work/);
+  assert.ok(calls.find((call) => call[1] === "create")![2]!.startsWith(agent.executorPrompt!));
   assert.equal(session.sessionId, "session");
   assert.equal(session.runId, "run");
   assert.deepEqual(await Effect.runPromise(agent.resume(session)), session);
@@ -46,6 +48,11 @@ test("Doubao retains session/run IDs, checks existing work, and routes native co
     state: "completed",
     result: { text: "done" },
   });
+});
+
+test("Doubao exposes custom executor instructions for Task construction", () => {
+  const agent = makeDoubaoAgent(undefined, undefined, undefined, "Custom executor policy");
+  assert.equal(agent.executorPrompt, "Custom executor policy");
 });
 
 test("Doubao cancellation prevents follow-up effects even when the active transport ignores abort", async () => {

@@ -17,7 +17,7 @@ export * from "./signals/actors.js";
 export * from "./tasks/run.js";
 export * from "./goals/plan.js";
 export * from "./goals/reasoner.js";
-export * from "./goals/runtime.js";
+export * from "./goals/signal-coordination.js";
 export * from "./decisions/system-one.js";
 export * from "./context/processing.js";
 export * from "./delegation/actor.js";
@@ -36,7 +36,7 @@ export {
   writebackApprovalId,
   writebackPrompt,
 } from "@aster/api-contracts";
-export * from "./tasks/preparation.js";
+export * from "./reasoning/structured.js";
 export * from "./approvals/actor.js";
 export * from "./goals/history.js";
 export * from "./goals/intent.js";
@@ -45,12 +45,12 @@ export * from "./goals/tasks.js";
 export * from "./config/settings.js";
 export * from "./context/memory.js";
 export * from "./runtime/integration.js";
-export * from "./tasks/services.js";
+export * from "./tasks/execution.js";
 export * from "./signals/policy.js";
 export { secretConfig } from "@aster/agent";
 export * from "./context/reactions.js";
 export * from "./signals/commands.js";
-export * from "./goals/services.js";
+export * from "./goals/relevance.js";
 export * from "./runtime/api.js";
 export * from "./runtime/runtime.js";
 export * from "./context/errors.js";
@@ -66,7 +66,7 @@ export * from "./tasks/outcome.js";
 export * from "./signals/state.js";
 export * from "./goals/state.js";
 export * from "./personal/actor.js";
-export * from "./personal/processor.js";
+export * from "./personal/reasoner.js";
 export * from "./personal/actions.js";
 
 export * from "./context/durable.js";

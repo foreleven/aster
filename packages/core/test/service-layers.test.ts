@@ -1,19 +1,21 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber, Layer } from "effect";
-import {
-  InternalAgent,
-  taskPreparationLayer,
-  TaskPreparation,
-  ExternalAgents,
-  SystemOneClient,
-  DecisionError,
-} from "../src/index.js";
-const internal = InternalAgent.of({
-  extract: () => Effect.sync(() => []),
-  describe: () => Effect.sync(() => "Test Context"),
-  prepare: (definition) => Effect.sync(() => ({ instructions: definition.task, input: [] })),
-});
+import { makeTaskExecution, ExternalAgents, SystemOneClient, DecisionError } from "../src/index.js";
+import { AgentRunner } from "@aster/agent";
+import { reasoningConfig, emptyRecall, agentResult } from "./workflow-fixtures.js";
+const reasoning = Layer.mergeAll(
+  reasoningConfig,
+  emptyRecall,
+  Layer.succeed(
+    AgentRunner,
+    AgentRunner.make(() =>
+      Effect.succeed(
+        agentResult("submit_result", { instructions: "Read-only analysis", input: [] }),
+      ),
+    ),
+  ),
+);
 
 test("readiness preserves typed decision errors and cancellation of the injected Effect", async () => {
   for (const fails of [true, false]) {
@@ -23,32 +25,30 @@ test("readiness preserves typed decision errors and cancellation of the injected
           const entered = yield* Deferred.make<void>();
           let finalized = false;
           const cause = new DecisionError({ message: "Decision service unavailable" });
-          const layer = taskPreparationLayer.pipe(
-            Layer.provide(
-              Layer.mergeAll(
-                Layer.succeed(InternalAgent, internal),
-                Layer.succeed(ExternalAgents, {}),
-                Layer.succeed(SystemOneClient, {
-                  systemOne: () =>
-                    fails
-                      ? Effect.fail(cause)
-                      : Effect.gen(function* () {
-                          yield* Deferred.succeed(entered, undefined);
-                          return yield* Effect.never;
-                        }).pipe(
-                          Effect.ensuring(
-                            Effect.sync(() => {
-                              finalized = true;
-                            }),
-                          ),
+          const layer = Layer.mergeAll(
+            Layer.mergeAll(
+              reasoning,
+              Layer.succeed(ExternalAgents, {}),
+              Layer.succeed(SystemOneClient, {
+                systemOne: () =>
+                  fails
+                    ? Effect.fail(cause)
+                    : Effect.gen(function* () {
+                        yield* Deferred.succeed(entered, undefined);
+                        return yield* Effect.never;
+                      }).pipe(
+                        Effect.ensuring(
+                          Effect.sync(() => {
+                            finalized = true;
+                          }),
                         ),
-                }),
-              ),
+                      ),
+              }),
             ),
           );
           yield* Effect.gen(function* () {
-            const preparation = yield* TaskPreparation;
-            const decision = preparation.ready(
+            const preparation = yield* makeTaskExecution();
+            const decision = preparation.checkReadiness(
               { slug: "test", when: "now", task: "Review", agent: "test", mode: "auto" },
               { path: "/test", description: "Test", state: {}, messages: [] },
               { instructions: "Review", input: [] },
@@ -70,27 +70,25 @@ test("readiness preserves typed decision errors and cancellation of the injected
     );
   }
 });
-test("TaskPreparation uses injected internal reasoning and execution capabilities", async () => {
+test("Task execution uses injected AgentRunner and execution capabilities", async () => {
   let capabilities: unknown;
-  const layer = taskPreparationLayer.pipe(
-    Layer.provide(
-      Layer.mergeAll(
-        Layer.succeed(InternalAgent, internal),
-        Layer.succeed(ExternalAgents, {}),
-        Layer.succeed(SystemOneClient, {
-          systemOne: (input) =>
-            Effect.sync(() => {
-              assert.equal(typeof input.state, "string");
-              capabilities = JSON.parse(input.state as string).execution;
-              return { answers: { executable: { type: "choice", choice: "no" } } };
-            }),
-        }),
-      ),
+  const layer = Layer.mergeAll(
+    Layer.mergeAll(
+      reasoning,
+      Layer.succeed(ExternalAgents, {}),
+      Layer.succeed(SystemOneClient, {
+        systemOne: (input) =>
+          Effect.sync(() => {
+            assert.equal(typeof input.state, "string");
+            capabilities = JSON.parse(input.state as string).execution;
+            return { answers: { executable: { type: "choice", choice: "no" } } };
+          }),
+      }),
     ),
   );
   await Effect.runPromise(
     Effect.gen(function* () {
-      const preparation = yield* TaskPreparation;
+      const preparation = yield* makeTaskExecution();
       const definition = {
         slug: "test",
         when: "changed",
@@ -99,9 +97,9 @@ test("TaskPreparation uses injected internal reasoning and execution capabilitie
         mode: "confirm" as const,
       };
       const source = { path: "/test", description: "test", state: {}, messages: [] };
-      const task = yield* preparation.prepare(definition, source, {});
-      assert.equal(task.instructions, "Read-only analysis");
-      assert.equal(yield* preparation.ready(definition, source, task), false);
+      const task = yield* preparation.buildExecutionInput(definition, source, {});
+      assert.ok(task.instructions.endsWith("Read-only analysis"));
+      assert.equal(yield* preparation.checkReadiness(definition, source, task), false);
       assert.deepEqual(capabilities, {
         supportedAgent: false,
         workspace: "Isolated local workspace",

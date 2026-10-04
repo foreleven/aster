@@ -1,3 +1,4 @@
+import { personalDisabled } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit } from "@aster/actor";
@@ -10,7 +11,6 @@ import {
   ExternalAgentError,
   PersonalActions,
   PersonalAgentActor,
-  PersonalProcessor,
   contextSpawnOptions,
   makeApplicationApi,
   makeContextRegistry,
@@ -151,7 +151,7 @@ test("Personal inspects retained Delegation business data without provider metad
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
             PersonalActions.unavailable,
-            PersonalProcessor.disabled,
+            personalDisabled,
           ),
         );
         const personal = yield* system.spawn("personal", PersonalAgentActor);

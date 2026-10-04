@@ -6,7 +6,7 @@ import { TestClock } from "effect/testing";
 import {
   SignalActor,
   makeContextRegistry,
-  makeGoalRuntime,
+  makeGoalSignalCommands,
   type GoalCommand,
 } from "../src/index.js";
 
@@ -37,27 +37,20 @@ test("Goal coordination retains the caller's Clock and cancellation instead of s
         const entered = yield* Deferred.make<void>();
         let cancelled = false;
         let observedTime: number | undefined;
-        const runtime = makeGoalRuntime(
-          { definitions: [] },
-          registry,
-          {
-            ask: () =>
-              Effect.gen(function* () {
-                observedTime = yield* Clock.currentTimeMillis;
-                yield* Deferred.succeed(entered, undefined);
-                return yield* Effect.never;
-              }).pipe(
-                Effect.ensuring(
-                  Effect.sync(() => {
-                    cancelled = true;
-                  }),
-                ),
+        const runtime = makeGoalSignalCommands(registry, {
+          ask: () =>
+            Effect.gen(function* () {
+              observedTime = yield* Clock.currentTimeMillis;
+              yield* Deferred.succeed(entered, undefined);
+              return yield* Effect.never;
+            }).pipe(
+              Effect.ensuring(
+                Effect.sync(() => {
+                  cancelled = true;
+                }),
               ),
-          },
-          {
-            plan: () => Effect.die(new Error("No reasoning expected")),
-          },
-        );
+            ),
+        });
         const operation = runtime.reconcile("project", subscriber.ref);
         assert.equal(observedTime, undefined, "constructing an Effect must not send a command");
         const clock = yield* TestClock.make();

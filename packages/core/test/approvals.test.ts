@@ -1,3 +1,5 @@
+import { DEFAULT_EXECUTOR_PROMPT } from "../src/index.js";
+import { taskExecutionLayer } from "./workflow-fixtures.js";
 import { TaskPreparationError } from "../src/index.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -14,7 +16,6 @@ import {
   ExternalAgents,
   SignalDefinitions,
   SignalRootActor,
-  TaskPreparation,
   type ApprovalEntry,
   type ApprovalResponse,
   type InputRequest,
@@ -294,11 +295,17 @@ test("prepared Task is checked before confirmation and the approved Task is subm
             Layer.succeed(SignalDefinitions, [
               { slug: "review", when: "now", task: "Review", agent: "codex", mode: "confirm" },
             ]),
-            Layer.succeed(TaskPreparation, {
+            taskExecutionLayer({
               prepare: () => Effect.sync(() => task),
               ready: (_definition, _source, prepared) =>
                 Effect.sync(() => {
-                  assert.deepEqual(prepared, task);
+                  assert.deepEqual(prepared, {
+                    instructions: `${DEFAULT_EXECUTOR_PROMPT}\n\n${task.instructions}`,
+                    input: [
+                      { content: "Current Goal/source state:\n{}", sources: ["/source"] },
+                      ...task.input,
+                    ],
+                  });
                   assert.ok(
                     Object.values(registry.snapshot()).some((record) =>
                       record.messages.some((m) => (m as { type?: string }).type === "TaskPrepared"),
@@ -311,7 +318,13 @@ test("prepared Task is checked before confirmation and the approved Task is subm
               codex: fakeAgent({
                 submit: (prepared) =>
                   Effect.sync(() => {
-                    assert.deepEqual(prepared, task);
+                    assert.deepEqual(prepared, {
+                      instructions: `${DEFAULT_EXECUTOR_PROMPT}\n\n${task.instructions}`,
+                      input: [
+                        { content: "Current Goal/source state:\n{}", sources: ["/source"] },
+                        ...task.input,
+                      ],
+                    });
                     submissions++;
                     return { sessionId: "session", runId: "run" };
                   }),
@@ -432,7 +445,7 @@ test("failed preparation and rejected readiness stay recorded without submitting
               Layer.succeed(SignalDefinitions, [
                 { slug: "blocked", when: "now", task: "Task", agent: "test", mode: "auto" },
               ]),
-              Layer.succeed(TaskPreparation, {
+              taskExecutionLayer({
                 prepare: () =>
                   Effect.gen(function* () {
                     attempts++;
@@ -503,7 +516,7 @@ test("a resolved execution confirmation survives restart and uses the saved Task
             ActorSystem.provide(
               Layer.succeed(ContextRegistry, registry),
               Layer.succeed(SignalDefinitions, [definition]),
-              Layer.succeed(TaskPreparation, {
+              taskExecutionLayer({
                 prepare: () =>
                   Effect.sync(() => {
                     prepared++;
@@ -515,7 +528,10 @@ test("a resolved execution confirmation survives restart and uses the saved Task
                 test: fakeAgent({
                   submit: (task) =>
                     Effect.sync(() => {
-                      assert.equal(task.instructions, "Original prepared task");
+                      assert.equal(
+                        task.instructions,
+                        `${DEFAULT_EXECUTOR_PROMPT}\n\nOriginal prepared task`,
+                      );
                       submitted++;
                       return { sessionId: "restored" };
                     }),

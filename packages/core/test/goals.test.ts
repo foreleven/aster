@@ -1,3 +1,4 @@
+import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import { goalTestReply } from "./goal-fixtures.js";
 import { preparationLayer, fakeAgent } from "./fixtures.js";
 import assert from "node:assert/strict";
@@ -5,7 +6,7 @@ import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import { ContextRegistry, makeContextRegistry } from "../src/index.js";
 import { Effect, Layer } from "effect";
-import { GoalRuntime, GoalsRootActor } from "../src/index.js";
+import { GoalsRootActor } from "../src/index.js";
 import type { StoredGoalPlan as GoalPlan } from "../src/goals/plan.js";
 import { ExternalAgents, DelegationActor } from "../src/index.js";
 import { SignalActor, SignalDefinitions, SignalRootActor, SignalRunActor } from "../src/index.js";
@@ -58,7 +59,7 @@ test("a user message during planning is retained for a second evaluation without
             Layer.succeed(ContextRegistry, registry),
             preparationLayer,
             Layer.succeed(ExternalAgents, {}),
-            Layer.succeed(GoalRuntime, {
+            goalWorkflowLayer({
               definitions: [{ slug: "project", description: "Monitor project progress over time" }],
               reasoner: {
                 plan: (input) =>

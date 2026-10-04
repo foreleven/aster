@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
-import { Models, type ResolvedModel } from "@aster/agent";
+import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
 import { Effect, Layer } from "effect";
 import { makeGoalReasoner } from "../src/index.js";
 
@@ -125,7 +125,10 @@ test("reopened Goal sessions keep their policy and history while tools read the 
           messages: [{ role: "user", content: "Continue the Goal", timestamp: 0 }],
           durable: { sessionId: "test", requestId: `turn-${turn}`, storageDirectory: directory },
         });
-      }).pipe(Effect.provide(models), Effect.timeout("10 seconds")),
+      }).pipe(
+        Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))),
+        Effect.timeout("10 seconds"),
+      ),
     );
   const first = await run(0);
   const next = await run(1);

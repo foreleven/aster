@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Agent, AgentError, Models } from "@aster/agent";
+import { AgentRunner, Agent, AgentError, Models } from "@aster/agent";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import {
   makeDescriptionInitializer,
-  makeInternalAgent,
+  makeStructuredReasoning,
   makeSignalExtractor,
 } from "../src/index.js";
+
+import { makeExecutionInputBuilder } from "../src/tasks/build-execution-input.js";
 
 const identity = { path: "/test", identity: "Test", parentDescription: "Parent" };
 const source = { path: "/test", description: "Test", state: {}, messages: [] };
@@ -77,7 +79,7 @@ test("description and extraction run lazily with the caller Clock and reject mal
   );
 });
 
-test("InternalAgent cancellation releases memory tools before SDK idle for description, extraction and preparation", async (t) => {
+test("AgentRunner cancellation releases memory tools before SDK idle for description, extraction and preparation", async (t) => {
   for (const kind of ["describe", "extract", "prepare"]) {
     await Effect.runPromise(
       Effect.scoped(
@@ -127,7 +129,7 @@ test("InternalAgent cancellation releases memory tools before SDK idle for descr
               }),
             ),
           );
-          const internal = yield* makeInternalAgent("test", {
+          const memory = {
             search: () =>
               Effect.suspend(() => {
                 searches++;
@@ -137,13 +139,22 @@ test("InternalAgent cancellation releases memory tools before SDK idle for descr
                   : blocked;
               }),
             expand: () => Effect.succeed({ results: [] }),
-          }).pipe(Effect.provide(models));
+          };
+          const run = yield* makeStructuredReasoning("test", memory).pipe(
+            Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))),
+          );
           const work =
             kind === "describe"
-              ? internal.describe(identity)
+              ? makeDescriptionInitializer((prompt, schema) => run(prompt, schema, {}))(identity)
               : kind === "extract"
-                ? internal.extract(source.path, [definition], { [source.path]: source })
-                : internal.prepare(definition, source, {});
+                ? makeSignalExtractor({ run, accessInstructions: [] })(source.path, [definition], {
+                    [source.path]: source,
+                  })
+                : makeExecutionInputBuilder({ memory, run, executorPrompt: () => "" })(
+                    definition,
+                    source,
+                    {},
+                  );
           const fiber = yield* work.pipe(Effect.forkScoped);
           yield* Deferred.await(entered).pipe(Effect.timeout("2 seconds"));
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"));

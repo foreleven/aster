@@ -9,6 +9,7 @@ import { minimaxProvider } from "@earendil-works/pi-ai/providers/minimax";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { Config, ConfigProvider, Context, Effect, Layer, Redacted, Schema } from "effect";
+import { withAgentCallbacks, type AgentCallbackInvoker } from "./agent-callbacks.js";
 import { secretConfig } from "./configuration.js";
 import { PiStorageLease } from "./pi-storage-lease.js";
 export { PiStorageLease, PiStorageLeaseError } from "./pi-storage-lease.js";
@@ -22,6 +23,7 @@ import {
 import { DurableAgentFailure } from "./durable-error.js";
 export { secretConfig } from "./configuration.js";
 export { rejectedToolResult } from "./durable-tools.js";
+export { type AgentCallbackInvoker } from "./agent-callbacks.js";
 
 export type {
   AgentMessage,
@@ -358,3 +360,36 @@ export {
   type PiDurableRuntime,
   type PiExecutionEnvironment,
 } from "./pi-runtime.js";
+
+export type AgentInvocation = Parameters<typeof Agent.make>[0] & Parameters<Agent["run"]>[0];
+export type AgentResult = Effect.Success<ReturnType<Agent["run"]>>;
+
+/** Shared execution capability; each invocation owns a fresh Agent and its callback scope. */
+export class AgentRunner extends Context.Service<
+  AgentRunner,
+  {
+    readonly run: <E, R>(
+      invocation: (invoke: AgentCallbackInvoker) => Effect.Effect<AgentInvocation, E, R>,
+    ) => Effect.Effect<AgentResult, E | AgentError, R>;
+  }
+>()("agent/Runner") {
+  static readonly make = (
+    execute: (invocation: AgentInvocation) => Effect.Effect<AgentResult, AgentError>,
+  ): AgentRunner["Service"] => ({
+    run: (invocation) =>
+      withAgentCallbacks((invoke) => invocation(invoke).pipe(Effect.flatMap(execute))),
+  });
+
+  static readonly layer = Layer.effect(
+    AgentRunner,
+    Effect.gen(function* () {
+      const models = yield* Models;
+      return AgentRunner.make(
+        Effect.fn("AgentRunner.run")(function* ({ messages, ...options }) {
+          const agent = yield* Agent.make(options).pipe(Effect.provideService(Models, models));
+          return yield* agent.run({ messages });
+        }),
+      );
+    }),
+  );
+}

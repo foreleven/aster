@@ -1,3 +1,5 @@
+import { ExternalAgents } from "../tasks/model.js";
+import type { TaskExecutionServices } from "../tasks/execution.js";
 import { SignalReactionInput, acceptSignalReaction } from "./reaction.js";
 import {
   CausalChain,
@@ -16,7 +18,6 @@ import { defineContext, ContextRecord } from "../context/model.js";
 import { ContextRegistry } from "../context/registry.js";
 import { Clock, Cron, Context, Effect, Layer, Schedule, Schema } from "effect";
 import { SignalDefinition, validateSignalTime } from "../config/schema.js";
-import { TaskPreparation, ExternalAgents } from "../tasks/model.js";
 import type { GoalCommand } from "../goals/actors.js";
 import { SignalRunActor, type RunCommand } from "../tasks/run.js";
 import { SignalState as DurableSignalState } from "./state.js";
@@ -95,7 +96,7 @@ type SignalCommand = typeof SignalCommand.Type;
 
 export class SignalActor extends ContextActor.Service<
   SignalActor,
-  SignalDefinitions | TaskPreparation | ExternalAgents
+  SignalDefinitions | TaskExecutionServices
 >()("signals/SignalActor", {
   command: SignalCommand,
   context: defineContext({
@@ -583,7 +584,7 @@ export const SignalRootCommand = Schema.Union([
 export type SignalRootCommand = typeof SignalRootCommand.Type;
 export class SignalRootActor extends ContextActor.Service<
   SignalRootActor,
-  SignalDefinitions | TaskPreparation | ExternalAgents
+  SignalDefinitions | TaskExecutionServices
 >()("signals/RootActor", {
   command: SignalRootCommand,
   context: defineContext({ identity: "Signals", state: Schema.Struct({}), message: Schema.Never }),
