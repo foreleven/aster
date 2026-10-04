@@ -123,7 +123,7 @@
   margin: 12px 0;
 }
 .context-messages h2,
-.context-summary h2 {
+.context-summary > h2 {
   font-size: 13px;
   font-weight: 600;
   margin-bottom: 16px;
@@ -135,8 +135,7 @@
   background: #fafbfd;
   margin-bottom: 14px;
 }
-.context-messages .message p,
-.context-summary p {
+.context-messages .message p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   line-height: 1.75;

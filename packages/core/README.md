@@ -1,5 +1,7 @@
 # Core
 
+Goal reasoning uses a stable personal-assistant system policy in `goals/agent-prompt.ts`. Each turn reads its frozen Goal definition, summary, turn ID, admission purpose and Context overview through the paginated `goal_current` tool. Task, Signal, Context and history tools provide further details. Current facts are not embedded in the system prompt. Catalogue `aster.goal.v10` identifies this tool/policy contract; durable request conflicts remain fenced instead of silently resubmitting accepted work.
+
 Goal planning has no fixed whole-run time limit. Goal End and runtime shutdown still interrupt the owning Fiber, drain SDK callbacks and release the Agent session. Interrupted durable exchanges retain their request identity for reconciliation. History compaction retains a three-minute limit per page.
 
 Durable Goal planning passes `config.goals.contextTokens` and `reserveTokens` to Pi's native compaction policy (defaults 200,000 and 8,192 tokens; compaction threshold 191,808 tokens, capped by the model context window). The native transcript is compacted within the original request before further generation. The isolated-run byte guard does not run on durable sessions: GoalHistory compaction alone cannot shrink Pi's retained conversation. Catalogue `aster.goal.v6` freezes this changed policy; existing failed evaluations remain auditable and a new retry uses the new policy.

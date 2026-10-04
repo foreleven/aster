@@ -1,3 +1,4 @@
+import { Markdown } from "../components/markdown";
 import { ProcessingDetails } from "./processing";
 import { DelegationDetails } from "./delegation";
 import { TaskRunDetails } from "./task-run";
@@ -37,6 +38,7 @@ export function ContextWorkspace({
   const [error, setError] = useState("");
   const approvals = useAtomValue(approvalEntries);
   const state = context.personalState;
+  const summary = summaryText(context.state.summary);
   const restricted = context.projection?.visibility === "restricted";
   const isDelegation = !restricted && /^\/delegations\/[^/]+$/.test(context.path);
   const isPersonal = !restricted && context.path === "/personal";
@@ -96,10 +98,10 @@ export function ContextWorkspace({
               public view.
             </p>
           )}
-          {summaryText(context.state.summary) && (
+          {summary && (
             <section className="context-summary">
               <h2>Current summary</h2>
-              <p>{summaryText(context.state.summary)}</p>
+              <Markdown>{summary}</Markdown>
             </section>
           )}
           {!restricted && isRunPath(context.path) && (

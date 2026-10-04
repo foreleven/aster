@@ -384,6 +384,46 @@ test("Goal title appears in navigation and inspector while Details keeps the des
   expect(errors).toEqual([]);
 });
 
+test("Goal summaries and conclusions render Markdown", async ({ page }) => {
+  const data = fixture();
+  const markdown = [
+    "## Travel options",
+    "",
+    "**Family trip** with a [reference](https://example.com/travel).",
+    "",
+    "- Compare destinations",
+    "- Check `flight` prices",
+    "",
+    "| Destination | Fare |",
+    "| --- | --- |",
+    "| Xiamen | 1300 |",
+    "| Sanya | 3920 |",
+  ].join("\n");
+  const goal = data.contexts.find((context) => context.path === "/goals/engine");
+  goal.state.summary = markdown;
+  goal.state.progress = markdown;
+  data.timelines.engine.groups[0].conclusion.text = markdown;
+  const { errors } = await setup(page, data);
+  await page.goto("/?context=%2Fgoals%2Fengine");
+
+  for (const selector of [".goal-description", ".evaluation-conclusion"]) {
+    const content = page.locator(selector);
+    await expect(content.getByRole("heading", { name: "Travel options" })).toBeVisible();
+    await expect(content.locator("strong").filter({ hasText: "Family trip" })).toBeVisible();
+    await expect(content.getByRole("link", { name: "reference" })).toHaveAttribute(
+      "href",
+      "https://example.com/travel",
+    );
+    await expect(content.getByRole("listitem")).toHaveCount(2);
+    await expect(content.locator("code")).toHaveText("flight");
+    await expect(content.getByRole("table").getByRole("row")).toHaveCount(3);
+  }
+
+  await page.getByRole("tab", { name: "Details", exact: true }).click();
+  await expect(page.getByRole("tabpanel", { name: "Details" }).getByRole("table")).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
 test("Goal timeline omits internal Agent tool exchanges", async ({ page }) => {
   const data = fixture();
   const goal = data.contexts.find((context) => context.path === "/goals/engine");

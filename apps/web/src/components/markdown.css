@@ -1,0 +1,97 @@
+.markdown-content {
+  min-width: 0;
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.markdown-content > * + * {
+  margin-top: 0.85em;
+}
+.markdown-content :is(h1, h2, h3, h4, h5, h6) {
+  margin: 1.25em 0 0.5em;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.markdown-content h1 {
+  font-size: 1.35em;
+}
+.markdown-content h2 {
+  font-size: 1.2em;
+}
+.markdown-content :is(h3, h4, h5, h6) {
+  font-size: 1.05em;
+}
+.markdown-content > :first-child {
+  margin-top: 0;
+}
+.markdown-content ul,
+.markdown-content ol {
+  padding-left: 1.5em;
+}
+.markdown-content ul {
+  list-style: disc;
+}
+.markdown-content ol {
+  list-style: decimal;
+}
+.markdown-content li + li,
+.markdown-content li > :is(p, ul, ol) {
+  margin-top: 0.3em;
+}
+.markdown-content a {
+  color: var(--goal-blue, var(--color-primary));
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.markdown-content blockquote {
+  border-left: 3px solid var(--goal-line, var(--color-border));
+  padding-left: 1em;
+  color: var(--goal-muted, var(--color-muted-foreground));
+}
+.markdown-content code {
+  border-radius: 4px;
+  padding: 0.15em 0.35em;
+  background: var(--color-muted);
+  font-family: "SFMono-Regular", Consolas, monospace;
+  font-size: 0.9em;
+}
+.markdown-content pre {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+  overflow-wrap: normal;
+  border-radius: 6px;
+  padding: 12px;
+  background: var(--color-muted);
+}
+.markdown-content pre code {
+  padding: 0;
+  background: none;
+}
+.markdown-content table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.markdown-content :is(th, td) {
+  border: 1px solid var(--goal-line, var(--color-border));
+  padding: 6px 10px;
+}
+.markdown-content th {
+  background: var(--color-muted);
+  font-weight: 600;
+}
+.markdown-content .contains-task-list {
+  list-style: none;
+}
+.markdown-content input[type="checkbox"] {
+  margin-right: 0.5em;
+}
+.markdown-content img {
+  max-width: 100%;
+  height: auto;
+}
+.markdown-content hr {
+  border-top: 1px solid var(--goal-line, var(--color-border));
+}

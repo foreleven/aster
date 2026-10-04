@@ -76,6 +76,29 @@ contexts:
         config:
           mailbox: me
           pollIntervalMs: 30000
+  /apps:
+    description: On-demand, read-only application queries for research and travel planning.
+    # Requires OpenCLI on PATH and its browser bridge with the relevant sites logged in.
+    # No polling or browser commands run at startup. Each child publishes its command catalogue.
+    /xiaohongshu:
+      description: Search Xiaohongshu travel notes, read full notes and comments, and compare recent first-hand destination experiences through OpenCLI.
+    /ctrip:
+      description: Query Ctrip destinations, hotels, flights, trains and travel packages through OpenCLI. Prices and availability are time-stamped snapshots; no booking or payment.
+  # Optional generic IMAP/POP3 source, separate from /lark/mail.
+  # /mail:
+  #   description: My connected mailboxes
+  #   config:
+  #     pollIntervalMs: 30000
+  #     mailboxes:
+  #       - id: personal
+  #         protocol: imap
+  #         host: imap.example.com
+  #         port: 993
+  #         secure: true
+  #         username: me@example.com
+  #         password: ${MAIL_PASSWORD}
+  #         folder: INBOX
+  #         maxMessages: 50
 signals:
   email-action-request:
     when: A new email explicitly asks me to complete a specific task.
@@ -90,3 +113,41 @@ goals:
       As the Knowledge Engine frontend tech lead, continuously monitor the Knowledge Engine project.
       Track significant changes, frontend impact, dependencies and blockers, matters requiring my involvement, and recommended next steps.
       Provide concise analysis through Doubao, citing evidence from messages and documents.
+
+  spring-festival-travel:
+    title: Spring Festival 2027 Travel Plan
+    description: |
+      Act as my proactive personal travel assistant and help me plan a trip during the upcoming
+      2027 Spring Festival in Chinese. Start researching in the first evaluation and give me useful
+      travel recommendations; do not wait for a completed preference questionnaire or ask whether
+      you may search. Read existing Contexts and memory for preferences I have already provided.
+      Use query_context with both /apps/xiaohongshu and /apps/ctrip in the initial research pass,
+      after reading their command catalogues. Search Xiaohongshu for Spring Festival experiences,
+      compare promising destinations, and inspect selected signed note URLs and comments.
+      Use Ctrip destination search, attractions and hotel details to check practical options.
+      Without confirmed departure city or dates, begin with destination-level research; postpone
+      route-specific fares and dated hotel quotes until their required inputs are known. Distinguish
+      personal anecdotes and sponsored content from verified facts. If one source is unavailable,
+      continue with the other, report the limitation and still provide evidence-backed findings.
+      Present two or three concrete destination options with distinct tradeoffs, who each suits,
+      suggested trip length and pace, holiday crowds, weather, closures and entry constraints.
+      Recommend one provisional option and draft a sample day-by-day itinerary with accommodation
+      areas, activities and alternatives. Label illustrative assumptions and unknowns explicitly.
+      Provide sourced cost ranges where available, and separate transport, lodging and activities;
+      do not invent total costs, quotes or personal preferences to fill missing information.
+      Alongside this first shortlist, ask only the most consequential missing questions, such as
+      departure city, date flexibility, budget and travelers. Reuse known answers. Refine destination,
+      pace, accessibility, dietary needs and passport/visa constraints as relevant to the choices.
+      Verify holiday dates and travel policies from authoritative sources where available, and mark
+      anything unverified. As preferences become known, refine the itinerary, transport and hotel
+      shortlist, itemized budget with contingency, reservation timeline, packing checklist and
+      alternatives for weather or sell-outs. Cite source links, Context paths and query timestamps.
+      If holiday inventory is not yet on sale, say so; never treat missing inventory as sold out
+      or present current off-season prices as a holiday quote. Ask before scheduling future checks.
+      Request my feedback and revise the plan. Only research and plan; do not book, pay, publish,
+      contact third parties or modify external accounts. If login/captcha blocks a source, explain
+      the required user action, continue independent research and never invent blocked results.
+    completionCriteria: |
+      I have confirmed my travel preferences and selected a destination, and explicitly accepted
+      a feasible itinerary with transport and hotel options, an itemized budget, cited evidence,
+      reservation deadlines, contingency plans and clearly stated unresolved availability checks.

@@ -82,3 +82,5 @@ export type { ContextViewPolicy } from "./context/model.js";
 export * from "./goals/intent.js";
 
 export * from "./memory/actor.js";
+
+export * from "./context/queries.js";

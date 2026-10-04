@@ -26,3 +26,5 @@ export interface GoalReasoner {
     readonly history?: GoalHistory;
   }): Effect.Effect<StoredGoalPlan, GoalReasoningError>;
 }
+
+export type GoalReasoningInput = Parameters<GoalReasoner["plan"]>[0];

@@ -1,7 +1,7 @@
 import { IntegrationError } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Redacted, Schema } from "effect";
 import {
   AsterRuntime,
   ConfigLocation,
@@ -20,6 +20,7 @@ import {
   makeMemoryGoalHistory,
 } from "@aster/core";
 import { Models } from "@aster/agent";
+import { MailFetcher, MailIntegration, MailSettings } from "@aster/integrations";
 import { MemoryBackend } from "@aster/core";
 
 class Source extends ContextActor.Service<Source>()("test/Source", {
@@ -312,4 +313,105 @@ test("runtime stops capture observers before draining admitted work and releases
   );
   assert.equal(events.at(-1), "memory:released");
   assert.ok(events.indexOf("memory:drained") < events.indexOf("memory:released"));
+});
+
+test("runtime activates generic mail and exposes its tree through ListContexts before retrieval finishes", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const mail = MailIntegration.installation.pipe(
+          Layer.provide(
+            Layer.mergeAll(
+              Layer.succeed(MailSettings, {
+                mailboxes: [
+                  {
+                    id: "work",
+                    host: "unused.invalid",
+                    username: "test",
+                    password: Redacted.make("secret"),
+                  },
+                ],
+              }),
+              Layer.succeed(MailFetcher, {
+                pull: () =>
+                  Deferred.succeed(entered, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.as([]),
+                  ),
+                pullAll: () => Effect.die("Unexpected batch pull"),
+              }),
+            ),
+          ),
+        );
+        yield* Effect.gen(function* () {
+          const runtime = yield* AsterRuntime;
+          yield* Deferred.await(entered);
+          const contexts = yield* runtime.api.contexts;
+          assert.ok(contexts.some((context) => context.path === "/mail"));
+          assert.ok(contexts.some((context) => context.path === "/mail/work"));
+          assert.ok(!JSON.stringify(contexts).includes("secret"));
+          assert.equal((yield* runtime.api.inspect).phase, "starting");
+          yield* Deferred.succeed(release, undefined);
+          yield* runtime.ready;
+          assert.equal((yield* runtime.api.inspect).phase, "ready");
+        }).pipe(
+          Effect.provide(
+            AsterRuntime.layer({ integrations: [mail] }).pipe(
+              Layer.provide(infrastructure([])),
+              Layer.provide(config),
+            ),
+          ),
+        );
+      }),
+    ).pipe(Effect.timeout("10 seconds")),
+  );
+});
+
+test("runtime owns Apps activation and exposes query commands after readiness", async () => {
+  const { AppsIntegration, AppsSettings, OpenCli } = await import("@aster/integrations");
+  let calls = 0;
+  const apps = AppsIntegration.installation.pipe(
+    Layer.provide(
+      Layer.mergeAll(
+        Layer.succeed(AppsSettings, {
+          description: "Apps",
+          apps: [{ name: "ctrip", description: "Travel queries" }],
+        }),
+        Layer.succeed(OpenCli, {
+          run: () =>
+            Effect.sync(() => {
+              calls++;
+              return [{ city: "Sanya" }];
+            }),
+        }),
+      ),
+    ),
+  );
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const runtime = yield* AsterRuntime;
+        yield* runtime.ready;
+        assert.equal(calls, 0);
+        assert.ok((yield* runtime.api.contexts).some((record) => record.path === "/apps/ctrip"));
+        const result = yield* runtime.api.queryContext({
+          path: "/apps/ctrip",
+          command: "search",
+          args: { query: "Sanya" },
+        });
+        assert.deepEqual(result.data, [{ city: "Sanya" }]);
+        assert.equal(calls, 1);
+      }),
+    ).pipe(
+      Effect.provide(
+        AsterRuntime.layer({ integrations: [apps] }).pipe(Layer.provide(infrastructure([]))),
+      ),
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromUnknown({ config: { agent: { model: "test" } } }),
+      ),
+    ),
+  );
 });

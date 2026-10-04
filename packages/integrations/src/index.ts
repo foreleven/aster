@@ -4,3 +4,7 @@ export * from "./mail/errors.js";
 export * from "./mail/client.js";
 export * from "./mail/config.js";
 export * from "./mail/integration.js";
+
+export * from "./apps/integration.js";
+export * from "./apps/config.js";
+export * from "./apps/client.js";

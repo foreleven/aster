@@ -316,7 +316,6 @@
   font-size: 16px;
   line-height: 1.4;
   margin: 14px 0 9px;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 .goal-pill {
@@ -584,6 +583,9 @@
 .goal-details dd {
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+.goal-details .markdown-content {
+  white-space: normal;
 }
 .composer-area {
   flex-shrink: 0;
@@ -1173,7 +1175,7 @@
   margin-bottom: 10px;
 }
 .timeline-input p,
-.evaluation-conclusion p {
+.evaluation-conclusion > p {
   white-space: pre-wrap;
   line-height: 1.6;
   margin: 8px 0;
@@ -1197,6 +1199,9 @@
 }
 .evaluation-conclusion {
   padding: 10px 2px;
+}
+.evaluation-conclusion > .markdown-content {
+  margin: 8px 0;
 }
 .timeline-output {
   border-top: 1px solid var(--goal-line);

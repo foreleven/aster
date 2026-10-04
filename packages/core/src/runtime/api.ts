@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ContextQueries, ContextQueryError, type ContextQueryInput } from "../context/queries.js";
 import { inspectProcessing } from "../context/processing-inspection.js";
 import { RecoveryInput, type ProcessingOwner, type CommandReceipt } from "@aster/api-contracts";
 import { goalTimeline } from "../goals/timeline.js";
@@ -31,6 +32,7 @@ import { makePersonalApi } from "../personal/api.js";
 /** Transport-independent queries and commands. Actor paths remain inside core. */
 export const makeApplicationApi = (options: {
   readonly registry: ContextRegistry["Service"];
+  readonly queries?: ContextQueries["Service"];
   readonly history?: GoalHistory;
   readonly goals?: ActorRef<GoalsRootCommand>;
   readonly approvals?: ActorRef<ApprovalCommand>;
@@ -78,6 +80,12 @@ export const makeApplicationApi = (options: {
     if (reply._tag === "Rejected") return yield* reply.error;
   });
   return {
+    queryContext: (input: ContextQueryInput) =>
+      options.queries
+        ? options.queries.query(input)
+        : Effect.fail(
+            new ContextQueryError({ kind: "unavailable", message: "Context queries unavailable" }),
+          ),
     inspectProcessing: (owner: ProcessingOwner) => inspectProcessing(registry, owner),
     recoverProcessing: Effect.fn("ApplicationApi.recoverProcessing")(function* (
       raw: RecoveryInput,

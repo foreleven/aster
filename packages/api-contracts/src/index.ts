@@ -1,3 +1,5 @@
+import { ContextQueryInput, ContextQueryResult, ContextQueryError } from "./context-query.js";
+export * from "./context-query.js";
 import { RecoveryInput, ProcessingOwner, ProcessingSnapshot } from "./recovery.js";
 export * from "./recovery.js";
 import { GoalTimelinePage, RetryGoalSignalInput, RetryGoalTurnInput } from "./goal-timeline.js";
@@ -117,6 +119,11 @@ export const ApplicationRpcs = RpcGroup.make(
     error: ApplicationError,
   }),
   Rpc.make("ListContexts", { success: Schema.Array(PublicContext), error: ApplicationError }),
+  Rpc.make("QueryContext", {
+    payload: ContextQueryInput,
+    success: ContextQueryResult,
+    error: ContextQueryError,
+  }),
   Rpc.make("GetContext", {
     payload: { path: Schema.String },
     success: PublicContext,

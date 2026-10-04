@@ -1,3 +1,4 @@
+import { ContextQueries } from "../context/queries.js";
 import { Effect, Layer } from "effect";
 import { Models } from "@aster/agent";
 import { GoalSettings } from "../config/settings.js";
@@ -27,11 +28,10 @@ export const goalRuntimeLayer = Layer.effect(
       );
     const models = yield* Models;
     yield* models.resolve(settings.reasoning!.model);
-    const reasoner = yield* makeGoalReasoner(
-      settings.reasoning!.model,
-      yield* MemoryRecall,
-      settings.reasoning,
-    );
+    const reasoner = yield* makeGoalReasoner(settings.reasoning!.model, yield* MemoryRecall, {
+      ...settings.reasoning,
+      queries: yield* ContextQueries,
+    });
     return makeGoalRuntime(settings, registry, commands, reasoner, history);
   }),
 );

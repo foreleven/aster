@@ -25,7 +25,7 @@ The local composition is intentionally small:
 
 ```ts
 const RuntimeLive = AsterRuntime.layer({
-  integrations: [LarkIntegration.layer, MailIntegration.layer],
+  integrations: [LarkIntegration.layer, MailIntegration.layer, AppsIntegration.layer],
 }).pipe(
   Layer.provide(
     Layer.mergeAll(
@@ -34,6 +34,7 @@ const RuntimeLive = AsterRuntime.layer({
       Models.configured,
       SystemOneClientLive.layer,
       AgentMemoryBackend.layer,
+      NodeServices.layer,
     ),
   ),
   Layer.provide(LocalConfig.layer({ configPath, envPath, projectRoot })),
@@ -107,6 +108,8 @@ The lease outlives all Pi writers and callbacks in its Scope. SDK close failure 
 [ADR 0046](adr/0046-separate-business-integrations-from-infrastructure.md) separates business integrations (`lark/`, `mail/`) from infrastructure (`config/`, `storage/`, `system-one/`, `pi/`, `codex/`, `doubao/`, `agentmemory/`, `process/`). These sibling packages do not import or re-export one another. Local imports each directly; core imports neither. The existing Agent package stays independent of core.
 
 Memory is an internal consumer owned by core. Its startup acknowledgement follows Actor initialization and precedes business source activation. Source capture handoffs wait for the Memory pending queue commit. Stopping the Actor interrupts local capture observers while retaining unacknowledged queue entries; runtime then drains admitted backend operations before releasing adapter resources. The agentmemory capture protocol cannot cancel already-submitted observations, so that Promise boundary remains in infra. Capture state paths, formats, provenance, and daemon ownership remain compatible.
+
+Apps readiness means that the configured query Contexts are durably registered and their scoped query routes are bound. It does not require browser login or an initial external fetch. The local host supplies Effect Node process services; the integration owns command validation, process limits and query cancellation.
 
 ## Goal readiness and activation
 

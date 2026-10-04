@@ -18,6 +18,7 @@ import { contextQueryKeys } from "@aster/api-contracts";
 import { sendGoalMessage, endGoal } from "../api/client";
 import { summaryText, type ContextView } from "../dashboard/model";
 import { references } from "../lib/dashboard";
+import { Markdown } from "../components/markdown";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
 import { Timeline } from "./timeline";
 import { WorkPanel } from "./work-panel";
@@ -66,6 +67,7 @@ export function GoalWorkspace({
     ]),
   ];
   const activity = lastActivity(goal);
+  const summary = summaryText(goal.state.summary) || goal.state.progress;
 
   // React is the imperative boundary; typed AtomRpc mutations own transport and invalidation.
   async function submit(kind: "message" | "end") {
@@ -161,10 +163,10 @@ export function GoalWorkspace({
                 Last activity {dateLabel(activity)}
               </div>
             )}
-            {(summaryText(goal.state.summary) || goal.state.progress) && (
-              <p className="goal-description">
-                {summaryText(goal.state.summary) || goal.state.progress}
-              </p>
+            {summary && (
+              <div className="goal-description">
+                <Markdown>{summary}</Markdown>
+              </div>
             )}
           </section>
           <Tabs value={tab} onValueChange={setTab} className="goal-tabs">
@@ -234,7 +236,9 @@ export function GoalWorkspace({
                 <dt>Description</dt>
                 <dd>{goal.description}</dd>
                 <dt>Progress</dt>
-                <dd>{goal.state.progress || "No progress recorded yet."}</dd>
+                <dd>
+                  <Markdown>{goal.state.progress || "No progress recorded yet."}</Markdown>
+                </dd>
                 <dt>Completion criteria</dt>
                 <dd>
                   {goal.state.completionCriteria || "This goal stays active until you end it."}

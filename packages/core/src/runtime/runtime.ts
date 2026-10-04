@@ -1,3 +1,4 @@
+import { ContextQueries } from "../context/queries.js";
 import { memoryLayer } from "../memory/services.js";
 import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster/api-contracts";
 import type { ReactionCommand } from "../context/reaction-actor.js";
@@ -236,6 +237,7 @@ const acquireRuntime = Effect.gen(function* () {
       return reply.receipt;
     }),
     registry,
+    queries: yield* ContextQueries,
     history,
     goals,
     approvals,
@@ -270,6 +272,7 @@ export class AsterRuntime extends Context.Service<
   }) {
     const foundation = Layer.mergeAll(
       ContextRegistry.layer,
+      ContextQueries.layer,
       GoalSettings.layer,
       SignalCommands.layer,
       PersonalActions.layer,

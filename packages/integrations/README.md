@@ -4,6 +4,47 @@
 
 Integrations depend on core contracts and the existing Actor/Agent packages. They receive model and decision services through Effect dependencies, never by importing `@aster/infra`. The local host selects integration Layers; `AsterRuntime` owns their activation, readiness, and shutdown. This package does not re-export infrastructure, memory backends, or Models.
 
-The generic mail adapter is exported from `mail/`. `MailIntegration.layer` provides the configured `MailSettings` and `MailFetcher` services; `MailSettings` reads `contexts./mail.config.mailboxes` from the captured `ConfigProvider`, while `mailFetcherLayer(settings.mailboxes)` is available for standalone composition. Passwords are decoded into `Redacted` values. Each mailbox may set `protocol: "imap" | "pop3"`, `host`, `port`, `secure`, `username`, `password`, `folder`, and `maxMessages`; IMAP and POP3 are supported because SMTP is a submission protocol.
+The generic mail adapter is exported from `mail/`. `MailIntegration.services` provides the configured `MailSettings` and `MailFetcher` services; `MailSettings` reads `contexts./mail.config.mailboxes` from the captured `ConfigProvider`, while `mailFetcherLayer(settings.mailboxes)` is available for standalone composition. Passwords are decoded into `Redacted` values. Each mailbox may set `protocol: "imap" | "pop3"`, `host`, `port`, `secure`, `username`, `password`, `folder`, and `maxMessages`; IMAP and POP3 are supported because SMTP is a submission protocol.
 
 Transport and protocol tests live here. Cross-integration, source-to-Memory, and application lifecycle tests remain in `apps/local/test`. Tests use fake transports.
+
+## Generic mail Contexts
+
+A configured `/mail` now installs a runtime-managed source. The root lists its mailbox paths; `/mail/<mailbox-id>` exposes protocol, folder, sync status, last successful sync time, and a sanitized failure message. Both levels are committed before the first remote request. Each mailbox polls independently, with a default `pollIntervalMs` of 30,000. An absent `/mail.config` disables the source; an explicitly configured empty mailbox list, duplicate IDs, or non-positive intervals/limits fail configuration validation.
+
+Each retrieved message becomes `/mail/<mailbox-id>/<message-id>`, with path segments percent-encoded. IMAP identities include folder, UIDVALIDITY, and UID; POP3 identities use UIDL and require server support. Message IDs do not depend on mutable sequence numbers or an optional RFC Message-ID header. Persisted messages deduplicate repeated retrieval and restart replay. Credentials and transport configuration are never copied into public Contexts.
+
+Polling reads a bounded recent snapshot (the latest `maxMessages`, default 50), not a complete historical backfill. Bursts larger than that limit between polls can leave older messages outside the snapshot; increase the limit or shorten the interval for high-volume mailboxes. Existing email Contexts remain readable when they leave the remote snapshot. New email Contexts participate in the normal Signal reaction pipeline.
+
+Runtime readiness waits for each configured mailbox's first successful retrieval and durable publication in the current activation. Empty successful snapshots count as ready; transport failure remains visible and retries without blocking other mailboxes. Mailbox Actors own polling Fibers; shutdown interrupts retrieval and timers before storage is released. Child email Actors acknowledge only after their durable commit, so an interrupted publication is safely deduplicated on replay.
+
+`MailIntegration.services` provides settings and the real transport for standalone callers. `MailIntegration.installation` accepts injected `MailSettings` and `MailFetcher` for lifecycle tests or alternate transports. `MailIntegration.layer` composes both; it registers a source and does not itself open mailbox connections.
+
+Mailbox failures expose `lastFailure` with a sanitized stage, reason, allowlisted error code, and IMAP response status. `lastError` includes that diagnosis and the retry delay. Logs use `mail.poll.started`, `mail.poll.failed` (warning, with attempt and retry delay), `mail.poll.recovered` (info after durable publication), and `mail.poll.completed` (info for initial sync, debug for subsequent successful polls). Success clears the previous failure fields. Raw SDK errors, protocol commands/responses, usernames, passwords, and message contents are not logged.
+
+## On-demand application Contexts
+
+`AppsIntegration` registers `/apps` and the configured `/apps/xiaohongshu` and `/apps/ctrip` children. Configuration uses direct child keys under `contexts./apps`, as shown in `aster.config.example.yaml`; descriptions are optional and have defaults. Omit a child to disable it. Unsupported children and invalid descriptions fail configuration validation. The root lists enabled paths, and each child publishes `mode: query-only` and a JSON Schema command catalogue. Startup commits those Contexts and binds their query handlers without starting OpenCLI or opening browser tabs. There is no polling, automatic retry, or source-event production.
+
+Queries are available to Goals and Personal through `query_context`, and to application clients through the `QueryContext` RPC (`path`, `command`, `args`). For example:
+
+```json
+{
+  "path": "/apps/ctrip",
+  "command": "hotel-search",
+  "args": { "city": "43", "checkin": "2027-02-05", "checkout": "2027-02-10", "limit": 5 }
+}
+```
+
+The supported commands are:
+
+- Xiaohongshu: `search`, `note`, `comments`, `user`, `feed`. Search supports `sort`, `noteType` and `publishTime`. Note/comment queries require the complete signed URL returned by search, including `xsec_token`.
+- Ctrip: `search`, `hotel-suggest`, `hotel-search`, `hotel`, `attraction`, `flight`, `flight-round`, `train`, `bus`, `ferry`, `cruise`, `tour`, `package`. Hotel and attraction searches use numeric city IDs; flights use uppercase IATA codes; date arguments use valid `YYYY-MM-DD` calendar dates. Check-out must follow check-in, and return cannot precede departure.
+
+Commands use named scalar arguments, validated against the published catalogue. Lists default to 10 results, with a maximum of 50 (30 for hotel searches). Login, posting, following, downloads, booking and payment are not exposed. Each successful response includes the Context path, command, query timestamp and JSON data; the owning Actor commits `lastResult` before acknowledging. Later errors preserve the previous successful result, including its original timestamp. Agent tools retain paginated results within an evaluation using `read_query_result` without repeating the browser query. Results and page content remain untrusted evidence.
+
+Install OpenCLI separately and make `opencli` available on the host's PATH. Configure its browser bridge and log into the relevant websites before using browser-backed queries. Adapters were checked against OpenCLI 1.8.8 and the upstream [Ctrip](https://opencli.info/docs/adapters/browser/ctrip.html) and [Xiaohongshu](https://opencli.info/docs/adapters/browser/xiaohongshu.html) documentation. OpenCLI/site updates may require adapter changes; Aster does not perform automatic installation, login or captcha bypass. Future travel inventory may not yet be on sale, and prices are query-time observations.
+
+The transport uses Effect's scoped child-process spawner with explicit argv, no shell, a filtered captured environment, a 90-second deadline and a 128 KiB stdout limit. Browser queries share one semaphore; a second request to the same Context receives a typed busy reply. Caller cancellation and Actor shutdown release process work, and retiring Actors unregister their query routes. Immediately before spawning, `apps.query.command` logs the full shell-quoted command, including query arguments and any signed note URL, so the user can copy it into a terminal. Environment variables are not printed. Execution still uses argv directly with `shell: false`. The other `apps.query.started`, `apps.query.completed` and `apps.query.failed` logs contain path, command or sanitized failure details; raw process output is not logged. On nonzero exit, the transport retains at most 16,384 characters of stderr while draining the pipe. OpenCLI 1.8.8 emits a YAML error envelope to stderr even with `-f json`; Aster decodes YAML/JSON diagnostics and exports only a bounded, redacted code/message/help summary. Failure logs always include the command. Browser connection, argument, timeout and session-busy codes retain typed categories; authentication and site security failures include the upstream explanation without automatic retry. Malformed diagnostics produce an explicit fallback rather than dumping browser content. `opencli doctor` checks the local daemon and extension; a healthy bridge does not prove site login or query success.
+
+`AppsIntegration.installation` accepts injected `AppsSettings` and `OpenCli` services for tests. `AppsIntegration.layer` composes the real services and requires the host's `ChildProcessSpawner` and captured `ProcessEnvironment`. Runtime owns activation and shutdown. Tests use fake processes and real Actor/runtime wiring, with no live site queries.

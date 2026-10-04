@@ -1,3 +1,4 @@
+import { Markdown } from "../components/markdown";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { contextQueryKeys } from "@aster/api-contracts";
 import { sendGoalMessage, endGoal } from "../api/client";
@@ -38,6 +39,7 @@ export function Inspector({
     s: DisplayState = c?.state || {},
     restricted = c?.projection?.visibility === "restricted",
     goal = restricted ? null : c?.path.match(/^\/goals\/([^/]+)$/);
+  const summary = summaryText(s.summary);
   const send = useAtomSet(sendGoalMessage, { mode: "promise" });
   const end = useAtomSet(endGoal, { mode: "promise" });
   const sending = useAtomValue(sendGoalMessage).waiting;
@@ -148,10 +150,12 @@ export function Inspector({
                 ))}
               </div>
             )}
-            {goal && summaryText(s.summary) && (
-              <div className="my-4 text-sm whitespace-pre-wrap">
+            {goal && summary && (
+              <div className="my-4 text-sm">
                 <b>Current summary</b>
-                <p className="mt-2">{summaryText(s.summary)}</p>
+                <div className="mt-2">
+                  <Markdown>{summary}</Markdown>
+                </div>
               </div>
             )}
             <Tabs defaultValue="messages">

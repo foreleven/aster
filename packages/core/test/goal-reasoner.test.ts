@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Agent, AgentError, Models, type AgentMessage } from "@aster/agent";
+import { Agent, AgentError, Models, type AgentMessage, type AgentTool } from "@aster/agent";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
 import { GoalReasoningError, makeGoalReasoner } from "../src/index.js";
@@ -43,17 +43,11 @@ test("Goal planning receives an independent relevance check and can ignore a hig
         Effect.promise(async () => {
           const prompt = messages.find((message) => message.role === "system")!.content;
           assert.equal(typeof prompt, "string");
-          assert.match(String(prompt), /Independently verify each admitted input/);
-          assert.match(String(prompt), /screening score and rationale are fallible routing hints/);
-          assert.match(
-            String(prompt),
-            /If no input has a verified Goal link, use disposition ignored/,
-          );
+          assert.match(String(prompt), /Verify how each external update relates to this Goal/);
+          assert.match(String(prompt), /Screening scores and rationales are routing hints/);
+          assert.match(String(prompt), /ignored when admitted evidence is unrelated/);
           assert.match(String(prompt), /Do not turn unrelated facts into Goal progress/);
-          assert.match(
-            String(prompt),
-            /In a mixed batch, advance only the verified relevant inputs/,
-          );
+          assert.match(String(prompt), /For mixed inputs, work only from the relevant evidence/);
           assert.ok(messages.some((message) => JSON.stringify(message).includes("0.779")));
           const submit = options.tools!.find((tool) => tool.name === "finish_turn")!;
           const proposal = await submit.execute("ignore-unrelated", {
@@ -379,6 +373,63 @@ test("SDK tool error handling cannot turn an Effect callback defect into a succe
   assert.equal(Cause.squash(exit.cause), defect);
 });
 
+test("Goal reasoner can query a Context and cite its path without delegated execution", async (t) => {
+  const path = "/apps/ctrip";
+  let queried = false;
+  t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
+    Effect.succeed({
+      run: () =>
+        Effect.promise(async () => {
+          const query = options.tools!.find((tool) => tool.name === "query_context")!;
+          assert.ok(query);
+          const response = await query.execute("query", {
+            path,
+            command: "search",
+            args: { query: "Sanya" },
+          });
+          assert.match(JSON.stringify(response), /Sanya/);
+          const submit = options.tools!.find((tool) => tool.name === "finish_turn")!;
+          const proposal = await submit.execute("plan", {
+            disposition: "advance",
+            progress: "Sanya is an option; confirm dates and budget.",
+            nextStep: { _tag: "WaitForEvent", references: ["/source"] },
+            evidence: [path],
+            taskChanges: [],
+            signalChanges: [],
+          });
+          return { messages: [{ ...result, details: proposal.details }] };
+        }),
+    } satisfies Agent),
+  );
+  const plan = await Effect.runPromise(
+    Effect.gen(function* () {
+      const reasoner = yield* makeGoalReasoner("test", memory, {
+        queries: {
+          register: () => Effect.void,
+          query: (input) =>
+            Effect.sync(() => {
+              queried = true;
+              return {
+                path: input.path,
+                command: input.command,
+                queriedAt: "2026-10-04T00:00:00.000Z",
+                data: [{ name: "Sanya" }],
+              };
+            }),
+        },
+      });
+      return yield* reasoner.plan({
+        ...input,
+        contexts: {
+          [path]: { path, description: "Ctrip travel queries", state: {}, messages: [] },
+        },
+      });
+    }).pipe(Effect.provide(models)),
+  );
+  assert.ok(queried);
+  assert.deepEqual(plan.evidence, [path]);
+});
+
 test("Task and Signal tools read frozen snapshots including deleted entries", async (t) => {
   const deletedTask = {
     id: "retired",
@@ -452,4 +503,259 @@ test("replay-only inspection decodes a saved legacy result without the reconcile
     }).pipe(Effect.provide(models)),
   );
   assert.deepEqual(restored, legacy);
+});
+
+test("invalid Goal proposals are recoverable tool rejections before a valid result", async (t) => {
+  t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
+    Effect.succeed({
+      run: () =>
+        Effect.promise(async () => {
+          const submit = options.tools!.find((tool) => tool.name === "finish_turn")!;
+          const valid = {
+            disposition: "advance",
+            progress: "Findings recorded",
+            nextStep: { _tag: "WaitForEvent", references: ["/source"] },
+            evidence: [],
+            taskChanges: [],
+            signalChanges: [],
+          };
+          const invalid = [
+            { args: { ...valid, progress: "中".repeat(2001) }, message: /Summary must fit/ },
+            {
+              args: { ...valid, evidence: ["/missing"] },
+              message: /Evidence must reference existing Context paths/,
+            },
+            {
+              args: {
+                ...valid,
+                taskChanges: [
+                  {
+                    operation: "task_create",
+                    id: "review",
+                    title: "Review",
+                    instructions: "Read evidence",
+                    evidence: ["/missing"],
+                  },
+                ],
+              },
+              message: /Task evidence must reference existing Context paths/,
+            },
+            {
+              args: { ...valid, nextStep: { _tag: "Complete", evidence: ["Findings"] } },
+              message: /Goal completion requires criteria and evidence/,
+            },
+          ];
+          for (const { args, message } of invalid) {
+            const rejected = await submit.execute("invalid", args);
+            assert.equal(rejected.isError, true);
+            assert.notEqual(rejected.terminate, true);
+            assert.match(JSON.stringify(rejected.content), message);
+          }
+          const accepted = await submit.execute("valid", valid);
+          assert.equal(accepted.terminate, true);
+          assert.notEqual(accepted.isError, true);
+          return { messages: [{ ...result, details: accepted.details }] };
+        }),
+    } satisfies Agent),
+  );
+  const plan = await Effect.runPromise(
+    Effect.gen(function* () {
+      const reasoner = yield* makeGoalReasoner("test", memory);
+      return yield* reasoner.plan(input);
+    }).pipe(Effect.provide(models)),
+  );
+  assert.equal(plan.progress, "Findings recorded");
+});
+
+test("fresh Goal evaluations reject legacy, missing and malformed results", async (t) => {
+  const legacy = { progress: "Old result", evidence: [], signals: [], completed: false };
+  for (const messages of [
+    [],
+    [{ ...result, toolName: "submit_plan", details: legacy }],
+    [{ ...result, details: legacy }],
+    [{ ...result, details: null }],
+    [{ ...result, isError: true }],
+  ]) {
+    t.mock.method(Agent, "make", () =>
+      Effect.succeed({
+        run: () => Effect.succeed({ messages }),
+      } satisfies Agent),
+    );
+    const exit = await Effect.runPromise(
+      Effect.gen(function* () {
+        const reasoner = yield* makeGoalReasoner("test", memory);
+        return yield* Effect.exit(reasoner.plan(input));
+      }).pipe(Effect.provide(models)),
+    );
+    assert.ok(Exit.isFailure(exit));
+    const error = Cause.squash(exit.cause);
+    assert.ok(error instanceof GoalReasoningError);
+    assert.equal(error.outcome, "failed");
+  }
+});
+
+const readCurrentGoal = async (tool: AgentTool) => {
+  let text = "";
+  let offset = 0;
+  let pages = 0;
+  while (true) {
+    const response = await tool.execute("current", { offset });
+    assert.notEqual(response.isError, true);
+    assert.ok(Buffer.byteLength(JSON.stringify(response.content), "utf8") <= 14000);
+    const content = response.content[0]!;
+    assert.equal(content.type, "text");
+    if (content.type !== "text") throw new Error("Expected a text tool result");
+    const page = JSON.parse(content.text);
+    text += page.content;
+    pages++;
+    if (page.nextOffset === null) {
+      assert.equal(text.length, page.totalCharacters);
+      return { snapshot: JSON.parse(text), pages };
+    }
+    assert.ok(page.nextOffset > offset);
+    offset = page.nextOffset;
+  }
+};
+
+test("Goal system policy and tool definitions stay stable while current facts change", async (t) => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const clock = yield* TestClock.make();
+      yield* clock.adjust(12345);
+      const prompts: string[] = [];
+      const catalogues: string[] = [];
+      const snapshots: unknown[] = [];
+      t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) => {
+        assert.equal(options.durable?.sessionId, "project");
+        assert.deepEqual(JSON.parse(options.durable!.catalogueId!), [
+          "aster.goal.v10",
+          200000,
+          8192,
+        ]);
+        catalogues.push(
+          JSON.stringify(
+            options.tools!.map(({ name, description, parameters, replay }) => ({
+              name,
+              description,
+              parameters,
+              replay,
+            })),
+          ),
+        );
+        return Effect.succeed({
+          run: ({ messages }) =>
+            Effect.promise(async () => {
+              const system = messages.find((message) => message.role === "system")!;
+              assert.equal(system.timestamp, 12345);
+              const prompt = String(system.content);
+              assert.match(prompt, /You are the user's personal assistant/);
+              assert.match(prompt, /At the start of every turn, call goal_current/);
+              assert.doesNotMatch(prompt, /PRIVATE_/);
+              prompts.push(prompt);
+              const current = options.tools!.find((tool) => tool.name === "goal_current")!;
+              assert.equal(current.replay, "safe");
+              const { snapshot } = await readCurrentGoal(current);
+              snapshots.push(snapshot);
+              const submit = options.tools!.find((tool) => tool.name === "finish_turn")!;
+              const proposal = await submit.execute("continue", {
+                disposition: "advance",
+                progress: "Useful findings",
+                nextStep: {
+                  _tag: "Continue",
+                  objective: "Inspect the remaining evidence",
+                  previousResultId: snapshot.turnId,
+                },
+                evidence: [],
+                taskChanges: [],
+                signalChanges: [],
+              });
+              assert.equal(proposal.terminate, true);
+              return { messages: [{ ...result, details: proposal.details }] };
+            }),
+        } satisfies Agent);
+      });
+      const reasoner = yield* makeGoalReasoner("test", memory);
+      for (const index of [0, 1]) {
+        const path = `/PRIVATE_source_${index}/record`;
+        const turnId = `PRIVATE_turn_${index}`;
+        const plan = yield* reasoner
+          .plan({
+            ...input,
+            goal: {
+              ...input.goal,
+              description: `PRIVATE_goal_${index}`,
+              completionCriteria: `PRIVATE_criteria_${index}`,
+            },
+            current: {
+              ...input.current,
+              state:
+                index === 0
+                  ? { progress: "PRIVATE_previous_progress" }
+                  : { summary: "PRIVATE_current_summary", progress: "PRIVATE_old_progress" },
+            },
+            contexts: { [path]: { path, description: "Evidence", state: {}, messages: [] } },
+            reason: `PRIVATE_reason_${index}`,
+            durable: { ...input.durable, requestId: turnId },
+          })
+          .pipe(Effect.provideService(Clock.Clock, clock));
+        assert.equal(plan.version, 2);
+        if (plan.version === 2) {
+          assert.equal(plan.turnId, turnId);
+          assert.deepEqual(plan.nextStep, {
+            _tag: "Continue",
+            objective: "Inspect the remaining evidence",
+            previousResultId: turnId,
+          });
+        }
+        assert.deepEqual(snapshots[index], {
+          turnId,
+          admittedPurpose: `PRIVATE_reason_${index}`,
+          goal: {
+            ...input.goal,
+            description: `PRIVATE_goal_${index}`,
+            completionCriteria: `PRIVATE_criteria_${index}`,
+          },
+          summary: index === 0 ? "PRIVATE_previous_progress" : "PRIVATE_current_summary",
+          availableContexts: {
+            count: 1,
+            roots: [`/PRIVATE_source_${index}`],
+            instructions:
+              "Use search_contexts to find relevant paths, then read_context. Both tools are paginated; no Context list is embedded here.",
+          },
+        });
+      }
+      assert.equal(prompts[0], prompts[1]);
+      assert.equal(catalogues[0], catalogues[1]);
+    }).pipe(Effect.provide(models), Effect.scoped),
+  );
+});
+
+test("goal_current paginates large Unicode and escaped snapshots without losing facts", async (t) => {
+  const description = '旅行计划😀\n"\\\u0000'.repeat(3000);
+  const summary = "Existing findings: " + "证据".repeat(2500);
+  t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
+    Effect.succeed({
+      run: () =>
+        Effect.promise(async () => {
+          const current = options.tools!.find((tool) => tool.name === "goal_current")!;
+          const { snapshot, pages } = await readCurrentGoal(current);
+          assert.ok(pages > 1);
+          assert.equal(snapshot.goal.description, description);
+          assert.equal(snapshot.summary, summary);
+          assert.equal(snapshot.turnId, input.durable.requestId);
+          assert.deepEqual(snapshot.availableContexts.roots, []);
+          return { messages: [result] };
+        }),
+    } satisfies Agent),
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const reasoner = yield* makeGoalReasoner("test", memory);
+      yield* reasoner.plan({
+        ...input,
+        goal: { ...input.goal, description },
+        current: { ...input.current, state: { summary } },
+      });
+    }).pipe(Effect.provide(models)),
+  );
 });

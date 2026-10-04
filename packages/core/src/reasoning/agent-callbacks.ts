@@ -1,17 +1,20 @@
 import { Cause, Deferred, Effect, Fiber, Result } from "effect";
 
-type Invoke = <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) => Promise<A>;
+export type AgentCallbackInvoker = <A, E>(
+  effect: Effect.Effect<A, E>,
+  signal?: AbortSignal,
+) => Promise<A>;
 
 /** One reasoning invocation owns its SDK callbacks, including their Context and failure path. */
 export const withAgentCallbacks = <A, E, R>(
-  use: (invoke: Invoke) => Effect.Effect<A, E, R>,
+  use: (invoke: AgentCallbackInvoker) => Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
   Effect.scoped(
     Effect.gen(function* () {
       const runPromise = Effect.runPromiseWith(yield* Effect.context<never>());
       const callbacks = new AbortController();
       const callbackFailure = yield* Deferred.make<never>();
-      const invoke: Invoke = (effect, signal) => {
+      const invoke: AgentCallbackInvoker = (effect, signal) => {
         callbacks.signal.throwIfAborted();
         return runPromise(
           effect.pipe(

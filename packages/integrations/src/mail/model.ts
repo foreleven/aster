@@ -21,11 +21,12 @@ export const Mailbox = Schema.Struct({
   username: Schema.NonEmptyString,
   password: Schema.Redacted(Schema.String),
   folder: Schema.optional(Schema.NonEmptyString),
-  maxMessages: Schema.optional(Schema.Int),
+  maxMessages: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
 });
 export type Mailbox = typeof Mailbox.Type;
 
 export const MailConfig = Schema.Struct({
+  pollIntervalMs: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
   mailboxes: Schema.Array(Mailbox),
 });
 export type MailConfig = typeof MailConfig.Type;

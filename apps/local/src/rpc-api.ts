@@ -44,6 +44,8 @@ export const applicationRpcHandlers = (api: ApplicationApi) =>
     SendPersonalMessage: (input, options) =>
       traced("SendPersonalMessage", options.requestId, api.personal.sendMessage(input)),
     ListContexts: (_, options) => traced("ListContexts", options.requestId, api.contexts),
+    QueryContext: (input, options) =>
+      traced("QueryContext", options.requestId, api.queryContext(input)),
     GetContext: ({ path }, options) => traced("GetContext", options.requestId, api.context(path)),
     ListGoals: (_, options) => traced("ListGoals", options.requestId, api.goals.list),
     RetryGoalTurn: (input, options) =>

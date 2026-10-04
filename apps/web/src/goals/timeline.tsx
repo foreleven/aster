@@ -10,6 +10,7 @@ import {
 import { goalTimeline, pendingSignalRetries, pendingTurnRetries } from "../api/timeline";
 import { resultError, resultValue, retryGoalSignal, retryGoalTurn } from "../api/client";
 import { clockLabel, dateLabel, EmptyState } from "./presentation";
+import { Markdown } from "../components/markdown";
 
 type Inspect = (path: string) => void;
 const labels: Record<GoalTimelineGroup["status"], string> = {
@@ -257,7 +258,7 @@ function EvaluationCard({
             {group.disposition ? dispositionLabels[group.disposition] : "Conclusion"}
             {!group.conclusion.applied && " · Not applied"}
           </strong>
-          <p>{group.conclusion.text}</p>
+          <Markdown>{group.conclusion.text}</Markdown>
           {group.conclusion.evidence.length > 0 && (
             <details className="event-context">
               <summary>
