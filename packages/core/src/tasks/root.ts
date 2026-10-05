@@ -1,4 +1,4 @@
-import type { TaskExecutionServices } from "./execution.js";
+import { ExternalAgents } from "./model.js";
 import { runActorPath } from "./address.js";
 import { ApplicationError, TaskDeliveryInput, ResumeRunDeliveryInput } from "@aster/api-contracts";
 import { Effect, Layer, Schema } from "effect";
@@ -7,14 +7,14 @@ import { ContextRegistry } from "../context/registry.js";
 import { defineContext } from "../context/definition.js";
 import { RunState } from "./run-state.js";
 import { taskPath } from "./admission.js";
-import { SignalRunActor, StartTask, ResumePersonalRun } from "./run.js";
+import { TaskRunActor, StartTask, ResumeRun, RunReady } from "./run.js";
 import type { ActorRef } from "@aster/actor";
 import type { RunCommand } from "./run.js";
 
-const Command = Schema.Union([StartTask, ResumePersonalRun]);
+const Command = Schema.Union([StartTask, ResumeRun, RunReady]);
 export type RunRootCommand = typeof Command.Type;
-/** Owns asynchronous Tasks submitted by Personal and Goals; conversations do not own execution. */
-export class RunRootActor extends ContextActor.Service<RunRootActor, TaskExecutionServices>()(
+/** Owns asynchronous Tasks sent to delegate Actors; conversations do not own execution. */
+export class RunRootActor extends ContextActor.Service<RunRootActor, ExternalAgents>()(
   "tasks/Root",
   {
     command: Command,
@@ -39,17 +39,24 @@ export class RunRootActor extends ContextActor.Service<RunRootActor, TaskExecuti
                 )
                 .pipe(Effect.orDie);
             for (const record of Object.values(registry.snapshot())) {
-              if (!/^\/runs\/(?:personal|goal)--[a-f0-9]{64}$/.test(record.path)) continue;
+              if (!/^\/runs\/[a-f0-9]{64}$/.test(record.path)) continue;
               const state = Schema.decodeUnknownSync(RunState)(record.state);
               if (!state.admission || state.admission.input.target !== record.path) continue;
               yield* actor
-                .spawn(record.path.slice("/runs/".length), SignalRunActor)
+                .spawn(record.path.slice("/runs/".length), TaskRunActor)
                 .pipe(Effect.orDie);
             }
           }),
         receive: (command, actor) =>
           Effect.gen(function* () {
-            if (command._tag === "ResumePersonalRun") {
+            if (command._tag === "Ready") {
+              for (const child of yield* actor.children())
+                yield* (child as ActorRef<RunCommand>)
+                  .ask<void>((replyTo) => ({ _tag: "Ready", replyTo }))
+                  .pipe(Effect.orDie);
+              return yield* command.replyTo.tell(undefined);
+            }
+            if (command._tag === "ResumeRun") {
               const input = yield* Schema.decodeUnknownEffect(ResumeRunDeliveryInput)(
                 command.input,
               ).pipe(Effect.result);
@@ -96,7 +103,7 @@ export class RunRootActor extends ContextActor.Service<RunRootActor, TaskExecuti
             const name = decoded.success.target.slice("/runs/".length);
             const child =
               ((yield* actor.child(name)) as ActorRef<RunCommand> | undefined) ??
-              (yield* actor.spawn(name, SignalRunActor).pipe(Effect.orDie));
+              (yield* actor.spawn(name, TaskRunActor).pipe(Effect.orDie));
             yield* child.tell({ ...command, input: decoded.success });
           }),
       });

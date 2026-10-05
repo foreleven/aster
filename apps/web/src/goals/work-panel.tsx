@@ -1,3 +1,4 @@
+import { taskText } from "../lib/dashboard";
 import React, { useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { approvalEntries } from "../dashboard/state";
@@ -90,10 +91,13 @@ export function WorkPanel({
             </p>
           )}
           {signals.map((signal) => {
-            const schedule = signal.state.schedule;
+            const schedule =
+              signal.state.trigger?._tag === "Schedule" ? signal.state.trigger.schedule : undefined;
             const sources = [
               ...new Set([
-                ...(signal.state.occurrences ?? []).map((occurrence) => occurrence.source.path),
+                ...(signal.state.occurrences ?? []).map(
+                  (occurrence) => occurrence.message.evidence?.path ?? occurrence.message.source,
+                ),
                 ...references(signal),
               ]),
             ].filter((path) => path !== goal.path);
@@ -114,10 +118,9 @@ export function WorkPanel({
                   </div>
                   <Pill status={signal.state.active === false ? "paused" : "active"} />
                   <p>
-                    {signal.state.when ||
-                      (typeof signal.state.task === "string"
-                        ? signal.state.task
-                        : signal.state.task?.instructions)}
+                    {signal.state.trigger?._tag === "Context"
+                      ? signal.state.trigger.when
+                      : taskText(signal.state.task)}
                   </p>
                   <div className="signal-schedule">
                     <Clock3 size={14} />

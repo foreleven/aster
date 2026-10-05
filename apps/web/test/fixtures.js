@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 const context = (path, description, state = {}, messages = []) => ({
   path,
   description,
@@ -56,7 +57,10 @@ export function fixture() {
         actor("/user/goals/engine", "/goals/engine"),
         actor("/user/signals", "/signals"),
         actor("/user/signals/progress", "/signals/progress"),
-        actor("/user/signals/progress/run-1", "/signals/progress/runs/run-1"),
+        actor(
+          "/user/signals/progress/run-1",
+          "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+        ),
         actor("/user/approvals", "/approvals"),
         actor("/user/memory", "/memory"),
       ],
@@ -111,7 +115,7 @@ export function fixture() {
         active: true,
       }),
       context(
-        "/signals/progress/runs/run-1",
+        "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
         "Summarize Knowledge Engine project progress",
         {
           status: "awaiting-confirmation",
@@ -133,7 +137,7 @@ export function fixture() {
           {
             id: "approval-1",
             target: "/user/signals/progress/run-1",
-            contextPath: "/signals/progress/runs/run-1",
+            contextPath: "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
             kind: "confirmation",
             status: "pending",
             request: {
@@ -146,7 +150,7 @@ export function fixture() {
           {
             id: "question-1",
             target: "/user/signals/progress/run-1",
-            contextPath: "/signals/progress/runs/run-1",
+            contextPath: "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
             kind: "input",
             status: "pending",
             request: {
@@ -165,9 +169,12 @@ export function fixture() {
         ],
       }),
       context("/memory", "Long-term work memory", { status: "ready" }),
-      context("/signals/old/runs/old", "Historical execution record", { status: "completed" }, [
-        { type: "Completed", text: "Historical result", at },
-      ]),
+      context(
+        "/runs/8c5bccef7d6ef2ca671af0ccf2cf36a5052148b44d2beee086cb3467a09f4884",
+        "Historical execution record",
+        { status: "completed" },
+        [{ type: "Completed", text: "Historical result", at }],
+      ),
     ],
   };
 }
@@ -321,15 +328,25 @@ export function designFixture() {
   signal.state = {
     goal: "engine",
     active: true,
-    when: "Check for round-trip fares HND/CTS below ¥4,000 for our dates.",
-    schedule: { type: "cron", expression: "0 */6 * * *", timeZone: "Asia/Tokyo" },
+    trigger: {
+      _tag: "Schedule",
+      schedule: { type: "cron", expression: "0 */6 * * *", timeZone: "Asia/Tokyo" },
+    },
+    task: {
+      _tag: "Goal",
+      target: "/goals/engine",
+      text: "Check for round-trip fares HND/CTS below ¥4,000 for our dates.",
+    },
     nextDue: Date.parse("2025-01-14T16:12:00+09:00"),
     seenSources: ["hashed-source-fingerprint"],
     occurrences: ["/sources/flights", "/sources/skyscanner", "/sources/ana"].map((path) => ({
-      source: { path },
+      message: { source: path },
     })),
   };
-  const run = data.contexts.find((context) => context.path === "/signals/progress/runs/run-1");
+  const run = data.contexts.find(
+    (context) =>
+      context.path === "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+  );
   run.description = "Compare flights";
   run.path = "/runs/goal--flights";
   run.state.status = "running";
@@ -352,10 +369,17 @@ export function designFixture() {
       state: {
         goal: "engine",
         active: true,
-        when: "Monitor Japanese and Hokkaido local holidays during our travel dates.",
-        schedule: { type: "cron", expression: "0 9 * * *", timeZone: "Asia/Tokyo" },
+        trigger: {
+          _tag: "Schedule",
+          schedule: { type: "cron", expression: "0 9 * * *", timeZone: "Asia/Tokyo" },
+        },
+        task: {
+          _tag: "Goal",
+          target: "/goals/engine",
+          text: "Monitor Japanese and Hokkaido local holidays during our travel dates.",
+        },
         nextDue: Date.parse("2025-01-15T09:00:00+09:00"),
-        occurrences: [{ source: { path: "/sources/calendar" } }],
+        occurrences: [{ message: { source: "/sources/calendar" } }],
       },
       messages: [],
     },
@@ -384,7 +408,7 @@ export function designFixture() {
       messages: [],
     })),
     ...["visa", "hotels"].map((slug) => ({
-      path: `/signals/${slug}/runs/run-1`,
+      path: `/runs/${createHash("sha256").update(slug).digest("hex")}`,
       description: `Trip ${slug} execution`,
       state: { status: "waiting_input", definition: { goal: "engine" } },
       messages: [],

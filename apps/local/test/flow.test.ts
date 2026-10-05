@@ -1,6 +1,5 @@
-import { taskExecutionLayer } from "./workflow-fixtures.js";
 import { gateStub, summaryStub } from "./summary-fixtures.js";
-import { ApprovalQueueActor, ExternalAgents } from "@aster/core";
+
 import { Models } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -24,7 +23,6 @@ import {
 import { Deferred, Effect, Fiber, Layer, Option, Stream } from "effect";
 import { SystemOneClient } from "@aster/core";
 import { makeSystemOneGate } from "@aster/core";
-import { SignalDefinitions, SignalRootActor } from "@aster/core";
 
 const email: EmailData = {
   messageId: "new-id",
@@ -158,67 +156,6 @@ test("Lark channel publishes today’s startup mail as an email Context", async 
   assert.equal(result.paths.includes("/lark/mail/me/new-id"), true);
 });
 
-test("Signal actor creates an independent run Context with a triggering message", async () => {
-  const result = await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        const definitions = [
-          {
-            slug: "email-action-request",
-            when: "Email requests work",
-            task: "Complete requested work",
-            agent: "doubao-delegate",
-            mode: "confirm" as const,
-          },
-        ];
-        const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
-            ImStorage.layer,
-            Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
-            Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
-            Layer.succeed(ImSearch, { recent: async () => [] }),
-            Layer.succeed(ChatSummarizer, {
-              summarize: summaryStub(async () => {
-                throw new Error("No chats in mail test");
-              }),
-            }),
-            Layer.succeed(ExternalAgents, {}),
-            taskExecutionLayer,
-            Layer.succeed(SignalDefinitions, definitions),
-          ),
-        );
-        yield* system.spawn("approvals", ApprovalQueueActor);
-        const root = yield* system.spawn("signals", SignalRootActor);
-        yield* root.tell({
-          _tag: "Trigger",
-          slug: "email-action-request",
-          sourceContext: {
-            path: "/lark/mail/me/new-id",
-            description: "An email",
-            state: email,
-            messages: [],
-          },
-        });
-        const path = yield* Effect.gen(function* () {
-          for (let index = 0; index < 100; index++) {
-            const found = Object.keys(registry.snapshot()).find((key) =>
-              key.startsWith("/signals/email-action-request/runs/"),
-            );
-            if (found) return found;
-            yield* Effect.sleep(5);
-          }
-          return yield* Effect.die(new Error("Signal run was not created"));
-        });
-        return registry.get(path);
-      }),
-    ),
-  );
-  assert.equal("type" in result!, false);
-  assert.equal((result?.messages[0] as { type: string }).type, "Triggered");
-});
-
 test("System One receives email fields and every Signal condition, then selects typed yes answers", async () => {
   let request: unknown;
   const client = {
@@ -233,16 +170,11 @@ test("System One receives email fields and every Signal condition, then selects 
         };
       }),
   } as unknown as SystemOneClient;
-  const signals = [
-    {
-      slug: "review",
-      when: "Review request",
-      task: "Review",
-      agent: "a",
-      mode: "confirm" as const,
-    },
-    { slug: "invoice", when: "Invoice", task: "Pay", agent: "a", mode: "confirm" as const },
-  ];
+  const signals = ["review", "invoice"].map((slug) => ({
+    slug,
+    trigger: { _tag: "Context" as const, when: slug === "review" ? "Review request" : "Invoice" },
+    task: { _tag: "Goal" as const, target: "/goals/personal", text: "Review" },
+  }));
   const selected = await Effect.runPromise(
     makeSystemOneGate(client)(
       { path: "/lark/mail/me/new-id", description: "email", state: email, messages: [] },

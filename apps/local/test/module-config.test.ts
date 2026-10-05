@@ -23,8 +23,8 @@ contexts:
       /im: {config: {summary: {model: one}}}
   /memory: {config: {dataDir: ./memory}}
 signals:
-  my-signal: {when: changed, task: original, agent: test, mode: confirm}
-  another: {when: changed, task: keep, agent: test, mode: confirm}
+  my-signal: {trigger: {_tag: Context, when: changed}, task: {_tag: Goal, target: /goals/personal, text: original}}
+  another: {trigger: {_tag: Context, when: changed}, task: {_tag: Goal, target: /goals/personal, text: keep}}
 config:
   models:
     - {name: one, provider: openai, model: first, url: 'http://unused.invalid', apiKey: '\${SECRET}'}
@@ -36,20 +36,25 @@ config:
     envPath,
     projectRoot: dir,
     environment: {
-      ASTER_SIGNALS_MY_SIGNAL_TASK: "overridden",
+      ASTER_SIGNALS_MY_SIGNAL_TASK_TEXT: "overridden",
       ASTER_CONTEXTS_LARK_CHILDREN_IM_CONFIG_POLL_INTERVAL_MS: "5000",
       ASTER_CONFIG_MODELS_0_MODEL: "replacement",
       SECRET: "captured-secret",
     },
-    overrides: { signals: { another: { task: "explicit" } } },
+    overrides: { signals: { another: { task: { text: "explicit" } } } },
   });
   const { Layer } = await import("effect");
   await Effect.runPromise(
     Effect.gen(function* () {
-      assert.deepEqual((yield* signalSettings).map((s) => [s.slug, s.task]).sort(), [
-        ["another", "explicit"],
-        ["my-signal", "overridden"],
-      ]);
+      assert.deepEqual(
+        (yield* signalSettings)
+          .map((s) => [s.slug, s.task._tag === "Goal" ? s.task.text : ""])
+          .sort(),
+        [
+          ["another", "explicit"],
+          ["my-signal", "overridden"],
+        ],
+      );
       assert.equal((yield* LarkConfig).im?.config?.pollIntervalMs, 5000);
       assert.equal((yield* memorySettings).dataDir, join(dir, "memory"));
       const models = yield* Models;

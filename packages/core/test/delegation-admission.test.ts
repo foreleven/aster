@@ -1,4 +1,3 @@
-import { personalDisabled } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit } from "@aster/actor";
@@ -9,8 +8,6 @@ import {
   DelegationState,
   ExternalAgents,
   ExternalAgentError,
-  PersonalActions,
-  PersonalAgentActor,
   contextSpawnOptions,
   makeApplicationApi,
   type ContextRecord,
@@ -125,7 +122,7 @@ for (const result of ["found", "missing", "unsupported", "failed"] as const) {
   });
 }
 
-test("Personal inspects retained Delegation business data without provider metadata or executor calls", async () => {
+test("Application API inspects retained Delegation business data without provider metadata or executor calls", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -147,16 +144,8 @@ test("Personal inspects retained Delegation business data without provider metad
           messages: [{ type: "native-frame", token: "private-token" }],
         };
         const registry = yield* makeContextRegistry({ loadAll: () => [record], save: () => {} });
-        const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
-            PersonalActions.unavailable,
-            personalDisabled,
-          ),
-        );
-        const personal = yield* system.spawn("personal", PersonalAgentActor);
-        const api = makeApplicationApi({ registry, personal, inspect: Effect.succeed(null) });
-        const view = yield* api.personal.inspectDelegation(record.path);
+        const api = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
+        const view = yield* api.inspectDelegation(record.path);
         assert.deepEqual(view, {
           path: record.path,
           revision: 2,
@@ -173,11 +162,11 @@ test("Personal inspects retained Delegation business data without provider metad
         });
         assert.doesNotMatch(JSON.stringify(view), /private-token|metadata|native-frame/);
         assert.equal(
-          (yield* api.personal.inspectDelegation("/personal").pipe(Effect.flip)).kind,
+          (yield* api.inspectDelegation("/personal").pipe(Effect.flip)).kind,
           "invalid-input",
         );
         assert.equal(
-          (yield* api.personal.inspectDelegation("/delegations/missing").pipe(Effect.flip)).kind,
+          (yield* api.inspectDelegation("/delegations/missing").pipe(Effect.flip)).kind,
           "not-found",
         );
         assert.equal(registry.get(record.path)?.revision, 2);

@@ -8,7 +8,7 @@ Status: implemented. See [ADR 0040](adr/0040-compose-aster-runtime-with-effect-l
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------- |
 | local                   | CLI arguments, configuration locations, adapter selection, process signals, HTTP/SSE and static assets                 |
 | core runtime            | shared Layer graph, domain roots, integration installation/activation, subscriptions, readiness coordination, shutdown |
-| core domain modules     | Context reactions, Signal eligibility, Goal operations/history, internal reasoning and Task preparation                |
+| core domain modules     | Context reactions, Signal eligibility, Goal operations/history, internal reasoning and Task delivery                   |
 | integrations            | private settings and clients, root/child Actors, initial readiness and cleanup                                         |
 | infrastructure adapters | file stores, model and decision transport, memory backend and external executors                                       |
 | ActorSystem             | generic typed Actors, mailboxes, supervision and scoped Actor services                                                 |
@@ -17,11 +17,11 @@ Local must not select Signal candidates, inspect Goal state, construct mailbox C
 
 ## Effect composition
 
-External Layers supply storage, history, Models, SystemOneClient, memory backend and external agents. Internal Layers construct shared Context registries, domain settings, command endpoints, AgentRunner and Goal/Signal coordination. Task, Goal and Personal Actors construct their business workflows within their Behavior scopes; those workflows are not globally supplied services. ConfigProvider is installed over the complete acquisition graph, including adapters and integrations.
+External Layers supply storage, history, Models, SystemOneClient, memory backend and external agents. Internal Layers construct shared Context registries, domain settings, command endpoints, AgentRunner and Goal/Signal coordination. Task and Goal Actors construct their business workflows within their Behavior scopes; those workflows are not globally supplied services. ConfigProvider is installed over the complete acquisition graph, including adapters and integrations.
 
 Integration Layers acquire dependencies and return runtime-managed installation capabilities. Multiple modules must coexist without overwriting a shared service tag. The runtime uses one graph/memoization scope and passes acquired services into Actors without acquiring duplicate clients or copying Scope. Integration metadata is not a second configuration-driven dependency injection system.
 
-`AsterRuntime.layer` composes `contextAndCommandServices`, `memoryLayer`, `AgentRunner.layer`, integration registration and `GoalSignals.layer`. `AgentRunner` owns per-invocation SDK execution and callback lifetime; it never holds a shared business session. `GoalSignals` coordinates persisted Signal subscriptions and commands, with the caller's ActorRef passed explicitly. `makeTaskExecution`, `makeGoalReasoner` and `makePersonalReasoner` are local workflow constructors. Only `acquireRuntime` creates root Actors and activates integrations. It captures ConfigProvider and shared capabilities for Actors without copying an ambient Scope; model execution begins only when work invokes the runner.
+`AsterRuntime.layer` composes `contextAndCommandServices`, `memoryLayer`, `AgentRunner.layer`, integration registration and `GoalSignals.layer`. `AgentRunner` owns per-invocation SDK execution and callback lifetime; it never holds a shared business session. `GoalSignals` commands Signal definitions and deactivates Goal-owned Signals. Task delivery routes typed messages to Goal or Run Actors. Only `acquireRuntime` creates root Actors and activates integrations. It captures ConfigProvider and shared capabilities for Actors without copying an ambient Scope; model execution begins only when work invokes the runner.
 
 The local composition is intentionally small:
 
@@ -51,19 +51,19 @@ const RuntimeLive = AsterRuntime.layer({
 | Models                                             | Models.configured                     | Internal Agent, Goal reasoner, Lark summarizer                     |
 | SystemOneClient                                    | SystemOneClientLive.layer             | Signal/Goal policies and Lark summary gate                         |
 | MemoryBackend                                      | AgentMemoryBackend.layer              | Core builds MemoryRecall, ContextCaptureSink, and the Memory Actor |
-| ExternalAgents                                     | ConfiguredDurableInfrastructure.layer | Task preparation and Delegation Actors                             |
+| ExternalAgents                                     | ConfiguredDurableInfrastructure.layer | Task confirmation and Delegation Actors                            |
 
 `ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. Every host supplies MemoryBackend; core internally assembles MemoryRecall and ContextCaptureSink. Local never supplies the internal registry, command endpoint, business reasoning workflows separately.
 
-Startup phases: acquire and validate dependencies; prepare roots and command endpoints; subscribe consumers; activate integrations; asynchronously await required initial readiness; initialize Goals once. Lark readiness means initial retrieval catch-up, preserving current behavior; it does not mean all summaries have completed. Without IM it completes immediately. Sources continue to be selected in code.
+Startup phases: acquire dependencies and subscribe to Context changes; register/activate source integrations; restore Signals and Runs; register Goals; bind decision delivery and start journal consumption. Buffered changes and the durable journal preserve early source commits. Signal activation waits for Goal restoration. After source readiness, runtime initializes Goals once and waits for their activation, not model completion. The built-in personal assistant is an idle ordinary Goal at `/goals/personal`.
 
 Shutdown phases: close admission/stop sources; stop startup coordination and reaction producers; finish or durably retain pending work according to existing domain contracts; stop Actors; release adapter resources. Store lock and signal handlers outlive all finalizers. Interrupted startup must release every resource already acquired.
 
 Readiness is completed with the startup Exit, not only its typed error channel. A defect fails waiting callers, and shutdown interrupts pending readiness even if the startup Fiber never began. Cleanup phases compose with Effect finalizers: a failing integration stop does not skip remaining integrations, Actor termination or capture draining. Multiple cleanup defects remain observable to the host.
 
-Internal domain operations also preserve the caller's Effect execution. Goal Signal reconciliation/edits/deactivation return Effects rather than starting independent Promise runtimes. Mailbox handlers use `pipeToSelf` for remote acknowledgements; per-Goal Signal operations remain serialized without preventing the Goal mailbox from accepting End or UserMessage. The shared Run workflow lives in `core/tasks`, below both Goals and Signals.
+Internal domain operations also preserve the caller's Effect execution. Goal Signal edits/deactivation return Effects rather than starting independent Promise runtimes. Mailbox handlers use `pipeToSelf` for remote acknowledgements; per-Goal Signal operations remain serialized without preventing the Goal mailbox from accepting End or UserMessage. The shared Run workflow lives in `core/tasks`, below both Goals and Signals.
 
-Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluation performs history reads and generation-tagged mailbox acknowledgements directly. Only the Agent adapter bridges SDK Promise callbacks, preserving the calling Context and cancelling pending callbacks before Agent cleanup waits for idle. Goal End signals cancellation through a Deferred; restart and shutdown use the Behavior scope. Expected reasoning failures remain tagged, while defects enter supervision. MemoryRecall, Signal extraction and Context description also expose Effect ports. The agentmemory adapter in infra owns the Promise-to-Effect adapter and forwards cancellation to the backend HTTP request, including expansion fallbacks. Goal, Personal and structured reasoning use AgentRunner from @aster/agent, which owns their SDK callback lifecycle; no additional host Layer is needed.
+Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluation performs history reads and generation-tagged mailbox acknowledgements directly. Only the Agent adapter bridges SDK Promise callbacks, preserving the calling Context and cancelling pending callbacks before Agent cleanup waits for idle. Goal End signals cancellation through a Deferred; restart and shutdown use the Behavior scope. Expected reasoning failures remain tagged, while defects enter supervision. MemoryRecall and Context description also expose Effect ports. The agentmemory adapter in infra owns the Promise-to-Effect adapter and forwards cancellation to the backend HTTP request, including expansion fallbacks. Goal and structured reasoning use AgentRunner from @aster/agent, which owns their SDK callback lifecycle; no additional host Layer is needed.
 
 ## Configuration
 
@@ -101,7 +101,7 @@ The process captures LocalConfig once before resolving and locking `config.durab
 
 ## Local Pi process ownership
 
-Every production Pi directory opener uses `PiStorageLease` from the Agent adapter, including ownerless Goal/Personal runs and the shared Context/execution backend. The host holds a SQLite exclusive transaction on a permanent lock file in the canonical directory. This local-filesystem kernel lock survives symlink aliases and competing recovery processes; a paused live owner cannot be evicted, while process death releases the lock. No stale PID file is deleted to acquire Pi ownership. This is not a distributed lease protocol.
+Every production Pi directory opener uses `PiStorageLease` from the Agent adapter, including ownerless Goal conversations and the shared Context/execution backend. The host holds a SQLite exclusive transaction on a permanent lock file in the canonical directory. This local-filesystem kernel lock survives symlink aliases and competing recovery processes; a paused live owner cannot be evicted, while process death releases the lock. No stale PID file is deleted to acquire Pi ownership. This is not a distributed lease protocol.
 
 The lease outlives all Pi writers and callbacks in its Scope. SDK close failure quarantines ownership until process exit; accepted mutations and cancellation cleanup drain before a normal release. Session/Harness reopen retains the same lease and rejects a retired or quarantined owner. Logical owner identity is still validated against Pi documents; acquiring an OS lock does not authorize adopting another owner's conversation. Runtime inspection includes redacted storage owner identities, lease identities and held/quarantined status. Lock descriptors on disk are diagnostics only, and lock database files are never removed by acquisition or release.
 
@@ -115,7 +115,7 @@ Apps readiness means that the configured query Contexts are durably registered a
 
 ## Goal readiness and activation
 
-Goal receivers restore before source integrations activate. Root `AwaitReady` with `stage: "restored"` waits for restoration only; the default activated stage also waits for `Initialize`. Readiness aggregation is scoped and does not block root routing. After integrations are ready, runtime activates Goals and awaits admission readiness, without waiting for model results. Recovery failures fail readiness. Supervised child restarts inherit the root activation gate.
+Sources register first; Signal and Run roots restore before Goal registration. Goal receivers restore before Signals activate. Root `AwaitReady` with `stage: "restored"` waits for restoration only; the default activated stage also waits for `Initialize`. Readiness aggregation is scoped and does not block root routing. After integrations are ready, runtime activates Goals and awaits admission readiness, without waiting for model results. Restoration defects fail readiness through supervision or the readiness timeout. Supervised child restarts inherit the root activation gate.
 
 ## Context consumer composition
 

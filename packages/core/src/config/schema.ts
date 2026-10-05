@@ -10,28 +10,21 @@ export const ModelConfig = Schema.Struct({
 });
 export type ModelConfig = typeof ModelConfig.Type;
 
-import { SignalSchedule, SignalAction } from "@aster/api-contracts";
+import { SignalSchedule, SignalTrigger, Task } from "@aster/api-contracts";
 export { SignalSchedule } from "@aster/api-contracts";
-export const validateSignalTime = (signal: { schedule?: SignalSchedule; notBefore?: string }) => {
+export const validateSignalTime = (signal: { schedule: SignalSchedule }) => {
   const absolute = (value: string) => {
     if (!/(Z|[+-]\d{2}:\d{2})$/.test(value) || !Number.isFinite(Date.parse(value)))
       throw new Error("Time requires a valid absolute ISO timestamp with offset");
   };
-  if (signal.notBefore) absolute(signal.notBefore);
   if (signal.schedule?.type === "once") absolute(signal.schedule.at);
   if (signal.schedule?.type === "cron")
     Cron.parseUnsafe(signal.schedule.expression, signal.schedule.timeZone);
 };
 
 export const SignalEntry = Schema.Struct({
-  action: Schema.optional(SignalAction),
-  when: Schema.String,
-  schedule: Schema.optional(SignalSchedule),
-  notBefore: Schema.optional(Schema.String),
-  taskId: Schema.optional(Schema.String),
-  task: Schema.String,
-  agent: Schema.String,
-  mode: Schema.Union([Schema.Literal("auto"), Schema.Literal("confirm")]),
+  trigger: SignalTrigger,
+  task: Task,
 });
 
 export const GoalTitle = Schema.String.check(Schema.isPattern(/\S/));
@@ -104,10 +97,7 @@ export const parseConfig = (input: unknown, baseDir: string): CoreConfig => {
   }
   const signals = Object.entries(parsed.signals ?? {}).map(([slug, signal]) => {
     if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new Error(`Invalid Signal slug: ${slug}`);
-    if (!signal.when.trim() || !signal.task.trim() || !signal.agent.trim()) {
-      throw new Error(`Signal ${slug} has an empty field`);
-    }
-    validateSignalTime(signal);
+    if (signal.trigger._tag === "Schedule") validateSignalTime(signal.trigger);
     return { slug, ...signal };
   });
   const goals = Object.entries(parsed.goals ?? {}).map(([slug, goal]) => {

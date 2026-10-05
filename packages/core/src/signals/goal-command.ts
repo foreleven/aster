@@ -1,14 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { ApplicationError, CausalChain, CommandReceipt } from "@aster/api-contracts";
 import { Effect, Match, Schema } from "effect";
-import { SignalDefinition, SignalSchedule, validateSignalTime } from "../config/schema.js";
+import { SignalDefinition, validateSignalTime } from "../config/schema.js";
 import type { ContextRegistry } from "../context/registry.js";
 
 const SignalPatch = Schema.Struct({
-  when: Schema.optional(Schema.String),
-  task: Schema.optional(Schema.String),
-  notBefore: Schema.optional(Schema.NullOr(Schema.String)),
-  schedule: Schema.optional(Schema.NullOr(SignalSchedule)),
+  trigger: SignalDefinition.fields.trigger,
+  task: SignalDefinition.fields.task,
 });
 export const GoalSignalChange = Schema.Union([
   Schema.Struct({ operation: Schema.Literal("create"), definition: SignalPatch }),
@@ -39,7 +37,6 @@ export type GoalSignalInput = typeof GoalSignalInput.Type;
 export const GoalSignalReceipt = Schema.Struct({ input: GoalSignalInput, receipt: CommandReceipt });
 const Ownership = Schema.Struct({
   goal: Schema.optional(Schema.String),
-  owner: Schema.optional(Schema.String),
   revision: Schema.optional(Schema.Number),
   deleted: Schema.optional(Schema.Boolean),
   goalCommandReceipts: Schema.optional(Schema.Array(GoalSignalReceipt)),
@@ -51,7 +48,6 @@ export const applyGoalSignal = Effect.fn("Signal.applyGoalCommand")(function* (o
   path: string;
   raw: GoalSignalInput;
   configured: readonly SignalDefinition[];
-  agents: readonly string[];
   nextDue: (definition: SignalDefinition) => number | undefined;
 }): Effect.fn.Return<CommandReceipt, ApplicationError> {
   const invalid = (message: string) => new ApplicationError({ kind: "invalid-input", message });
@@ -74,7 +70,7 @@ export const applyGoalSignal = Effect.fn("Signal.applyGoalCommand")(function* (o
   const slug = input.target.slice("/signals/".length);
   if (
     options.configured.some((definition) => definition.slug === slug) ||
-    (current && (state?.goal !== goal || state.owner !== undefined))
+    (current && state?.goal !== goal)
   )
     return yield* conflict("Signal belongs to another owner");
   const owner = options.registry.get(input.source)?.state as { status?: string } | undefined;
@@ -88,25 +84,13 @@ export const applyGoalSignal = Effect.fn("Signal.applyGoalCommand")(function* (o
     Match.when({ operation: "delete" }, () => ({})),
     Match.orElse((value) => value.definition),
   );
-  const raw: Record<string, unknown> = {
-    ...current?.state,
-    ...patch,
-    slug,
-    when: "Observe Goal context changes",
-    task: "Notify the Goal of relevant evidence",
-    agent: options.agents[0] ?? "doubao-delegate",
-    mode: "confirm",
-  };
-  Object.assign(raw, current?.state, patch);
-  for (const field of ["schedule", "notBefore"]) if (raw[field] === null) delete raw[field];
+  const raw = { ...current?.state, ...patch, slug };
   const definition = yield* Schema.decodeUnknownEffect(SignalDefinition)(raw).pipe(
     Effect.mapError(() => invalid("Invalid Signal definition")),
   );
-  if (!definition.when.trim() || !definition.task.trim())
-    return yield* invalid("Signal condition and description must not be empty");
   const nextDue = yield* Effect.try({
     try: () => {
-      validateSignalTime(definition);
+      if (definition.trigger._tag === "Schedule") validateSignalTime(definition.trigger);
       return change.operation === "delete" ? undefined : options.nextDue(definition);
     },
     catch: () => invalid("Invalid Signal timing"),
@@ -115,11 +99,11 @@ export const applyGoalSignal = Effect.fn("Signal.applyGoalCommand")(function* (o
   const next = {
     ...current?.state,
     ...definition,
-    schedule: definition.schedule,
-    notBefore: definition.notBefore,
     goal,
     causal: input.causal,
     active: change.operation !== "delete",
+    occurrences:
+      (current?.state as { occurrences?: readonly unknown[] } | undefined)?.occurrences ?? [],
     deleted: change.operation === "delete",
     revision: (state?.revision ?? 0) + 1,
     nextDue,

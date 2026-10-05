@@ -16,7 +16,7 @@ import {
   SignalDefinitions,
   ApprovalQueueActor,
   approvalEntries,
-  makeGoalSignalCommands,
+  SignalCommands,
   makeMemoryGoalHistory,
   type ContextRecord,
   type GoalCommandReply,
@@ -25,7 +25,7 @@ import {
 } from "../src/index.js";
 import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
 import type { GoalSubmission } from "../src/goals/protocol.js";
-import { fakeAgent, preparationLayer } from "./fixtures.js";
+import { fakeAgent } from "./fixtures.js";
 import { agentResult, emptyRecall, modelReplyLayer } from "./workflow-fixtures.js";
 
 const tool = (input: AgentInvocation, name: string, args: object, id = name) =>
@@ -48,18 +48,18 @@ const setup = Effect.fnUntraced(function* (
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
       Layer.succeed(ContextRegistry, registry),
-      preparationLayer,
+
       emptyRecall,
       Layer.succeed(GoalSettings, {
         definitions: [{ slug: "project", description: "Improve project reliability" }],
         reasoning: { model: "test" },
       }),
       Layer.succeed(GoalHistoryStore, options.history ?? makeMemoryGoalHistory()),
-      Layer.effect(
-        GoalSignals,
-        Effect.sync(() =>
-          makeGoalSignalCommands(registry, {
+      GoalSignals.layer.pipe(
+        Layer.provide(
+          Layer.succeed(SignalCommands, {
             ask: (command, timeout) => signals.ask(command, timeout),
+            bind: () => Effect.succeed(true),
           }),
         ),
       ),
@@ -187,7 +187,7 @@ test("Goal persists input before acknowledgement, serializes delivery, and start
   );
 });
 
-test("Context changes pass the Agent Gate before Pi; user input bypasses it", async () => {
+test("Context changes pass the Agent Gate before Pi; user and Task inputs bypass it", async () => {
   await run(
     Effect.gen(function* () {
       let calls = 0,
@@ -254,6 +254,19 @@ test("Context changes pass the Agent Gate before Pi; user input bypasses it", as
       yield* env.submit("direct", { _tag: "UserInput", text: "Direct instruction" });
       yield* env.wait(() => env.state().inputs.at(-1)!.status === "completed");
       assert.equal(calls, 3);
+      assert.equal(gates, 2);
+      yield* env.submit("task-direct", {
+        _tag: "TaskMessage",
+        delivery: {
+          requestId: "task-direct",
+          source: "/goals/project",
+          task: { _tag: "Goal", target: "/goals/project", text: "Follow up" },
+          createdAt: "2026-10-01T00:00:00Z",
+          causal: { rootRequestId: "task-direct", remainingAgentTurns: 3 },
+        },
+      });
+      yield* env.wait(() => env.state().inputs.at(-1)!.status === "completed");
+      assert.equal(calls, 4);
       assert.equal(gates, 2);
     }),
   );
@@ -349,21 +362,34 @@ test("Tasks execute independently through shared Run approval and return feedbac
     Effect.gen(function* () {
       const finished = yield* Deferred.make<void>();
       let submissions = 0,
-        calls = 0;
+        calls = 0,
+        gates = 0;
       const env = yield* setup(
         (input) =>
           Effect.gen(function* () {
             calls++;
             if (calls === 1) {
               const result = yield* tool(input, "start_task", {
-                agent: "test",
-                task: { instructions: "Investigate the project", input: [] },
+                task: {
+                  _tag: "Delegate",
+                  agent: "test",
+                  task: { instructions: "Investigate the project", input: [] },
+                  replyTo: "/goals/project",
+                },
               });
               assert.equal(result.isError, undefined);
             }
             return { messages: [] };
           }),
         {
+          gate: () =>
+            Effect.sync(() => {
+              gates++;
+              return agentResult("submit_relevance", {
+                relevant: false,
+                reason: "Context gate only",
+              });
+            }),
           external: fakeAgent({
             submit: () =>
               Effect.sync(() => {
@@ -413,6 +439,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
       );
       assert.equal(submissions, 1);
       assert.equal("tasks" in env.state(), false);
+      assert.equal(gates, 0);
     }),
   );
 });
@@ -474,8 +501,12 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
           Effect.gen(function* () {
             if (++calls === 1)
               yield* tool(input, "start_task", {
-                agent: "test",
-                task: { instructions: "Recover this external task", input: [] },
+                task: {
+                  _tag: "Delegate",
+                  agent: "test",
+                  task: { instructions: "Recover this external task", input: [] },
+                  replyTo: "/goals/project",
+                },
               });
             return { messages: [] };
           }),

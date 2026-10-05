@@ -1,16 +1,15 @@
 import {
   ApplicationError,
-  BusinessNotification,
   CausalChain,
   CommandReceipt,
   PublicContext,
+  TaskMessage,
 } from "@aster/api-contracts";
 import { Clock, Effect, Schema } from "effect";
 import { isDeepStrictEqual } from "node:util";
 import type { ContextRegistry } from "../context/registry.js";
 import { SignalDefinition } from "../config/schema.js";
 import { sourceSignalEligible } from "./policy.js";
-import { signalNotifications } from "../notifications/signal.js";
 
 export const SignalReactionInput = Schema.Struct({
   requestId: Schema.NonEmptyString,
@@ -26,25 +25,20 @@ export const SignalReactionReceipt = Schema.Struct({
   receipt: CommandReceipt,
 });
 
+export const SignalOccurrence = Schema.Struct({
+  message: TaskMessage,
+  delivered: Schema.Boolean,
+  error: Schema.optional(Schema.String),
+});
+
 const ReactionState = Schema.Struct({
-  businessOutbox: Schema.optional(Schema.Array(BusinessNotification)),
   causal: Schema.optional(CausalChain),
   ...SignalDefinition.fields,
   goal: Schema.optional(Schema.String),
   active: Schema.optional(Schema.Boolean),
   deleted: Schema.optional(Schema.Boolean),
   reactionReceipts: Schema.optional(Schema.Array(SignalReactionReceipt)),
-  occurrences: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        causal: Schema.optional(CausalChain),
-        id: Schema.String,
-        text: Schema.String,
-        delivered: Schema.Boolean,
-        source: PublicContext,
-      }),
-    ),
-  ),
+  occurrences: Schema.Array(SignalOccurrence),
 });
 
 /** Called only in the Signal mailbox. Occurrence and receipt are one accepted commit. */
@@ -76,11 +70,7 @@ export const acceptSignalReaction = Effect.fn("Signal.acceptReaction")(function*
       });
     return previous.receipt;
   }
-  if (
-    !sourceSignalEligible(state, yield* Clock.currentTimeMillis, (slug) =>
-      registry.get(`/goals/${slug}`),
-    )
-  )
+  if (!sourceSignalEligible(state, (slug) => registry.get(`/goals/${slug}`)))
     return yield* new ApplicationError({
       kind: "conflict",
       message: "Signal no longer accepts source reactions",
@@ -92,10 +82,14 @@ export const acceptSignalReaction = Effect.fn("Signal.acceptReaction")(function*
     occurrences: [
       ...(state.occurrences ?? []),
       {
-        id: `${path}:reaction:${input.requestId}`,
-        text: `Condition: ${state.when}\nRelated task: ${state.taskId ?? "None"}\nSource: ${input.sourceContext.path}\nRead the matched source snapshot before deciding whether work is needed.`,
-        source: input.sourceContext,
-        causal: state.causal ?? { rootRequestId: input.causationId, remainingAgentTurns: 4 },
+        message: {
+          requestId: `${path}:reaction:${input.requestId}`,
+          source: path,
+          task: state.task,
+          createdAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+          evidence: input.sourceContext,
+          causal: state.causal ?? { rootRequestId: input.causationId, remainingAgentTurns: 4 },
+        },
         delivered: false,
       },
     ],
@@ -107,13 +101,6 @@ export const acceptSignalReaction = Effect.fn("Signal.acceptReaction")(function*
         state: {
           ...current.state,
           ...next,
-          businessOutbox: signalNotifications({
-            path,
-            revision: receipt.revision,
-            at: new Date(yield* Clock.currentTimeMillis).toISOString(),
-            previous: state,
-            next,
-          }),
         },
       },
       { expectedRevision: input.expectedRevision },

@@ -7,14 +7,9 @@ import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Status, Blank } from "./shared";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { ApplicationError, contextQueryKeys } from "@aster/api-contracts";
-import { respondPersonalApproval, respondToApproval, invalidateQueries } from "../api/client";
+import { respondToApproval } from "../api/client";
 import type { ApprovalEntry, ApprovalResponse } from "@aster/api-contracts";
-import {
-  approvalEntries,
-  approvalDiagnostics,
-  contextViews,
-  pendingApprovalResponses,
-} from "./state";
+import { approvalEntries, approvalDiagnostics, pendingApprovalResponses } from "./state";
 export function Approvals({
   inspect,
   report,
@@ -30,77 +25,29 @@ export function Approvals({
     : allEntries;
   const { runs, failures: goalFailures } = useAtomValue(approvalDiagnostics);
   const [answers, setAnswers] = useState<Record<string, string>>({});
-  const respondMutation = useAtomSet(respondToApproval, { mode: "promise" });
-  const personalMutation = useAtomSet(respondPersonalApproval, { mode: "promiseExit" });
-  const personalBusy = useAtomValue(respondPersonalApproval).waiting;
-  const legacyBusy = useAtomValue(respondToApproval).waiting;
-  const busy = personalBusy || legacyBusy;
-  const inFlight = useRef(false);
-  const contexts = useAtomValue(contextViews);
-  const personal = contexts.find((item) => item.path === "/personal");
-  const queue = contexts.find((item) => item.path === "/approvals");
+  const respondMutation = useAtomSet(respondToApproval, { mode: "promiseExit" });
   const pending = useAtomValue(pendingApprovalResponses);
   const setPending = useAtomSet(pendingApprovalResponses);
-  const invalidate = useAtomSet(invalidateQueries);
-  const delivery = (id: string) =>
-    personal?.personalState?.outbox?.findLast(
-      (item) => "approvalId" in item.input && item.input.approvalId === id,
-    );
-  const retained = (id: string) => (delivery(id)?.status === "rejected" ? undefined : pending[id]);
-  const clear = (id: string) =>
-    setPending((current) =>
-      Object.fromEntries(Object.entries(current).filter(([key]) => key !== id)),
-    );
+  const busy = useAtomValue(respondToApproval).waiting;
+  const inFlight = useRef(false);
   async function respond(entry: ApprovalEntry, response: ApprovalResponse) {
     if (inFlight.current) return;
     inFlight.current = true;
+    const frozen = pending[entry.id] ?? response;
+    setPending((previous) => ({ ...previous, [entry.id]: frozen }));
     try {
-      if (!personal) {
-        await respondMutation({
-          payload: { id: entry.id, response },
-          reactivityKeys: contextQueryKeys("/approvals"),
-        });
-        return;
-      }
-      if (
-        personal.revision === undefined ||
-        queue?.revision === undefined ||
-        personal.projectionError
-      ) {
-        report("Approval revisions are unavailable. Refresh before responding.");
-        return;
-      }
-      const input = retained(entry.id)?.input ?? {
-        requestId: crypto.randomUUID(),
-        causationId: crypto.randomUUID(),
-        approvalId: entry.id,
-        expectedRevision: personal.revision,
-        approvalsRevision: queue.revision,
-        response,
-      };
-      setPending((current) => ({ ...current, [entry.id]: { input, accepted: false } }));
-      const result = await personalMutation({
-        payload: input,
-        reactivityKeys: [...contextQueryKeys("/personal"), ...contextQueryKeys("/approvals")],
+      const result = await respondMutation({
+        payload: { id: entry.id, response: frozen },
+        reactivityKeys: contextQueryKeys("/approvals"),
       });
-      if (Exit.isSuccess(result)) {
-        setPending((current) => ({ ...current, [entry.id]: { input, accepted: true } }));
-        report("");
-      } else {
+      if (Exit.isFailure(result)) {
         const failure = Cause.squash(result.cause);
         report(failure instanceof Error ? failure.message : String(failure));
-        const error = Cause.findError(result.cause);
-        if (
-          error._tag === "Success" &&
-          Schema.is(ApplicationError)(error.success) &&
-          ["conflict", "invalid-input"].includes(error.success.kind)
-        ) {
-          clear(entry.id);
-          invalidate([...contextQueryKeys("/personal"), ...contextQueryKeys("/approvals")]);
-        }
-      }
-    } catch (e) {
-      report(e instanceof Error ? e.message : String(e));
+        if (!Schema.is(ApplicationError)(failure) || failure.kind === "unavailable") return;
+      } else report("");
+      setPending((previous) =>
+        Object.fromEntries(Object.entries(previous).filter(([id]) => id !== entry.id)),
+      );
     } finally {
       inFlight.current = false;
     }
@@ -113,14 +60,13 @@ export function Approvals({
             title="No approval requests yet"
             detail={
               runs === 0
-                ? "No Signal occurrences yet. The workflow has not reached task confirmation or external execution."
-                : `There are ${runs} Signal occurrences. No tasks currently require human approval.`
+                ? "No Tasks yet. The workflow has not reached task confirmation or external execution."
+                : `There are ${runs} Tasks. No tasks currently require human approval.`
             }
           />
           <p className="text-sm text-muted-foreground">
-            The queue receives task confirmations in confirm mode and requests for permission or
-            information from agents delegated by this system. Auto mode skips confirmation before
-            execution.
+            The queue contains task confirmations and requests for permission or additional
+            information. Results appear in the originating Goal.
           </p>
           {goalFailures.map((failure) => (
             <Alert variant="destructive" key={failure.path}>
@@ -160,25 +106,11 @@ export function Approvals({
             <pre className="bg-muted rounded-md p-4 mb-4 max-h-72 overflow-auto">
               {e.request.prompt}
             </pre>
-            {delivery(e.id)?.status === "rejected" && <p role="alert">{delivery(e.id)?.error}</p>}
-            {e.status === "pending" &&
-            (retained(e.id) || (delivery(e.id) && delivery(e.id)?.status !== "rejected")) ? (
-              <div className="flex flex-col gap-2">
-                <p>
-                  {retained(e.id)?.accepted || delivery(e.id)
-                    ? "Your decision is saved in Personal. Follow its delivery status there."
-                    : "The response acknowledgement is uncertain. Reconcile your saved decision before making another."}
-                </p>
-                {retained(e.id) && !retained(e.id)?.accepted && !delivery(e.id) && (
-                  <Button
-                    disabled={!!busy}
-                    onClick={() => respond(e, retained(e.id)!.input.response)}
-                  >
-                    Reconcile saved decision
-                  </Button>
-                )}
-                <Button variant="link" onClick={() => inspect("/personal")}>
-                  View Personal delivery
+            {e.status === "pending" && pending[e.id] ? (
+              <div>
+                <p>Response not confirmed. Reconcile the saved decision before making another.</p>
+                <Button disabled={!!busy} onClick={() => respond(e, pending[e.id]!)}>
+                  Reconcile saved decision
                 </Button>
               </div>
             ) : e.status === "pending" ? (

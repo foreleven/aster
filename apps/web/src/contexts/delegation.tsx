@@ -5,7 +5,7 @@ import { ApplicationClient, resultError, resultValue } from "../api/client";
 
 const inspection = Atom.family((path: string) =>
   ApplicationClient.query(
-    "InspectPersonalDelegation",
+    "InspectDelegation",
     { path },
     { reactivityKeys: [QueryKeys.all, QueryKeys.context(path)] },
   ),

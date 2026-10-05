@@ -54,7 +54,8 @@ export function GoalWorkspace({
       !context.state.deleted &&
       (context.state.goal === slug ||
         context.state.definition?.goal === slug ||
-        context.state.sourcePath === goal.path),
+        context.state.sourcePath === goal.path ||
+        context.state.replyTo === goal.path),
   );
   const relatedPaths = [
     ...new Set([...references(goal), ...related.map((context) => context.path)]),

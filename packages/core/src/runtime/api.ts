@@ -1,3 +1,7 @@
+import { inspectDelegation } from "../delegation/inspection.js";
+import type { RunRootCommand } from "../tasks/root.js";
+import type { RunAdmissionReply } from "../tasks/run.js";
+import { ResumeRunDeliveryInput } from "@aster/api-contracts";
 import { randomUUID } from "node:crypto";
 import { ContextQueries, ContextQueryError, type ContextQueryInput } from "../context/queries.js";
 import { inspectProcessing } from "./processing.js";
@@ -21,8 +25,6 @@ import type { GoalHistory } from "../goals/history.js";
 import type { GoalCommand, GoalCommandReply, GoalsRootCommand } from "../goals/actors.js";
 import { approvalEntries, type ApprovalCommand } from "../approvals/actor.js";
 import type { ApprovalResponse } from "../tasks/model.js";
-import type { PersonalCommand } from "../personal/actor.js";
-import { makePersonalApi } from "../personal/api.js";
 
 /** Transport-independent queries and commands. Actor paths remain inside core. */
 export const makeApplicationApi = (options: {
@@ -30,8 +32,8 @@ export const makeApplicationApi = (options: {
   readonly queries?: ContextQueries["Service"];
   readonly history?: GoalHistory;
   readonly goals?: ActorRef<GoalsRootCommand>;
+  readonly runs?: ActorRef<RunRootCommand>;
   readonly approvals?: ActorRef<ApprovalCommand>;
-  readonly personal?: ActorRef<PersonalCommand>;
   readonly inspect: Effect.Effect<unknown>;
   readonly recoverProcessing?: (
     input: RecoveryInput,
@@ -77,6 +79,38 @@ export const makeApplicationApi = (options: {
     if (reply._tag === "Rejected") return yield* reply.error;
   });
   return {
+    inspectDelegation: (path: string) =>
+      inspectDelegation(path, (path) =>
+        Effect.suspend(() => {
+          const record = registry.get(path);
+          return record
+            ? Effect.succeed(record)
+            : Effect.fail(
+                new ApplicationError({ kind: "not-found", message: "Delegation not found" }),
+              );
+        }),
+      ),
+    resumeRun: (input: ResumeRunDeliveryInput) =>
+      Effect.gen(function* () {
+        if (!options.runs)
+          return yield* new ApplicationError({
+            kind: "unavailable",
+            message: "Task owner unavailable",
+          });
+        const reply = yield* options.runs
+          .ask<RunAdmissionReply>((replyTo) => ({ _tag: "ResumeRun", input, replyTo }))
+          .pipe(
+            Effect.mapError(
+              () =>
+                new ApplicationError({
+                  kind: "unavailable",
+                  message: "Resume acknowledgement missing; retain the original identity",
+                }),
+            ),
+          );
+        if (reply._tag === "Rejected") return yield* reply.error;
+        return reply.receipt;
+      }),
     queryContext: (input: ContextQueryInput) =>
       options.queries
         ? options.queries.query(input)
@@ -100,7 +134,6 @@ export const makeApplicationApi = (options: {
         });
       return yield* options.recoverProcessing(input);
     }),
-    personal: makePersonalApi(options.personal),
     changes: registry.changes.pipe(
       Stream.map((change) => ({
         ...change,

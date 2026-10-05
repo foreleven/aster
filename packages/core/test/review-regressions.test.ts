@@ -1,7 +1,7 @@
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem, ActorTestKit } from "@aster/actor";
+import { ActorSystem } from "@aster/actor";
 import { Clock, Deferred, Effect, Fiber, Layer, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import {
@@ -11,34 +11,18 @@ import {
   ContextRegistry,
   ExternalAgents,
   GoalsRootActor,
-  SignalRunActor,
   SignalActor,
   SignalDefinitions,
-  contextSpawnOptions,
   makeApplicationApi,
   makeMemoryGoalHistory,
-  type GoalCommand,
-  type RunState,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
-import { fakeAgent, preparationLayer } from "./fixtures.js";
 
 const definition = {
   slug: "review",
-  when: "now",
-  task: "Task",
-  agent: "test",
-  mode: "confirm",
+  trigger: { _tag: "Context", when: "now" },
+  task: { _tag: "Goal", target: "/goals/personal", text: "Task" },
 } as const;
-const source = { path: "/source", description: "Source", state: {}, messages: [] };
-const base = {
-  signalSlug: "review",
-  sourcePath: source.path,
-  definition,
-  source,
-  task: { instructions: "Task", input: [] },
-};
-
 test("Goal API waits for durable input and history; stopped roots fail instead of accepting", async () => {
   await Effect.runPromise(
     Effect.scoped(
@@ -46,7 +30,6 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
         const registry = yield* makeContextRegistry();
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const initialized = yield* Deferred.make<void>();
         const underlying = makeMemoryGoalHistory();
         const history = {
           ...underlying,
@@ -62,20 +45,19 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
-            preparationLayer,
+
             Layer.succeed(ExternalAgents, {}),
             goalWorkflowLayer({
               definitions: [{ slug: "project", description: "Project" }],
               history,
               reasoner: { plan: () => Effect.never },
-              signals: () => [],
-              reconcile: () => Deferred.succeed(initialized, undefined).pipe(Effect.as([])),
+
               deactivate: () => Effect.void,
             }),
           ),
         );
         const root = yield* system.spawn("goals", GoalsRootActor);
-        yield* Deferred.await(initialized);
+        yield* root.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
         const api = makeApplicationApi({
           registry,
           goals: root,
@@ -127,115 +109,6 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
       }),
     ),
   );
-});
-
-test("every persisted Run terminal outcome is replayed on restart and parent reattachment", async () => {
-  const states = [
-    "completed",
-    "failed",
-    "cancelled",
-    "blocked",
-    "rejected",
-    "preparation-failed",
-  ] as const;
-  for (const status of states) {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          let saves = 0;
-          const registry = yield* makeContextRegistry({
-            loadAll: () => [
-              {
-                path: "/runs/review",
-                description: "Run",
-                state: { ...base, status, outcomeText: `Original ${status}` },
-                messages: [],
-              },
-            ],
-            save: () => {
-              saves++;
-            },
-          });
-          const system = yield* ActorSystem.make().pipe(
-            ActorSystem.provide(
-              Layer.succeed(ContextRegistry, registry),
-              preparationLayer,
-              Layer.succeed(ExternalAgents, {}),
-            ),
-          );
-          const actor = yield* system.spawn(
-            "run",
-            SignalRunActor,
-            contextSpawnOptions("/runs/review"),
-          );
-          for (let attachment = 0; attachment < 2; attachment++) {
-            const parent = yield* ActorTestKit.probe<GoalCommand>();
-            yield* actor.tell({ _tag: "Resume", path: "/runs/review", subscriber: parent.ref });
-            const update = yield* parent.take().pipe(Effect.timeout("2 seconds"));
-            assert.equal(update._tag, "SubmitInput");
-            if (update._tag === "SubmitInput" && update.input._tag === "ExecutionFeedback") {
-              yield* update.replyTo.tell({
-                _tag: "Accepted",
-                receipt: { requestId: update.requestId, revision: 1 },
-              });
-              assert.equal(update.input.status, status);
-              assert.equal(update.input.text, `Original ${status}`);
-              assert.equal(update.input.terminal, true);
-            }
-          }
-          assert.equal(saves, 0);
-        }),
-      ),
-    );
-  }
-});
-
-test("Run keeps authoritative failure/cancellation distinct from uncertain external outcomes", async () => {
-  for (const status of ["failed", "cancelled", "unknown"] as const) {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const registry = yield* makeContextRegistry({
-            loadAll: () => [
-              {
-                path: "/runs/review",
-                description: "Run",
-                state: { ...base, status: "ready" },
-                messages: [],
-              },
-            ],
-            save: () => {},
-          });
-          const system = yield* ActorSystem.make().pipe(
-            ActorSystem.provide(
-              Layer.succeed(ContextRegistry, registry),
-              preparationLayer,
-              Layer.succeed(ExternalAgents, {
-                test: fakeAgent({
-                  status: () => Effect.succeed({ state: status, error: "Executor outcome" }),
-                }),
-              }),
-            ),
-          );
-          const finished = yield* Stream.runHead(
-            system.events.pipe(
-              Stream.filter(
-                (event) =>
-                  event._tag === "CommandProcessed" &&
-                  event.path === "/user/run" &&
-                  event.commandTag === "Finished",
-              ),
-            ),
-          ).pipe(Effect.forkScoped);
-          yield* Effect.yieldNow;
-          yield* system.spawn("run", SignalRunActor, contextSpawnOptions("/runs/review"));
-          yield* Fiber.join(finished).pipe(Effect.timeout("2 seconds"));
-          const saved = registry.get("/runs/review")!.state as RunState;
-          assert.equal(saved.status, status === "unknown" ? "uncertain" : status);
-        }),
-      ),
-    );
-  }
 });
 
 test("invalid option stays pending and can be corrected without losing the original request", async () => {
@@ -296,7 +169,7 @@ test("malformed Signal delivery state stops before recovery writes or execution"
           description: "Signal",
           state: {
             ...definition,
-            occurrences: [{ id: "one", text: "Pending", delivered: "false", source }],
+            occurrences: [{ id: "one", text: "Pending", delivered: "false" }],
           },
           messages: [],
         };
@@ -309,7 +182,7 @@ test("malformed Signal delivery state stops before recovery writes or execution"
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
-            preparationLayer,
+
             Layer.succeed(ExternalAgents, {}),
             Layer.succeed(SignalDefinitions, [definition]),
           ),

@@ -1,8 +1,8 @@
 import { Match, Predicate, Schema } from "effect";
 import {
   WritebackOperation,
-  PersonalMessage,
-  PersonalState,
+  Task,
+  SignalTrigger,
   PreparedTask,
   RunResumption,
   ExecutionResumption,
@@ -44,23 +44,21 @@ const DisplayState = Schema.Struct({
   progress: Schema.optional(Schema.String),
   completionCriteria: Schema.optional(Schema.String),
   active: Schema.optional(Schema.Boolean),
-  when: Schema.optional(Schema.String),
-  task: Schema.optional(Schema.Union([Schema.String, PreparedTask])),
+  trigger: Schema.optional(SignalTrigger),
+  replyTo: Schema.optional(Schema.String),
+  task: Schema.optional(Schema.Union([Task, PreparedTask])),
   outcomeText: Schema.optional(Schema.String),
   occurrences: Schema.optional(
-    Schema.Array(Schema.Struct({ source: Schema.Struct({ path: Schema.String }) })),
+    Schema.Array(
+      Schema.Struct({
+        message: Schema.Struct({
+          source: Schema.String,
+          evidence: Schema.optional(Schema.Struct({ path: Schema.String })),
+        }),
+      }),
+    ),
   ),
   nextDue: Schema.optional(Schema.Number),
-  schedule: Schema.optional(
-    Schema.Union([
-      Schema.Struct({ type: Schema.Literal("once"), at: Schema.String }),
-      Schema.Struct({
-        type: Schema.Literal("cron"),
-        expression: Schema.String,
-        timeZone: Schema.String,
-      }),
-    ]),
-  ),
   historyCount: Schema.optional(Schema.Number),
   sourceContext: Schema.optional(Schema.String),
   sourcePath: Schema.optional(Schema.String),
@@ -80,28 +78,16 @@ export interface ContextView extends Omit<PublicContext, "state" | "messages"> {
   readonly messages: readonly MessageView[];
   readonly rawState: PublicContext["state"];
   readonly projectionError?: string;
-  readonly personalState?: PersonalState;
 }
 export const projectContext = (record: PublicContext): ContextView => {
   const result = Schema.decodeUnknownResult(DisplayState)(record.state);
   const messages = record.messages.map(projectMessage);
-  const personal =
-    record.path === "/personal"
-      ? Schema.decodeUnknownResult(PersonalState)(record.state)
-      : undefined;
-  const personalState = personal?._tag === "Success" ? personal.success : undefined;
-  const personalError =
-    record.path === "/personal" && (!personalState || messages.some((message) => !message.personal))
-      ? "Personal Context contains unsupported data; refresh before sending a message"
-      : undefined;
   return Match.value(result).pipe(
     Match.tag("Success", ({ success }) => ({
       ...record,
       messages,
       rawState: record.state,
       state: success,
-      personalState,
-      ...(personalError ? { projectionError: personalError } : {}),
     })),
     Match.tag("Failure", () => ({
       ...record,
@@ -149,8 +135,6 @@ const parseGoalIntent = (content: unknown) => {
   return result._tag === "Success" ? result.success : undefined;
 };
 export const projectMessage = (raw: unknown) => {
-  const personalResult = Schema.decodeUnknownResult(PersonalMessage)(raw);
-  const personal = personalResult._tag === "Success" ? personalResult.success : undefined;
   const decoded = Schema.decodeUnknownResult(MessageFields)(raw);
   const message =
     decoded._tag === "Success"
@@ -189,28 +173,14 @@ export const projectMessage = (raw: unknown) => {
         : message.text,
     ),
   );
-  const progress = personal?.payload._tag === "ProgressEvent" ? personal.payload : undefined;
   return {
     ...message,
-    personal,
-    progress,
-    role: personal ? (personal.payload._tag === "UserInput" ? "user" : "assistant") : message.role,
-    at: personal?.createdAt ?? message.at,
     intent,
-    label: personal
-      ? Match.value(personal.payload).pipe(
-          Match.tag("UserInput", () => "You"),
-          Match.tag("AgentReply", () => "Personal Agent"),
-          Match.tag("ProgressEvent", (payload) =>
-            payload.notification.kind === "NeedsAttention" ? "Needs attention" : "Progress",
-          ),
-          Match.exhaustive,
-        )
-      : label,
-    text: personal?.payload.text ?? (intent ? intent.content.summary : text),
+    label,
+    text: intent ? intent.content.summary : text,
     tool,
     details: JSON.stringify(tool ? content : raw, null, 2),
-    references: progress ? [progress.notification.source] : (message.references ?? []),
+    references: message.references ?? [],
   };
 };
 export type MessageView = ReturnType<typeof projectMessage>;

@@ -1,3 +1,5 @@
+import { goalAgentGate } from "./gate.js";
+import { deliverTask } from "../tasks/message.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ReplyTo, type ActorContext } from "@aster/actor";
@@ -13,7 +15,7 @@ import { ContextQueries } from "../context/queries.js";
 import { MemoryRecall } from "../memory/contracts.js";
 import { GoalSignals } from "../signals/goal-owner.js";
 import { ExternalAgents } from "../tasks/model.js";
-import { attachGoalTasks, cancelGoalTasks, startTask } from "../tasks/commands.js";
+import { attachGoalTasks, cancelGoalTasks } from "../tasks/commands.js";
 import { GoalHistoryStore } from "./history.js";
 import { GoalState } from "./state.js";
 import { goalWorkingState } from "./working-state.js";
@@ -27,7 +29,6 @@ import {
   GoalCommandReply,
 } from "./protocol.js";
 import { conversationText, runGoalConversation } from "./conversation.js";
-import { goalAgentGate } from "./gate.js";
 export { GoalCommand, GoalCommandReply, GoalDeliveryReply, GoalReadyReply } from "./protocol.js";
 export { GoalsRootActor, GoalsRootCommand } from "./root.js";
 
@@ -60,7 +61,7 @@ const GoalMailbox = Schema.Union([
       Schema.TaggedStruct("Failure", { error: Schema.instanceOf(AgentError) }),
     ]),
   }),
-  Schema.TaggedStruct("SignalsReady", {
+  Schema.TaggedStruct("PeersEnded", {
     generation: Schema.String,
     result: Schema.Union([
       Schema.TaggedStruct("Success", { value: Schema.Void }),
@@ -104,18 +105,14 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
       const accept = goalAdmission(registry, working, history);
       const incarnation = randomUUID();
       let activated = false;
-      let restored = false;
-      let recoveryError: ApplicationError | undefined;
       let running: { generation: string; cancellation: Deferred.Deferred<void> } | undefined;
       const waiters: { replyTo: ReplyTo<GoalReadyReply>; stage?: "restored" | "activated" }[] = [];
       const ready = Effect.fnUntraced(function* () {
         for (let index = waiters.length - 1; index >= 0; index--) {
           const waiter = waiters[index]!;
-          if (!recoveryError && !(restored && (activated || waiter.stage === "restored"))) continue;
+          if (!activated && waiter.stage !== "restored") continue;
           waiters.splice(index, 1);
-          yield* waiter.replyTo.tell(
-            recoveryError ? { _tag: "Failed", error: recoveryError } : { _tag: "Ready" },
-          );
+          yield* waiter.replyTo.tell({ _tag: "Ready" });
         }
       });
       const patchInput = (id: string, patch: Partial<StoredGoalInput>) =>
@@ -128,8 +125,8 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
       const endPeers = Effect.fnUntraced(function* (context: Owner) {
         yield* cancelGoalTasks(context, registry, path);
         yield* context.pipeToSelf(
-          signals.deactivate(definition.slug, context.self).pipe(Effect.asVoid),
-          (result) => ({ _tag: "SignalsReady", generation: incarnation, result }),
+          signals.deactivate(definition.slug).pipe(Effect.asVoid),
+          (result) => ({ _tag: "PeersEnded", generation: incarnation, result }),
         );
       });
       const runConversation = Effect.fnUntraced(function* (
@@ -174,8 +171,8 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                       : Effect.fail(reply.error),
                   ),
                 ),
-            startTask: (input) => startTask(context, input),
-            signal: (input) => signals.applySignal(input, context.self),
+            startTask: (input) => deliverTask(context, input),
+            signal: (input) => signals.applySignal(input),
           }).pipe(
             Effect.provideService(AgentRunner, runner),
             Effect.map((result) => conversationText(result.messages)),
@@ -218,17 +215,20 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                     state: {
                       ...initial,
                       causal,
-                      inputs: [
-                        {
-                          ...newGoalInput(
-                            initial,
-                            { _tag: "GoalStarted", pursuit: "initial" },
-                            "initial",
-                            DateTime.formatIso(yield* DateTime.now),
-                          ),
-                          causal,
-                        },
-                      ],
+                      inputs:
+                        slug === "personal"
+                          ? []
+                          : [
+                              {
+                                ...newGoalInput(
+                                  initial,
+                                  { _tag: "GoalStarted", pursuit: "initial" },
+                                  "initial",
+                                  DateTime.formatIso(yield* DateTime.now),
+                                ),
+                                causal,
+                              },
+                            ],
                     },
                   },
                   { expectedRevision: 0 },
@@ -249,10 +249,6 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
               Deferred.Deferred<void> | undefined;
             if (activation)
               yield* context.pipeToSelf(Deferred.await(activation), () => ({ _tag: "Activate" }));
-            yield* context.pipeToSelf(
-              signals.reconcile(slug, context.self).pipe(Effect.asVoid),
-              (result) => ({ _tag: "SignalsReady", generation: incarnation, result }),
-            );
           }),
         receive: (command, context) =>
           Match.value(command).pipe(
@@ -269,18 +265,10 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                 yield* wake(context);
               }),
             ),
-            Match.tag("SignalsReady", (command) =>
+            Match.tag("PeersEnded", (command) =>
               Effect.gen(function* () {
                 if (command.generation !== incarnation) return;
-                if (command.result._tag === "Failure")
-                  recoveryError = new ApplicationError({
-                    kind: "unavailable",
-                    message: command.result.error.message,
-                  });
-                else restored = true;
-                yield* ready();
-                if (state().status === "active") yield* wake(context);
-                else yield* cancelGoalTasks(context, registry, path);
+                if (command.result._tag === "Failure") yield* Effect.logError(command.result.error);
               }),
             ),
             Match.tag("SubmitInput", "End", "RetryTurn", (command) =>
@@ -425,14 +413,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
             ),
             Match.tag("RunNext", () =>
               Effect.gen(function* () {
-                if (
-                  !restored ||
-                  !activated ||
-                  recoveryError ||
-                  running ||
-                  state().status !== "active"
-                )
-                  return;
+                if (!activated || running || state().status !== "active") return;
                 // An uncertain delivery blocks later inputs. Restart inspects it using the same Pi identity.
                 const input =
                   state().inputs.find((input) => input.status === "running") ??

@@ -1,14 +1,14 @@
 import { Schema } from "effect";
 import { CommandIdentifier } from "./command.js";
-import { CausalChain } from "./notification.js";
+import { CausalChain } from "./causal.js";
 
 /** Publish the committed result verbatim. No credentials, templates or arbitrary
- * tool names can be supplied as part of a Signal action. */
-export const SignalAction = Schema.TaggedStruct("PublishResult", {
+ * tool names can be supplied as part of a Task action. */
+export const TaskAction = Schema.TaggedStruct("PublishResult", {
   channelPath: Schema.String.check(Schema.isPattern(/^\/[a-zA-Z0-9_/-]+$/)),
   identity: Schema.Literals(["user", "bot"]),
 });
-export type SignalAction = typeof SignalAction.Type;
+export type TaskAction = typeof TaskAction.Type;
 const Timestamp = Schema.String.check(
   Schema.makeFilter(
     (value) => /(Z|[+-]\d{2}:\d{2})$/.test(value) && Number.isFinite(Date.parse(value)),
@@ -18,10 +18,10 @@ const Timestamp = Schema.String.check(
 export const WritebackRequest = Schema.Struct({
   requestId: CommandIdentifier,
   source: Schema.String,
-  signalPath: Schema.String,
+  taskSource: Schema.String,
   causationId: CommandIdentifier,
   createdAt: Timestamp,
-  action: SignalAction,
+  action: TaskAction,
   content: Schema.NonEmptyString,
   causal: CausalChain,
 });

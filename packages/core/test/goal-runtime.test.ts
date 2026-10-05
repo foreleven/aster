@@ -1,53 +1,40 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorTestKit } from "@aster/actor";
-import { Clock, Deferred, Effect, Fiber } from "effect";
+import { Clock, Deferred, Effect, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
-import { SignalActor, makeGoalSignalCommands, type GoalCommand } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { GoalSignals, SignalCommands } from "../src/index.js";
 
 test("Goal coordination retains the caller's Clock and cancellation instead of starting a detached runtime", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        const path = "/signals/project--watch";
-        yield* registry.register(path, SignalActor.context);
-        yield* registry.commit(
-          {
-            path,
-            description: "watch",
-            messages: [],
-            state: {
-              slug: "project--watch",
-              goal: "project",
-              when: "changed",
-              task: "read",
-              agent: "test",
-              mode: "confirm",
-            },
-          },
-          { expectedRevision: registry.get(path)?.revision ?? 0 },
-        );
-        const subscriber = yield* ActorTestKit.probe<GoalCommand>();
         const entered = yield* Deferred.make<void>();
         let cancelled = false;
         let observedTime: number | undefined;
-        const runtime = makeGoalSignalCommands(registry, {
-          ask: () =>
-            Effect.gen(function* () {
-              observedTime = yield* Clock.currentTimeMillis;
-              yield* Deferred.succeed(entered, undefined);
-              return yield* Effect.never;
-            }).pipe(
-              Effect.ensuring(
-                Effect.sync(() => {
-                  cancelled = true;
+        const runtime = yield* GoalSignals.pipe(
+          Effect.provide(
+            GoalSignals.layer.pipe(
+              Layer.provide(
+                Layer.succeed(SignalCommands, {
+                  bind: () => Effect.succeed(true),
+                  ask: () =>
+                    Effect.gen(function* () {
+                      observedTime = yield* Clock.currentTimeMillis;
+                      yield* Deferred.succeed(entered, undefined);
+                      return yield* Effect.never;
+                    }).pipe(
+                      Effect.ensuring(
+                        Effect.sync(() => {
+                          cancelled = true;
+                        }),
+                      ),
+                    ),
                 }),
               ),
             ),
-        });
-        const operation = runtime.reconcile("project", subscriber.ref);
+          ),
+        );
+        const operation = runtime.deactivate("project");
         assert.equal(observedTime, undefined, "constructing an Effect must not send a command");
         const clock = yield* TestClock.make();
         yield* clock.adjust(12345);

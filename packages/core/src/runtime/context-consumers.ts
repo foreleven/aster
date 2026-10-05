@@ -1,8 +1,6 @@
 import { DurableContext } from "../context/persistence.js";
-import { NotificationsActor } from "../notifications/actor.js";
-import { BusinessOutbox } from "../notifications/inbox.js";
 import { type ActorSystem, type ActorRef } from "@aster/actor";
-import { Effect, Schema, Stream } from "effect";
+import { Effect, Stream } from "effect";
 import { ContextRegistry } from "../context/registry.js";
 import { ContextCaptureSink } from "../memory/contracts.js";
 import { ContextCaptures } from "../memory/capture.js";
@@ -25,6 +23,7 @@ export const startContextReactions = <Services>(roots: {
   readonly system: ActorSystem<
     Services | ContextRegistry | ReactionPolicy | GoalSettings | DurableContext
   >;
+  readonly changes: Stream.Stream<ContextChange>;
   readonly signals: ActorRef<SignalRootCommand>;
   readonly goals?: ActorRef<GoalsRootCommand>;
 }) =>
@@ -42,9 +41,7 @@ export const startContextReactions = <Services>(roots: {
       );
       if (ready._tag === "Failed") return yield* ready.error;
     }
-    const changes = yield* registry.subscribe;
-    const notifications = yield* roots.system.spawn("notifications", NotificationsActor);
-    yield* notifications.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+    const changes = roots.changes;
     const reactions = yield* roots.system.spawn("system-one", SystemOneActor);
     yield* reactions.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
     // Description and Memory keep their own policy. They never directly deliver Goal/Signal work.
@@ -59,8 +56,6 @@ export const startContextReactions = <Services>(roots: {
     );
     return yield* Stream.runForEach(changes, (change) =>
       Effect.gen(function* () {
-        if (Schema.is(BusinessOutbox)(change.record.state))
-          yield* notifications.tell({ _tag: "Wake" });
         yield* reactions.tell({ _tag: "Wake" });
         yield* process(change);
       }),

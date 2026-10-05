@@ -7,7 +7,6 @@ import { ContextQueries } from "../context/queries.js";
 import { memoryLayer } from "../memory/services.js";
 import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster/api-contracts";
 import type { ReactionCommand } from "../reactions/actor.js";
-import type { NotificationCommand } from "../notifications/actor.js";
 import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
 import { GoalScreeningStore } from "../goals/screening.js";
 import { RunRootActor } from "../tasks/root.js";
@@ -40,11 +39,8 @@ import { GoalHistoryStore } from "../goals/history.js";
 import { GoalsRootActor } from "../goals/actors.js";
 import { GoalSignals } from "../signals/goal-owner.js";
 import { ExternalAgents } from "../tasks/model.js";
-import { makeConfiguredSignalExtractor } from "../signals/extractor.js";
 import { MemoryRecall } from "../memory/contracts.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
-import { PersonalAgentActor, type PersonalReply } from "../personal/actor.js";
-import { PersonalActions } from "../personal/actions.js";
 import { startContextReactions } from "./context-consumers.js";
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
 import { makeApplicationApi, type ApplicationApi } from "./api.js";
@@ -64,7 +60,6 @@ type ActorServices =
   | SignalDefinitions
   | SystemOneClient
   | ExternalAgents
-  | PersonalActions
   | GoalSignals;
 
 const acquireRuntime = Effect.gen(function* () {
@@ -74,7 +69,10 @@ const acquireRuntime = Effect.gen(function* () {
   const settings = yield* GoalSettings;
   const definitions = yield* SignalDefinitions;
   const decisions = yield* SystemOneClient;
-  if ((settings.definitions.length || definitions.length) && decisions.configured === false)
+  if (
+    (settings.definitions.some((goal) => goal.slug !== "personal") || definitions.length) &&
+    decisions.configured === false
+  )
     return yield* new RuntimeConfigurationError({
       message: "Signals and Goals require config.system-one",
     });
@@ -84,7 +82,6 @@ const acquireRuntime = Effect.gen(function* () {
   const modules = (yield* RuntimeIntegrations).installed();
   const reactionPolicy = yield* makeReactionPolicy({
     client: decisions,
-    extract: yield* makeConfiguredSignalExtractor(),
     screening: Option.getOrUndefined(yield* Effect.serviceOption(GoalScreeningStore)),
   });
   const shared = Context.pick(
@@ -98,7 +95,6 @@ const acquireRuntime = Effect.gen(function* () {
     SignalDefinitions,
     SystemOneClient,
     ExternalAgents,
-    PersonalActions,
     GoalSignals,
   )(yield* Effect.context<ActorServices | DurableContext>());
   // Integration environments are captured by their own Layers. Never inject an ambient Scope.
@@ -163,15 +159,22 @@ const acquireRuntime = Effect.gen(function* () {
       events: [...state.events.slice(-199), event],
     })),
   ).pipe(Effect.forkIn(workScope));
+  const changes = yield* registry.subscribe.pipe(Effect.provideService(Scope.Scope, workScope));
+  for (const module of modules.filter((module) => module.phase === "source")) {
+    const handle = yield* module
+      .activate(system)
+      .pipe(Effect.provideService(Scope.Scope, workScope));
+    handles.push({ phase: module.phase, handle });
+  }
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
-  const personal = yield* system.spawn("personal", PersonalAgentActor);
   const signals = yield* system.spawn("signals", SignalRootActor);
+  yield* signals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
   const runs = yield* system.spawn("runs", RunRootActor);
+  yield* runs.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
   yield* endpoint.bind(signals);
   const goals = settings.definitions.length
     ? yield* system.spawn("goals", GoalsRootActor)
     : undefined;
-  yield* (yield* PersonalActions).bind(goals, signals, approvals, runs);
   for (const module of modules.filter((module) => module.phase === "consumer")) {
     const handle = yield* module
       .activate(system)
@@ -179,18 +182,11 @@ const acquireRuntime = Effect.gen(function* () {
     handles.push({ phase: module.phase, handle });
   }
   yield* reactionPolicy.bind(signals, goals);
-  running.reactions = yield* startContextReactions({ system, signals, goals }).pipe(
+  running.reactions = yield* startContextReactions({ system, signals, goals, changes }).pipe(
     Effect.provideService(Scope.Scope, workScope),
   );
-  for (const module of modules.filter((module) => module.phase === "source")) {
-    const handle = yield* module
-      .activate(system)
-      .pipe(Effect.provideService(Scope.Scope, workScope));
-    handles.push({ phase: module.phase, handle });
-  }
   running.initialization = yield* Effect.gen(function* () {
-    // Readiness includes Personal recovery, not only a transient mailbox enqueue.
-    yield* personal.ask<PersonalReply>((replyTo) => ({ _tag: "Get", replyTo }));
+    yield* signals.tell({ _tag: "Activate" });
     yield* Effect.forEach(handles, ({ handle }) => handle.ready, { concurrency: "unbounded" });
     if (goals) {
       yield* goals.tell({ _tag: "Initialize" });
@@ -219,8 +215,7 @@ const acquireRuntime = Effect.gen(function* () {
   );
   const api = makeApplicationApi({
     recoverProcessing: Effect.fn("Runtime.recoverProcessing")(function* (input: RecoveryInput) {
-      const target =
-        input._tag === "RetryNotification" ? "/user/notifications" : "/user/system-one";
+      const target = "/user/system-one";
       const selected = yield* system
         .select(target)
         .resolve()
@@ -234,7 +229,7 @@ const acquireRuntime = Effect.gen(function* () {
             ),
           ),
         );
-      const reply = yield* (selected as ActorRef<ReactionCommand | NotificationCommand>)
+      const reply = yield* (selected as ActorRef<ReactionCommand>)
         .ask<RecoveryReply>((replyTo) => ({ _tag: "Recover", input, replyTo }))
         .pipe(
           Effect.catchTag("AskTimeoutError", () =>
@@ -254,7 +249,7 @@ const acquireRuntime = Effect.gen(function* () {
     history,
     goals,
     approvals,
-    personal,
+    runs,
     inspect: Effect.gen(function* () {
       // The host owns domain metadata and the dashboard contract; actor stays domain-neutral.
       const actors = (yield* system.inspect({ metadata: ["contextPath"] })).map(
@@ -290,7 +285,6 @@ export class AsterRuntime extends Context.Service<
       ContextQueries.layer,
       GoalSettings.layer,
       SignalCommands.layer,
-      PersonalActions.layer,
       RuntimeIntegrations.layer,
       Layer.effect(SignalDefinitions, signalSettings),
     );

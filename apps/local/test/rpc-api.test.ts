@@ -1,4 +1,4 @@
-import { personalDisabled } from "./workflow-fixtures.js";
+import { AgentRunner } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Layer, Schema, Stream } from "effect";
@@ -12,8 +12,13 @@ import {
   contextView,
   makeApplicationApi,
   ContextRegistry,
-  PersonalAgentActor,
-  PersonalActions,
+  GoalsRootActor,
+  GoalSettings,
+  GoalHistoryStore,
+  GoalSignals,
+  MemoryRecall,
+  ExternalAgents,
+  makeMemoryGoalHistory,
 } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import { startGoalApi } from "../src/http-api.js";
@@ -30,22 +35,39 @@ const record = {
   messages: [],
 };
 
-test("Personal RPC returns the same durable receipt for duplicate business requests", async () => {
+test("Goal RPC acknowledges duplicate business requests without duplicating input", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            PersonalActions.unavailable,
             Layer.succeed(ContextRegistry, registry),
-            personalDisabled,
+            Layer.succeed(GoalSettings, {
+              definitions: [{ slug: "personal", description: "Assistant" }],
+              reasoning: { model: "test" },
+            }),
+            Layer.succeed(GoalHistoryStore, makeMemoryGoalHistory()),
+            Layer.succeed(GoalSignals, {
+              applySignal: () => Effect.die("Unexpected Signal"),
+              deactivate: () => Effect.void,
+            }),
+            Layer.succeed(MemoryRecall, {
+              search: () => Effect.succeed({ results: [] }),
+              expand: () => Effect.succeed({ results: [] }),
+            }),
+            Layer.succeed(ExternalAgents, {}),
+            Layer.succeed(
+              AgentRunner,
+              AgentRunner.make(() => Effect.die("No model expected")),
+            ),
           ),
         );
-        const personal = yield* system.spawn("personal", PersonalAgentActor);
+        const goals = yield* system.spawn("goals", GoalsRootActor);
+        yield* goals.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
         const application = makeApplicationApi({
           registry,
-          personal,
+          goals,
           inspect: Effect.succeed(null),
         });
         const api = yield* Effect.acquireRelease(
@@ -61,25 +83,20 @@ test("Personal RPC returns the same durable receipt for duplicate business reque
             });
             return JSON.parse(await response.text());
           });
-        const before = yield* call(1, "GetPersonal", null);
+        const before = yield* call(1, "GetContext", { path: "/goals/personal" });
         assert.equal(before.exit._tag, "Success");
-        assert.equal(before.exit.value.revision, 1);
+        assert.equal(before.exit.value.path, "/goals/personal");
         const input = {
           requestId: "stable-business-request",
-          causationId: "user",
-          expectedRevision: 1,
+          slug: "personal",
           text: "Watch the release",
         };
-        const first = yield* call(2, "SendPersonalMessage", input);
-        const duplicate = yield* call(3, "SendPersonalMessage", input);
+        const first = yield* call(2, "SendGoalMessage", input);
+        const duplicate = yield* call(3, "SendGoalMessage", input);
         assert.equal(first.exit._tag, "Success");
-        assert.deepEqual(first.exit.value, {
-          requestId: input.requestId,
-          revision: 2,
-          sequence: 1,
-        });
+        assert.equal(first.exit.value, null);
         assert.deepEqual(duplicate.exit, first.exit);
-        assert.equal((yield* application.personal.get).messages.length, 1);
+        assert.equal((yield* application.goals.timeline("personal", {})).groups.length, 1);
       }),
     ),
   );

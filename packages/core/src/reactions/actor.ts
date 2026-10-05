@@ -248,11 +248,6 @@ export class SystemOneActor extends ContextActor.Service<
               Effect.gen(function* () {
                 const recovered = yield* Effect.gen(function* () {
                   const input = command.input;
-                  if (input._tag === "RetryNotification")
-                    return yield* new ApplicationError({
-                      kind: "invalid-input",
-                      message: "Recovery addressed to another owner",
-                    });
                   const replay = yield* recoveryReplay(
                     input,
                     registry.get(path)!.revision ?? 0,

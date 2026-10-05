@@ -1,14 +1,5 @@
-import { taskExecutionLayer } from "./workflow-fixtures.js";
 import { Effect, Layer } from "effect";
 import { ExternalAgents, type ExternalAgent } from "../src/index.js";
-export const preparationLayer = taskExecutionLayer({
-  prepare: (definition, source) =>
-    Effect.sync(() => ({
-      instructions: definition.task,
-      input: [{ content: JSON.stringify(source.state), sources: [source.path] }],
-    })),
-  ready: () => Effect.sync(() => true),
-});
 export const fakeAgent = (overrides: Partial<ExternalAgent> = {}): ExternalAgent => ({
   capabilities: "Test executor",
   submit: () => Effect.sync(() => ({ sessionId: "test-session", runId: "test-run" })),

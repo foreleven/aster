@@ -1,7 +1,7 @@
 import { ContextCaptures, ContextDescriptions, makeContextMaintenance } from "@aster/core";
 import { runCapture } from "@aster/core/testing";
 import { larkCaptures, larkDescriptions, larkContextViews } from "@aster/integrations";
-import { taskExecutionLayer } from "./workflow-fixtures.js";
+import { TaskRunActor, DEFAULT_EXECUTOR_PROMPT } from "@aster/core";
 import { ContextDescriptionError } from "@aster/core";
 import { ApprovalQueueActor, ExternalAgents } from "@aster/core";
 import assert from "node:assert/strict";
@@ -13,8 +13,6 @@ import { ContextRegistry, type ContextRecord } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import { LarkRootActor, LarkEmailChannelActor, LarkMailMessageActor } from "@aster/integrations";
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect";
-import { detectSignals } from "@aster/core";
-import { SignalDefinitions, SignalRootActor } from "@aster/core";
 
 const source = (subject: string): ContextRecord => ({
   path: "/lark/mail/me/test",
@@ -39,7 +37,7 @@ const waitFor = (predicate: () => boolean, label = "processing") =>
     return yield* Effect.die(new Error(`Expected ${label} did not finish`));
   });
 
-test("only confirmed Signal Runs capture activity, using the evaluated source snapshot", async () => {
+test("admitted Task Runs capture activity, using the evaluated source snapshot", async () => {
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -54,22 +52,11 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
         yield* registry.register("/lark/mail", LarkEmailChannelActor.context);
         yield* registry.register("/lark/mail/me/test", LarkMailMessageActor.context);
         const captures: MemoryCapture[] = [];
-        const definitions = [
-          {
-            slug: "review",
-            when: "review request",
-            task: "Review",
-            agent: "test",
-            mode: "confirm" as const,
-          },
-        ];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(ContextCaptures, capturesPolicy),
             Layer.succeed(ExternalAgents, {}),
-            taskExecutionLayer,
-            Layer.succeed(SignalDefinitions, definitions),
             Layer.succeed(MemoryBackend, {
               description: "Memory",
               retrieval: "bm25",
@@ -84,9 +71,7 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
         );
         const memory = yield* system.spawn("memory", MemoryActor);
         yield* system.spawn("approvals", ApprovalQueueActor);
-        const signals = yield* system.spawn("signals", SignalRootActor);
         const newerSourceWritten = yield* Deferred.make<void>();
-        let evaluated = 0;
         const descriptionInputs: unknown[] = [];
         const processor = makeContextMaintenance({
           registry,
@@ -106,25 +91,6 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
               return `Fixed ${identity.identity}`;
             }),
         });
-        const evaluate = (
-          record: ContextRecord,
-          snapshot: Readonly<Record<string, ContextRecord>>,
-        ) =>
-          detectSignals(
-            record.path,
-            snapshot,
-            definitions,
-            () => Effect.succeed(definitions),
-            signals,
-            (path, _candidates, snapshot) =>
-              Effect.sync(() => {
-                evaluated++;
-                return (snapshot[path]!.state as { subject: string }).subject ===
-                  "Confirmed request"
-                  ? ["review"]
-                  : [];
-              }),
-          );
         const listener = yield* Stream.runForEach(registry.changes, processor).pipe(
           Effect.forkScoped,
         );
@@ -145,18 +111,38 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
           () => !!registry.get("/lark/mail/me/test")?.description,
           "description initialization",
         );
-        const first = registry.reader.get("/lark/mail/me/test")!;
-        yield* evaluate(first, { ...registry.reader.snapshot(), [first.path]: first });
-        yield* waitFor(() => evaluated === 1, "first evaluation");
-        assert.equal(captures.length, 0, "Jev candidate must not write memory");
+        assert.equal(captures.length, 0, "Context candidate must not write memory");
         yield* registry.commit(source("Confirmed request"), {
           expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0,
         });
         const confirmed = registry.reader.get("/lark/mail/me/test")!;
-        yield* evaluate(confirmed, { ...registry.reader.snapshot(), [confirmed.path]: confirmed });
-        yield* waitFor(
-          () => Object.keys(registry.snapshot()).some((p) => p.includes("/runs/")),
-          "Run creation",
+        const runPath = "/runs/" + "a".repeat(64);
+        yield* registry.register(runPath, TaskRunActor.context);
+        yield* registry.commit(
+          {
+            path: runPath,
+            description: "Review",
+            messages: [],
+            state: {
+              status: "awaiting-confirmation",
+              executorPrompt: DEFAULT_EXECUTOR_PROMPT,
+              admission: {
+                receipt: { requestId: "task", revision: 1 },
+                input: {
+                  requestId: "task",
+                  source: "/signals/review",
+                  target: runPath,
+                  createdAt: "2026-10-01T00:00:00Z",
+                  agent: "test",
+                  task: { instructions: "Review", input: [] },
+                  replyTo: "/goals/personal",
+                  evidence: confirmed,
+                  causal: { rootRequestId: "task", remainingAgentTurns: 3 },
+                },
+              },
+            },
+          },
+          { expectedRevision: 0 },
         );
         // A newer source value exists before memory finishes processing the Run notification.
         yield* registry.commit(
@@ -175,7 +161,7 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
   );
   assert.equal(result.captures.length, 1);
   const capture = result.captures[0]!;
-  assert.match(capture.sessionId, /^\/signals\/review\/runs\//);
+  assert.match(capture.sessionId, /^\/runs\/[a-f0-9]{64}:trigger$/);
   assert.equal((capture.records[1]!.state as { subject: string }).subject, "Confirmed request");
   assert.equal("type" in result.snapshot[capture.records[0]!.path]!, false);
   assert.deepEqual(result.descriptionInputs[0], {

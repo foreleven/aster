@@ -15,8 +15,7 @@ import type { MemoryRecall } from "../memory/contracts.js";
 import type { ContextQueries } from "../context/queries.js";
 import { contextTools } from "../reasoning/context-tools.js";
 import { contextQueryTools } from "../reasoning/context-query-tools.js";
-import { taskPath } from "../tasks/admission.js";
-import type { TaskDeliveryInput } from "@aster/api-contracts";
+import type { TaskMessage } from "@aster/api-contracts";
 import type { GoalSignalInput } from "../signals/goal-command.js";
 import type { StoredGoalInput } from "./inputs.js";
 import { inputMessage } from "./inputs.js";
@@ -44,7 +43,7 @@ export interface GoalConversation {
     completed: boolean,
     evidence: readonly string[],
   ) => Effect.Effect<unknown, ApplicationError>;
-  readonly startTask: (input: TaskDeliveryInput) => Effect.Effect<unknown, ApplicationError>;
+  readonly startTask: (input: TaskMessage) => Effect.Effect<unknown, ApplicationError>;
   readonly signal: (input: GoalSignalInput) => Effect.Effect<unknown, ApplicationError>;
 }
 
@@ -77,21 +76,40 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           ),
           signal,
         );
+      const actorTask = Type.Union([
+        Type.Object({
+          _tag: Type.Literal("Goal"),
+          target: Type.String({ pattern: "^/goals/[a-z0-9][a-z0-9-]*$" }),
+          text: Type.String({ minLength: 1 }),
+        }),
+        Type.Object({
+          _tag: Type.Literal("Delegate"),
+          agent: Type.String(),
+          replyTo: Type.String({ pattern: "^/goals/[a-z0-9][a-z0-9-]*$" }),
+          task: Type.Object({
+            instructions: Type.String({ minLength: 1 }),
+            input: Type.Array(
+              Type.Object({ content: Type.String(), sources: Type.Array(Type.String()) }),
+            ),
+          }),
+        }),
+      ]);
       const signalDefinition = Type.Object({
-        when: Type.Optional(Type.String()),
-        task: Type.Optional(Type.String()),
-        notBefore: Type.Optional(Type.Union([Type.String(), Type.Null()])),
-        schedule: Type.Optional(
-          Type.Union([
-            Type.Object({ type: Type.Literal("once"), at: Type.String() }),
-            Type.Object({
-              type: Type.Literal("cron"),
-              expression: Type.String(),
-              timeZone: Type.String(),
-            }),
-            Type.Null(),
-          ]),
-        ),
+        trigger: Type.Union([
+          Type.Object({ _tag: Type.Literal("Context"), when: Type.String({ minLength: 1 }) }),
+          Type.Object({
+            _tag: Type.Literal("Schedule"),
+            schedule: Type.Union([
+              Type.Object({ type: Type.Literal("once"), at: Type.String() }),
+              Type.Object({
+                type: Type.Literal("cron"),
+                expression: Type.String(),
+                timeZone: Type.String(),
+              }),
+            ]),
+          }),
+        ]),
+        task: actorTask,
       });
       const reads = contextTools(registry.reader.snapshot(), 4000);
       const tools = [
@@ -130,7 +148,8 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
               Object.values(registry.reader.snapshot()).filter(
                 (record) =>
                   record.path.startsWith("/runs/") &&
-                  (record.state as { sourcePath?: string }).sourcePath === source,
+                  ((record.state as { sourcePath?: string }).sourcePath === source ||
+                    (record.state as { replyTo?: string }).replyTo === source),
               ),
             ),
         }),
@@ -190,27 +209,15 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           replay: "never",
           label: "Start asynchronous Task",
           description:
-            "Create a durable external Task using the shared execution and confirmation workflow. The Task continues independently and sends feedback; this tool returns once accepted.",
-          parameters: Type.Object({
-            agent: Type.String(),
-            task: Type.Object({
-              instructions: Type.String({ minLength: 1 }),
-              input: Type.Array(
-                Type.Object({ content: Type.String(), sources: Type.Array(Type.String()) }),
-              ),
-            }),
-          }),
+            "Send a Task to a Goal Actor or an external delegate. Delegate tasks require user confirmation and reply to the specified Goal. Keep the same request identity on unknown outcomes.",
+          parameters: Type.Object({ task: actorTask }),
           execute: (id, args, signal) => {
             const requestId = identity(id);
             return mutation(
               options.startTask({
                 ...args,
                 requestId,
-                causationId: input.inputId,
                 source,
-                target: taskPath(source, requestId),
-                operation: "startTask",
-                expectedRevision: 0,
                 createdAt: input.receivedAt,
                 causal,
               }),
@@ -223,7 +230,7 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           replay: "never",
           label: "Manage Signal",
           description:
-            "Create, change or delete a Goal signal or timer. It runs independently and notifies the Goal when triggered. Read the current revision before changing an existing Signal.",
+            "Create, change or delete a Goal signal or timer. It executes its configured Task when triggered. Read the current revision before changing an existing Signal.",
           parameters: Type.Object({
             id: Type.String({ pattern: "^[a-z0-9][a-z0-9-]*$" }),
             change: Type.Union([

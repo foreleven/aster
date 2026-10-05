@@ -8,11 +8,7 @@ config:
   #     directory: /absolute/path/to/aster-data/pi # default <root>/pi
   #     ownerId: aster-executions
   #   routes:
-  #     - { prefix: /personal, backend: pi }
   #     - { prefix: /goals, backend: pi }
-  # Optional persistent Personal Agent. Uses the same named model catalogue as Goals.
-  personal:
-    model: goal-reasoning
   agent:
     model: goal-reasoning
   system-one:
@@ -101,10 +97,16 @@ contexts:
   #         maxMessages: 50
 signals:
   email-action-request:
-    when: A new email explicitly asks me to complete a specific task.
-    task: Complete the work requested in the email and explain the result.
-    agent: doubao-delegate
-    mode: confirm
+    trigger:
+      _tag: Context
+      when: A new email explicitly asks me to complete a specific task.
+    task:
+      _tag: Delegate
+      agent: doubao-delegate
+      replyTo: /goals/personal
+      task:
+        instructions: Complete the work requested in the email and explain the result.
+        input: []
 
 goals:
   knowledge-engine:

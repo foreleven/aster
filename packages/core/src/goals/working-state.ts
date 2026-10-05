@@ -1,5 +1,4 @@
-import { DateTime, Effect, Schema } from "effect";
-import { goalNotifications } from "../notifications/goal.js";
+import { Effect, Schema } from "effect";
 import type { GoalDefinition } from "../config/schema.js";
 import type { ContextRegistry } from "../context/registry.js";
 import { GoalState } from "./state.js";
@@ -36,16 +35,7 @@ export const goalWorkingState = (
       .commit(
         {
           ...snapshot,
-          state: {
-            ...s,
-            businessOutbox: goalNotifications({
-              path: snapshot.path,
-              revision: (snapshot.revision ?? 0) + 1,
-              at: DateTime.formatIso(yield* DateTime.now),
-              previous,
-              next: s,
-            }),
-          },
+          state: s,
           messages,
         },
         { expectedRevision: expectedRevision ?? snapshot.revision ?? 0 },

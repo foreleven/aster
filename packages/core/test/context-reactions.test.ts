@@ -28,9 +28,15 @@ const record = (path: string, state: object): ContextRecord => ({
   state,
   messages: [],
 });
-const definition = { when: "changed", task: "read", agent: "test", mode: "confirm" as const };
+const definition = {
+  trigger: { _tag: "Context", when: "changed" },
+  task: { _tag: "Goal", target: "/goals/personal", text: "read" },
+  active: true,
+  revision: 1,
+  occurrences: [],
+};
 
-test("source Signal eligibility handles deadlines, deletion, schedules and completed owners consistently", () => {
+test("source Signal eligibility handles deletion, schedules and completed owners consistently", () => {
   const snapshot = Object.fromEntries(
     [
       record("/signals/live", { ...definition, slug: "live" }),
@@ -39,24 +45,19 @@ test("source Signal eligibility handles deadlines, deletion, schedules and compl
       record("/signals/timer", {
         ...definition,
         slug: "timer",
-        schedule: { type: "once", at: new Date(1000).toISOString() },
-      }),
-      record("/signals/later", {
-        ...definition,
-        slug: "later",
-        notBefore: new Date(2000).toISOString(),
+        trigger: { _tag: "Schedule", schedule: { type: "once", at: new Date(1000).toISOString() } },
       }),
       record("/signals/finished", { ...definition, slug: "finished", goal: "done" }),
       record("/goals/done", { status: "completed" }),
     ].map((item) => [item.path, item]),
   );
   assert.deepEqual(
-    sourceSignals(snapshot, 1999).map((s) => s.slug),
+    sourceSignals(snapshot).map((s) => s.slug),
     ["live"],
   );
   assert.deepEqual(
-    sourceSignals(snapshot, 2000).map((s) => s.slug),
-    ["live", "later"],
+    sourceSignals(snapshot).map((s) => s.slug),
+    ["live"],
   );
 });
 
@@ -124,7 +125,6 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         const signalProbe = yield* ActorTestKit.probe<SignalRootCommand>();
         const policy = yield* makeReactionPolicy({
           client: yield* SystemOneClient,
-          extract: (_path, candidates) => Effect.succeed(candidates.map((s) => s.slug)),
         });
         yield* policy.bind(signalProbe.ref, goalProbe.ref);
         const system = yield* ActorSystem.make().pipe(
@@ -137,6 +137,7 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         );
         const starting = yield* startContextReactions({
           system,
+          changes: yield* registry.subscribe,
           signals: signalProbe.ref,
           goals: goalProbe.ref,
         }).pipe(
@@ -164,21 +165,19 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
               receipt: { requestId: signal.input.requestId, revision: 2 },
             });
         }
-        const delivered = yield* goalProbe.take();
-        goals.push(delivered);
-        if (
-          delivered._tag === "Route" &&
-          delivered.command._tag === "SubmitInput" &&
-          delivered.command.input._tag === "GoalIntent"
-        )
-          yield* delivered.command.replyTo.tell({
-            _tag: "Accepted",
-            receipt: { requestId: delivered.command.requestId, revision: 2 },
-          });
+        for (let index = 0; index < 2; index++) {
+          const delivered = yield* goalProbe.take();
+          goals.push(delivered);
+          if (delivered._tag === "Route" && delivered.command._tag === "SubmitInput")
+            yield* delivered.command.replyTo.tell({
+              _tag: "Accepted",
+              receipt: { requestId: delivered.command.requestId, revision: 2 },
+            });
+        }
         assert.equal(signals.length, 2);
         assert.deepEqual(
           goals.map((command) => (command._tag === "Route" ? command.slug : "initialize")),
-          ["other"],
+          ["owned", "other"],
         );
         const intent = goals[0];
         assert.equal(intent?._tag, "Route");
@@ -193,8 +192,8 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
             "Relevant evidence",
           );
         }
-        assert.equal(screened.length, 1);
-        assert.match(screened[0]!, /other/);
+        assert.equal(screened.length, 2);
+        assert.match(screened[1]!, /other/);
         yield* registry.commit(
           {
             ...record("/source", { summary: "A relevant source summary" }),

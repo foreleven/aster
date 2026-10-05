@@ -1,4 +1,4 @@
-import { BusinessNotification, CausalChain } from "@aster/api-contracts";
+import { CausalChain } from "@aster/api-contracts";
 import { Schema } from "effect";
 import { GoalTitle } from "../config/schema.js";
 import { GoalRequestRecord } from "./protocol.js";
@@ -17,7 +17,6 @@ export const GoalState = Schema.Struct({
   lastError: Schema.optional(Schema.String),
   inputs: Schema.Array(StoredGoalInput),
   requests: Schema.optional(Schema.Array(GoalRequestRecord)),
-  businessOutbox: Schema.optional(Schema.Array(BusinessNotification)),
   causal: Schema.optional(CausalChain),
   historyCount: Schema.Number,
 }).check(

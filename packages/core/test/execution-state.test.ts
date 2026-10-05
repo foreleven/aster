@@ -1,3 +1,4 @@
+import { taskInput } from "./task-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Fiber, Layer, Schema, Stream } from "effect";
@@ -9,25 +10,16 @@ import {
   DelegationState,
   ExternalAgents,
   RunState,
-  SignalRunActor,
+  TaskRunActor,
   contextSpawnOptions,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
-import { fakeAgent, preparationLayer } from "./fixtures.js";
+import { fakeAgent } from "./fixtures.js";
 
-const definition = {
-  slug: "review",
-  when: "now",
-  task: "Review",
-  agent: "test",
-  mode: "confirm",
-} as const;
 const task = { instructions: "Read evidence", input: [] };
 const run = {
-  signalSlug: definition.slug,
-  sourcePath: "/source",
-  definition,
-  source: { path: "/source", description: "Source", state: {}, messages: [] },
+  admission: { input: taskInput(), receipt: { requestId: "task", revision: 1 } },
+  executorPrompt: "Test policy",
 };
 const delegation = {
   request: { runPath: "/runs/test", agent: "test", task },
@@ -35,13 +27,13 @@ const delegation = {
   responses: {},
 };
 
-test("Run phases require a prepared Task while preserving pre-preparation cancellation and recovered completion", () => {
+test("every Run requires a frozen admitted Task and accepts only execution phases", () => {
   const decode = Schema.decodeUnknownSync(RunState);
-  assert.equal(decode({ ...run, status: "cancelled" }).task, undefined);
-  for (const status of ["checking", "awaiting-confirmation", "submitting", "running", "completed"])
+  for (const status of ["awaiting-confirmation", "ready", "running", "completed", "cancelled"])
+    assert.deepEqual(decode({ ...run, status }).admission.input.task, taskInput().task);
+  for (const status of ["preparing", "checking", "typo"])
     assert.throws(() => decode({ ...run, status }));
-  assert.throws(() => decode({ ...run, status: "typo", task }));
-  assert.equal(decode({ ...run, status: "completed", task }).sessionId, undefined);
+  assert.throws(() => decode({ status: "completed" }));
 });
 
 test("Delegation distinguishes ambiguous submission from sessions and completed results", () => {
@@ -85,7 +77,7 @@ test("malformed restored Run and Delegation state stop before external execution
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               Layer.succeed(ContextRegistry, registry),
-              preparationLayer,
+
               Layer.succeed(ExternalAgents, {
                 test: fakeAgent({
                   submit: () =>
@@ -110,7 +102,7 @@ test("malformed restored Run and Delegation state stop before external execution
           ).pipe(Effect.forkScoped);
           yield* Effect.yieldNow;
           const options = contextSpawnOptions(record.path, { supervision: () => "stop" });
-          if (kind === "run") yield* system.spawn("restored", SignalRunActor, options);
+          if (kind === "run") yield* system.spawn("restored", TaskRunActor, options);
           else yield* system.spawn("restored", DelegationActor, options);
           const event = yield* Fiber.join(stopped).pipe(Effect.timeout("2 seconds"));
           assert.equal(event._tag, "Some");

@@ -3,28 +3,14 @@ import { test } from "node:test";
 import { AgentRunner, Agent, AgentError, Models } from "@aster/agent";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
-import {
-  makeDescriptionInitializer,
-  makeStructuredReasoning,
-  makeSignalExtractor,
-} from "../src/index.js";
-
-import { makeExecutionInputBuilder } from "../src/tasks/build-execution-input.js";
+import { makeDescriptionInitializer, makeStructuredReasoning } from "../src/index.js";
 
 const identity = { path: "/test", identity: "Test", parentDescription: "Parent" };
-const source = { path: "/test", description: "Test", state: {}, messages: [] };
-const definition = {
-  slug: "test",
-  when: "now",
-  task: "review",
-  agent: "test",
-  mode: "confirm",
-} as const;
 const models = Layer.succeed(Models, {
   resolve: () => Effect.die(new Error("Agent.make is mocked")),
 });
 
-test("description and extraction run lazily with the caller Clock and reject malformed output as tagged failures", async () => {
+test("description run lazily with the caller Clock and reject malformed output as tagged failures", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -42,18 +28,11 @@ test("description and extraction run lazily with the caller Clock and reject mal
             return raw;
           });
         const describe = makeDescriptionInitializer(run);
-        const extract = makeSignalExtractor({ accessInstructions: [], run });
         const description = describe(identity);
         assert.equal(called, 0);
         assert.equal(
           yield* description.pipe(Effect.provideService(Clock.Clock, clock)),
           "Fixed identity",
-        );
-        assert.deepEqual(
-          yield* extract(source.path, [definition], { [source.path]: source }).pipe(
-            Effect.provideService(Clock.Clock, clock),
-          ),
-          ["test"],
         );
         for (raw of [null, {}, { description: "   " }]) {
           const error = yield* describe(identity).pipe(
@@ -62,11 +41,6 @@ test("description and extraction run lazily with the caller Clock and reject mal
           );
           assert.equal(error._tag, "ContextDescriptionError");
           assert.equal(error.path, identity.path);
-          const extraction = yield* extract(source.path, [definition], {}).pipe(
-            Effect.provideService(Clock.Clock, clock),
-            Effect.flip,
-          );
-          assert.equal(extraction._tag, "SignalDetectionError");
         }
         const defect = new Error("broken reasoning invariant");
         const exit = yield* Effect.exit(
@@ -79,15 +53,14 @@ test("description and extraction run lazily with the caller Clock and reject mal
   );
 });
 
-test("AgentRunner cancellation releases memory tools before SDK idle for description, extraction and preparation", async (t) => {
-  for (const kind of ["describe", "extract", "prepare"]) {
+test("AgentRunner cancellation releases memory tools before SDK idle for description", async (t) => {
+  {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const entered = yield* Deferred.make<void>();
           let released = false,
-            idle = false,
-            searches = 0;
+            idle = false;
           t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
             Effect.succeed({
               run: () =>
@@ -129,32 +102,13 @@ test("AgentRunner cancellation releases memory tools before SDK idle for descrip
               }),
             ),
           );
-          const memory = {
-            search: () =>
-              Effect.suspend(() => {
-                searches++;
-                // Preparation does mandatory recall before invoking the internal Agent.
-                return kind === "prepare" && searches === 1
-                  ? Effect.succeed({ results: [] })
-                  : blocked;
-              }),
-            expand: () => Effect.succeed({ results: [] }),
-          };
+          const memory = { search: () => blocked, expand: () => Effect.succeed({ results: [] }) };
           const run = yield* makeStructuredReasoning("test", memory).pipe(
             Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))),
           );
-          const work =
-            kind === "describe"
-              ? makeDescriptionInitializer((prompt, schema) => run(prompt, schema, {}))(identity)
-              : kind === "extract"
-                ? makeSignalExtractor({ run, accessInstructions: [] })(source.path, [definition], {
-                    [source.path]: source,
-                  })
-                : makeExecutionInputBuilder({ memory, run, executorPrompt: () => "" })(
-                    definition,
-                    source,
-                    {},
-                  );
+          const work = makeDescriptionInitializer((prompt, schema) => run(prompt, schema, {}))(
+            identity,
+          );
           const fiber = yield* work.pipe(Effect.forkScoped);
           yield* Deferred.await(entered).pipe(Effect.timeout("2 seconds"));
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"));

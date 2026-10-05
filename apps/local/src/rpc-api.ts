@@ -24,25 +24,9 @@ export const applicationRpcHandlers = (api: ApplicationApi) =>
       traced("InspectProcessing", options.requestId, api.inspectProcessing(owner)),
     RecoverProcessing: (input, options) =>
       traced("RecoverProcessing", options.requestId, api.recoverProcessing(input)),
-    ResumePersonalRun: (input, options) =>
-      traced("ResumePersonalRun", options.requestId, api.personal.resumeRun(input)),
-    StartPersonalTask: (input, options) =>
-      traced("StartPersonalTask", options.requestId, api.personal.startTask(input)),
-    InspectPersonalDelegation: ({ path }, options) =>
-      traced("InspectPersonalDelegation", options.requestId, api.personal.inspectDelegation(path)),
-    RequestPersonalApproval: (input, options) =>
-      traced("RequestPersonalApproval", options.requestId, api.personal.requestApproval(input)),
-    RespondPersonalApproval: (input, options) =>
-      traced("RespondPersonalApproval", options.requestId, api.personal.respondApproval(input)),
-    ApplyPersonalSignal: (input, options) =>
-      traced("ApplyPersonalSignal", options.requestId, api.personal.applySignal(input)),
-    GetPersonal: (_, options) => traced("GetPersonal", options.requestId, api.personal.get),
-    SendPersonalGoalMessage: (input, options) =>
-      traced("SendPersonalGoalMessage", options.requestId, api.personal.sendGoalMessage(input)),
-    RetryPersonalInput: (input, options) =>
-      traced("RetryPersonalInput", options.requestId, api.personal.retry(input)),
-    SendPersonalMessage: (input, options) =>
-      traced("SendPersonalMessage", options.requestId, api.personal.sendMessage(input)),
+    ResumeRun: (input, options) => traced("ResumeRun", options.requestId, api.resumeRun(input)),
+    InspectDelegation: ({ path }, options) =>
+      traced("InspectDelegation", options.requestId, api.inspectDelegation(path)),
     ListContexts: (_, options) => traced("ListContexts", options.requestId, api.contexts),
     QueryContext: (input, options) =>
       traced("QueryContext", options.requestId, api.queryContext(input)),

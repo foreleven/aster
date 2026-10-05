@@ -15,7 +15,7 @@ test("local provider precedence, exact credentials and config-relative locations
     envPath = join(dir, ".env");
   await writeFile(
     configPath,
-    'http: {port: 4317}\ncontexts:\n  /lark:\n    children:\n      /im: {config: {pollIntervalMs: 900000}}\nsignals:\n  test: {when: changed, task: "Keep ${UNEXPANDED}", agent: test, mode: confirm}\n',
+    'http: {port: 4317}\ncontexts:\n  /lark:\n    children:\n      /im: {config: {pollIntervalMs: 900000}}\nsignals:\n  test: {trigger: {_tag: Context, when: changed}, task: {_tag: Goal, target: /goals/personal, text: "Keep ${UNEXPANDED}"}}\n',
   );
   await writeFile(envPath, "ASTER_HTTP_PORT=4318\nTEST_SECRET=dotenv-secret\n");
   const before = { ...process.env };
@@ -36,7 +36,11 @@ test("local provider precedence, exact credentials and config-relative locations
       Effect.gen(function* () {
         assert.equal(yield* port, expected);
         assert.equal((yield* ConfigLocation).baseDir, dir);
-        assert.equal((yield* signalSettings)[0]!.task, "Keep ${UNEXPANDED}");
+        assert.deepEqual((yield* signalSettings)[0]!.task, {
+          _tag: "Goal",
+          target: "/goals/personal",
+          text: "Keep ${UNEXPANDED}",
+        });
         const provider = yield* ConfigProvider.ConfigProvider;
         const secret = yield* secretConfig("${TEST_SECRET}", provider);
         assert.equal(String(secret), "<redacted>");
@@ -103,11 +107,17 @@ test("local provider precedence, exact credentials and config-relative locations
 test("module settings read structured provider values and disabled decisions need no credentials", async () => {
   const { Layer } = await import("effect");
   const config = ConfigProvider.layer(
-    ConfigProvider.fromUnknown({ contexts: { "/custom": { private: { count: 3 } } } }),
+    ConfigProvider.fromUnknown({
+      config: { agent: { model: "test" } },
+      contexts: { "/custom": { private: { count: 3 } } },
+    }),
   );
   await Effect.runPromise(
     Effect.gen(function* () {
-      assert.deepEqual((yield* GoalSettings).definitions, []);
+      assert.deepEqual(
+        (yield* GoalSettings).definitions.map((goal) => goal.slug),
+        ["personal"],
+      );
       assert.equal((yield* SystemOneClient).configured, false);
     }).pipe(
       Effect.provide(

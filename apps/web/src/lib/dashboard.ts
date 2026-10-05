@@ -8,7 +8,6 @@ export const statusLabels: Readonly<Record<string, string>> = {
   running: "Running",
   starting: "Starting",
   restarting: "Restarting",
-  checking: "Readiness check",
   "awaiting-confirmation": "Awaiting confirmation",
   active: "Monitoring",
   completed: "Completed",
@@ -20,12 +19,9 @@ export const statusLabels: Readonly<Record<string, string>> = {
   resolved: "Awaiting delivery",
   acknowledged: "Acknowledged",
   waiting_input: "Awaiting input",
-  "waiting-confirmation": "Awaiting confirmation",
-  preparing: "Preparing task",
   ready: "Ready",
   stopping: "Stopping",
   stopped: "Stopped",
-  "preparation-failed": "Preparation failed",
   blocked: "Blocked",
   rejected: "Rejected",
   submitting: "Submitting",
@@ -88,36 +84,27 @@ export function references(record?: ContextView) {
       [
         state.sourceContext,
         state.sourcePath,
+        state.replyTo,
         state.runPath,
         state.definition?.goal && `/goals/${state.definition.goal}`,
         state.request?.runPath,
         state.goal && `/goals/${state.goal}`,
-        ...(typeof state.task === "object" ? state.task.input.flatMap((item) => item.sources) : []),
+        ...(state.task && "input" in state.task
+          ? state.task.input.flatMap((item) => item.sources)
+          : []),
         ...(record?.messages || []).flatMap((m) => m.references),
-        ...(record?.personalState?.outbox ?? []).map((item) => item.input.target),
         ...(state.deliveries ?? []).map((item) => item.input.source),
       ].filter((v): v is string => typeof v === "string" && v.startsWith("/")),
     ),
   ];
 }
-export const isRunPath = (path: string) =>
-  /^\/(?:runs\/[^/]+|(?:signals|goals)\/[^/]+\/runs\/[^/]+)$/.test(path);
+export const isRunPath = (path: string) => /^\/runs\/[a-f0-9]{64}$/.test(path);
 export function runStages(record: ContextView) {
   const types = new Set((record?.messages || []).map((m) => m.type));
   const status = record?.state?.status;
   return [
     {
-      title: "Task preparation",
-      done: typeof record.state.task === "object" || types.has("TaskPrepared"),
-      active: status === "preparing",
-    },
-    {
-      title: "Readiness check",
-      done: types.has("Ready") || types.has("ConfirmationRequested") || types.has("Delegating"),
-      active: status === "checking",
-    },
-    {
-      title: "Confirm / Auto",
+      title: "Task confirmation",
       done: types.has("Delegating"),
       active: status === "awaiting-confirmation",
     },
@@ -128,4 +115,10 @@ export function runStages(record: ContextView) {
     },
     { title: "Result delivery", done: types.has("Completed"), active: false },
   ];
+}
+
+export function taskText(task: ContextView["state"]["task"]): string | undefined {
+  if (!task) return undefined;
+  if ("instructions" in task) return task.instructions;
+  return task._tag === "Goal" ? task.text : task.task.instructions;
 }

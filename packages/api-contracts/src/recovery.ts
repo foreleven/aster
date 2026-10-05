@@ -10,7 +10,6 @@ export const RecoveryInput = Schema.Union([
     workId: CommandIdentifier,
     deliveryId: CommandIdentifier,
   }),
-  Schema.TaggedStruct("RetryNotification", { ...identity, deliveryId: CommandIdentifier }),
 ]);
 export type RecoveryInput = typeof RecoveryInput.Type;
 export const RecoveryReply = Schema.Union([
@@ -30,7 +29,7 @@ export const RecoveryReceipt = Schema.Struct({
 );
 export type RecoveryReceipt = typeof RecoveryReceipt.Type;
 
-export const ProcessingOwner = Schema.Literals(["system-one", "notifications"]);
+export const ProcessingOwner = Schema.Literal("system-one");
 export type ProcessingOwner = typeof ProcessingOwner.Type;
 export const ProcessingSnapshot = Schema.Struct({
   owner: ProcessingOwner,
@@ -38,7 +37,7 @@ export const ProcessingSnapshot = Schema.Struct({
   entries: Schema.Array(
     Schema.Struct({
       id: CommandIdentifier,
-      kind: Schema.Literals(["screening", "reaction-delivery", "notification"]),
+      kind: Schema.Literals(["screening", "reaction-delivery"]),
       workId: Schema.optional(CommandIdentifier),
       source: Schema.String,
       target: Schema.String,

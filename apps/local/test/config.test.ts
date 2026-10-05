@@ -30,12 +30,12 @@ contexts:
         config: {mailbox: me}
 signals:
   review:
-    when: |
-      A new email requests a review.
-      Consider the chat context too.
-    task: Review
-    agent: test
-    mode: confirm
+    trigger:
+      _tag: Context
+      when: |
+        A new email requests a review.
+        Consider the chat context too.
+    task: {_tag: Goal, target: /goals/personal, text: Review}
 `,
     );
     const config = loadConfig(file);
@@ -58,7 +58,9 @@ signals:
       join(dir, "custom/memory"),
     );
     assert.equal(memory.autoCompress, false);
-    assert.match(config.signals[0]!.when, /review\.\nConsider/);
+    const trigger = config.signals[0]!.trigger;
+    assert.equal(trigger._tag, "Context");
+    if (trigger._tag === "Context") assert.match(trigger.when, /review\.\nConsider/);
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

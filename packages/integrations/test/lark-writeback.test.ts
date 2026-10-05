@@ -12,7 +12,7 @@ const operation: WritebackOperation = {
   request: {
     requestId: "a".repeat(48),
     source,
-    signalPath: "/signals/report",
+    taskSource: "/signals/report",
     causationId: "input-1",
     createdAt: at,
     content: "@./private-file\nExact approved text",

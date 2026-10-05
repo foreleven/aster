@@ -18,7 +18,6 @@ import { makeContextRegistry } from "../src/testing/context.js";
 import { GoalHistoryError } from "../src/goals/history.js";
 import { type GoalIntentInput } from "../src/goals/intent.js";
 import type { GoalCommandReply } from "../src/goals/actors.js";
-import { preparationLayer } from "./fixtures.js";
 
 const input: GoalIntentInput = {
   requestId: "source-revision-one-to-project",
@@ -84,7 +83,7 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
                 Layer.succeed(ContextRegistry, registry),
-                preparationLayer,
+
                 Layer.succeed(ExternalAgents, {}),
                 goalWorkflowLayer({
                   definitions: [{ slug: "project", description: "Monitor release" }],
@@ -123,8 +122,7 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
                     plan: () =>
                       Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
                   },
-                  signals: () => [],
-                  reconcile: () => Effect.succeed([]),
+
                   deactivate: () => Effect.void,
                 }),
               ),

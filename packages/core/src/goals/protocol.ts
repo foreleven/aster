@@ -1,24 +1,13 @@
 import { ReplyTo } from "@aster/actor";
 import { Schema } from "effect";
-import {
-  ApplicationError,
-  CausalChain,
-  CommandReceipt,
-  GoalDeliveryInput,
-} from "@aster/api-contracts";
+import { ApplicationError, CausalChain, TaskMessage, CommandReceipt } from "@aster/api-contracts";
 import { GoalIntentInput } from "./intent.js";
 
 /** Producer-specific envelopes preserve provenance; only UserInput crosses public ingress. */
 export const GoalSubmission = Schema.Union([
+  Schema.TaggedStruct("TaskMessage", { delivery: TaskMessage }),
   Schema.TaggedStruct("UserInput", { text: Schema.NonEmptyString }),
-  Schema.TaggedStruct("PersonalMessage", { delivery: GoalDeliveryInput }),
   Schema.TaggedStruct("GoalIntent", { delivery: GoalIntentInput }),
-  Schema.TaggedStruct("SignalOccurrence", {
-    id: Schema.NonEmptyString,
-    signalPath: Schema.String,
-    text: Schema.String,
-    causal: Schema.optional(CausalChain),
-  }),
   Schema.TaggedStruct("ExecutionFeedback", {
     runPath: Schema.String,
     text: Schema.String,

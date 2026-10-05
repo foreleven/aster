@@ -1,11 +1,11 @@
 import { ExecutionResumption } from "@aster/api-contracts";
 import { Schema } from "effect";
-import { ApprovalResponse, ExecutionSession, InputRequest, Task } from "../tasks/model.js";
+import { ApprovalResponse, ExecutionSession, InputRequest, PreparedTask } from "../tasks/model.js";
 
 export const DelegationRequest = Schema.Struct({
   runPath: Schema.String,
   agent: Schema.String,
-  task: Task,
+  task: PreparedTask,
 });
 export type DelegationRequest = typeof DelegationRequest.Type;
 

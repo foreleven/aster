@@ -4,14 +4,13 @@ import {
   PublicContext,
   RecoveryReceipt,
 } from "@aster/api-contracts";
-import { Match, Schema, SchemaGetter } from "effect";
+import { Schema } from "effect";
 import { ContextEvent } from "../context/model.js";
 import { contextEventId } from "../context/model.js";
 import { GoalTitle } from "../config/schema.js";
 import { GoalIntentInput } from "../goals/intent.js";
 import { GoalScreeningRecord } from "../goals/screening.js";
 import { SignalReactionInput } from "../signals/reaction.js";
-import { LegacyReactionState } from "./legacy-state.js";
 
 const Attempts = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 export const ReactionDeliveryInput = Schema.Union([
@@ -86,11 +85,7 @@ const CurrentState = Schema.Struct({
       if (
         new Set(recoveryReceipts.map((entry) => entry.input.requestId)).size !==
           recoveryReceipts.length ||
-        recoveryReceipts.some(
-          ({ input }) =>
-            input._tag === "RetryNotification" ||
-            !work.some((item) => item.event.id === input.workId),
-        )
+        recoveryReceipts.some(({ input }) => !work.some((item) => item.event.id === input.workId))
       )
         return false;
       const sources = new Set<string>();
@@ -130,73 +125,7 @@ const CurrentState = Schema.Struct({
   ),
 );
 
-/** Decode old work once; stable source and delivery identities never change during migration. */
-const legacy = LegacyReactionState.pipe(
-  Schema.decodeTo(CurrentState, {
-    decode: SchemaGetter.transform((state) => ({
-      recoveryReceipts: state.recoveryReceipts,
-      work: state.work.map((item) => {
-        const event = {
-          id: item.event.requestId,
-          record: { ...item.event.record, revision: item.event.revision },
-          createdAt: item.event.createdAt,
-        };
-        const base = { event, attempts: item.attempts };
-        const { [event.record.path]: _source, ...evidence } = item.snapshot;
-        const input = { evidence, goals: item.goals, screeningAt: item.admittedAt };
-        const deliveries: readonly ReactionDelivery[] = (item.deliveries ?? []).map((delivery) => {
-          const base = { command: delivery.command, attempts: delivery.attempts };
-          return Match.value(delivery.status).pipe(
-            Match.when("pending", () => ({ ...base, status: "pending" as const })),
-            Match.when("sending", () => ({ ...base, status: "sending" as const })),
-            Match.when("unknown", () => ({
-              ...base,
-              status: "unknown" as const,
-              error: delivery.error ?? "Delivery outcome unknown",
-            })),
-            Match.when("rejected", () => ({
-              ...base,
-              status: "rejected" as const,
-              error: delivery.error ?? "Delivery rejected",
-            })),
-            // LegacyReactionState already verifies delivered receipt identity.
-            Match.when("delivered", () => ({
-              ...base,
-              status: "delivered" as const,
-              receipt: delivery.receipt!,
-            })),
-            Match.exhaustive,
-          );
-        });
-        return Match.value(item.status).pipe(
-          Match.when("pending", () => ({ ...base, status: "pending" as const })),
-          Match.when("planning", () => ({ ...base, status: "planning" as const, input })),
-          Match.when("failed", () => ({
-            ...base,
-            status: "failed" as const,
-            input,
-            error: item.error ?? "Screening failed",
-          })),
-          Match.when("ready", () => ({
-            ...base,
-            status: "ready" as const,
-            screenings: item.screenings ?? [],
-            deliveries,
-          })),
-          Match.when("completed", () => ({
-            ...base,
-            status: "completed" as const,
-            screenings: item.screenings ?? [],
-            deliveries,
-          })),
-          Match.exhaustive,
-        );
-      }),
-    })),
-    encode: SchemaGetter.forbiddenEncoding,
-  }),
-);
-export const ReactionState = Schema.Union([CurrentState, legacy]);
+export const ReactionState = CurrentState;
 export type ReactionState = typeof CurrentState.Type;
 export const ReactionReply = Schema.Union([
   Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),

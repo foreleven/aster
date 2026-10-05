@@ -3,8 +3,8 @@ import { Asterisk, ChevronDown, ChevronRight, RefreshCw, Search, X } from "lucid
 import type { ContextView } from "../dashboard/model";
 
 export const contextTitle = (context: ContextView) =>
-  context.path === "/personal"
-    ? "Personal Agent"
+  context.path === "/goals/personal"
+    ? "Personal assistant"
     : context.state.title || context.state.chat?.name || context.description || context.path;
 
 type Node = { context: ContextView; children: Node[] };
@@ -105,7 +105,8 @@ export function ContextNavigation({
 }) {
   const [query, setQuery] = useState("");
   const sorted = [...contexts].sort((a, b) => {
-    const personalOrder = Number(b.path === "/personal") - Number(a.path === "/personal");
+    const personalOrder =
+      Number(b.path === "/goals/personal") - Number(a.path === "/goals/personal");
     return personalOrder || a.path.localeCompare(b.path);
   });
   return (

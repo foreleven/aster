@@ -1,17 +1,13 @@
-import { taskExecutionLayer, personalReasoningLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem } from "@aster/actor";
-import { Deferred, Effect, Layer, Schema } from "effect";
+
+import { Effect, Schema } from "effect";
 import {
-  ContextRegistry,
   contextView,
   defineContext,
   makeApplicationApi,
   makeContextMaintenance,
   makeMemoryGoalHistory,
-  PersonalActions,
-  PersonalAgentActor,
   type ContextRecord,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
@@ -167,50 +163,6 @@ test("application reads project business fields and history without altering can
   );
 });
 
-test("Personal mailbox and processor read tools expose only public snapshots", async () => {
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* makeContextRegistry({ loadAll: () => fixtures, save: () => {} });
-        const read = yield* Deferred.make<void>();
-        const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
-            PersonalActions.unavailable,
-            personalReasoningLayer({
-              enabled: true,
-              run: (_message, reads) =>
-                Effect.gen(function* () {
-                  assertPublic(yield* reads.list.pipe(Effect.orDie));
-                  assertPublic(yield* reads.read("/delegations/work").pipe(Effect.orDie));
-                  const inspection = yield* reads
-                    .inspectDelegation("/delegations/work")
-                    .pipe(Effect.orDie);
-                  assertPublic(inspection);
-                  assert.equal(inspection.hasExecution, true);
-                  assert.equal(inspection.requests[0]?.prompt, "Allow this task?");
-                  yield* Deferred.succeed(read, undefined);
-                  return { text: "Read allowed evidence" };
-                }),
-            }),
-          ),
-        );
-        const personal = yield* system.spawn("personal", PersonalAgentActor);
-        const api = makeApplicationApi({ registry, personal, inspect: Effect.succeed(null) });
-        assertPublic(yield* api.personal.listContexts);
-        assertPublic(yield* api.personal.readContext("/delegations/work"));
-        yield* api.personal.sendMessage({
-          requestId: "read",
-          causationId: "user",
-          expectedRevision: 1,
-          text: "Read context",
-        });
-        yield* Deferred.await(read);
-      }),
-    ).pipe(Effect.timeout("5 seconds")),
-  );
-});
-
 test("owner policies fail closed and project the original change for reactions and capture", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -273,60 +225,5 @@ test("owner policies fail closed and project the original change for reactions a
       assert.equal(archived.projection?.visibility, "public");
       assertPublic(archived);
     }),
-  );
-});
-
-test("Run preparation and readiness receive projected frozen evidence", async () => {
-  const { ExternalAgents, SignalRunActor, contextSpawnOptions } = await import("../src/index.js");
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* makeContextRegistry({ loadAll: () => fixtures, save: () => {} });
-        const source = fixtures[0]!;
-        const checked = yield* Deferred.make<void>();
-        const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
-            Layer.succeed(ExternalAgents, {}),
-            taskExecutionLayer({
-              prepare: (_definition, evidence, snapshot) =>
-                Effect.sync(() => {
-                  assertPublic(evidence);
-                  assertPublic(snapshot);
-                  assert.equal(evidence.revision, source.revision);
-                  return task;
-                }),
-              ready: (_definition, evidence) =>
-                Effect.gen(function* () {
-                  assertPublic(evidence);
-                  assert.equal(evidence.path, source.path);
-                  yield* Deferred.succeed(checked, undefined);
-                  return false;
-                }),
-            }),
-          ),
-        );
-        const path = "/signals/watch/runs/preparation";
-        const actor = yield* system.spawn("preparation", SignalRunActor, contextSpawnOptions(path));
-        yield* actor.tell({
-          _tag: "Initialize",
-          path,
-          definition: {
-            slug: "watch",
-            when: "changed",
-            task: "Read",
-            agent: "fake",
-            mode: "confirm",
-          },
-          sourceContext: source,
-        });
-        yield* Deferred.await(checked);
-        assert.ok(
-          JSON.stringify(registry.get(path)!.state).includes(secret),
-          "owner retains exact recovery evidence",
-        );
-        assertPublic(registry.views.project(registry.get(path)!));
-      }),
-    ).pipe(Effect.timeout("5 seconds")),
   );
 });

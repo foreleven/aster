@@ -1,8 +1,4 @@
-import { Option } from "effect";
-import { makeTaskExecution, type TaskExecutionServices } from "./execution.js";
 import { createHash } from "node:crypto";
-import { CausalChain } from "@aster/api-contracts";
-import { runNotifications } from "../notifications/run.js";
 import { isDeepStrictEqual } from "node:util";
 import {
   ApplicationError,
@@ -10,24 +6,22 @@ import {
   TaskDeliveryInput,
   ResumeRunDeliveryInput,
 } from "@aster/api-contracts";
-import { taskPath } from "./admission.js";
+import { taskPath, sourceTask, delegateInput } from "./admission.js";
 import { transitionRun, type RunTransition } from "./run-transition.js";
 import { RunState, terminalRunText } from "./run-state.js";
 import { makeRunWriteback, planWriteback, WritebackFinished } from "./writeback.js";
-import { Clock, Effect, Match, Layer, Schema, Struct } from "effect";
+import { Clock, Effect, Match, Layer, Schema, Struct, Schedule } from "effect";
 import { ReplyTo, type ActorContext, type ActorRef } from "@aster/actor";
 import { ContextActor, contextSpawnOptions, contextPath } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
-import { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { ContextRegistry } from "../context/registry.js";
-import { SignalDefinition } from "../config/schema.js";
 import {
   DelegationActor,
   DelegationUpdate,
   type ResumeExecutionReply,
 } from "../delegation/actor.js";
-import { Task, ExternalAgents, taskPrompt } from "./model.js";
-import { ApprovalResolved, sendApproval } from "../approvals/actor.js";
+import { ExternalAgents, taskPrompt, DEFAULT_EXECUTOR_PROMPT } from "./model.js";
+import { ApprovalResolved, sendApproval, approvalEntries } from "../approvals/actor.js";
 import type { GoalCommand } from "../goals/actors.js";
 
 export const RunAdmissionReply = Schema.Union([
@@ -39,13 +33,15 @@ export const StartTask = Schema.TaggedStruct("StartTask", {
   input: TaskDeliveryInput,
   replyTo: ReplyTo<RunAdmissionReply>(),
 });
-export const ResumePersonalRun = Schema.TaggedStruct("ResumePersonalRun", {
+export const ResumeRun = Schema.TaggedStruct("ResumeRun", {
   input: ResumeRunDeliveryInput,
   replyTo: ReplyTo<RunAdmissionReply>(),
 });
+export const RunReady = Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() });
 export const RunCommand = Schema.Union([
+  RunReady,
   WritebackFinished,
-  ResumePersonalRun,
+  ResumeRun,
   Schema.TaggedStruct("DeliverResumption", {}),
   Schema.TaggedStruct("ResumptionDelivered", {
     requestId: Schema.String,
@@ -55,31 +51,20 @@ export const RunCommand = Schema.Union([
     ]),
   }),
   StartTask,
+  Schema.TaggedStruct("FeedbackDelivered", { error: Schema.optional(Schema.String) }),
   Schema.TaggedStruct("Cancel", {
     reason: Schema.String,
     replyTo: Schema.optional(ReplyTo<void>()),
   }),
-  Schema.TaggedStruct("Initialize", {
-    causal: Schema.optional(CausalChain),
-    path: Schema.String,
-    definition: SignalDefinition,
-    sourceContext: ContextRecord,
-    subscriber: Schema.optional(ReplyTo<GoalCommand>()),
-    replyTo: Schema.optional(ReplyTo<void>()),
-  }),
   DelegationUpdate,
   ApprovalResolved,
-  Schema.TaggedStruct("Prepared", { task: Task }),
-  Schema.TaggedStruct("Ready", { ready: Schema.Boolean }),
-  Schema.TaggedStruct("PreparationFailed", { error: Schema.String }),
   Schema.TaggedStruct("Resume", {
     path: Schema.String,
-    subscriber: Schema.optional(ReplyTo<GoalCommand>()),
   }),
 ]);
 export type RunCommand = typeof RunCommand.Type;
-export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExecutionServices>()(
-  "signals/RunActor",
+export class TaskRunActor extends ContextActor.Service<TaskRunActor, ExternalAgents>()(
+  "tasks/RunActor",
   {
     command: RunCommand,
     context: defineContext({
@@ -89,14 +74,13 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
   },
 ) {
   static readonly layer = Layer.effect(
-    SignalRunActor,
+    TaskRunActor,
     Effect.gen(function* () {
       const registry = yield* ContextRegistry;
-      const execution = yield* makeTaskExecution();
       const agents = yield* ExternalAgents;
       let resumptionInFlight: string | undefined;
       let runPath = "";
-      let subscriber: ActorRef<GoalCommand> | undefined;
+      let owner: ActorContext<RunCommand, ExternalAgents | ContextRegistry>;
       const state = () => Schema.decodeUnknownSync(RunState)(registry.get(runPath)!.state);
       const transition = Effect.fn("Run.transition")(function* (change: RunTransition) {
         const current = registry.get(runPath)!;
@@ -113,13 +97,6 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
               state: {
                 ...next.state,
                 ...(writeback ? { writeback } : {}),
-                businessOutbox: runNotifications({
-                  path: runPath,
-                  revision: (current.revision ?? 0) + 1,
-                  at,
-                  previous: state(),
-                  next: next.state,
-                }),
               },
               messages: [...current.messages, { ...next.event, at }],
             },
@@ -129,43 +106,92 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
       });
       const writeback = yield* makeRunWriteback({ path: () => runPath, state });
       const valid = () => {
-        const source = state().admission?.input.source;
+        const source = state().admission.input.replyTo;
         if (!source?.startsWith("/goals/")) return true;
         return (
           (registry.get(source)?.state as { status?: string } | undefined)?.status === "active"
         );
       };
-      const notify = (text: string, terminal: boolean) =>
-        subscriber
-          ? subscriber
+      // The Run event is durable; replay on restart and retry the same receipt identity in a scoped fiber.
+      // Waiting for a Goal acknowledgement must never block the Run mailbox.
+      const notify = (text: string, terminal: boolean) => {
+        const current = state();
+        const requestId = createHash("sha256")
+          .update(JSON.stringify([runPath, current.status, text]))
+          .digest("hex");
+        return owner.pipeToSelf(
+          Effect.gen(function* () {
+            const target = yield* owner
+              .select(`/user${current.admission.input.replyTo}`)
+              .resolve()
+              .pipe(
+                Effect.mapError(
+                  () =>
+                    new ApplicationError({
+                      kind: "unavailable",
+                      message: "Reply Goal is unavailable",
+                    }),
+                ),
+              );
+            const reply = yield* (target as ActorRef<GoalCommand>)
               .ask<import("../goals/protocol.js").GoalCommandReply>((replyTo) => ({
                 _tag: "SubmitInput",
-                requestId: createHash("sha256")
-                  .update(JSON.stringify([runPath, state().status, text]))
-                  .digest("hex"),
+                requestId,
                 replyTo,
                 input: {
                   _tag: "ExecutionFeedback",
                   runPath,
-                  causal: state().admission?.input.causal ?? state().causal,
+                  causal: current.admission.input.causal,
                   text,
                   terminal,
-                  status: state().status,
+                  status: current.status,
                 },
               }))
               .pipe(
-                Effect.asVoid,
-                Effect.catchTag("AskTimeoutError", (error) => Effect.logWarning(error.message)),
-              )
-          : Effect.void;
+                Effect.mapError(
+                  () =>
+                    new ApplicationError({
+                      kind: "unavailable",
+                      message: "Goal feedback receipt missing",
+                    }),
+                ),
+              );
+            if (reply._tag === "Rejected") return yield* reply.error;
+          }).pipe(
+            Effect.retry({
+              schedule: Schedule.spaced("3 seconds"),
+              while: (error) => error.kind === "unavailable",
+            }),
+          ),
+          (result) => ({
+            _tag: "FeedbackDelivered",
+            error: result._tag === "Failure" ? result.error.message : undefined,
+          }),
+        );
+      };
+      const executionTask = () => ({
+        ...state().admission.input.task,
+        instructions: `${state().executorPrompt}\n\n${state().admission.input.task.instructions}`,
+        input: [
+          ...state().admission.input.task.input,
+          ...(state().admission.input.evidence
+            ? [
+                {
+                  content: JSON.stringify(state().admission.input.evidence),
+                  sources: [state().admission.input.evidence!.path],
+                },
+              ]
+            : []),
+        ],
+      });
       const replayTerminal = Effect.fnUntraced(function* (includeUncertain = false) {
-        const text = terminalRunText(state(), registry.get(runPath)!.messages, includeUncertain);
+        const text = terminalRunText(state(), includeUncertain);
         if (text === undefined) return false;
         yield* notify(text, true);
         return true;
       });
       const cancel = (
-        context: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>,
+        context: ActorContext<RunCommand, ExternalAgents | ContextRegistry>,
         reason: string,
       ) =>
         Effect.gen(function* () {
@@ -185,12 +211,11 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
           yield* notify(reason, true);
         });
       const launch = (
-        context: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>,
+        context: ActorContext<RunCommand, ExternalAgents | ContextRegistry>,
         recovering = false,
       ) =>
         Effect.gen(function* () {
           const current = state();
-          if (!current.task) return;
           if (!recovering && !valid()) {
             yield* cancel(context, "Task revision is no longer executable");
             return;
@@ -210,11 +235,11 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
             _tag: "Start",
             recovering,
             replyTo: context.self,
-            request: { runPath, task: current.task, agent: current.definition.agent },
+            request: { runPath, task: executionTask(), agent: current.admission.input.agent },
           });
         });
       const requestConfirmation = (
-        context: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>,
+        context: ActorContext<RunCommand, ExternalAgents | ContextRegistry>,
       ) =>
         sendApproval(context, {
           _tag: "Enqueue",
@@ -227,25 +252,13 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
             request: {
               id: `${runPath}:confirm`,
               kind: "approval",
-              prompt: taskPrompt(state().task!),
+              prompt: taskPrompt(executionTask()),
             },
           },
         });
-      const check = (context: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>) =>
-        context.pipeToSelf(
-          execution.checkReadiness(
-            state().definition,
-            registry.views.project(state().source),
-            state().task!,
-          ),
-          (result) =>
-            result._tag === "Success"
-              ? { _tag: "Ready", ready: result.value }
-              : { _tag: "PreparationFailed", error: result.error.message },
-        );
       const admitTask = Effect.fn("Run.admitTask")(function* (
         raw: TaskDeliveryInput,
-        actor: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>,
+        actor: ActorContext<RunCommand, ExternalAgents | ContextRegistry>,
       ) {
         const input = yield* Schema.decodeUnknownEffect(TaskDeliveryInput)(raw).pipe(
           Effect.mapError(
@@ -260,22 +273,32 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
           });
         const existing = registry.get(path);
         if (existing) {
+          runPath = path;
           const admission = Schema.decodeUnknownSync(RunState)(existing.state).admission;
-          if (!admission || !isDeepStrictEqual(admission.input, input))
+          if (!isDeepStrictEqual(admission.input, input))
             return yield* new ApplicationError({
               kind: "conflict",
               message: "Run belongs to another Task command",
             });
           return { receipt: admission.receipt, created: false };
         }
+        const source = yield* sourceTask(registry, input.source, input.requestId);
         if (
-          input.source.startsWith("/goals/") &&
-          (registry.get(input.source)?.state as { status?: string } | undefined)?.status !==
-            "active"
+          source &&
+          (source.task._tag !== "Delegate" ||
+            !isDeepStrictEqual(delegateInput(source, source.task), input))
         )
           return yield* new ApplicationError({
             kind: "conflict",
-            message: "Goal has ended or is missing",
+            message: "Task differs from its committed Signal occurrence",
+          });
+        if (
+          (registry.get(input.replyTo)?.state as { status?: string } | undefined)?.status !==
+          "active"
+        )
+          return yield* new ApplicationError({
+            kind: "conflict",
+            message: "Reply Goal is missing or ended",
           });
         if (!agents[input.agent])
           return yield* new ApplicationError({
@@ -283,19 +306,6 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
             message: "Task executor is not configured",
           });
         const receipt = { requestId: input.requestId, revision: 1 };
-        const definition = {
-          slug: path.slice("/runs/".length),
-          when: "Explicit task",
-          task: input.task.instructions,
-          agent: input.agent,
-          mode: "confirm" as const,
-        };
-        const sourceContext = {
-          path: input.source,
-          description: "Explicit task",
-          state: { requestId: input.requestId, causationId: input.causationId },
-          messages: [],
-        };
         yield* registry
           .commit(
             {
@@ -303,30 +313,25 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
               description: `Task: ${input.task.instructions}`,
               state: {
                 admission: { input, receipt },
-                signalSlug: definition.slug,
-                sourcePath: input.source,
-                definition,
-                source: sourceContext,
-                status: "checking",
-                task: input.task,
+                executorPrompt: agents[input.agent]!.executorPrompt ?? DEFAULT_EXECUTOR_PROMPT,
+                status: "awaiting-confirmation",
               },
               messages: [
                 {
                   type: "Triggered",
-                  at: input.createdAt,
+                  at: new Date(yield* Clock.currentTimeMillis).toISOString(),
                   sourcePath: input.source,
                   task: input.task.instructions,
                   agent: input.agent,
                   mode: "confirm",
-                  sourceContext,
+                  sourceContext: input.evidence,
                   requestId: input.requestId,
-                  causationId: input.causationId,
                   target: path,
                   revision: receipt.revision,
                 },
               ],
             },
-            { expectedRevision: input.expectedRevision },
+            { expectedRevision: 0 },
           )
           .pipe(
             Effect.catchTag("ContextConflict", () =>
@@ -338,15 +343,6 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
             Effect.catchTag("ContextValidationError", Effect.die),
           );
         runPath = path;
-        if (input.source.startsWith("/goals/")) {
-          subscriber = yield* actor
-            .select(`/user${input.source}`)
-            .resolve()
-            .pipe(
-              Effect.map((ref) => ref as ActorRef<GoalCommand>),
-              Effect.orDie,
-            );
-        }
         return { receipt, created: true };
       });
       const admitResumption = Effect.fn("Run.admitResumption")(function* (
@@ -376,7 +372,7 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
             });
           return previous.receipt;
         }
-        if (!saved.task || !["failed", "uncertain"].includes(saved.status))
+        if (!["failed", "uncertain"].includes(saved.status))
           return yield* new ApplicationError({
             kind: "conflict",
             message:
@@ -406,8 +402,7 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
                 {
                   type: "ResumeRequested",
                   requestId: input.requestId,
-                  causationId: input.causationId,
-                  at: input.createdAt,
+                  at: new Date(yield* Clock.currentTimeMillis).toISOString(),
                 },
               ],
             },
@@ -425,7 +420,7 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
         return receipt;
       });
       const deliverResumption = Effect.fn("Run.deliverResumption")(function* (
-        actor: ActorContext<RunCommand, TaskExecutionServices | ContextRegistry>,
+        actor: ActorContext<RunCommand, ExternalAgents | ContextRegistry>,
       ) {
         if (resumptionInFlight) return;
         const pending = state().resumptions?.find((item) => item.status === "pending");
@@ -445,7 +440,7 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
             .pipe(Effect.orDie));
         yield* child.tell({
           _tag: "Start",
-          request: { runPath, task: saved.task!, agent: saved.definition.agent },
+          request: { runPath, task: executionTask(), agent: saved.admission.input.agent },
           replyTo: actor.self,
           resumeOnly: true,
         });
@@ -474,25 +469,20 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
           (result) => ({ _tag: "ResumptionDelivered", requestId: pending.input.requestId, result }),
         );
       });
-      return SignalRunActor.of({
+      return TaskRunActor.of({
         started: (context) =>
           Effect.gen(function* () {
-            const record = registry.get(contextPath(context));
-            const saved = record && Schema.decodeUnknownSync(RunState)(record.state);
-            if (!saved) return;
-            const owner = saved.admission?.input.source;
-            const parent = owner?.startsWith("/goals/")
-              ? yield* context.select(`/user${owner}`).resolve().pipe(Effect.option)
-              : Option.none();
-            yield* context.self.tell({
-              _tag: "Resume",
-              path: contextPath(context),
-              subscriber: Option.getOrUndefined(parent) as ActorRef<GoalCommand> | undefined,
-            });
+            owner = context;
+            if (registry.get(contextPath(context)))
+              yield* context.self.tell({ _tag: "Resume", path: contextPath(context) });
           }),
         receive: (command, context) =>
           Match.value(command).pipe(
-            Match.tag("ResumePersonalRun", ({ input, replyTo }) =>
+            Match.tag("Ready", ({ replyTo }) => replyTo.tell(undefined)),
+            Match.tag("FeedbackDelivered", ({ error }) =>
+              error ? Effect.logWarning(error) : Effect.void,
+            ),
+            Match.tag("ResumeRun", ({ input, replyTo }) =>
               Effect.gen(function* () {
                 const result = yield* admitResumption(input).pipe(Effect.result);
                 if (result._tag === "Failure")
@@ -543,65 +533,10 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
                 if (result._tag === "Failure")
                   return yield* replyTo.tell({ _tag: "Rejected", error: result.failure });
                 yield* replyTo.tell({ _tag: "Accepted", receipt: result.success.receipt });
-                if (result.success.created) yield* check(context);
-              }),
-            ),
-            Match.tag("Initialize", (command) =>
-              Effect.gen(function* () {
-                if (registry.get(command.path)) {
-                  yield* context.self.tell({
-                    _tag: "Resume",
-                    path: command.path,
-                    subscriber: command.subscriber,
-                  });
-                  if (command.replyTo) yield* command.replyTo.tell(undefined);
-                  return;
+                if (result.success.created) {
+                  yield* requestConfirmation(context);
+                  yield* notify("Task accepted; awaiting user confirmation", false);
                 }
-                runPath = command.path;
-                subscriber = command.subscriber;
-                yield* registry
-                  .commit(
-                    {
-                      path: runPath,
-                      description: `An occurrence of Signal ${command.definition.slug}`,
-                      state: {
-                        causal: command.causal,
-                        signalSlug: command.definition.slug,
-                        sourcePath: command.sourceContext.path,
-                        definition: command.definition,
-                        source: command.sourceContext,
-                        status: "preparing",
-                      },
-                      messages: [
-                        {
-                          type: "Triggered",
-                          at: new Date().toISOString(),
-                          sourcePath: command.sourceContext.path,
-                          task: command.definition.task,
-                          agent: command.definition.agent,
-                          mode: command.definition.mode,
-                          sourceContext: command.sourceContext,
-                        },
-                      ],
-                    },
-                    { expectedRevision: 0 },
-                  )
-                  .pipe(Effect.asVoid, Effect.orDie);
-                if (command.replyTo) yield* command.replyTo.tell(undefined);
-                yield* Effect.logInfo(
-                  JSON.stringify({ event: "task.preparation.started", runPath }),
-                );
-                yield* context.pipeToSelf(
-                  execution.buildExecutionInput(
-                    command.definition,
-                    registry.views.project(command.sourceContext),
-                    registry.reader.snapshot(),
-                  ),
-                  (result) =>
-                    result._tag === "Success"
-                      ? { _tag: "Prepared", task: result.value }
-                      : { _tag: "PreparationFailed", error: result.error.message },
-                );
               }),
             ),
             Match.tag("Cancel", ({ reason, replyTo }) =>
@@ -609,52 +544,18 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
                 Effect.andThen(() => (replyTo ? replyTo.tell(undefined) : Effect.void)),
               ),
             ),
-            Match.tag("Prepared", ({ task }) =>
-              Effect.gen(function* () {
-                if (state().status !== "preparing") return;
-                if (!valid()) {
-                  yield* cancel(context, "Task changed during preparation");
-                  return;
-                }
-                yield* transition({ type: "TaskPrepared", task });
-                yield* Effect.logInfo(JSON.stringify({ event: "task.prepared", runPath }));
-                yield* check(context);
-              }),
-            ),
-            Match.tag("Ready", ({ ready }) =>
-              Effect.gen(function* () {
-                if (state().status !== "checking") return;
-                if (!valid()) {
-                  yield* cancel(context, "Task changed during readiness check");
-                  return;
-                }
-                yield* Effect.logInfo(JSON.stringify({ event: "task.readiness", runPath, ready }));
-                if (!ready) {
-                  yield* transition({ type: "NotExecutable" });
-                  yield* notify("The execution plan is not currently executable", true);
-                  return;
-                }
-                if (state().definition.mode === "confirm") {
-                  yield* transition({ type: "ConfirmationRequested" });
-                  yield* requestConfirmation(context);
-                  yield* notify("Execution plan prepared; awaiting user confirmation", false);
-                } else {
-                  yield* transition({ type: "Ready" });
-                  yield* launch(context);
-                }
-              }),
-            ),
-            Match.tag("PreparationFailed", ({ error }) =>
-              Effect.gen(function* () {
-                if (["cancelled", "completed"].includes(state().status)) return;
-                yield* transition({ type: "PreparationFailed", text: error });
-                yield* notify(error, true);
-              }),
-            ),
             Match.tag("ApprovalResolved", ({ requestId, response }) =>
               Effect.gen(function* () {
                 if (yield* writeback.resolve(requestId, context)) return;
                 if (requestId !== `${runPath}:confirm`) return;
+                const decision = approvalEntries(registry).find((entry) => entry.id === requestId);
+                if (
+                  !decision ||
+                  !["resolved", "acknowledged"].includes(decision.status) ||
+                  decision.target !== context.path ||
+                  !isDeepStrictEqual(decision.response, response)
+                )
+                  return;
                 if (!valid() && state().status === "awaiting-confirmation") {
                   yield* cancel(context, "Confirmation refers to an obsolete task revision");
                   return;
@@ -677,17 +578,13 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
                   });
               }),
             ),
-            Match.tag("Resume", ({ path, subscriber: restoredSubscriber }) =>
+            Match.tag("Resume", ({ path }) =>
               Effect.gen(function* () {
                 if (runPath) {
-                  if (restoredSubscriber) {
-                    subscriber = restoredSubscriber;
-                    yield* replayTerminal(true);
-                  }
+                  yield* replayTerminal(true);
                   return;
                 }
                 runPath = path;
-                subscriber = restoredSubscriber;
                 if (!registry.get(path)) return;
                 const current = state();
                 yield* writeback.recover(context);
@@ -695,12 +592,7 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
                   yield* context.self.tell({ _tag: "DeliverResumption" });
                   return;
                 }
-                if (
-                  ["preparing", "checking", "ready", "awaiting-confirmation"].includes(
-                    current.status,
-                  ) &&
-                  !valid()
-                ) {
+                if (["ready", "awaiting-confirmation"].includes(current.status) && !valid()) {
                   yield* cancel(context, "Task changed before restart");
                   return;
                 }
@@ -711,18 +603,10 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
                   yield* launch(context, true);
                   return;
                 }
-                if (yield* replayTerminal()) return;
-                if (current.status === "awaiting-confirmation" && current.task)
-                  yield* requestConfirmation(context);
-                else if (current.status === "checking" && current.task) yield* check(context);
-                else if (current.status === "ready" && current.task) yield* launch(context);
-                else if (current.task && current.definition) yield* launch(context, true);
-                else {
-                  const text =
-                    "Task was not prepared before interruption; no external task submitted";
-                  yield* transition({ type: "RecoveryFailed", text });
-                  yield* replayTerminal();
-                }
+                if (yield* replayTerminal(true)) return;
+                if (current.status === "awaiting-confirmation") yield* requestConfirmation(context);
+                else if (current.status === "ready") yield* launch(context);
+                else yield* launch(context, true);
               }),
             ),
             Match.tag("Submitted", ({ result }) =>

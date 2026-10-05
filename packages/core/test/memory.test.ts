@@ -199,9 +199,20 @@ test("recovered captures exclude private source data and Memory queue state stay
         sessionId: "legacy",
         records: [
           {
-            path: "/signals/legacy/runs/one",
+            path: "/runs/" + "a".repeat(64),
             description: "Result",
-            state: { status: "completed", source: { token: secret } },
+            state: {
+              status: "completed",
+              admission: {
+                input: {
+                  source: "/goals/personal",
+                  replyTo: "/goals/personal",
+                  agent: "test",
+                  task: { instructions: "Done", input: [] },
+                },
+              },
+              source: { token: secret },
+            },
             messages: [{ type: "Completed", text: "Done", provider: secret }],
           },
         ],

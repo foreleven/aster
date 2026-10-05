@@ -11,7 +11,7 @@ const matchesInput = (input: GoalInput, filter: string) =>
   filter === "all" ||
   filter === "progress" ||
   (filter === "notes" && input.payload._tag === "UserInput") ||
-  (filter === "signals" && input.payload._tag === "SignalOccurrence") ||
+  (filter === "signals" && input.payload._tag === "TaskMessage") ||
   ((filter === "tasks" || filter === "results") && input.payload._tag === "ExecutionFeedback");
 function InputCard({ input, inspect }: { input: GoalInput; inspect: Inspect }) {
   const link = (path: string, label = path) => (
@@ -51,18 +51,11 @@ function InputCard({ input, inspect }: { input: GoalInput; inspect: Inspect }) {
             <p>{text}</p>
           </>
         )),
-        Match.tag("PersonalMessage", ({ text, source }) => (
+        Match.tag("TaskMessage", ({ text, source }) => (
           <>
-            <strong>Personal Agent</strong>
+            <strong>Task message</strong>
             <p>{text}</p>
             {link(source)}
-          </>
-        )),
-        Match.tag("SignalOccurrence", ({ signalPath, evidence }) => (
-          <>
-            <strong>Signal occurrence</strong>
-            <p>{evidence}</p>
-            {link(signalPath)}
           </>
         )),
         Match.tag("ExecutionFeedback", ({ runPath, status, text }) => (

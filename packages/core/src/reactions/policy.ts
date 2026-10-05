@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import type { ActorRef } from "@aster/actor";
 import { ApplicationError } from "@aster/api-contracts";
 import { Clock, Context, Effect, Match, Ref, Schema } from "effect";
-import type { SignalExtractor } from "../signals/detect.js";
 import type { SystemOneClient } from "../decisions/system-one.js";
 import { makeSystemOneGate } from "../signals/detect.js";
 import { sourceSignals } from "../signals/policy.js";
@@ -39,7 +38,6 @@ export class ReactionPolicy extends Context.Service<
 /** Planning only reads frozen evidence. No domain delivery occurs until the plan commits. */
 export const makeReactionPolicy = (options: {
   client: SystemOneClient;
-  extract: SignalExtractor;
   screening?: GoalScreeningStore["Service"] | undefined;
 }): Effect.Effect<ReactionPolicy["Service"]> =>
   Effect.gen(function* () {
@@ -53,21 +51,15 @@ export const makeReactionPolicy = (options: {
         function* (work) {
           const record = work.event.record;
           const snapshot = { ...work.input.evidence, [record.path]: record };
-          const definitions = sourceSignals(snapshot, Date.parse(work.input.screeningAt));
+          const definitions = sourceSignals(snapshot);
           const candidates = yield* makeSystemOneGate(options.client)(record, definitions);
-          const extracted = yield* options.extract(record.path, candidates, snapshot);
-          // An extractor cannot invent targets that were not screened as candidates.
-          const selected = candidates.filter((item) => extracted.includes(item.slug));
           const commands: ReactionDeliveryInput[] = [];
-          const matchedGoals = new Set<string>();
           const deliveryId = (kind: string, target: string) =>
             createHash("sha256")
               .update(JSON.stringify(["reaction-delivery-v1", work.event.id, kind, target]))
               .digest("hex");
-          for (const signal of selected) {
+          for (const signal of candidates) {
             const target = `/signals/${signal.slug}`;
-            const goal = (snapshot[target]?.state as { goal?: string } | undefined)?.goal;
-            if (goal) matchedGoals.add(goal);
             commands.push({
               _tag: "Signal",
               input: {
@@ -87,7 +79,6 @@ export const makeReactionPolicy = (options: {
             record,
             work.input.goals.filter(
               (goal) =>
-                !matchedGoals.has(goal.slug) &&
                 snapshot[`/goals/${goal.slug}`]?.projection?.visibility !== "restricted" &&
                 (snapshot[`/goals/${goal.slug}`]?.state as { status?: string } | undefined)
                   ?.status === "active",

@@ -1,4 +1,4 @@
-import type { PersonalApprovalResponseInput } from "@aster/api-contracts";
+import type { ApprovalResponse } from "@aster/api-contracts";
 import { Atom, AsyncResult } from "effect/reactivity";
 import {
   contextsQuery,
@@ -36,8 +36,7 @@ export const failureCount = Atom.make(
   (get) =>
     get(dashboardRows).filter(
       (row) =>
-        ["failed", "uncertain", "preparation-failed"].includes(row.context?.state.status ?? "") ||
-        row.actor?.lastError,
+        ["failed", "uncertain"].includes(row.context?.state.status ?? "") || row.actor?.lastError,
     ).length,
 );
 export const dashboardStatus = Atom.make((get) => {
@@ -108,7 +107,6 @@ export const approvalDiagnostics = Atom.make((get) => {
   };
 });
 
-// Frozen user decisions survive navigation while an admission acknowledgement is uncertain.
-export const pendingApprovalResponses = Atom.make<
-  Record<string, { input: PersonalApprovalResponseInput; accepted: boolean }>
->({}).pipe(Atom.keepAlive);
+export const pendingApprovalResponses = Atom.make<Record<string, ApprovalResponse>>({}).pipe(
+  Atom.keepAlive,
+);

@@ -1,43 +1,39 @@
-import type { PublicContext as ContextRecord } from "@aster/api-contracts";
-import type { SignalDefinition } from "../config/schema.js";
-import type { CausalChain } from "@aster/api-contracts";
-import { Match } from "effect";
-
-/** An accepted recurring definition authorizes one bounded reaction per due
- * occurrence. One-shot follow-ups keep their parent budget, so an Agent cannot
- * replenish an exhausted chain by continually scheduling another one-shot. */
+import { Schema } from "effect";
+import type { PublicContext, CausalChain } from "@aster/api-contracts";
+import { SignalDefinition } from "../config/schema.js";
 export const scheduledCausalChain = (
-  state: Pick<SignalDefinition, "schedule"> & { readonly causal?: CausalChain },
-  occurrenceId: string,
-): CausalChain | undefined =>
-  Match.value(state.schedule?.type).pipe(
-    Match.when("cron", () => ({ rootRequestId: occurrenceId, remainingAgentTurns: 4 })),
-    Match.orElse(() => state.causal),
-  );
-
+  state: SignalDefinition & { causal?: CausalChain },
+  requestId: string,
+): CausalChain =>
+  state.trigger._tag === "Schedule" && state.trigger.schedule.type === "cron"
+    ? { rootRequestId: requestId, remainingAgentTurns: 4 }
+    : (state.causal ?? { rootRequestId: requestId, remainingAgentTurns: 4 });
 export const signalEnabled = (
   state: { active?: boolean; deleted?: boolean; goal?: string },
-  getGoal: (slug: string) => ContextRecord | undefined,
+  getGoal: (slug: string) => PublicContext | undefined,
 ) =>
   state.active !== false &&
   !state.deleted &&
   (!state.goal ||
     (getGoal(state.goal)?.state as { status?: string } | undefined)?.status !== "completed");
-
 export const sourceSignalEligible = (
   state: SignalDefinition & { active?: boolean; deleted?: boolean; goal?: string },
-  now: number,
-  getGoal: (slug: string) => ContextRecord | undefined,
-) =>
-  signalEnabled(state, getGoal) &&
-  !state.schedule &&
-  (!state.notBefore || now >= Date.parse(state.notBefore));
-
-export const sourceSignals = (snapshot: Readonly<Record<string, ContextRecord>>, now: number) =>
+  getGoal: (slug: string) => PublicContext | undefined,
+) => state.trigger._tag === "Context" && signalEnabled(state, getGoal);
+export const sourceSignals = (snapshot: Readonly<Record<string, PublicContext>>) =>
   Object.values(snapshot)
     .filter(
       (record) =>
         /^\/signals\/[^/]+$/.test(record.path) && record.projection?.visibility !== "restricted",
     )
-    .map((record) => record.state as SignalDefinition)
-    .filter((state) => sourceSignalEligible(state, now, (slug) => snapshot[`/goals/${slug}`]));
+    .map((record) =>
+      Schema.decodeUnknownSync(
+        Schema.Struct({
+          ...SignalDefinition.fields,
+          active: Schema.optional(Schema.Boolean),
+          deleted: Schema.optional(Schema.Boolean),
+          goal: Schema.optional(Schema.String),
+        }),
+      )(record.state),
+    )
+    .filter((state) => sourceSignalEligible(state, (slug) => snapshot[`/goals/${slug}`]));

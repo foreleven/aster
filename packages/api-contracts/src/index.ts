@@ -1,34 +1,21 @@
+import { ResumeRunDeliveryInput } from "./run-command.js";
 import { ContextQueryInput, ContextQueryResult, ContextQueryError } from "./context-query.js";
 export * from "./context-query.js";
 import { RecoveryInput, ProcessingOwner, ProcessingSnapshot } from "./recovery.js";
 export * from "./recovery.js";
 import { GoalTimelinePage, RetryGoalTurnInput } from "./goal-timeline.js";
 export * from "./goal-timeline.js";
-export * from "./notification.js";
+export * from "./causal.js";
 export * from "./writeback.js";
-import { PersonalResumeRunInput } from "./run-command.js";
 export * from "./run-command.js";
-import { PersonalStartTaskInput } from "./task-command.js";
 export * from "./task-command.js";
 import { DelegationInspection, DelegationPath } from "./delegation.js";
 export * from "./delegation.js";
-import { PersonalApprovalResponseInput, PersonalApprovalRequestInput } from "./approval-command.js";
 import { CommandReceipt } from "./command.js";
 export * from "./command.js";
-export * from "./approval-command.js";
-import { PersonalSignalCommandInput, SignalDeliveryReceipt } from "./signal-command.js";
 export * from "./signal-command.js";
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
-import {
-  PersonalInput,
-  PersonalReceipt,
-  PersonalRetryInput,
-  PersonalGoalMessageInput,
-} from "./personal.js";
-import { GoalDeliveryReceipt } from "./delivery.js";
-export * from "./personal.js";
-export * from "./delivery.js";
 import {
   ApplicationError,
   ApprovalEntry,
@@ -62,6 +49,16 @@ export const QueryInvalidation = Schema.TaggedStruct("Invalidate", {
 });
 export type QueryInvalidation = typeof QueryInvalidation.Type;
 export const ApplicationRpcs = RpcGroup.make(
+  Rpc.make("ResumeRun", {
+    payload: ResumeRunDeliveryInput,
+    success: CommandReceipt,
+    error: ApplicationError,
+  }),
+  Rpc.make("InspectDelegation", {
+    payload: { path: DelegationPath },
+    success: DelegationInspection,
+    error: ApplicationError,
+  }),
   Rpc.make("InspectProcessing", {
     payload: { owner: ProcessingOwner },
     success: ProcessingSnapshot,
@@ -70,52 +67,6 @@ export const ApplicationRpcs = RpcGroup.make(
   Rpc.make("RecoverProcessing", {
     payload: RecoveryInput,
     success: CommandReceipt,
-    error: ApplicationError,
-  }),
-  Rpc.make("RequestPersonalApproval", {
-    payload: PersonalApprovalRequestInput,
-    success: CommandReceipt,
-    error: ApplicationError,
-  }),
-  Rpc.make("ResumePersonalRun", {
-    payload: PersonalResumeRunInput,
-    success: CommandReceipt,
-    error: ApplicationError,
-  }),
-  Rpc.make("StartPersonalTask", {
-    payload: PersonalStartTaskInput,
-    success: CommandReceipt,
-    error: ApplicationError,
-  }),
-  Rpc.make("InspectPersonalDelegation", {
-    payload: { path: DelegationPath },
-    success: DelegationInspection,
-    error: ApplicationError,
-  }),
-  Rpc.make("RespondPersonalApproval", {
-    payload: PersonalApprovalResponseInput,
-    success: CommandReceipt,
-    error: ApplicationError,
-  }),
-  Rpc.make("ApplyPersonalSignal", {
-    payload: PersonalSignalCommandInput,
-    success: SignalDeliveryReceipt,
-    error: ApplicationError,
-  }),
-  Rpc.make("SendPersonalGoalMessage", {
-    payload: PersonalGoalMessageInput,
-    success: GoalDeliveryReceipt,
-    error: ApplicationError,
-  }),
-  Rpc.make("GetPersonal", { success: PublicContext, error: ApplicationError }),
-  Rpc.make("RetryPersonalInput", {
-    payload: PersonalRetryInput,
-    success: PersonalReceipt,
-    error: ApplicationError,
-  }),
-  Rpc.make("SendPersonalMessage", {
-    payload: PersonalInput,
-    success: PersonalReceipt,
     error: ApplicationError,
   }),
   Rpc.make("ListContexts", { success: Schema.Array(PublicContext), error: ApplicationError }),

@@ -5,12 +5,12 @@ A Goal coordinates three parallel capabilities:
 ```text
 Goal
 ├── Pi conversation — reasoning, user input and feedback
-├── Tasks           — asynchronous external work
+├── Tasks           — messages to Goal or Delegate Actors
 └── Signals         — conditions and timers
 
 Context change → System One Gate → Goal Agent Gate → Pi conversation
 User input ─────────────────────────────────────────→ Pi conversation
-Task feedback / Signal occurrence ─────────────────→ Pi conversation
+Task messages / execution feedback ─────────────────→ Pi conversation
 ```
 
 The conversation can request a Task or configure a Signal through tools. Their owners accept and persist those commands. Returning an assistant response does not stop a Task or a Signal. Goal End interrupts its conversation, revokes Task executions that have not started, and deactivates its Signals. Already-submitted external work remains owned by the existing Run and Delegation; interruption does not prove cancellation.
@@ -25,7 +25,7 @@ Each Goal has one durable Pi session/conversation, identified by its slug. Pi ow
 
 ## Input and recovery
 
-Goal creation commits a deterministic initial input. Runtime activation is an in-memory gate; restarting does not manufacture another initial pursuit.
+Configured Goal creation commits a deterministic initial input. The built-in `/goals/personal` starts with an empty input queue and otherwise uses the ordinary GoalActor. Runtime activation is an in-memory gate; restarting does not manufacture another initial pursuit.
 
 `SubmitInput` validates producer authority and commits the input and exact request receipt before acknowledging. One delivery at a time enters Pi with `requestId = inputId`; later inputs remain pending. Input status records only the cross-store handoff: pending, running, completed, failed, unknown or ignored. Context changes additionally retain the Agent Gate decision. There is no frozen Context catalogue or second evaluation journal.
 
@@ -36,7 +36,7 @@ The retained business state is:
 - Goal identity, description, optional completion criteria, status and progress.
 - Accepted inputs with their delivery status, response and producer causality.
 - Exact request receipts for idempotent producer retries.
-- Business notification outbox and the public-history count.
+- The public-history count.
 
 Task execution state lives in `/runs/...`; Signal state lives in `/signals/...`; conversation execution state lives in Pi. Goal stores none of their duplicated lifecycle state. Business history is a public input feed, not Pi's transcript. The Timeline reads accepted inputs and conversation responses directly.
 
@@ -44,13 +44,13 @@ Task execution state lives in `/runs/...`; Signal state lives in `/signals/...`;
 
 The Context reaction owner first runs the existing System One relevance screen. Only admitted evidence reaches the Goal. Before entering the persistent conversation, `goals/gate.ts` runs a separate read-only Goal Agent Gate. An unrelated change is recorded as ignored and never sent to the conversation. Gate failure is visible and may be explicitly retried.
 
-User input, Task feedback and already-owned Signal occurrences do not pass through generic Context screening. Feedback carries its original causal budget; starting a new conversation turn does not replenish it. Exhausted automatic feedback remains visible without invoking Pi.
+User input, Task feedback and Task messages do not pass through generic Context screening. Feedback carries its original causal budget; starting a new conversation turn does not replenish it. Exhausted automatic feedback remains visible without invoking Pi.
 
 ## Tasks and Signals
 
-Goals use the same `StartTask` command and `TaskDeliveryInput` as Personal. The shared Run root persists an exact admission and receipt, performs readiness/confirmation, and owns the external Delegation. Task identity is derived from source and tool-call identity. Goal has no separate Task CRUD list, revision model, reservation journal or Task proposal batch. Its work panel reads the independent Run Contexts.
+Goals send `TaskMessage` through a shared dispatcher. A Goal Task delivers text directly; a Delegate Task includes prepared instructions, executor and replyTo Goal. The Run root saves admission and receipt before confirmation and owns external Delegation. Task identity derives from source and tool-call identity. Its work panel reads independent Run Contexts, including Signal Tasks replying to this Goal.
 
-Signals accept direct commands in their own mailbox, validate owner/revision/timing, and commit definition and receipt together. They retain occurrences until the Goal acknowledges acceptance. A Goal Signal observes conditions or schedules and sends evidence; it does not independently execute the Goal's external Task. Goal has no Signal proposal or delivery outbox. Startup reattaches subscriptions from Signal records and Task feedback from Run records.
+Signals accept direct commands, validate owner/revision/timing and commit the complete trigger, Task and receipt. Both Context and schedule triggers freeze a Task occurrence before dispatch. Receivers acknowledge durable admission. Goal has no Signal proposal batch, subscription facade or notification outbox. Startup restores Signal owners before registering Goals and reattaches Run feedback after receivers exist.
 
 ## Scope
 

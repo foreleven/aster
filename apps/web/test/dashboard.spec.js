@@ -1,5 +1,4 @@
 import { test, expect } from "@playwright/test";
-import { createHash } from "node:crypto";
 import { at, fixture, designFixture } from "./fixtures.js";
 async function setup(page, data = fixture()) {
   const errors = [];
@@ -48,7 +47,7 @@ async function setup(page, data = fixture()) {
         case "ListApprovals":
           value = data.contexts.find((c) => c.path === "/approvals")?.state.entries ?? [];
           break;
-        case "InspectPersonalDelegation": {
+        case "InspectDelegation": {
           const record = data.contexts.find((item) => item.path === body.path);
           const state = record.state;
           value = {
@@ -132,152 +131,18 @@ async function setup(page, data = fixture()) {
             });
           break;
         }
-        case "SendPersonalMessage": {
+        case "ResumeRun": {
           writes.push({ tag: rpc.tag, body });
-          const personal = data.contexts.find((c) => c.path === "/personal");
-          let message = personal.messages.find((entry) => entry.requestId === body.requestId);
-          if (!message) {
-            personal.revision++;
-            message = {
-              requestId: body.requestId,
-              causationId: body.causationId,
-              source: "user",
-              target: "/personal",
-              revision: personal.revision,
-              sequence: personal.messages.length + 1,
-              createdAt: at,
-              payload: { _tag: "UserInput", text: body.text },
-            };
-            personal.messages.push(message);
-            personal.state.pendingRequestIds.push(body.requestId);
-          }
-          value = {
-            requestId: body.requestId,
-            revision: message.revision,
-            sequence: message.sequence,
-          };
-          break;
-        }
-        case "RetryPersonalInput": {
-          writes.push({ tag: rpc.tag, body });
-          const personal = data.contexts.find((c) => c.path === "/personal");
-          personal.revision++;
-          const previous = personal.state.runs.findLast(
-            (run) => run.requestId === body.inputRequestId,
-          );
-          personal.state.runs.push({
-            ...previous,
-            executionId: `retry:${body.requestId}`,
-            revision: personal.revision,
-            status: "running",
-            error: undefined,
-          });
-          value = {
-            requestId: body.requestId,
-            revision: personal.revision,
-            sequence: previous.inputSequence,
-          };
-          break;
-        }
-        case "RequestPersonalApproval": {
-          writes.push({ tag: rpc.tag, body });
-          const personal = data.contexts.find((item) => item.path === "/personal");
-          const delivery = personal.state.outbox.find(
-            (item) => item.input.requestId === body.requestId,
-          );
-          delivery.status = "delivered";
-          delivery.error = undefined;
-          delivery.receipt = { requestId: body.requestId, revision: body.approvalsRevision + 1 };
-          value = { requestId: body.requestId, revision: delivery.acceptedRevision };
-          break;
-        }
-        case "RespondPersonalApproval": {
-          writes.push({ tag: rpc.tag, body });
-          const personal = data.contexts.find((c) => c.path === "/personal");
-          let item = personal.state.outbox.find(
-            (entry) => entry.input.requestId === body.requestId,
-          );
-          if (!item) {
-            personal.revision++;
-            item = {
-              input: {
-                operation: "respondApproval",
-                requestId: body.requestId,
-                causationId: body.causationId,
-                source: "/personal",
-                target: "/approvals",
-                expectedRevision: body.approvalsRevision,
-                createdAt: at,
-                approvalId: body.approvalId,
-                response: body.response,
-              },
-              acceptedRevision: personal.revision,
-              status: "pending",
-            };
-            personal.state.outbox.push(item);
-          }
-          item.status = "delivered";
-          item.error = undefined;
-          item.receipt = { requestId: body.requestId, revision: body.approvalsRevision + 1 };
-          const queue = data.contexts.find((c) => c.path === "/approvals");
-          queue.state.entries.find((entry) => entry.id === body.approvalId).status = "acknowledged";
-          value = { requestId: body.requestId, revision: item.acceptedRevision };
-          break;
-        }
-        case "ResumePersonalRun": {
-          writes.push({ tag: rpc.tag, body });
-          const run = data.contexts.find((item) => item.path === body.runPath);
-          const personal = data.contexts.find((item) => item.path === "/personal");
-          const previous = personal.state.outbox.find(
-            (item) => item.input.requestId === body.requestId,
-          );
-          if (!previous) {
-            personal.revision++;
-            const input = {
-              operation: "resumeRun",
-              requestId: body.requestId,
-              causationId: body.causationId,
-              source: "/personal",
-              target: body.runPath,
-              expectedRevision: body.runRevision,
-              createdAt: at,
-            };
-            run.revision++;
-            run.state.resumptions = [
-              {
-                input,
-                receipt: { requestId: body.requestId, revision: run.revision },
-                status: "delivered",
-              },
-            ];
-            personal.state.outbox.push({
-              input,
-              acceptedRevision: personal.revision,
+          const run = data.contexts.find((item) => item.path === body.target);
+          run.state.resumptions = [
+            {
+              input: body,
+              receipt: { requestId: body.requestId, revision: run.revision + 1 },
               status: "delivered",
-              receipt: { requestId: body.requestId, revision: run.revision },
-            });
-          }
-          value = {
-            requestId: body.requestId,
-            revision: previous?.acceptedRevision ?? personal.revision,
-          };
-          break;
-        }
-        case "StartPersonalTask":
-        case "ApplyPersonalSignal":
-        case "SendPersonalGoalMessage": {
-          writes.push({ tag: rpc.tag, body });
-          const personal = data.contexts.find((c) => c.path === "/personal");
-          const item = personal.state.outbox.find(
-            (entry) => entry.input.requestId === body.requestId,
-          );
-          item.status = "delivered";
-          item.error = undefined;
-          item.receipt = {
-            requestId: body.requestId,
-            revision: (body.goalRevision ?? body.signalRevision ?? 0) + 1,
-          };
-          value = { requestId: body.requestId, revision: item.acceptedRevision };
+            },
+          ];
+          run.revision++;
+          value = { requestId: body.requestId, revision: run.revision };
           break;
         }
         case "EndGoal":
@@ -301,14 +166,14 @@ async function setup(page, data = fixture()) {
   });
   await page.goto("/");
   const firstGoal =
-    data.contexts.find((context) => context.path === "/personal") ??
+    data.contexts.find((context) => context.path === "/goals/personal") ??
     data.contexts.find((context) => /^\/goals\/[^/]+$/.test(context.path)) ??
     data.contexts[0];
   await expect(
     page.getByRole("heading", {
       name:
-        firstGoal?.path === "/personal"
-          ? "Personal Agent"
+        firstGoal?.path === "/goals/personal"
+          ? "Personal assistant"
           : firstGoal?.state.title || firstGoal?.description || "No Contexts yet",
       exact: true,
     }),
@@ -529,10 +394,11 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   const { fileURLToPath } = await import("node:url");
   const requireLocal = createRequire(new URL("../../local/package.json", import.meta.url));
   const { Effect, Layer, Schema } = await import(requireLocal.resolve("effect"));
-  const { makeApplicationApi, makeContextRegistry, GoalActor, makeMemoryGoalHistory } =
+  const { makeApplicationApi, GoalActor, makeMemoryGoalHistory } =
     await import("../../../packages/core/dist/index.js");
   const { ActorSystem, Actor } = await import("../../../packages/actor/dist/index.js");
   const { startGoalApi } = await import("../../local/dist/http-api.js");
+  const { makeContextRegistry } = await import("../../../packages/core/dist/testing/context.js");
   const registry = await Effect.runPromise(makeContextRegistry());
   await Effect.runPromise(registry.register("/goals/real-http", GoalActor.context));
   const record = {
@@ -845,6 +711,62 @@ test("rejected approval preserves pending state and is not resubmitted", async (
   expect(errors).toEqual([]);
 });
 
+test("uncertain approval keeps its exact decision across navigation and reconnect", async ({
+  page,
+}) => {
+  const { writes, errors } = await setup(page);
+  const attempts = [];
+  await page.route("**/api/rpc{,/}", async (route) => {
+    const rpc = JSON.parse(route.request().postData().trim());
+    if (rpc.tag !== "RespondToApproval") return route.fallback();
+    attempts.push(rpc.payload);
+    if (attempts.length > 1) return route.fallback();
+    return route.fulfill({
+      contentType: "application/ndjson",
+      body:
+        JSON.stringify({
+          _tag: "Exit",
+          requestId: rpc.id,
+          exit: {
+            _tag: "Failure",
+            cause: [
+              {
+                _tag: "Fail",
+                error: {
+                  _tag: "ApplicationError",
+                  kind: "unavailable",
+                  message: "Approval acknowledgement missing",
+                },
+              },
+            ],
+          },
+        }) + "\n",
+    });
+  });
+  await page.getByRole("button", { name: "Approve execution", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Approval acknowledgement missing");
+  await expect(page.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /Summarize Knowledge Engine project progress/ })
+    .first()
+    .click();
+  await page.evaluate(() => window.testEvents.emit("ready"));
+  await page
+    .getByRole("navigation")
+    .getByRole("button", { name: /Monitor Knowledge Engine project progress/ })
+    .click();
+  await expect(
+    page.getByRole("button", { name: "Reconcile saved decision", exact: true }),
+  ).toBeVisible();
+  expect(attempts).toHaveLength(1);
+  await page.getByRole("button", { name: "Reconcile saved decision", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(attempts[1]).toEqual(attempts[0]);
+  expect(writes[0]).toEqual({ tag: "RespondToApproval", body: attempts[0] });
+  expect(errors).toEqual([]);
+});
+
 test("history invalidation during an older-page request retains both ends without refetching cached pages", async ({
   page,
 }) => {
@@ -896,42 +818,6 @@ test("history invalidation during an older-page request retains both ends withou
       }) + "\n",
   });
   await expect(dialog.getByText("Entry 67", { exact: true })).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
-test("notification deliveries render without a dashboard projection error", async ({ page }) => {
-  const data = fixture();
-  data.contexts.push({
-    path: "/notifications",
-    revision: 1,
-    description: "Business notification delivery",
-    state: {
-      deliveries: [
-        {
-          input: {
-            requestId: "notification-1",
-            source: "/goals/engine",
-            target: "/personal",
-            kind: "GoalProgress",
-            revision: 1,
-          },
-          status: "delivered",
-          attempts: 1,
-          receipt: { requestId: "notification-1", revision: 2 },
-        },
-      ],
-    },
-    messages: [],
-  });
-  const { errors } = await setup(page, data);
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Business notification delivery/ })
-    .click();
-  await expect(
-    page.getByText("Unsupported dashboard fields in /notifications", { exact: false }),
-  ).toHaveCount(0);
-  await expect(page.locator(".context-related")).toContainText("Knowledge Engine");
   expect(errors).toEqual([]);
 });
 
@@ -1093,174 +979,22 @@ test("populated responsive layouts retain all Goal work and wrap long content", 
 function personalFixture() {
   const data = fixture();
   data.contexts.unshift({
-    path: "/personal",
-    description: "Personal workspace",
+    path: "/goals/personal",
+    description: "Personal assistant",
     revision: 4,
     state: {
-      owner: { kind: "ownerless", id: "personal" },
-      pendingRequestIds: ["input-1"],
-      processedThrough: 0,
-      runs: [
-        {
-          requestId: "input-1",
-          executionId: "input:input-1",
-          inputSequence: 1,
-          status: "failed",
-          startedAt: at,
-          error: "Provider temporarily unavailable",
-        },
-      ],
-      outbox: [
-        {
-          input: {
-            requestId: "delivery-1",
-            causationId: "input-1",
-            source: "/personal",
-            target: "/goals/engine",
-            expectedRevision: 3,
-            createdAt: at,
-            text: "Prioritize the release checklist",
-          },
-          acceptedRevision: 4,
-          status: "unknown",
-          error: "Receiver acknowledgement not confirmed",
-        },
-      ],
+      slug: "personal",
+      title: "Personal assistant",
+      status: "active",
+      summary: "Ready to help",
+      progress: "Ready to help",
+      historyCount: 0,
     },
-    messages: [
-      {
-        requestId: "input-1",
-        causationId: "user-1",
-        source: "user",
-        target: "/personal",
-        revision: 1,
-        sequence: 1,
-        createdAt: at,
-        payload: { _tag: "UserInput", text: "Help me prepare the release" },
-      },
-    ],
+    messages: [],
   });
+  data.timelines.personal = { groups: [] };
   return data;
 }
-
-const rpcFailure = (rpc, kind, message) => ({
-  contentType: "application/ndjson",
-  body:
-    JSON.stringify({
-      _tag: "Exit",
-      requestId: rpc.id,
-      exit: {
-        _tag: "Failure",
-        cause: [{ _tag: "Fail", error: { _tag: "ApplicationError", kind, message } }],
-      },
-    }) + "\n",
-});
-
-test("Personal workspace shows committed work and sends typed input", async ({ page }) => {
-  const data = personalFixture();
-  const { writes, errors } = await setup(page, data);
-  await expect(page).toHaveTitle("Aster · Workspace");
-  await expect(page.locator("vite-error-overlay")).toHaveCount(0);
-  await expect(
-    page.getByRole("main").getByText("Help me prepare the release", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByRole("complementary", { name: "Related work" })).toContainText(
-    "Provider temporarily unavailable",
-  );
-  await page.screenshot({ path: "/tmp/aster-personal-desktop.png" });
-  await page.getByLabel("Message Personal Agent").fill("Check the release blockers");
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(
-    page.getByRole("main").getByText("Check the release blockers", { exact: true }),
-  ).toBeVisible();
-  expect(writes[0]).toMatchObject({
-    tag: "SendPersonalMessage",
-    body: { expectedRevision: 4, text: "Check the release blockers" },
-  });
-  expect(writes[0].body.requestId).toBeTruthy();
-  await expect(page.getByLabel("Message Personal Agent")).toHaveValue("");
-  await page.getByRole("button", { name: "Retry input 1" }).click();
-  await expect(
-    page.getByRole("complementary", { name: "Related work" }).getByText("Running", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByRole("button", { name: "Retry input 1" })).toHaveCount(0);
-  expect(writes[1]).toMatchObject({
-    tag: "RetryPersonalInput",
-    body: { inputRequestId: "input-1", expectedRevision: 5 },
-  });
-  await page.getByRole("button", { name: "Reconcile delivery" }).click();
-  await expect(page.getByText("Accepted at target revision 4")).toBeVisible();
-  expect(writes[2]).toMatchObject({
-    tag: "SendPersonalGoalMessage",
-    body: {
-      requestId: "delivery-1",
-      causationId: "input-1",
-      goalSlug: "engine",
-      goalRevision: 3,
-      text: "Prioritize the release checklist",
-    },
-  });
-  expect(errors).toEqual([]);
-});
-
-test("uncertain Personal submission retains identity across navigation and reconnect", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  const { writes, errors } = await setup(page, data);
-  let failed;
-  await page.route("**/api/rpc{,/}", async (route) => {
-    const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "SendPersonalMessage" || failed) return route.fallback();
-    failed = rpc.payload;
-    await route.fulfill(rpcFailure(rpc, "unavailable", "Submission outcome unknown"));
-  });
-  await page.getByLabel("Message Personal Agent").fill("Keep this exact request");
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Submission outcome unknown");
-  await expect(page.getByLabel("Message Personal Agent")).toBeDisabled();
-  expect(writes).toHaveLength(0);
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Monitor Knowledge Engine/ })
-    .click();
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Personal Agent/ })
-    .click();
-  data.contexts[0].revision = 9;
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await expect(page.getByText("Revision 9", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Message Personal Agent")).toHaveValue("Keep this exact request");
-  await page.getByRole("button", { name: "Retry submission" }).click();
-  await expect(page.getByLabel("Message Personal Agent")).toHaveValue("");
-  expect(writes[0].body).toEqual(failed);
-  expect(errors).toEqual([]);
-});
-
-test("Personal revision conflict refreshes before a new explicit submission", async ({ page }) => {
-  const data = personalFixture();
-  const { writes, errors } = await setup(page, data);
-  let rejected;
-  await page.route("**/api/rpc{,/}", async (route) => {
-    const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "SendPersonalMessage" || rejected) return route.fallback();
-    rejected = rpc.payload;
-    data.contexts[0].revision = 8;
-    await route.fulfill(rpcFailure(rpc, "conflict", "Personal Context revision changed"));
-  });
-  await page.getByLabel("Message Personal Agent").fill("Review current priorities");
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Personal Context revision changed");
-  await expect(page.getByText("Revision 8", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Message Personal Agent")).toBeEnabled();
-  expect(writes).toHaveLength(0);
-  await page.getByRole("button", { name: "Send message", exact: true }).click();
-  await expect(page.getByLabel("Message Personal Agent")).toHaveValue("");
-  expect(writes[0].body.expectedRevision).toBe(8);
-  expect(writes[0].body.requestId).not.toBe(rejected.requestId);
-  expect(errors).toEqual([]);
-});
 
 test("Context tree navigates existing paths, search, history and missing selections", async ({
   page,
@@ -1275,7 +1009,9 @@ test("Context tree navigates existing paths, search, history and missing selecti
   await expect(page.getByRole("main")).toContainText("Core workflow integration is complete");
   await expect(page).toHaveURL(/context=%2Flark%2Fim%2Fchats%2Fchat-1/);
   await page.goBack();
-  await expect(page.getByRole("heading", { name: "Personal Agent", exact: true })).toBeVisible();
+  await expect(
+    page.getByRole("heading", { name: "Personal assistant", exact: true }),
+  ).toBeVisible();
   await page.goForward();
   await expect(page.getByRole("main")).toContainText("Core workflow integration is complete");
   await page.reload();
@@ -1284,181 +1020,6 @@ test("Context tree navigates existing paths, search, history and missing selecti
   await page.evaluate(() => window.testEvents.emit("ready"));
   await expect(page.getByRole("heading", { name: "Context unavailable" })).toBeVisible();
   expect(errors).toEqual([]);
-});
-
-test("Personal mobile layout exposes navigation, messages and related work", async ({ page }) => {
-  const { errors } = await setup(page, personalFixture());
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.getByLabel("Message Personal Agent")).toBeVisible();
-  await expect(page.getByRole("complementary", { name: "Related work" })).toBeVisible();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
-    true,
-  );
-  await page.screenshot({ path: "/tmp/aster-personal-mobile.png", fullPage: true });
-  await page.getByRole("button", { name: "Choose context" }).click();
-  await expect(page.getByRole("navigation", { name: "Contexts" })).toBeVisible();
-  await page.getByRole("button", { name: "Close contexts" }).click();
-  await expect(page.getByRole("navigation", { name: "Contexts" })).toBeHidden();
-  expect(errors).toEqual([]);
-});
-
-test("unsupported Personal data disables input and native Pi frames stay out of generic messages", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  data.contexts[0].state.pendingRequestIds = "invalid";
-  const { errors } = await setup(page, data);
-  await expect(page.getByRole("alert")).toContainText("Personal Context contains unsupported data");
-  await expect(page.getByLabel("Message Personal Agent")).toBeDisabled();
-  const chat = data.contexts.find((context) => context.path === "/lark/im/chats/chat-1");
-  chat.messages.push(
-    { kind: "pi.native", text: "Native implementation frame" },
-    { role: "system", content: "Internal system prompt" },
-    { role: "toolResult", content: "Internal tool response" },
-  );
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /\/lark\/im\/chats\/chat-1/ })
-    .click();
-  await expect(page.getByRole("main")).not.toContainText("Native implementation frame");
-  await expect(page.getByRole("main")).not.toContainText("Internal system prompt");
-  await expect(page.getByRole("main")).not.toContainText("Internal tool response");
-  expect(errors).toEqual([]);
-});
-
-test("Personal Signal delivery shows its command and reconciles with the same request identity", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  const personal = data.contexts.find((item) => item.path === "/personal");
-  personal.state.outbox = [
-    {
-      input: {
-        operation: "createSignal",
-        requestId: "signal-delivery-1",
-        causationId: "input-1",
-        source: "/personal",
-        target: "/signals/personal--release",
-        expectedRevision: 0,
-        createdAt: at,
-        definition: {
-          when: "Release updates",
-          task: "Inspect release blockers",
-          agent: "test",
-          schedule: { type: "cron", expression: "0 9 * * *", timeZone: "Asia/Shanghai" },
-        },
-        active: true,
-      },
-      acceptedRevision: 4,
-      attempts: 1,
-      status: "unknown",
-      error: "Acknowledgement missing",
-    },
-  ];
-  const { writes } = await setup(page, data);
-  await expect(page.getByText("Create Signal: Inspect release blockers")).toBeVisible();
-  await expect(page.getByText("Delivery attempts: 1")).toBeVisible();
-  await expect(page.getByText(/Confirmation required for each Run/)).toBeVisible();
-  await page.getByRole("button", { name: "Reconcile delivery" }).click();
-  await expect(page.getByText("Accepted at target revision 1")).toBeVisible();
-  expect(writes.at(-1)).toMatchObject({
-    tag: "ApplyPersonalSignal",
-    body: {
-      operation: "createSignal",
-      requestId: "signal-delivery-1",
-      signalSlug: "personal--release",
-      signalRevision: 0,
-      expectedRevision: 4,
-    },
-  });
-});
-
-test("Personal approval preserves an uncertain decision across navigation and reconciles its original identity", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  data.contexts.find((item) => item.path === "/approvals").revision = 7;
-  const { writes, errors } = await setup(page, data);
-  let frozen;
-  await page.route("**/api/rpc{,/}", async (route) => {
-    const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "RespondPersonalApproval" || frozen) return route.fallback();
-    frozen = rpc.payload;
-    return route.fulfill(rpcFailure(rpc, "unavailable", "Approval admission is uncertain"));
-  });
-  const openApprovals = () =>
-    page
-      .getByRole("navigation")
-      .getByRole("button", { name: /Task approval queue/ })
-      .click();
-  await openApprovals();
-  await page.getByRole("button", { name: "Approve execution", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Reconcile saved decision" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Personal Agent/ })
-    .click();
-  await openApprovals();
-  data.contexts.find((item) => item.path === "/approvals").revision = 8;
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await page.getByRole("button", { name: "Reconcile saved decision" }).click();
-  await expect(page.getByRole("button", { name: "Reconcile saved decision" })).toHaveCount(0);
-  expect(writes.at(-1)).toMatchObject({ tag: "RespondPersonalApproval", body: frozen });
-  expect(frozen).toMatchObject({
-    expectedRevision: 4,
-    approvalsRevision: 7,
-    approvalId: "approval-1",
-    response: { decision: "approve" },
-  });
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Personal Agent/ })
-    .click();
-  await expect(page.getByText("Approval approval-1: approve", { exact: true })).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
-test("Personal approval delivery reconciles a persisted unknown response without replacing its payload", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  const personal = data.contexts.find((item) => item.path === "/personal");
-  personal.state.outbox = [
-    {
-      input: {
-        operation: "respondApproval",
-        requestId: "decision-1",
-        causationId: "user-choice",
-        source: "/personal",
-        target: "/approvals",
-        expectedRevision: 7,
-        createdAt: at,
-        approvalId: "approval-1",
-        response: { decision: "reject" },
-      },
-      acceptedRevision: 4,
-      attempts: 1,
-      status: "unknown",
-      error: "Acknowledgement missing",
-    },
-  ];
-  const { writes } = await setup(page, data);
-  await expect(page.getByText("Approval approval-1: reject")).toBeVisible();
-  await page.getByRole("button", { name: "Reconcile delivery" }).click();
-  await expect(page.getByText("Accepted at target revision 8")).toBeVisible();
-  expect(writes.at(-1)).toMatchObject({
-    tag: "RespondPersonalApproval",
-    body: {
-      requestId: "decision-1",
-      causationId: "user-choice",
-      expectedRevision: 4,
-      approvalsRevision: 7,
-      approvalId: "approval-1",
-      response: { decision: "reject" },
-    },
-  });
 });
 
 test("Delegation workspace uses business inspection and refreshes after committed changes", async ({
@@ -1471,7 +1032,7 @@ test("Delegation workspace uses business inspection and refreshes after committe
     description: "Release execution",
     state: {
       request: {
-        runPath: "/signals/progress/runs/run-1",
+        runPath: "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
         agent: "pi",
         task: {
           instructions: "Analyze release evidence",
@@ -1506,90 +1067,7 @@ test("Delegation workspace uses business inspection and refreshes after committe
   record.revision = 4;
   await page.evaluate(() => window.testEvents.emit("ready"));
   await expect(page.getByText("Release review completed", { exact: true })).toBeVisible();
-  expect(reads.filter((tag) => tag === "InspectPersonalDelegation").length).toBeGreaterThan(1);
-  expect(errors).toEqual([]);
-});
-
-test("Personal one-time Task reconciles its frozen payload and presents the admitted Run", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  const personal = data.contexts.find((item) => item.path === "/personal");
-  const requestId = "task-delivery-1";
-  const path = `/runs/personal--${createHash("sha256").update(requestId).digest("hex")}`;
-  const task = {
-    instructions: "Draft the release summary",
-    input: [{ content: "All release blockers are resolved.", sources: ["/goals/engine"] }],
-  };
-  personal.state.outbox = [
-    {
-      input: {
-        operation: "startTask",
-        requestId,
-        causationId: "input-1",
-        source: "/personal",
-        target: path,
-        expectedRevision: 0,
-        createdAt: at,
-        agent: "test",
-        task,
-      },
-      acceptedRevision: 4,
-      attempts: 1,
-      status: "unknown",
-      error: "Acknowledgement missing",
-    },
-  ];
-  const run = {
-    path,
-    description: "Task: Draft the release summary",
-    revision: 2,
-    state: { status: "awaiting-confirmation", task, sourcePath: "/personal" },
-    messages: [
-      { type: "Triggered", at },
-      { type: "ConfirmationRequested", at },
-    ],
-  };
-  data.contexts.push(run);
-  const queue = data.contexts.find((item) => item.path === "/approvals");
-  queue.state.entries.push({
-    id: "personal-task-confirm",
-    target: `/user${path}`,
-    contextPath: path,
-    kind: "confirmation",
-    status: "pending",
-    request: {
-      id: "personal-task-confirm",
-      kind: "approval",
-      prompt: "Execute this release summary Task?",
-    },
-  });
-  const { writes, errors } = await setup(page, data);
-  await expect(
-    page.getByText("One-time Task · Confirmation required before execution"),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Reconcile delivery" }).click();
-  await expect(page.getByText("Accepted at target revision 1")).toBeVisible();
-  expect(writes.at(-1)).toEqual({
-    tag: "StartPersonalTask",
-    body: { requestId, causationId: "input-1", expectedRevision: 4, agent: "test", task },
-  });
-  await page.getByRole("button", { name: "View Task Run" }).click();
-  const details = page.getByRole("region", { name: "Task Run", exact: true });
-  await expect(details.getByText(task.instructions, { exact: true })).toBeVisible();
-  await expect(details.getByText(task.input[0].content)).toBeVisible();
-  await expect(details.getByText("Task preparation: Completed")).toBeVisible();
-  await expect(details.getByText("Confirm / Auto: Current stage")).toBeVisible();
-  await expect(page.getByText("Execute this release summary Task?")).toBeVisible();
-  await expect(page.getByRole("alert")).toHaveCount(0);
-  run.state.status = "completed";
-  run.state.outcomeText = "Release summary saved for review.";
-  run.revision = 5;
-  run.messages.push({ type: "Completed", at, text: run.state.outcomeText });
-  queue.state.entries.at(-1).status = "acknowledged";
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await expect(details.getByText("Release summary saved for review.")).toBeVisible();
-  expect(writes).toHaveLength(1);
+  expect(reads.filter((tag) => tag === "InspectDelegation").length).toBeGreaterThan(1);
   expect(errors).toEqual([]);
 });
 
@@ -1597,9 +1075,11 @@ test("Run resumption preserves uncertain admission across navigation and reconne
   page,
 }) => {
   const data = personalFixture();
-  const personal = data.contexts.find((item) => item.path === "/personal");
-  personal.state.outbox = [];
-  const run = data.contexts.find((item) => item.path === "/signals/progress/runs/run-1");
+  const personal = data.contexts.find((item) => item.path === "/goals/personal");
+  const run = data.contexts.find(
+    (item) =>
+      item.path === "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+  );
   run.revision = 7;
   run.state.status = "failed";
   run.state.task = { instructions: "Continue original work", input: [] };
@@ -1607,7 +1087,7 @@ test("Run resumption preserves uncertain admission across navigation and reconne
   let frozen;
   await page.route("**/api/rpc{,/}", async (route) => {
     const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "ResumePersonalRun" || frozen) return route.fallback();
+    if (rpc.tag !== "ResumeRun" || frozen) return route.fallback();
     frozen = rpc.payload;
     await route.fulfill({
       contentType: "application/ndjson",
@@ -1633,90 +1113,27 @@ test("Run resumption preserves uncertain admission across navigation and reconne
   });
   await page
     .getByRole("navigation")
-    .getByRole("button", { name: /progress.*run-1|run-1/i })
+    .getByRole("button", { name: /Summarize Knowledge Engine project progress/ })
     .first()
     .click();
   await page.getByRole("button", { name: "Resume execution", exact: true }).click();
   await expect(page.getByRole("alert")).toContainText("Resume acknowledgement missing");
   await page
     .getByRole("navigation")
-    .getByRole("button", { name: /Personal Agent/ })
+    .getByRole("button", { name: /Personal assistant/ })
     .click();
   personal.revision = 10;
   run.revision = 9;
   await page.evaluate(() => window.testEvents.emit("ready"));
   await page
     .getByRole("navigation")
-    .getByRole("button", { name: /progress.*run-1|run-1/i })
+    .getByRole("button", { name: /Summarize Knowledge Engine project progress/ })
     .first()
     .click();
   await page.getByRole("button", { name: "Reconcile resumption", exact: true }).click();
   await expect(page.getByText("Resumption delivered", { exact: true })).toBeVisible();
-  expect(writes.at(-1)).toEqual({ tag: "ResumePersonalRun", body: frozen });
-  expect(frozen).toMatchObject({ expectedRevision: 4, runRevision: 7, runPath: run.path });
-  expect(errors).toEqual([]);
-});
-
-test("Personal approval request reconciles its original demand and opens the still-pending approval", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  const path = "/signals/progress/runs/run-1";
-  const id = `${path}:confirm`;
-  const personal = data.contexts.find((item) => item.path === "/personal");
-  personal.state.outbox = [
-    {
-      input: {
-        operation: "requestApproval",
-        requestId: "approval-request-1",
-        causationId: "input-1",
-        source: "/personal",
-        target: "/approvals",
-        expectedRevision: 7,
-        contextPath: path,
-        contextRevision: 6,
-        approvalId: id,
-        createdAt: at,
-      },
-      acceptedRevision: 4,
-      attempts: 1,
-      status: "unknown",
-      error: "Request receipt missing",
-    },
-  ];
-  data.contexts
-    .find((item) => item.path === "/approvals")
-    .state.entries.push({
-      id,
-      target: "/user/signals/progress/~cnVucy9ydW4tMQ",
-      contextPath: path,
-      kind: "confirmation",
-      status: "pending",
-      request: { id, kind: "approval", prompt: "Approve this exact prepared Task?" },
-    });
-  const { writes, errors } = await setup(page, data);
-  await expect(page.getByText(`Request approval: ${id}`, { exact: true })).toBeVisible();
-  await expect(page.getByText(`For ${path} · Source revision 6`, { exact: true })).toBeVisible();
-  await page.getByRole("button", { name: "Reconcile delivery", exact: true }).click();
-  await expect(page.getByText("Accepted at target revision 8")).toBeVisible();
-  expect(writes.at(-1)).toEqual({
-    tag: "RequestPersonalApproval",
-    body: {
-      requestId: "approval-request-1",
-      causationId: "input-1",
-      expectedRevision: 4,
-      approvalId: id,
-      approvalsRevision: 7,
-      contextPath: path,
-      contextRevision: 6,
-    },
-  });
-  await page.getByRole("button", { name: "View requested approval", exact: true }).click();
-  await expect(page.getByText("Approve this exact prepared Task?", { exact: true })).toBeVisible();
-  expect(writes).toHaveLength(1);
-  expect(data.contexts.find((item) => item.path === "/approvals").state.entries.at(-1).status).toBe(
-    "pending",
-  );
+  expect(writes.at(-1)).toEqual({ tag: "ResumeRun", body: frozen });
+  expect(frozen).toMatchObject({ expectedRevision: 7, target: run.path });
   expect(errors).toEqual([]);
 });
 
@@ -1757,69 +1174,6 @@ test("restricted Contexts retain navigation and revision without exposing a raw 
     ),
   ).toBeVisible();
   await expect(page.getByRole("textbox", { name: /Message|information/ })).toHaveCount(0);
-  expect(errors).toEqual([]);
-});
-
-test("Personal business progress links to its source and preserves display-only outcomes after reconnect", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  const personal = data.contexts.find((item) => item.path === "/personal");
-  personal.state.runs = [];
-  personal.state.pendingRequestIds = [];
-  personal.state.outbox = [];
-  const source = "/signals/review/runs/result";
-  data.contexts.push({
-    path: source,
-    description: "Release review result",
-    revision: 4,
-    state: { status: "blocked", outcomeText: "Additional evidence is needed" },
-    messages: [],
-  });
-  const notification = {
-    requestId: "result-one",
-    causationId: "input-1",
-    source,
-    target: "/personal",
-    revision: 4,
-    createdAt: at,
-    causal: { rootRequestId: "input-1", remainingAgentTurns: 0 },
-    kind: "RunResult",
-    text: "The release review needs additional evidence.",
-  };
-  personal.messages.push({
-    requestId: notification.requestId,
-    causationId: notification.causationId,
-    source,
-    target: "/personal",
-    revision: 4,
-    sequence: 2,
-    createdAt: at,
-    causal: notification.causal,
-    payload: {
-      _tag: "ProgressEvent",
-      text: notification.text,
-      notification,
-      processing: "display-only",
-    },
-  });
-  const { writes, errors } = await setup(page, data);
-  const progress = page.locator(".message").filter({ hasText: notification.text });
-  await expect(progress.getByText("Progress", { exact: true })).toBeVisible();
-  await expect(
-    progress.getByText("Saved for you. Automatic follow-up has reached its limit."),
-  ).toBeVisible();
-  await progress.getByRole("button", { name: source, exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "Release review result", exact: true }),
-  ).toBeVisible();
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Personal/ })
-    .click();
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await expect(page.locator(".message").filter({ hasText: notification.text })).toHaveCount(1);
-  expect(writes).toEqual([]);
   expect(errors).toEqual([]);
 });
 
@@ -1869,12 +1223,12 @@ test("Run publication shows separate approval and retained unknown outcome after
   page,
 }) => {
   const data = personalFixture();
-  const source = "/signals/report/runs/one";
+  const source = "/runs/cb4e6fd93a8701d7e1020404e479c56377824d8bf23e8426fb3943480e9d7534";
   const operation = {
     request: {
       requestId: "publish-one",
       source,
-      signalPath: "/signals/report",
+      taskSource: "/signals/report",
       causationId: "user-one",
       createdAt: at,
       action: { _tag: "PublishResult", channelPath: "/lark/im/chats/oc_test", identity: "user" },
@@ -2002,5 +1356,18 @@ test("Goal turn retry retains its request identity after an unknown acknowledgem
   expect(requests).toHaveLength(2);
   expect(requests[1]).toEqual(requests[0]);
   expect(requests[0].turnId).toBe(group.requestId);
+  expect(errors).toEqual([]);
+});
+
+test("built-in personal assistant uses the ordinary Goal conversation", async ({ page }) => {
+  const data = personalFixture();
+  const { writes, errors } = await setup(page, data);
+  await page.getByLabel("Add information to Goal").fill("Review my priorities");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.getByText("Review my priorities", { exact: true })).toBeVisible();
+  expect(writes.at(-1)).toMatchObject({
+    tag: "SendGoalMessage",
+    body: { slug: "personal", text: "Review my priorities" },
+  });
   expect(errors).toEqual([]);
 });

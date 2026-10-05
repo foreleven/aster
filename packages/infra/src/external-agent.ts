@@ -1,7 +1,7 @@
 import {
   ExternalAgentError,
   type ExternalAgent,
-  type Task,
+  type PreparedTask,
   type ExecutionSession,
   type ExecutionStatus,
   type InputRequest,
@@ -13,7 +13,7 @@ import { Effect } from "effect";
 export interface ExternalAgentDriver {
   readonly capabilities: string;
   readonly executorPrompt?: string;
-  submit(task: Task, signal: AbortSignal): Promise<ExecutionSession>;
+  submit(task: PreparedTask, signal: AbortSignal): Promise<ExecutionSession>;
   status(session: ExecutionSession, signal: AbortSignal): Promise<ExecutionStatus>;
   resume(session: ExecutionSession, signal: AbortSignal): Promise<ExecutionSession>;
   wait(session: ExecutionSession, signal: AbortSignal): Promise<ExecutionStatus>;

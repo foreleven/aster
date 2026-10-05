@@ -1,3 +1,4 @@
+import { taskText } from "../lib/dashboard";
 import { Markdown } from "../components/markdown";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { contextQueryKeys } from "@aster/api-contracts";
@@ -186,11 +187,7 @@ export function Inspector({
                         <b>{task.description}</b>
                         <Status value={task.state.status} />
                       </div>
-                      <p className="my-2 whitespace-pre-wrap">
-                        {typeof task.state.task === "string"
-                          ? task.state.task
-                          : task.state.task?.instructions}
-                      </p>
+                      <p className="my-2 whitespace-pre-wrap">{taskText(task.state.task)}</p>
                       <Button variant="link" onClick={() => inspect(task.path)}>
                         View execution
                       </Button>

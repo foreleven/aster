@@ -10,7 +10,6 @@ import {
 } from "@aster/api-contracts";
 import { approvalEntries, sendApproval } from "../approvals/actor.js";
 import { ContextRegistry } from "../context/registry.js";
-import { businessNotification } from "../notifications/event.js";
 import type { RunState } from "./run-state.js";
 import type { ActorContext } from "@aster/actor";
 import type { RunCommand } from "./run.js";
@@ -58,7 +57,7 @@ export const planWriteback = (
   at: string,
 ): WritebackOperation | undefined => {
   if (state.writeback) return state.writeback;
-  if (state.status !== "completed" || !state.definition.action || !state.outcomeText?.trim())
+  if (state.status !== "completed" || !state.admission.input.action || !state.outcomeText?.trim())
     return undefined;
   const requestId = publicationId(source);
   return {
@@ -66,14 +65,14 @@ export const planWriteback = (
     request: {
       requestId,
       source,
-      signalPath: `/signals/${state.signalSlug}`,
-      causationId: state.admission?.input.requestId ?? state.causal?.rootRequestId ?? source,
+      taskSource: state.admission.input.source,
+      causationId: state.admission.input.requestId,
       createdAt: at,
-      action: state.definition.action,
+      action: state.admission.input.action,
       content: state.outcomeText,
       // Publication is the end of this automatic chain. Channel echo must not
       // manufacture fresh authorization or replenish the causal budget.
-      causal: { rootRequestId: state.causal?.rootRequestId ?? source, remainingAgentTurns: 0 },
+      causal: { rootRequestId: state.admission.input.causal.rootRequestId, remainingAgentTurns: 0 },
     },
   };
 };
@@ -91,7 +90,6 @@ export const makeRunWriteback = Effect.fn("Run.writeback")(function* (options: {
     const current = registry.get(options.path())!;
     const previous = options.state();
     const timestamp = yield* at;
-    const needsAttention = ["waiting-approval", "unknown"].includes(operation.status);
     const text = `External publication ${operation.status}: ${operation.request.action.channelPath}${operation.error ? `. ${operation.error}` : ""}`;
     yield* registry
       .commit(
@@ -100,19 +98,6 @@ export const makeRunWriteback = Effect.fn("Run.writeback")(function* (options: {
           state: {
             ...previous,
             writeback: operation,
-            businessOutbox: [
-              ...(previous.businessOutbox ?? []),
-              businessNotification({
-                source: current.path,
-                revision: (current.revision ?? 0) + 1,
-                at: timestamp,
-                kind: needsAttention ? "NeedsAttention" : "RunResult",
-                text,
-                eventId: `${operation.request.requestId}:${operation.status}`,
-                causationId: operation.request.requestId,
-                causal: operation.request.causal,
-              }),
-            ],
           },
           messages: [
             ...current.messages,
@@ -168,9 +153,9 @@ export const makeRunWriteback = Effect.fn("Run.writeback")(function* (options: {
     if (
       state.status !== "completed" ||
       operation.request.requestId !== publicationId(options.path()) ||
-      operation.request.signalPath !== `/signals/${state.signalSlug}` ||
+      operation.request.taskSource !== state.admission.input.source ||
       operation.request.source !== options.path() ||
-      !isDeepStrictEqual(operation.request.action, state.definition.action) ||
+      !isDeepStrictEqual(operation.request.action, state.admission.input.action) ||
       operation.request.content !== state.outcomeText
     )
       return yield* Effect.die(

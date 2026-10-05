@@ -1,3 +1,4 @@
+import { personalGoal } from "../goals/personal.js";
 import { Config, ConfigProvider, Context, Effect, Layer, Schema } from "effect";
 import {
   GoalTitle,
@@ -61,7 +62,16 @@ export class GoalSettings extends Context.Service<
       const entries = yield* Config.schema(Schema.Record(Schema.String, GoalEntry), "goals").pipe(
         Config.withDefault({}),
       );
-      const reasoning = yield* Config.schema(Schema.optional(GoalOptions), ["config", "goals"]);
+      const configuredReasoning = yield* Config.schema(Schema.optional(GoalOptions), [
+        "config",
+        "goals",
+      ]);
+      const reasoning = configuredReasoning ?? {
+        model: yield* Config.NonEmptyString("model").pipe(
+          Config.nested("agent"),
+          Config.nested("config"),
+        ),
+      };
       return yield* validateConfig("Goals", () => {
         const definitions = Object.entries(entries).map(([slug, definition]) => {
           if (!/^[a-z0-9][a-z0-9-]*$/.test(slug) || !definition.description.trim())
@@ -77,7 +87,10 @@ export class GoalSettings extends Context.Service<
             reasoning.reserveTokens >= (reasoning.contextTokens ?? 200000) / 2)
         )
           throw new Error("Invalid reserveTokens");
-        return { definitions, reasoning };
+        return {
+          definitions: [personalGoal, ...definitions.filter((goal) => goal.slug !== "personal")],
+          reasoning,
+        };
       });
     }),
   );
@@ -91,14 +104,8 @@ export const signalSettings = Config.schema(
   Config.mapEffect((entries) =>
     validateConfig("Signals", (): readonly SignalDefinition[] =>
       Object.entries(entries).map(([slug, definition]) => {
-        if (
-          !/^[a-z0-9][a-z0-9-]*$/.test(slug) ||
-          !definition.when.trim() ||
-          !definition.task.trim() ||
-          !definition.agent.trim()
-        )
-          throw new Error(`Invalid Signal: ${slug}`);
-        validateSignalTime(definition);
+        if (!/^[a-z0-9][a-z0-9-]*$/.test(slug)) throw new Error(`Invalid Signal: ${slug}`);
+        if (definition.trigger._tag === "Schedule") validateSignalTime(definition.trigger);
         return { slug, ...definition };
       }),
     ),

@@ -1,726 +1,384 @@
-import { ExternalAgents } from "../tasks/model.js";
-import type { TaskExecutionServices } from "../tasks/execution.js";
-import { SignalReactionInput, acceptSignalReaction } from "./reaction.js";
-import {
-  CausalChain,
-  ApplicationError,
-  SignalDeliveryInput,
-  SignalDeliveryReceipt,
-} from "@aster/api-contracts";
-import { applyPersonalSignal } from "./command.js";
-import { applyGoalSignal, GoalSignalInput } from "./goal-command.js";
-import { scheduledCausalChain, signalEnabled, sourceSignalEligible } from "./policy.js";
-import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { ReplyTo, type ActorContext, type ActorRef } from "@aster/actor";
-import { ContextActor, childActorName, spawnContextChild } from "../context/actor.js";
+import { ApplicationError, CommandReceipt, TaskMessage } from "@aster/api-contracts";
+import { Clock, Context, Cron, Effect, Layer, Match, Schema } from "effect";
+import { isDeepStrictEqual } from "node:util";
+import { ContextActor } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
-import { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { ContextRegistry } from "../context/registry.js";
-import { Clock, Cron, Context, Effect, Layer, Schedule, Schema } from "effect";
 import { SignalDefinition, validateSignalTime } from "../config/schema.js";
-import type { GoalCommand } from "../goals/actors.js";
-import { SignalRunActor, type RunCommand } from "../tasks/run.js";
-import { SignalState as DurableSignalState } from "./state.js";
-import { signalNotifications } from "../notifications/signal.js";
+import { deliverTask } from "../tasks/message.js";
+import { SignalState } from "./state.js";
+import { GoalSignalInput, applyGoalSignal } from "./goal-command.js";
+import { SignalReactionInput, acceptSignalReaction } from "./reaction.js";
+import { scheduledCausalChain, signalEnabled } from "./policy.js";
 
 export class SignalDefinitions extends Context.Service<
   SignalDefinitions,
-  ReadonlyArray<SignalDefinition>
+  readonly SignalDefinition[]
 >()("signals/Definitions") {}
-
-interface Occurrence {
-  causal?: CausalChain;
-  id: string;
-  text: string;
-  delivered: boolean;
-  source: ContextRecord;
-}
-interface SignalState extends SignalDefinition {
-  causal?: CausalChain;
-  goal?: string;
-  owner?: string;
-  active?: boolean;
-  deleted?: boolean;
-  revision?: number;
-  seenSources?: readonly string[];
-  nextDue?: number;
-  timerDone?: boolean;
-  occurrences?: readonly Occurrence[];
-}
 export const SignalCommandReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", { receipt: SignalDeliveryReceipt }),
+  Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
   Schema.TaggedStruct("Rejected", { error: ApplicationError }),
 ]);
 export type SignalCommandReply = typeof SignalCommandReply.Type;
-export const SignalConfigureReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", { ref: ReplyTo<unknown>() }),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-]);
-export type SignalConfigureReply = typeof SignalConfigureReply.Type;
-const ApplyPersonalCommand = Schema.TaggedStruct("ApplyPersonalCommand", {
-  input: SignalDeliveryInput,
+const Ready = Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() });
+const Activate = Schema.TaggedStruct("Activate", {});
+const React = Schema.TaggedStruct("React", {
+  input: SignalReactionInput,
   replyTo: ReplyTo<SignalCommandReply>(),
 });
 const ApplyGoalCommand = Schema.TaggedStruct("ApplyGoalCommand", {
   input: GoalSignalInput,
-  subscriber: ReplyTo<GoalCommand>(),
   replyTo: ReplyTo<SignalCommandReply>(),
 });
-const ReactCommand = Schema.TaggedStruct("React", {
-  input: SignalReactionInput,
-  replyTo: ReplyTo<SignalCommandReply>(),
+const Deactivate = Schema.TaggedStruct("Deactivate", {
+  goal: Schema.String,
+  replyTo: ReplyTo<void>(),
 });
-const ReadyCommand = Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() });
-const SignalCommand = Schema.Union([
-  ReadyCommand,
-  Schema.TaggedStruct("ReadyAfterConfiguration", { replyTo: ReplyTo<void>() }),
-  ReactCommand,
-  ApplyPersonalCommand,
+const Command = Schema.Union([
+  Ready,
+  Activate,
+  React,
   ApplyGoalCommand,
-  Schema.TaggedStruct("Trigger", { sourceContext: ContextRecord }),
-  Schema.TaggedStruct("Tick", { revision: Schema.Number, due: Schema.Number }),
-  Schema.TaggedStruct("DeliverOccurrences", {}),
-  Schema.TaggedStruct("DeliveryFinished", { id: Schema.String, accepted: Schema.Boolean }),
-  Schema.TaggedStruct("Configure", {
-    causal: Schema.optional(CausalChain),
-    definition: SignalDefinition,
-    goal: Schema.optional(Schema.String),
-    subscriber: Schema.optional(ReplyTo<GoalCommand>()),
-    active: Schema.Boolean,
-    deleted: Schema.optional(Schema.Boolean),
-    replyTo: Schema.optional(ReplyTo<SignalConfigureReply>()),
+  Deactivate,
+  Schema.TaggedStruct("Tick", { revision: Schema.Int, due: Schema.Number }),
+  Schema.TaggedStruct("Dispatch", {}),
+  Schema.TaggedStruct("Delivered", {
+    id: Schema.String,
+    result: Schema.Union([
+      Schema.TaggedStruct("Success", { value: CommandReceipt }),
+      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(ApplicationError) }),
+    ]),
   }),
-  Schema.TaggedStruct("Recover", {}),
 ]);
-type SignalCommand = typeof SignalCommand.Type;
+type Command = typeof Command.Type;
+export const nextSignalTime = (definition: SignalDefinition, now: number): number | undefined =>
+  Match.value(definition.trigger).pipe(
+    Match.tag("Context", () => undefined),
+    Match.tag("Schedule", ({ schedule }) =>
+      Match.value(schedule).pipe(
+        Match.when({ type: "once" }, ({ at }) => Date.parse(at)),
+        Match.when({ type: "cron" }, ({ expression, timeZone }) =>
+          Cron.next(Cron.parseUnsafe(expression, timeZone), now).getTime(),
+        ),
+        Match.exhaustive,
+      ),
+    ),
+    Match.exhaustive,
+  );
 
-export class SignalActor extends ContextActor.Service<
-  SignalActor,
-  SignalDefinitions | TaskExecutionServices
->()("signals/SignalActor", {
-  command: SignalCommand,
-  context: defineContext({
-    state: Schema.Record(Schema.String, Schema.Unknown),
-    message: Schema.Never,
-  }),
-}) {
+export class SignalActor extends ContextActor.Service<SignalActor, SignalDefinitions>()(
+  "signals/SignalActor",
+  {
+    command: Command,
+    context: defineContext({ state: SignalState, message: Schema.Never }),
+  },
+) {
   static readonly layer = Layer.effect(
     SignalActor,
     Effect.gen(function* () {
-      const registry = yield* ContextRegistry,
-        definitions = yield* SignalDefinitions;
-      const agents = yield* ExternalAgents;
-      let subscriber: ActorRef<GoalCommand> | undefined,
-        path = "";
-      let armed = "";
-      let retryScheduled = false;
+      const registry = yield* ContextRegistry;
+      const definitions = yield* SignalDefinitions;
+      let path = "",
+        activated = false,
+        armed = "",
+        retryScheduled = false;
       const inFlight = new Set<string>();
       const state = () => registry.get(path)?.state as SignalState | undefined;
-      const save = Effect.fn("Signal.save")(function* (patch: object) {
+      const save = Effect.fn("Signal.save")(function* (patch: Partial<SignalState>) {
         const current = registry.get(path)!;
-        const next = { ...current.state, ...patch } as Record<string, unknown>;
-        if (next.goal === undefined) delete next.goal;
-        next.businessOutbox = signalNotifications({
-          path,
-          revision: (current.revision ?? 0) + 1,
-          at: new Date(yield* Clock.currentTimeMillis).toISOString(),
-          previous: Schema.decodeUnknownSync(DurableSignalState)(current.state),
-          next: Schema.decodeUnknownSync(DurableSignalState)(next),
-        });
         yield* registry
-          .commit({ ...current, state: next }, { expectedRevision: current.revision ?? 0 })
-          .pipe(Effect.asVoid, Effect.orDie);
+          .commit(
+            { ...current, state: { ...current.state, ...patch } },
+            { expectedRevision: current.revision },
+          )
+          .pipe(Effect.orDie);
       });
       const enabled = () =>
-        !!state() && signalEnabled(state()!, (slug) => registry.get(`/goals/${slug}`));
-      const nextTime = (s: SignalState, now: number) =>
-        s.schedule?.type === "once"
-          ? Math.max(Date.parse(s.schedule.at), s.notBefore ? Date.parse(s.notBefore) : 0)
-          : s.schedule?.type === "cron"
-            ? Cron.next(
-                Cron.parseUnsafe(s.schedule.expression, s.schedule.timeZone),
-                Math.max(now, s.notBefore ? Date.parse(s.notBefore) - 1 : now),
-              ).getTime()
-            : undefined;
-      const arm = (context: ActorContext<SignalCommand, any>) =>
-        Effect.gen(function* () {
-          const s = state()!;
-          if (!enabled() || !s.schedule || s.timerDone) {
-            armed = "";
-            return;
-          }
-          const now = yield* Clock.currentTimeMillis;
-          const due = s.nextDue ?? nextTime(s, now)!;
-          if (s.nextDue === undefined) yield* save({ nextDue: due });
-          const key = `${s.revision}:${due}`;
-          if (armed === key) return;
-          armed = key;
-          yield* context.pipeToSelf(
-            Effect.schedule(
-              Effect.void,
-              Schedule.duration(Math.min(86400000, Math.max(0, due - now))),
-            ),
-            () => ({ _tag: "Tick", revision: s.revision ?? 1, due }),
-          );
-        });
-      const dispatch = (context: ActorContext<SignalCommand, any>) =>
-        Effect.gen(function* () {
-          if (!enabled()) return;
-          const pending = state()?.occurrences?.filter((o) => !o.delivered) ?? [];
-          for (const occurrence of pending) {
-            if (inFlight.has(occurrence.id)) continue;
-            let delivery: Effect.Effect<boolean, import("@aster/actor").AskTimeoutError>;
-            if (state()!.goal) {
-              if (!subscriber) continue;
-              delivery = subscriber
-                .ask<import("../goals/protocol.js").GoalCommandReply>((replyTo) => ({
-                  _tag: "SubmitInput",
-                  requestId: occurrence.id,
-                  input: {
-                    _tag: "SignalOccurrence",
-                    id: occurrence.id,
-                    signalPath: path,
-                    causal: occurrence.causal,
-                    text: occurrence.text,
-                  },
-                  replyTo,
-                }))
-                .pipe(
-                  Effect.map(
-                    (reply) => reply._tag === "Accepted" || reply.error.kind === "conflict",
-                  ),
-                );
-            } else {
-              const id = createHash("sha256").update(occurrence.id).digest("hex").slice(0, 32);
-              const runPath = `${path}/runs/${id}`;
-              if (registry.get(runPath)) {
-                delivery = Effect.succeed(true);
-              } else {
-                const run =
-                  ((yield* context.child(childActorName(`runs/${id}`))) as
-                    ActorRef<RunCommand> | undefined) ??
-                  (yield* spawnContextChild(context, `runs/${id}`, SignalRunActor).pipe(
-                    Effect.orDie,
-                  ));
-                delivery = run
-                  .ask<void>((replyTo) => ({
-                    _tag: "Initialize",
-                    path: runPath,
-                    definition: Schema.decodeUnknownSync(SignalDefinition)(state()!),
-                    sourceContext: occurrence.source,
-                    causal: occurrence.causal,
-                    replyTo,
-                  }))
-                  .pipe(Effect.as(true));
-              }
-            }
-            // Persisted occurrences are the outbox. Waiting for durable receipt runs
-            // outside the mailbox, so Configure and Tick can still make progress.
-            inFlight.add(occurrence.id);
-            yield* context.pipeToSelf(delivery, (result) => ({
-              _tag: "DeliveryFinished",
-              id: occurrence.id,
-              accepted: result._tag === "Success" && result.value,
-            }));
-          }
-          if (!retryScheduled && state()?.occurrences?.some((o) => !o.delivered)) {
-            retryScheduled = true;
-            yield* context.pipeToSelf(Effect.sleep("3 seconds"), () => ({
-              _tag: "DeliverOccurrences",
-            }));
-          }
-        });
+        activated && !!state() && signalEnabled(state()!, (slug) => registry.get(`/goals/${slug}`));
+      const arm = Effect.fn("Signal.arm")(function* (actor: ActorContext<Command>) {
+        const current = state();
+        if (!current || !enabled() || current.trigger._tag !== "Schedule" || current.timerDone) {
+          armed = "";
+          return;
+        }
+        const due = current.nextDue ?? nextSignalTime(current, yield* Clock.currentTimeMillis)!;
+        if (current.nextDue === undefined) yield* save({ nextDue: due });
+        const key = `${current.revision}:${due}`;
+        if (armed === key) return;
+        armed = key;
+        yield* actor.pipeToSelf(
+          Effect.sleep(Math.min(86400000, Math.max(0, due - (yield* Clock.currentTimeMillis)))),
+          () => ({ _tag: "Tick", revision: current.revision, due }),
+        );
+      });
+      const dispatch = Effect.fn("Signal.dispatch")(function* (actor: ActorContext<Command>) {
+        if (!enabled()) return;
+        for (const item of state()!.occurrences) {
+          if (item.delivered || item.error || inFlight.has(item.message.requestId)) continue;
+          inFlight.add(item.message.requestId);
+          yield* actor.pipeToSelf(deliverTask(actor, item.message), (result) => ({
+            _tag: "Delivered",
+            id: item.message.requestId,
+            result,
+          }));
+        }
+      });
       return SignalActor.of({
-        started: (context) =>
+        started: (actor) =>
           Effect.gen(function* () {
-            const slug = context.path.split("/").at(-1)!;
-            path = `/signals/${slug}`;
-            if (state())
-              yield* Schema.decodeUnknownEffect(DurableSignalState)(state()).pipe(Effect.orDie);
-            const definition = definitions.find((d) => d.slug === slug);
-            if (definition && state()?.owner === "/personal")
-              return yield* Effect.die(
-                new Error("Configured Signal collides with a Personal-owned Signal"),
-              );
+            path = `/signals/${actor.path.split("/").at(-1)!}`;
+            const definition = definitions.find((item) => `/signals/${item.slug}` === path);
+            const current = registry.get(path);
             if (definition) {
-              validateSignalTime(definition);
-              if (!state())
+              if (definition.trigger._tag === "Schedule") validateSignalTime(definition.trigger);
+              if (current && (current.state as SignalState).goal)
+                return yield* Effect.die(
+                  new Error("Configured Signal collides with Goal ownership"),
+                );
+              const old = current && Schema.decodeUnknownSync(SignalState)(current.state);
+              const changed =
+                !old ||
+                !isDeepStrictEqual(Schema.decodeUnknownSync(SignalDefinition)(old), definition);
+              if (changed)
                 yield* registry
                   .commit(
                     {
                       path,
-                      description: `Signal：${slug}`,
+                      description: `Signal: ${definition.slug}`,
                       state: {
+                        ...old,
                         ...definition,
                         active: true,
-                        revision: 1,
-                        occurrences: [],
-                        nextDue: nextTime(definition, yield* Clock.currentTimeMillis),
+                        revision: (old?.revision ?? 0) + 1,
+                        occurrences: old?.occurrences ?? [],
+                        nextDue: nextSignalTime(definition, yield* Clock.currentTimeMillis),
+                        timerDone: false,
                       },
                       messages: [],
                     },
-                    { expectedRevision: 0 },
+                    { expectedRevision: current?.revision ?? 0 },
                   )
-                  .pipe(Effect.asVoid, Effect.orDie);
-              yield* context.self.tell({ _tag: "Configure", definition, active: true });
-            } else if (state()) {
-              const goal = state()!.goal;
-              if (goal) {
-                const resolved = yield* context
-                  .select(`/user/goals/${goal}`)
-                  .resolve()
-                  .pipe(Effect.option);
-                if (resolved._tag === "Some") subscriber = resolved.value as ActorRef<GoalCommand>;
-              }
-              yield* context.self.tell({ _tag: "Recover" });
-            }
+                  .pipe(Effect.orDie);
+            } else if (current && !(current.state as SignalState).goal)
+              yield* save({ active: false });
           }),
-        receive: (command, context) =>
-          Effect.gen(function* () {
-            switch (command._tag) {
-              case "Ready":
-                // A root can queue Ready before started queues Configure. Requeue the
-                // barrier behind startup commands before acknowledging the catalogue.
-                return yield* context.self.tell({
-                  _tag: "ReadyAfterConfiguration",
-                  replyTo: command.replyTo,
-                });
-              case "ReadyAfterConfiguration":
-                return yield* command.replyTo.tell(undefined);
-              case "React": {
-                const result = yield* acceptSignalReaction(registry, path, command.input).pipe(
-                  Effect.result,
-                );
-                if (result._tag === "Failure")
-                  yield* command.replyTo.tell({ _tag: "Rejected", error: result.failure });
-                else {
-                  yield* command.replyTo.tell({ _tag: "Accepted", receipt: result.success });
-                  yield* dispatch(context);
-                }
-                return;
-              }
-              case "ApplyGoalCommand": {
+        receive: (command, actor) =>
+          Match.value(command).pipe(
+            Match.tag("Ready", ({ replyTo }) => replyTo.tell(undefined)),
+            Match.tag("Activate", () =>
+              Effect.gen(function* () {
+                activated = true;
+                yield* arm(actor);
+                yield* dispatch(actor);
+              }),
+            ),
+            Match.tag("Deactivate", ({ goal, replyTo }) =>
+              Effect.gen(function* () {
+                if (state()?.goal === goal)
+                  yield* save({ active: false, revision: state()!.revision + 1 });
+                yield* replyTo.tell(undefined);
+              }),
+            ),
+            Match.tag("ApplyGoalCommand", ({ input, replyTo }) =>
+              Effect.gen(function* () {
                 const now = yield* Clock.currentTimeMillis;
                 const result = yield* applyGoalSignal({
                   registry,
                   path,
-                  raw: command.input,
+                  raw: input,
                   configured: definitions,
-                  agents: Object.keys(agents),
-                  nextDue: (definition) => nextTime(definition, now),
+                  nextDue: (definition) => nextSignalTime(definition, now),
                 }).pipe(Effect.result);
                 if (result._tag === "Failure")
-                  yield* command.replyTo.tell({ _tag: "Rejected", error: result.failure });
-                else {
-                  subscriber = command.subscriber;
-                  yield* command.replyTo.tell({ _tag: "Accepted", receipt: result.success });
-                  yield* context.self.tell({ _tag: "Recover" });
-                }
-                return;
-              }
-              case "ApplyPersonalCommand": {
-                const now = yield* Clock.currentTimeMillis;
-                const result = yield* applyPersonalSignal({
-                  registry,
-                  path,
-                  raw: command.input,
-                  configured: definitions,
-                  agents: Object.keys(agents),
-                  nextDue: (definition) => nextTime(definition, now),
-                }).pipe(Effect.result);
+                  return yield* replyTo.tell({ _tag: "Rejected", error: result.failure });
+                activated = true;
+                yield* replyTo.tell({ _tag: "Accepted", receipt: result.success });
+                yield* arm(actor);
+                yield* dispatch(actor);
+              }),
+            ),
+            Match.tag("React", ({ input, replyTo }) =>
+              Effect.gen(function* () {
+                const result = yield* acceptSignalReaction(registry, path, input).pipe(
+                  Effect.result,
+                );
                 if (result._tag === "Failure")
-                  yield* command.replyTo.tell({ _tag: "Rejected", error: result.failure });
-                else {
-                  yield* command.replyTo.tell({ _tag: "Accepted", receipt: result.success });
-                  yield* context.self.tell({ _tag: "Recover" });
-                }
-                return;
-              }
-              case "Configure": {
-                // Personal definitions may only change through the versioned command protocol.
+                  return yield* replyTo.tell({ _tag: "Rejected", error: result.failure });
+                yield* replyTo.tell({ _tag: "Accepted", receipt: result.success });
+                yield* dispatch(actor);
+              }),
+            ),
+            Match.tag("Tick", (command) =>
+              Effect.gen(function* () {
+                const current = state();
                 if (
-                  state()?.owner === "/personal" ||
-                  (state()?.goal !== undefined && state()?.goal !== command.goal)
-                ) {
-                  if (command.replyTo)
-                    yield* command.replyTo.tell({
-                      _tag: "Rejected",
-                      error: new ApplicationError({
-                        kind: "conflict",
-                        message: "Signal belongs to another owner",
-                      }),
-                    });
-                  return;
-                }
-                if (command.goal !== undefined && command.definition.action !== undefined) {
-                  if (command.replyTo)
-                    yield* command.replyTo.tell({
-                      _tag: "Rejected",
-                      error: new ApplicationError({
-                        kind: "invalid-input",
-                        message:
-                          "Goal Signals deliver evidence to the Goal; publication actions require a Task-producing Signal",
-                      }),
-                    });
-                  return;
-                }
-                validateSignalTime(command.definition);
-                subscriber = command.subscriber;
-                const snapshot = registry.get(path);
-                const previous = snapshot?.state as SignalState | undefined;
-                const content = (s: SignalState) =>
-                  JSON.stringify({
-                    slug: s.slug,
-                    goal: s.goal,
-                    when: s.when,
-                    task: s.task,
-                    action: s.action,
-                    ...(s.taskId === undefined ? {} : { taskId: s.taskId }),
-                    agent: s.agent,
-                    mode: s.mode,
-                    schedule: s.schedule,
-                    notBefore: s.notBefore,
-                    active: s.active,
-                    deleted: !!s.deleted,
-                  });
-                const proposed = {
-                  ...Schema.decodeUnknownSync(SignalDefinition)(command.definition),
-                  ...(command.goal === undefined ? {} : { goal: command.goal }),
-                  active: command.active,
-                  deleted: !!command.deleted,
-                };
-                const changed = !previous || content(previous) !== content(proposed);
-                const now = yield* Clock.currentTimeMillis;
-                // Reattachment must not invalidate frozen commands by advancing Context revision.
-                if (
-                  changed ||
-                  (command.causal && !isDeepStrictEqual(command.causal, previous?.causal))
-                )
-                  yield* registry
-                    .commit(
-                      {
-                        path,
-                        description: `Signal：${command.definition.slug}`,
-                        state: {
-                          ...previous,
-                          ...proposed,
-                          action: proposed.action,
-                          schedule: proposed.schedule,
-                          notBefore: proposed.notBefore,
-                          taskId: proposed.taskId,
-                          ...(command.causal ? { causal: command.causal } : {}),
-                          revision: (previous?.revision ?? 0) + (changed ? 1 : 0),
-                          ...(changed
-                            ? { nextDue: nextTime(proposed, now), timerDone: false }
-                            : {}),
-                        },
-                        messages: [],
-                      },
-                      { expectedRevision: snapshot?.revision ?? 0 },
-                    )
-                    .pipe(Effect.asVoid, Effect.orDie);
-                if (command.replyTo)
-                  yield* command.replyTo.tell({
-                    _tag: "Accepted",
-                    ref: context.self as ActorRef<unknown>,
-                  });
-                yield* context.self.tell({ _tag: "Recover" });
-                return;
-              }
-              case "Recover": {
-                if (!state()) return;
-                for (const record of Object.values(registry.snapshot())) {
-                  if (!record.path.startsWith(`${path}/runs/`)) continue;
-                  const relative = `runs/${record.path.split("/").at(-1)!}`;
-                  const ref =
-                    ((yield* context.child(childActorName(relative))) as
-                      ActorRef<RunCommand> | undefined) ??
-                    (yield* spawnContextChild(context, relative, SignalRunActor).pipe(
-                      Effect.orDie,
-                    ));
-                  yield* ref.tell({ _tag: "Resume", path: record.path, subscriber });
-                }
-                yield* arm(context);
-                yield* dispatch(context);
-                return;
-              }
-              case "DeliverOccurrences":
-                retryScheduled = false;
-                yield* dispatch(context);
-                return;
-              case "DeliveryFinished":
-                inFlight.delete(command.id);
-                if (!command.accepted) return;
-                yield* save({
-                  occurrences: state()!.occurrences!.map((o) =>
-                    o.id === command.id ? { ...o, delivered: true } : o,
-                  ),
-                });
-                return;
-              case "Tick": {
-                const s = state();
-                if (
-                  !s ||
+                  !current ||
                   !enabled() ||
-                  command.revision !== s.revision ||
-                  command.due !== s.nextDue ||
-                  s.timerDone
+                  command.revision !== current.revision ||
+                  current.nextDue !== command.due ||
+                  current.timerDone
                 )
                   return;
                 armed = "";
                 const now = yield* Clock.currentTimeMillis;
-                if (now < command.due) {
-                  yield* arm(context);
-                  return;
-                }
-                const id = `${path}:${s.revision}:time:${command.due}`;
-                const causal = scheduledCausalChain(s, id);
-                const source = {
-                  path,
-                  description: registry.get(path)!.description,
-                  state: {
-                    slug: s.slug,
-                    goal: s.goal,
-                    when: s.when,
-                    task: s.task,
-                    action: s.action,
-                    taskId: s.taskId,
-                    agent: s.agent,
-                    mode: s.mode,
-                    ...(s.schedule === undefined ? {} : { schedule: s.schedule }),
-                    ...(s.notBefore === undefined ? {} : { notBefore: s.notBefore }),
-                    ...(s.goal === undefined ? {} : { goal: s.goal }),
-                    ...(s.revision === undefined ? {} : { revision: s.revision }),
-                  },
-                  messages: [
-                    {
-                      type: "Timer",
-                      scheduledAt: new Date(command.due).toISOString(),
-                      observedAt: new Date(now).toISOString(),
-                    },
-                  ],
+                if (now < command.due) return yield* arm(actor);
+                const requestId = `${path}:timer:${current.revision}:${command.due}`;
+                const message: TaskMessage = {
+                  requestId,
+                  source: path,
+                  task: current.task,
+                  createdAt: new Date(command.due).toISOString(),
+                  causal: scheduledCausalChain(current, requestId),
                 };
                 yield* save({
-                  timerDone: s.schedule?.type === "once",
-                  nextDue: s.schedule?.type === "cron" ? nextTime(s, now) : undefined,
-                  occurrences: [
-                    ...(s.occurrences ?? []),
-                    {
-                      id,
-                      text: `Scheduled check: ${s.when}\nRelated task: ${s.taskId ?? "None"}\nScheduled time: ${new Date(command.due).toISOString()}\nRead the current evidence before deciding whether work is needed.`,
-                      source,
-                      ...(causal ? { causal } : {}),
-                      delivered: false,
-                    },
-                  ],
+                  occurrences: [...current.occurrences, { message, delivered: false }],
+                  timerDone:
+                    current.trigger._tag === "Schedule" && current.trigger.schedule.type === "once",
+                  nextDue: nextSignalTime(current, now),
                 });
-                yield* dispatch(context);
-                yield* arm(context);
-                return;
-              }
-              case "Trigger": {
-                const s = state();
-                const now = yield* Clock.currentTimeMillis;
-                if (!s || !sourceSignalEligible(s, now, (slug) => registry.get(`/goals/${slug}`)))
-                  return;
-                const { through: _through, ...sourceState } = command.sourceContext.state as Record<
-                  string,
-                  unknown
-                >;
-                const sourceKey = createHash("sha256")
-                  .update(
-                    JSON.stringify({
-                      path: command.sourceContext.path,
-                      state: sourceState,
-                      messages: command.sourceContext.messages,
-                    }),
-                  )
-                  .digest("hex");
-                if (s.seenSources?.includes(sourceKey)) return;
-                const id = `${path}:source:${sourceKey}`;
+                yield* dispatch(actor);
+                yield* arm(actor);
+              }),
+            ),
+            Match.tag("Dispatch", () =>
+              Effect.gen(function* () {
+                retryScheduled = false;
+                yield* dispatch(actor);
+              }),
+            ),
+            Match.tag("Delivered", ({ id, result }) =>
+              Effect.gen(function* () {
+                inFlight.delete(id);
+                const retry = result._tag === "Failure" && result.error.kind === "unavailable";
                 yield* save({
-                  seenSources: [...(s.seenSources ?? []), sourceKey],
-                  occurrences: [
-                    ...(s.occurrences ?? []),
-                    {
-                      id,
-                      text: `Condition: ${s.when}\nRelated task: ${s.taskId ?? "None"}\nSource: ${command.sourceContext.path}\nRead the source Context; the matched snapshot is stored in the occurrences at ${path}.`,
-                      source: command.sourceContext,
-                      ...(s.causal ? { causal: s.causal } : {}),
-                      delivered: false,
-                    },
-                  ],
+                  occurrences: state()!.occurrences.map((item) =>
+                    item.message.requestId !== id
+                      ? item
+                      : {
+                          ...item,
+                          delivered: result._tag === "Success",
+                          ...(!retry && result._tag === "Failure"
+                            ? { error: result.error.message }
+                            : {}),
+                        },
+                  ),
                 });
-                yield* dispatch(context);
-                return;
-              }
-            }
-          }),
+                if (retry && !retryScheduled) {
+                  retryScheduled = true;
+                  yield* actor.pipeToSelf(Effect.sleep("3 seconds"), () => ({ _tag: "Dispatch" }));
+                }
+              }),
+            ),
+            Match.exhaustive,
+          ),
       });
     }),
   );
 }
-
 export const SignalRootCommand = Schema.Union([
-  ReadyCommand,
-  ReactCommand,
-  ApplyPersonalCommand,
+  Ready,
+  Activate,
+  React,
   ApplyGoalCommand,
-  Schema.TaggedStruct("Trigger", {
-    slug: Schema.String,
-    sourceContext: ContextRecord,
-  }),
-  Schema.TaggedStruct("Upsert", {
-    causal: Schema.optional(CausalChain),
-    definition: SignalDefinition,
-    goal: Schema.String,
-    subscriber: ReplyTo<GoalCommand>(),
-    active: Schema.Boolean,
-    deleted: Schema.optional(Schema.Boolean),
-    replyTo: ReplyTo<SignalConfigureReply>(),
-  }),
+  Deactivate,
 ]);
 export type SignalRootCommand = typeof SignalRootCommand.Type;
-export class SignalRootActor extends ContextActor.Service<
-  SignalRootActor,
-  SignalDefinitions | TaskExecutionServices
->()("signals/RootActor", {
-  command: SignalRootCommand,
-  context: defineContext({ state: Schema.Struct({}), message: Schema.Never }),
-}) {
+export class SignalRootActor extends ContextActor.Service<SignalRootActor, SignalDefinitions>()(
+  "signals/RootActor",
+  {
+    command: SignalRootCommand,
+    context: defineContext({ state: Schema.Struct({}), message: Schema.Never }),
+  },
+) {
   static readonly layer = Layer.effect(
     SignalRootActor,
     Effect.gen(function* () {
       const registry = yield* ContextRegistry,
         definitions = yield* SignalDefinitions;
       return SignalRootActor.of({
-        started: (context) =>
+        started: (actor) =>
           Effect.gen(function* () {
             yield* registry
               .commit(
                 {
                   path: "/signals",
-                  description: "Condition and schedule monitoring",
+                  description: "Context and scheduled Tasks",
                   state: {},
                   messages: [],
                 },
                 { expectedRevision: registry.get("/signals")?.revision ?? 0 },
               )
-              .pipe(Effect.asVoid, Effect.orDie);
+              .pipe(Effect.orDie);
             const slugs = new Set([
               ...definitions.map((d) => d.slug),
               ...Object.keys(registry.snapshot())
                 .filter((p) => /^\/signals\/[^/]+$/.test(p))
                 .map((p) => p.split("/").at(-1)!),
             ]);
-            for (const slug of slugs) {
-              const child =
-                ((yield* context.child(slug)) as ActorRef<SignalCommand> | undefined) ??
-                (yield* context.spawn(slug, SignalActor));
-              const record = registry.get(`/signals/${slug}`);
-              if (
-                record &&
-                !(record.state as { goal?: string }).goal &&
-                (record.state as { owner?: string }).owner !== "/personal" &&
-                !definitions.some((d) => d.slug === slug)
-              )
-                yield* child.tell({
-                  _tag: "Configure",
-                  definition: record.state as SignalDefinition,
-                  active: false,
-                });
-            }
+            for (const slug of slugs) yield* actor.spawn(slug, SignalActor);
           }),
-        receive: (command, context) =>
-          Effect.gen(function* () {
-            if (command._tag === "Ready") {
-              for (const child of yield* context.children())
-                yield* (child as ActorRef<SignalCommand>)
-                  .ask<void>((replyTo) => ({ _tag: "Ready", replyTo }))
-                  .pipe(Effect.orDie);
-              yield* command.replyTo.tell(undefined);
-            } else if (command._tag === "React") {
-              const decoded = yield* Schema.decodeUnknownEffect(SignalReactionInput)(
-                command.input,
-              ).pipe(Effect.result);
-              if (decoded._tag === "Failure")
-                return yield* command.replyTo.tell({
-                  _tag: "Rejected",
-                  error: new ApplicationError({
-                    kind: "invalid-input",
-                    message: "Invalid Signal reaction",
-                  }),
-                });
-              const child = yield* context.child(decoded.success.target.slice("/signals/".length));
-              if (child)
-                yield* (child as ActorRef<SignalCommand>).tell({
-                  ...command,
-                  input: decoded.success,
-                });
-              else
-                yield* command.replyTo.tell({
-                  _tag: "Rejected",
-                  error: new ApplicationError({
-                    kind: "not-found",
-                    message: "Signal Actor unavailable",
-                  }),
-                });
-            } else if (command._tag === "ApplyGoalCommand") {
-              const decoded = yield* Schema.decodeUnknownEffect(GoalSignalInput)(
-                command.input,
-              ).pipe(Effect.result);
-              if (decoded._tag === "Failure")
-                return yield* command.replyTo.tell({
-                  _tag: "Rejected",
-                  error: new ApplicationError({
-                    kind: "invalid-input",
-                    message: "Invalid Goal Signal command",
-                  }),
-                });
-              const slug = decoded.success.target.slice("/signals/".length);
-              const child =
-                (yield* context.child(slug)) ??
-                (yield* context.spawn(slug, SignalActor).pipe(Effect.orDie));
-              yield* (child as ActorRef<SignalCommand>).tell({
-                ...command,
-                input: decoded.success,
-              });
-            } else if (command._tag === "ApplyPersonalCommand") {
-              const decoded = yield* Schema.decodeUnknownEffect(SignalDeliveryInput)(
-                command.input,
-              ).pipe(Effect.result);
-              if (decoded._tag === "Failure")
-                return yield* command.replyTo.tell({
-                  _tag: "Rejected",
-                  error: new ApplicationError({
-                    kind: "invalid-input",
-                    message: "Invalid Personal Signal command",
-                  }),
-                });
-              const slug = decoded.success.target.slice("/signals/".length);
-              const child =
-                (yield* context.child(slug)) ??
-                (yield* context.spawn(slug, SignalActor).pipe(Effect.orDie));
-              yield* (child as ActorRef<SignalCommand>).tell({
-                ...command,
-                input: decoded.success,
-              });
-            } else if (command._tag === "Upsert") {
-              const existing = yield* context.child(command.definition.slug);
-              const child =
-                (existing as ActorRef<SignalCommand> | undefined) ??
-                (yield* context.spawn(command.definition.slug, SignalActor).pipe(Effect.orDie));
-              yield* child.tell({ ...command, _tag: "Configure" });
-            } else {
-              const child = yield* context.child(command.slug);
-              if (child)
-                yield* (child as ActorRef<SignalCommand>).tell({
-                  _tag: "Trigger",
-                  sourceContext: command.sourceContext,
-                });
-            }
-          }),
+        receive: (command, actor) =>
+          Match.value(command).pipe(
+            Match.tag("Ready", ({ replyTo }) =>
+              Effect.gen(function* () {
+                for (const child of yield* actor.children())
+                  yield* (child as ActorRef<Command>)
+                    .ask<void>((replyTo) => ({ _tag: "Ready", replyTo }))
+                    .pipe(Effect.orDie);
+                yield* replyTo.tell(undefined);
+              }),
+            ),
+            Match.tag("Activate", () =>
+              Effect.gen(function* () {
+                for (const child of yield* actor.children())
+                  yield* (child as ActorRef<Command>).tell({ _tag: "Activate" });
+              }),
+            ),
+            Match.tag("Deactivate", ({ goal, replyTo }) =>
+              Effect.gen(function* () {
+                for (const child of yield* actor.children())
+                  yield* (child as ActorRef<Command>)
+                    .ask<void>((replyTo) => ({ _tag: "Deactivate", goal, replyTo }))
+                    .pipe(Effect.orDie);
+                yield* replyTo.tell(undefined);
+              }),
+            ),
+            Match.tag("React", "ApplyGoalCommand", (command) =>
+              Effect.gen(function* () {
+                const decoded =
+                  command._tag === "React"
+                    ? yield* Schema.decodeUnknownEffect(SignalReactionInput)(command.input).pipe(
+                        Effect.result,
+                      )
+                    : yield* Schema.decodeUnknownEffect(GoalSignalInput)(command.input).pipe(
+                        Effect.result,
+                      );
+                if (decoded._tag === "Failure")
+                  return yield* command.replyTo.tell({
+                    _tag: "Rejected",
+                    error: new ApplicationError({
+                      kind: "invalid-input",
+                      message: "Invalid Signal command",
+                    }),
+                  });
+                const slug = decoded.success.target.slice("/signals/".length);
+                let child = (yield* actor.child(slug)) as ActorRef<Command> | undefined;
+                if (!child && command._tag === "ApplyGoalCommand")
+                  child = yield* actor.spawn(slug, SignalActor).pipe(Effect.orDie);
+                if (!child)
+                  return yield* command.replyTo.tell({
+                    _tag: "Rejected",
+                    error: new ApplicationError({
+                      kind: "not-found",
+                      message: "Signal unavailable",
+                    }),
+                  });
+                yield* (child as ActorRef<Command>).tell(command);
+              }),
+            ),
+            Match.exhaustive,
+          ),
       });
     }),
   );

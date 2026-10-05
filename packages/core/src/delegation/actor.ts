@@ -75,7 +75,7 @@ const terminalFailure = (
   );
 
 export class DelegationActor extends ContextActor.Service<DelegationActor, ExternalAgents>()(
-  "signals/DelegationActor",
+  "tasks/DelegationActor",
   {
     command: Command,
     context: defineContext({
@@ -251,8 +251,7 @@ export class DelegationActor extends ContextActor.Service<DelegationActor, Exter
                 {
                   type: "ResumeRequested",
                   requestId: input.requestId,
-                  causationId: input.causationId,
-                  at: input.createdAt,
+                  at: new Date(yield* Clock.currentTimeMillis).toISOString(),
                 },
               ],
             },

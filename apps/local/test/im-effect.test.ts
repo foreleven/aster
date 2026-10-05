@@ -325,7 +325,7 @@ for (const status of ["published", "unknown", "sending"] as const) {
                     request: {
                       requestId: "publish-1",
                       source,
-                      signalPath: "/signals/report",
+                      taskSource: "/signals/report",
                       causationId: "user-1",
                       createdAt: at,
                       action: { _tag: "PublishResult", channelPath: path, identity: "user" },

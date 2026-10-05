@@ -18,12 +18,10 @@ export * from "./decisions/system-one.js";
 export * from "./delegation/actor.js";
 export * from "./signals/detect.js";
 export * from "./reasoning/context-description.js";
-export * from "./signals/execution-gate.js";
-export * from "./signals/extractor.js";
 export * from "./tasks/model.js";
 export * from "./tasks/writeback.js";
 export {
-  SignalAction,
+  TaskAction,
   WritebackOperation,
   WritebackRequest,
   WritebackAuthorization,
@@ -38,7 +36,6 @@ export * from "./goals/screening.js";
 export * from "./config/settings.js";
 export * from "./memory/contracts.js";
 export * from "./runtime/integration.js";
-export * from "./tasks/execution.js";
 export * from "./signals/policy.js";
 export { secretConfig } from "@aster/agent";
 export * from "./runtime/context-consumers.js";
@@ -57,9 +54,6 @@ export * from "./tasks/run-state.js";
 export * from "./tasks/outcome.js";
 export * from "./signals/state.js";
 export * from "./goals/state.js";
-export * from "./personal/actor.js";
-export * from "./personal/reasoner.js";
-export * from "./personal/actions.js";
 
 export * from "./context/persistence.js";
 export * from "./context/kernel.js";

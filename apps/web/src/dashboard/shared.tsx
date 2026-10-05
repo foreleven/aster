@@ -8,7 +8,7 @@ export function Status({ value }: { value?: string }) {
   return (
     <Badge
       variant={
-        ["failed", "uncertain", "preparation-failed"].includes(value ?? "")
+        ["failed", "uncertain"].includes(value ?? "")
           ? "destructive"
           : ["running", "active", "processing", "completed"].includes(value ?? "")
             ? "secondary"
@@ -51,11 +51,6 @@ export function Messages({
             </time>
           </div>
           {message.text !== undefined ? <p>{message.text}</p> : <pre>{message.details}</pre>}
-          {message.progress?.processing === "display-only" && (
-            <p className="text-sm text-muted-foreground">
-              Saved for you. Automatic follow-up has reached its limit.
-            </p>
-          )}
           {message.references.map((path) => (
             <Button key={path} size="sm" variant="link" onClick={() => inspect(path)}>
               {path}

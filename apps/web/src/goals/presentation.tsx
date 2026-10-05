@@ -64,7 +64,7 @@ export const statusTone = (status?: string) =>
       "pending",
       () => "amber",
     ),
-    Match.whenOr("failed", "preparation-failed", "rejected", () => "red"),
+    Match.whenOr("failed", "rejected", () => "red"),
     Match.orElse(() => "neutral"),
   );
 export function Pill({ status }: { status?: string }) {
@@ -104,7 +104,7 @@ export const eventKind = (message: MessageView) =>
       tone: "amber",
       category: "signals",
     })),
-    Match.whenOr("task", "taskprepared", () => ({
+    Match.when("task", () => ({
       label: "Task",
       icon: CirclePlay,
       tone: "green",

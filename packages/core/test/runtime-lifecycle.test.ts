@@ -71,7 +71,7 @@ const config = ConfigProvider.layer(
   ConfigProvider.fromUnknown({ config: { agent: { model: "test" } } }),
 );
 
-test("runtime readiness includes the Personal root and its durable command API", async () => {
+test("runtime readiness includes the built-in Goal assistant and ordinary Goal command API", async () => {
   const live = AsterRuntime.layer({ integrations: [] }).pipe(
     Layer.provide(infrastructure()),
     Layer.provide(config),
@@ -80,21 +80,20 @@ test("runtime readiness includes the Personal root and its durable command API",
     Effect.gen(function* () {
       const runtime = yield* AsterRuntime;
       yield* runtime.ready;
-      const personal = yield* runtime.api.personal.get;
-      assert.equal(personal.path, "/personal");
-      assert.equal(personal.revision, 1);
-      const request = {
-        requestId: "runtime-input",
-        causationId: "user",
-        expectedRevision: 1,
-        text: "Track my work",
-      };
-      const accepted = yield* runtime.api.personal.sendMessage(request);
-      assert.equal(accepted.revision, 2);
-      assert.deepEqual(yield* runtime.api.personal.sendMessage(request), accepted);
-      assert.ok(
-        (yield* runtime.api.inspect).actors.some((actor) => actor.path === "/user/personal"),
+      const personal = yield* runtime.api.context("/goals/personal");
+      assert.equal(personal.path, "/goals/personal");
+      const accepted = yield* runtime.api.goals.sendMessage(
+        "personal",
+        "Track my work",
+        "runtime-input",
       );
+      assert.deepEqual(
+        yield* runtime.api.goals.sendMessage("personal", "Track my work", "runtime-input"),
+        accepted,
+      );
+      const paths = (yield* runtime.api.inspect).actors.map((actor) => actor.path);
+      assert.ok(paths.includes("/user/goals/personal"));
+      assert.ok(!paths.includes("/user/personal") && !paths.includes("/user/notifications"));
     }).pipe(Effect.provide(live)),
   );
 });

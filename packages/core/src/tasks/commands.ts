@@ -45,10 +45,10 @@ export const cancelGoalTasks = Effect.fn("Tasks.cancelGoal")(function* <C, R>(
   source: string,
 ) {
   for (const record of Object.values(registry.snapshot())) {
-    const state = record.state as { admission?: { input: { source: string } }; status?: string };
+    const state = record.state as { admission?: { input: { replyTo: string } }; status?: string };
     if (
-      state.admission?.input.source !== source ||
-      !["checking", "ready", "awaiting-confirmation"].includes(state.status ?? "")
+      state.admission?.input.replyTo !== source ||
+      !["ready", "awaiting-confirmation"].includes(state.status ?? "")
     )
       continue;
     const ref = yield* actor.select(runActorPath(record.path)).resolve().pipe(Effect.option);
@@ -67,14 +67,13 @@ export const attachGoalTasks = Effect.fn("Tasks.attachGoal")(function* <R>(
   source: string,
 ) {
   for (const record of Object.values(registry.snapshot())) {
-    const state = record.state as { admission?: { input: { source: string } } };
-    if (state.admission?.input.source !== source) continue;
+    const state = record.state as { admission?: { input: { replyTo: string } } };
+    if (state.admission?.input.replyTo !== source) continue;
     const ref = yield* actor.select(runActorPath(record.path)).resolve().pipe(Effect.option);
     if (ref._tag === "Some")
       yield* (ref.value as ActorRef<RunCommand>).tell({
         _tag: "Resume",
         path: record.path,
-        subscriber: actor.self,
       });
   }
 });

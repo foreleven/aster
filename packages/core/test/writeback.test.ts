@@ -1,103 +1,59 @@
+import { taskFixture, taskInput } from "./task-fixtures.js";
+import type { TaskDeliveryInput } from "@aster/api-contracts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem } from "@aster/actor";
-import { Deferred, Effect, Layer, Schema, Stream } from "effect";
+
+import { Deferred, Effect, Schema } from "effect";
 import {
-  ApprovalQueueActor,
   ChannelWrites,
   ChannelWriteError,
-  ContextRegistry,
-  ExternalAgents,
-  SignalDefinitions,
-  SignalRootActor,
   approvalEntries,
   writebackApprovalId,
   WritebackOperation,
   type ContextRecord,
-  SignalDefinition,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+
 import { RunState } from "../src/tasks/run-state.js";
 import { runActorPath } from "../src/tasks/address.js";
-import { preparationLayer, fakeAgent } from "./fixtures.js";
 
-const definition: SignalDefinition = {
-  slug: "publish",
-  when: "A report is due",
-  task: "Draft a report",
-  agent: "test",
-  mode: "confirm",
+const definition: TaskDeliveryInput = {
+  ...taskInput("publish"),
   action: { _tag: "PublishResult", channelPath: "/lark/im/chats/oc_test", identity: "user" },
 };
 const fixture = (options: {
   records: Map<string, ContextRecord>;
   publish: ChannelWrites["Service"]["publish"];
-  definition?: SignalDefinition;
+  definition?: TaskDeliveryInput;
   saved?: (record: ContextRecord) => void;
 }) =>
   Effect.gen(function* () {
-    const registry = yield* makeContextRegistry({
-      loadAll: () => [...options.records.values()],
-      save: (record) => {
-        options.records.set(record.path, structuredClone(record));
-        options.saved?.(record);
-      },
-    });
-    const system = yield* ActorSystem.make().pipe(
-      ActorSystem.provide(
-        Layer.succeed(ContextRegistry, registry),
-        preparationLayer,
-        Layer.succeed(ExternalAgents, { test: fakeAgent() }),
-        Layer.succeed(SignalDefinitions, [options.definition ?? definition]),
-        Layer.succeed(ChannelWrites, { publish: options.publish }),
-      ),
-    );
-    const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
-    const signals = yield* system.spawn("signals", SignalRootActor);
-    const until = (condition: () => boolean) =>
-      Effect.gen(function* () {
-        const changes = yield* registry.subscribe;
-        if (!condition())
-          yield* changes.pipe(
-            Stream.filter(() => condition()),
-            Stream.take(1),
-            Stream.runDrain,
-          );
-      });
+    const env = yield* taskFixture(options);
     const record = () =>
-      Object.values(registry.snapshot()).find((record) => record.path.includes("/runs/"));
+      Object.values(env.registry.snapshot()).find((record) => /^\/runs\/[^/]+$/.test(record.path));
     const state = () => record() && Schema.decodeUnknownSync(RunState)(record()!.state);
-    const trigger = signals.tell({
-      _tag: "Trigger",
-      slug: "publish",
-      sourceContext: {
-        path: "/evidence",
-        description: "Evidence",
-        state: { text: "Report facts" },
-        messages: [],
-      },
-    });
     const decide = (id: string, decision: "approve" | "reject") =>
-      approvals.ask<{ error?: string }>((replyTo) => ({
+      env.approvals.ask<{ error?: string }>((replyTo) => ({
         _tag: "Resolve",
         id,
         response: { decision },
         replyTo,
       }));
     const completed = Effect.gen(function* () {
-      yield* trigger;
-      if ((options.definition ?? definition).mode === "confirm") {
-        yield* until(() =>
-          approvalEntries(registry).some((entry) => entry.id.endsWith(":confirm")),
-        );
-        assert.deepEqual(yield* decide(`${record()!.path}:confirm`, "approve"), {});
-      }
-      yield* until(() => state()?.status === "completed");
+      yield* env.runs.ask((replyTo) => ({
+        _tag: "StartTask",
+        input: options.definition ?? definition,
+        replyTo,
+      }));
+      yield* env.wait(() =>
+        approvalEntries(env.registry).some((entry) => entry.id.endsWith(":confirm")),
+      );
+      assert.deepEqual(yield* decide(`${record()!.path}:confirm`, "approve"), {});
+      yield* env.wait(() => state()?.status === "completed");
     });
-    const waiting = until(() =>
-      approvalEntries(registry).some((entry) => entry.id.includes(":writeback:")),
+    const waiting = env.wait(() =>
+      approvalEntries(env.registry).some((entry) => entry.id.includes(":writeback:")),
     );
-    return { registry, system, signals, until, record, state, decide, completed, waiting };
+    return { ...env, until: env.wait, record, state, decide, completed, waiting };
   });
 
 test("Run persists the result and exact writeback before a separate approval; forged commands cannot publish", async () => {
@@ -130,30 +86,6 @@ test("Run persists the result and exact writeback before a separate approval; fo
         yield* env.waiting;
         assert.equal(calls, 0, "Task confirmation is not publication approval");
         const operation = env.state()!.writeback!;
-        const { action: _removed, ...localOnly } = definition;
-        const signal = yield* env.system.select("/user/signals/publish").resolve();
-        const before = env.registry.get("/signals/publish");
-        const unsupported = yield* signal.ask<{ _tag: string }>((replyTo) => ({
-          _tag: "Configure",
-          definition,
-          goal: "review",
-          active: true,
-          replyTo,
-        }));
-        assert.equal(unsupported._tag, "Rejected");
-        assert.deepEqual(env.registry.get("/signals/publish"), before);
-        const configured = yield* signal.ask<{ _tag: string }>((replyTo) => ({
-          _tag: "Configure",
-          definition: localOnly,
-          active: true,
-          replyTo,
-        }));
-        assert.equal(configured._tag, "Accepted");
-        assert.equal(
-          Schema.decodeUnknownSync(SignalDefinition)(env.registry.get("/signals/publish")!.state)
-            .action,
-          undefined,
-        );
         assert.deepEqual(env.state()!.writeback!.request.action, operation.request.action);
         const id = writebackApprovalId(operation.request);
         const entry = approvalEntries(env.registry).find((entry) => entry.id === id)!;
@@ -216,10 +148,7 @@ for (const outcome of ["published", "unknown", "rejected"] as const) {
               yield* env.decide(writebackApprovalId(env.state()!.writeback!.request), "approve");
             }
             yield* env.until(() => env.state()?.writeback?.status === outcome);
-            yield* env.signals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
-            const signal = yield* env.system.select("/user/signals/publish").resolve();
-            yield* signal.tell({ _tag: "Recover" });
-            yield* signal.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+
             const actor = yield* env.system.select(runActorPath(env.record()!.path)).resolve();
             yield* actor.tell({ _tag: "Resume", path: env.record()!.path });
             yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
@@ -275,7 +204,7 @@ test("rejecting publication keeps the local result and performs no external writ
       Effect.gen(function* () {
         const env = yield* fixture({
           records: new Map(),
-          definition: { ...definition, mode: "auto" },
+          definition,
           publish: () => Effect.die("Rejected publication cannot send"),
         });
         yield* env.completed;
@@ -358,10 +287,7 @@ for (const phase of ["sending", "published"] as const) {
           });
           const status = phase === "sending" ? "unknown" : "published";
           yield* env.until(() => env.state()?.writeback?.status === status);
-          yield* env.signals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
-          const signal = yield* env.system.select("/user/signals/publish").resolve();
-          yield* signal.tell({ _tag: "Recover" });
-          yield* signal.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+
           const actor = yield* env.system.select(runActorPath(env.record()!.path)).resolve();
           yield* actor.tell({ _tag: "Resume", path: env.record()!.path });
           yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));

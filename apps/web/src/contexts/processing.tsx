@@ -62,11 +62,6 @@ function RecoveryAction({
           workId: entry.workId!,
           deliveryId: entry.id,
         })),
-        Match.when("notification", (): RecoveryInput => ({
-          ...identity,
-          _tag: "RetryNotification",
-          deliveryId: entry.id,
-        })),
         Match.exhaustive,
       );
     setInputs((previous) => ({ ...previous, [key]: input }));
@@ -122,7 +117,7 @@ export function ProcessingDetails({
   const error = resultError(result);
   return (
     <section aria-label="Processing recovery" aria-busy={result.waiting}>
-      <h2>{owner === "system-one" ? "Screening and delivery" : "Notification delivery"}</h2>
+      <h2>Screening and delivery</h2>
       <p className="quiet-message">
         Recovery reuses saved evidence and commands. It does not replace an existing decision.
       </p>

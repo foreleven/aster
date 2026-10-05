@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { ApprovalResponse, PreparedTask, PersonalMessage } from "@aster/api-contracts";
+import { ApprovalResponse, PreparedTask } from "@aster/api-contracts";
 const BusinessEvent = Schema.Struct({
   type: Schema.Literals([
     "Triggered",
@@ -57,8 +57,6 @@ const ConversationMessage = Schema.Struct({
 const Text = Schema.Struct({ type: Schema.Literal("text"), text: Schema.String });
 /** Only business text crosses this boundary; tool arguments/results and provider frames stay private. */
 export const publicBusinessMessage = (value: unknown): unknown | undefined => {
-  const personal = Schema.decodeUnknownResult(PersonalMessage)(value);
-  if (personal._tag === "Success") return personal.success;
   const event = Schema.decodeUnknownResult(BusinessEvent)(value);
   if (event._tag === "Success") return event.success;
   const conversation = Schema.decodeUnknownResult(ConversationMessage)(value);

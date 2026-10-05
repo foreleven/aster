@@ -7,7 +7,6 @@ import { invalidateQueries } from "./api/client";
 import { contextViews, dashboardStatus, selectedRow } from "./dashboard/state";
 import { ContextNavigation } from "./contexts/navigation";
 import { ContextWorkspace } from "./contexts/workspace";
-import { usePersonalCommands } from "./contexts/personal";
 import { GoalWorkspace } from "./goals/workspace";
 import { EmptyState } from "./goals/presentation";
 import "./goals/goals.css";
@@ -31,13 +30,12 @@ export default function App() {
     (context) => /^\/goals\/[^/]+$/.test(context.path) && !context.state.deleted,
   );
   const selected = useSyncExternalStore(subscribeSelection, readSelection);
-  const personal = usePersonalCommands(contexts.find((context) => context.path === "/personal"));
   const [inspected, setInspected] = useState("");
   const [actionError, setActionError] = useState("");
   const [mobileNavigation, setMobileNavigation] = useState(false);
   const active = selected
     ? contexts.find((context) => context.path === selected)
-    : (contexts.find((context) => context.path === "/personal") ?? goals[0] ?? contexts[0]);
+    : (contexts.find((context) => context.path === "/goals/personal") ?? goals[0] ?? contexts[0]);
   const navigate = (path: string) => {
     const url = new URL(window.location.href);
     url.searchParams.set("context", path);
@@ -110,7 +108,6 @@ export default function App() {
             contexts={contexts}
             navigate={navigate}
             showNavigation={() => setMobileNavigation(true)}
-            personal={personal}
           />
         ) : (
           <main className="goals-empty-page">

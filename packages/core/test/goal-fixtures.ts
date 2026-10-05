@@ -29,7 +29,7 @@ export const goalIntentRecords = (state: import("../src/goals/state.js").GoalSta
   });
 export const goalDeliveryRecords = (state: import("../src/goals/state.js").GoalState) =>
   (state.requests ?? []).flatMap(({ request, receipt }) => {
-    if (request._tag !== "SubmitInput" || request.input._tag !== "PersonalMessage") return [];
+    if (request._tag !== "SubmitInput" || request.input._tag !== "TaskMessage") return [];
     const input = request.input.delivery;
     return [
       {
@@ -37,7 +37,7 @@ export const goalDeliveryRecords = (state: import("../src/goals/state.js").GoalS
         receipt,
         historySequence: state.inputs?.find(
           (item) =>
-            item.payload._tag === "PersonalMessage" && item.payload.requestId === input.requestId,
+            item.payload._tag === "TaskMessage" && item.payload.requestId === input.requestId,
         )?.historySequence,
       },
     ];

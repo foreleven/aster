@@ -1,3 +1,4 @@
+import { validateTaskMessage } from "../tasks/admission.js";
 import { Effect, Match } from "effect";
 import { ApplicationError } from "@aster/api-contracts";
 import type { goalWorkingState } from "./working-state.js";
@@ -28,42 +29,6 @@ export const goalAdmission = (
     const patch = { requests: [...(state().requests ?? []), admission] };
     const causal = { rootRequestId: request.requestId, remainingAgentTurns: 4 };
     return yield* Match.value(input).pipe(
-      Match.tag("PersonalMessage", ({ delivery }) =>
-        Effect.gen(function* () {
-          if (delivery.requestId !== request.requestId)
-            return yield* new ApplicationError({
-              kind: "invalid-input",
-              message: "Delivery identity mismatch",
-            });
-          if (
-            delivery.target !== current().path ||
-            !delivery.text.trim() ||
-            !Number.isFinite(Date.parse(delivery.createdAt))
-          )
-            return yield* new ApplicationError({
-              kind: "invalid-input",
-              message: "Invalid Goal delivery target or content",
-            });
-          yield* inputs.accept(
-            {
-              _tag: "PersonalMessage",
-              source: "/personal",
-              requestId: delivery.requestId,
-              text: delivery.text,
-            },
-            delivery.requestId,
-            {
-              ...patch,
-              causal: delivery.causal ?? {
-                rootRequestId: delivery.causationId,
-                remainingAgentTurns: 4,
-              },
-            },
-            delivery.expectedRevision,
-          );
-          return receipt;
-        }),
-      ),
       Match.tag("GoalIntent", ({ delivery }) =>
         Effect.gen(function* () {
           if (delivery.requestId !== request.requestId)
@@ -120,26 +85,30 @@ export const goalAdmission = (
           return receipt;
         }),
       ),
-      Match.tag("SignalOccurrence", (input) =>
+      Match.tag("TaskMessage", ({ delivery }) =>
         Effect.gen(function* () {
-          const signal = registry.get(input.signalPath)?.state as { goal?: string } | undefined;
-          if (signal?.goal !== state().slug || input.id !== request.requestId)
+          if (
+            delivery.requestId !== request.requestId ||
+            delivery.task._tag !== "Goal" ||
+            delivery.task.target !== current().path ||
+            !registry.get(delivery.source)
+          )
             return yield* new ApplicationError({
               kind: "invalid-input",
-              message: "Signal occurrence has no matching Goal owner or identity",
+              message: "Task destination or source is invalid",
             });
+          yield* validateTaskMessage(registry, delivery);
           yield* inputs.accept(
             {
-              _tag: "SignalOccurrence",
-              occurrenceId: input.id,
-              signalPath: input.signalPath,
-              evidence: input.text,
+              _tag: "TaskMessage",
+              requestId: delivery.requestId,
+              source: delivery.source,
+              text:
+                delivery.task.text +
+                (delivery.evidence ? `\n\nEvidence: ${JSON.stringify(delivery.evidence)}` : ""),
             },
-            input.id,
-            {
-              ...patch,
-              causal: input.causal ?? causal,
-            },
+            delivery.requestId,
+            { ...patch, causal: delivery.causal },
           );
           return receipt;
         }),
@@ -148,17 +117,10 @@ export const goalAdmission = (
         Effect.gen(function* () {
           const run = registry.get(input.runPath)?.state as
             | {
-                admission?: { input: { source: string } };
-                signalSlug?: string;
+                admission?: { input: { replyTo: string } };
               }
             | undefined;
-          const signal = (
-            run?.signalSlug ? registry.get(`/signals/${run.signalSlug}`)?.state : undefined
-          ) as { goal?: string } | undefined;
-          if (
-            !run ||
-            (run.admission?.input.source !== current().path && signal?.goal !== state().slug)
-          )
+          if (!run || run.admission?.input.replyTo !== current().path)
             return yield* new ApplicationError({
               kind: "invalid-input",
               message: "Execution feedback does not belong to this Goal",

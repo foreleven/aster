@@ -29,15 +29,10 @@ export type GoalIntent = typeof GoalIntent.Type;
 export const GoalInputPayload = Schema.Union([
   Schema.TaggedStruct("GoalIntent", { intent: GoalIntent }),
   Schema.TaggedStruct("UserInput", { text: Schema.NonEmptyString }),
-  Schema.TaggedStruct("PersonalMessage", {
-    text: Schema.NonEmptyString,
-    source: Schema.Literal("/personal"),
+  Schema.TaggedStruct("TaskMessage", {
     requestId: Schema.String,
-  }),
-  Schema.TaggedStruct("SignalOccurrence", {
-    occurrenceId: Schema.String,
-    signalPath: Schema.String,
-    evidence: Schema.String,
+    source: Schema.String,
+    text: Schema.String,
   }),
   Schema.TaggedStruct("ExecutionFeedback", {
     runPath: Schema.String,

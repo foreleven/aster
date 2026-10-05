@@ -1,33 +1,16 @@
-import { requestedApproval } from "./request.js";
-import {
-  ApplicationError,
-  ApprovalDelivery,
-  ApprovalDeliveryInput,
-  ApprovalRequestDelivery,
-  ApprovalRequestDeliveryInput,
-  ApprovalEntry,
-  CommandReceipt,
-} from "@aster/api-contracts";
 import { isDeepStrictEqual } from "node:util";
+import { ApprovalEntry } from "@aster/api-contracts";
 export { ApprovalEntry } from "@aster/api-contracts";
 import { ContextActor } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
 import { ApprovalResponse, InputRequest } from "../tasks/model.js";
 import { ReplyTo, type ActorContext } from "@aster/actor";
-import { Clock, Data, Effect, Layer, Match, Schema } from "effect";
+import { Data, Effect, Layer, Match, Schema } from "effect";
 
-export const ApprovalCommandReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-]);
-export type ApprovalCommandReply = typeof ApprovalCommandReply.Type;
 const ApprovalState = Schema.Struct({
   entries: Schema.Array(ApprovalEntry),
   revokedIds: Schema.optional(Schema.Array(Schema.String)),
-  commandReceipts: Schema.optional(
-    Schema.Array(Schema.Union([ApprovalDelivery, ApprovalRequestDelivery])),
-  ),
 });
 
 export const ApprovalResolved = Schema.TaggedStruct("ApprovalResolved", {
@@ -35,14 +18,6 @@ export const ApprovalResolved = Schema.TaggedStruct("ApprovalResolved", {
   response: ApprovalResponse,
 });
 export const ApprovalCommand = Schema.Union([
-  Schema.TaggedStruct("RequestPersonal", {
-    input: ApprovalRequestDeliveryInput,
-    replyTo: ReplyTo<ApprovalCommandReply>(),
-  }),
-  Schema.TaggedStruct("RespondPersonal", {
-    input: ApprovalDeliveryInput,
-    replyTo: ReplyTo<ApprovalCommandReply>(),
-  }),
   Schema.TaggedStruct("Revoke", { id: Schema.String }),
   Schema.TaggedStruct("Enqueue", { entry: ApprovalEntry }),
   Schema.TaggedStruct("Resolve", {
@@ -176,157 +151,6 @@ export class ApprovalQueueActor extends ContextActor.Service<ApprovalQueueActor>
           )
           .pipe(Effect.asVoid, Effect.orDie);
       };
-      const respondPersonal = Effect.fn("ApprovalQueue.respondPersonal")(function* (
-        raw: ApprovalDeliveryInput,
-      ) {
-        const input = yield* Schema.decodeUnknownEffect(ApprovalDeliveryInput)(raw).pipe(
-          Effect.mapError(
-            () =>
-              new ApplicationError({ kind: "invalid-input", message: "Invalid approval command" }),
-          ),
-        );
-        const current = registry.get("/approvals")!;
-        const state = Schema.decodeUnknownSync(ApprovalState)(current.state);
-        const previous = state.commandReceipts?.find(
-          (item) => item.input.requestId === input.requestId,
-        );
-        if (previous) {
-          if (!isDeepStrictEqual(previous.input, input))
-            return yield* new ApplicationError({
-              kind: "conflict",
-              message: "Approval command ID belongs to another response",
-            });
-          return previous.receipt;
-        }
-        const entry = state.entries.find((item) => item.id === input.approvalId);
-        const response = yield* validateApprovalResponse(entry, input.response).pipe(
-          Effect.catchTag("ApprovalValidationError", ({ message }) =>
-            Effect.fail(new ApplicationError({ kind: "conflict", message })),
-          ),
-        );
-        const receipt = { requestId: input.requestId, revision: (current.revision ?? 0) + 1 };
-        const at = new Date(yield* Clock.currentTimeMillis).toISOString();
-        yield* registry
-          .commit(
-            {
-              ...current,
-              state: {
-                ...state,
-                entries: state.entries.map((item) =>
-                  item.id === input.approvalId ? { ...item, response, status: "resolved" } : item,
-                ),
-                commandReceipts: [...(state.commandReceipts ?? []), { input, receipt }],
-              },
-              messages: [
-                ...current.messages,
-                {
-                  type: "Resolved",
-                  requestId: input.approvalId,
-                  commandId: input.requestId,
-                  causationId: input.causationId,
-                  source: input.source,
-                  target: input.target,
-                  revision: receipt.revision,
-                  response,
-                  at,
-                },
-              ],
-            },
-            { expectedRevision: input.expectedRevision },
-          )
-          .pipe(
-            Effect.catchTag("ContextConflict", () =>
-              Effect.fail(
-                new ApplicationError({
-                  kind: "conflict",
-                  message:
-                    "Approval Context revision changed; refresh before issuing a new response",
-                }),
-              ),
-            ),
-            Effect.catchTag("ContextCommitError", Effect.die),
-            Effect.catchTag("ContextValidationError", Effect.die),
-          );
-        return receipt;
-      });
-      const requestPersonal = Effect.fn("ApprovalQueue.requestPersonal")(function* (
-        raw: ApprovalRequestDeliveryInput,
-      ) {
-        const input = yield* Schema.decodeUnknownEffect(ApprovalRequestDeliveryInput)(raw).pipe(
-          Effect.mapError(
-            () =>
-              new ApplicationError({
-                kind: "invalid-input",
-                message: "Invalid approval request command",
-              }),
-          ),
-        );
-        const current = registry.get("/approvals")!;
-        const state = Schema.decodeUnknownSync(ApprovalState)(current.state);
-        const previous = state.commandReceipts?.find(
-          (item) => item.input.requestId === input.requestId,
-        );
-        if (previous) {
-          if (!isDeepStrictEqual(previous.input, input))
-            return yield* new ApplicationError({
-              kind: "conflict",
-              message: "Approval command ID belongs to another command",
-            });
-          return previous.receipt;
-        }
-        if (state.revokedIds?.includes(input.approvalId))
-          return yield* new ApplicationError({
-            kind: "conflict",
-            message: "Approval demand was revoked",
-          });
-        const entry = yield* requestedApproval(registry, input);
-        const existing = state.entries.find((item) => item.id === entry.id);
-        if (existing && !isDeepStrictEqual(existing, entry))
-          return yield* new ApplicationError({
-            kind: "conflict",
-            message: "Approval already resolved, revoked, or bound to another demand",
-          });
-        const receipt = { requestId: input.requestId, revision: (current.revision ?? 0) + 1 };
-        yield* registry
-          .commit(
-            {
-              ...current,
-              state: {
-                ...state,
-                entries: existing ? state.entries : [...state.entries, entry],
-                commandReceipts: [...(state.commandReceipts ?? []), { input, receipt }],
-              },
-              messages: [
-                ...current.messages,
-                {
-                  type: "RequestAdmitted",
-                  approvalId: entry.id,
-                  requestId: input.requestId,
-                  causationId: input.causationId,
-                  source: input.source,
-                  contextPath: input.contextPath,
-                  contextRevision: input.contextRevision,
-                  revision: receipt.revision,
-                  at: input.createdAt,
-                },
-              ],
-            },
-            { expectedRevision: input.expectedRevision },
-          )
-          .pipe(
-            Effect.catchTag("ContextConflict", () =>
-              Effect.fail(
-                new ApplicationError({
-                  kind: "conflict",
-                  message: "Approval queue revision changed",
-                }),
-              ),
-            ),
-            Effect.catchTag("ContextCommitError", Effect.die),
-            Effect.catchTag("ContextValidationError", Effect.die),
-          );
-        return receipt;
-      });
       return ApprovalQueueActor.of({
         started: (context) =>
           Effect.gen(function* () {
@@ -346,24 +170,6 @@ export class ApprovalQueueActor extends ContextActor.Service<ApprovalQueueActor>
           }),
         receive: (command, context) =>
           Match.value(command).pipe(
-            Match.tag("RequestPersonal", ({ input, replyTo }) =>
-              requestPersonal(input).pipe(
-                Effect.map((receipt): ApprovalCommandReply => ({ _tag: "Accepted", receipt })),
-                Effect.catchTag("ApplicationError", (error) =>
-                  Effect.succeed({ _tag: "Rejected" as const, error }),
-                ),
-                Effect.flatMap((reply) => replyTo.tell(reply)),
-              ),
-            ),
-            Match.tag("RespondPersonal", ({ input, replyTo }) =>
-              respondPersonal(input).pipe(
-                Effect.map((receipt): ApprovalCommandReply => ({ _tag: "Accepted", receipt })),
-                Effect.catchTag("ApplicationError", (error) =>
-                  Effect.succeed({ _tag: "Rejected" as const, error }),
-                ),
-                Effect.flatMap((reply) => replyTo.tell(reply)),
-              ),
-            ),
             Match.tag("Enqueue", ({ entry }) =>
               Effect.gen(function* () {
                 if (
@@ -404,6 +210,13 @@ export class ApprovalQueueActor extends ContextActor.Service<ApprovalQueueActor>
             Match.tag("Resolve", ({ id, response, replyTo }) =>
               Effect.gen(function* () {
                 const entry = approvalEntries(registry).find((item) => item.id === id);
+                if (entry?.response && ["resolved", "acknowledged"].includes(entry.status)) {
+                  const accepted = yield* validateApprovalResponse(
+                    { ...entry, status: "pending" },
+                    response,
+                  );
+                  if (isDeepStrictEqual(entry.response, accepted)) return yield* replyTo.tell({});
+                }
                 const accepted = yield* validateApprovalResponse(entry, response);
                 yield* save(
                   approvalEntries(registry).map((item) =>

@@ -2,7 +2,7 @@ import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { ConfigProvider, Deferred, Effect, Layer, Schema } from "effect";
+import { ConfigProvider, Effect, Layer, Schema } from "effect";
 import {
   ContextRegistry,
   ExternalAgents,
@@ -15,7 +15,6 @@ import {
   type ContextRecord,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
-import { preparationLayer } from "./fixtures.js";
 
 const configFor = (goal: object) => ({
   config: {
@@ -43,7 +42,12 @@ test("Goal config readers retain optional titles and reject blank or non-string 
     const config = configFor(goal);
     const expected = [{ slug: "project", ...goal }];
     assert.deepEqual(parseConfig(config, "/tmp").goals, expected);
-    assert.deepEqual((await Effect.runPromise(settingsFor(config))).definitions, expected);
+    assert.deepEqual(
+      (await Effect.runPromise(settingsFor(config))).definitions.filter(
+        (goal) => goal.slug !== "personal",
+      ),
+      expected,
+    );
   }
   for (const title of ["", " \n\t", 42, null]) {
     const config = configFor({ title, description: "Detailed responsibility" });
@@ -71,11 +75,10 @@ test("Goal startup persists titles and refreshes restored titles without losing 
               saved = record;
             },
           });
-          const ready = yield* Deferred.make<void>();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               Layer.succeed(ContextRegistry, registry),
-              preparationLayer,
+
               Layer.succeed(ExternalAgents, {}),
               goalWorkflowLayer({
                 definitions: [
@@ -83,14 +86,13 @@ test("Goal startup persists titles and refreshes restored titles without losing 
                 ],
                 history,
                 reasoner: { plan: () => Effect.die("No evaluation expected") },
-                signals: () => [],
-                reconcile: () => Deferred.succeed(ready, undefined).pipe(Effect.as([])),
+
                 deactivate: () => Effect.void,
               }),
             ),
           );
-          yield* system.spawn("goals", GoalsRootActor);
-          yield* Deferred.await(ready).pipe(Effect.timeout("2 seconds"));
+          const root = yield* system.spawn("goals", GoalsRootActor);
+          yield* root.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
           const api = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
           const record = yield* api.context("/goals/project");
           const canonical = registry.get(record.path)!;
