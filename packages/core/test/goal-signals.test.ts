@@ -156,7 +156,7 @@ test("Signal timer lives outside conversation, reschedules by revision and execu
               .occurrences[0]?.delivered === true,
         );
         assert.equal(
-          Object.keys(env.registry.snapshot()).some((path) => path.includes("/runs/")),
+          Object.keys(env.registry.snapshot()).some((path) => path.includes("/tasks/")),
           false,
         );
         yield* clock.adjust(60000);

@@ -18,14 +18,13 @@ export const goalTimeline = Atom.family((slug: string) => {
       const newest = yield* get.result(latest, { suspendOnWaiting: true });
       const client = yield* ApplicationClient;
       let page = newest;
-      let groups = [...newest.groups];
-      // Delivery statuses are mutable. Re-read the whole loaded range after invalidation;
-      // never retain an old completed/unknown decision from an immutable-history cache.
+      let messages = [...newest.messages];
+      // Re-read the loaded range on reconnect so newly committed replies are included.
       while (requested !== undefined && page.nextBefore !== null && page.nextBefore >= requested) {
         page = yield* client("GetGoalTimeline", { slug, before: page.nextBefore });
-        groups = [...page.groups, ...groups];
+        messages = [...page.messages, ...messages];
       }
-      return { ...newest, groups, nextBefore: page.nextBefore };
+      return { ...newest, messages, nextBefore: page.nextBefore };
     });
   });
   return { before, latest, feed };

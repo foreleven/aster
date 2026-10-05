@@ -407,3 +407,57 @@ test("Pi runtime fences a mixed tool round after a returned unknown write outcom
     ).pipe(Effect.timeout("5 seconds")),
   );
 });
+
+test("Pi external follow-up retains prior conversation, deduplicates, and returns the new answer", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        let calls = 0;
+        const runtime = yield* PiDurableAgentRuntime.make({
+          ownerId: "follow-up",
+          catalogueId: "test.v1",
+          openStorage: Effect.succeed(new MemoryStorage()),
+          resolved: {
+            ...resolved(() => answer()),
+            stream: (_model, context) => {
+              calls++;
+              if (calls === 2) {
+                assert.match(JSON.stringify(context.messages), /Original finding/);
+                assert.match(JSON.stringify(context.messages), /More analysis/);
+              }
+              const message = answer([
+                { type: "text", text: calls === 1 ? "Original finding" : "New finding" },
+              ]);
+              const stream = createAssistantMessageEventStream();
+              stream.push({ type: "done", reason: "stop", message });
+              return stream;
+            },
+          },
+        });
+        const first = yield* runtime.submit({
+          requestId: "first",
+          prompt: "Investigate",
+          instructions: "Read evidence",
+        });
+        assert.deepEqual(yield* runtime.wait(first), {
+          state: "completed",
+          text: "Original finding",
+        });
+        const next = yield* runtime.followUp(first, { requestId: "second", text: "More analysis" });
+        assert.notEqual(next.runId, first.runId);
+        assert.deepEqual(yield* runtime.wait(next), { state: "completed", text: "New finding" });
+        assert.deepEqual(
+          yield* runtime.followUp(first, { requestId: "second", text: "More analysis" }),
+          next,
+        );
+        assert.equal(calls, 2);
+        assert.equal(
+          (yield* runtime
+            .followUp(first, { requestId: "second", text: "Different" })
+            .pipe(Effect.result))._tag,
+          "Failure",
+        );
+      }),
+    ).pipe(Effect.timeout("10 seconds")),
+  );
+});

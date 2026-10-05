@@ -49,7 +49,7 @@ export const deliverTask = Effect.fn("Task.deliver")(function* <C, R>(
         return reply.receipt;
       }),
     ),
-    Match.tag("Delegate", (task) => startTask(actor, delegateInput(input, task))),
+    Match.tag("Delegate", "Agent", (task) => startTask(actor, delegateInput(input, task))),
     Match.exhaustive,
   );
 });

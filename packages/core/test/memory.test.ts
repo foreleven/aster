@@ -1,3 +1,5 @@
+import { testConversations } from "./conversation-fixtures.js";
+import { retainedTask } from "./task-fixtures.js";
 import { ContextCaptures } from "../src/memory/capture.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -15,10 +17,10 @@ import {
 import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
 
 const input: ContextCapture = {
-  sessionId: "/goals/project/runs/one:outcome:completed",
+  sessionId: "/goals/project/tasks/one:outcome:completed",
   records: [
     {
-      path: "/goals/project/runs/one",
+      path: "/goals/project/tasks/one",
       description: "Result",
       state: { status: "completed" },
       messages: ["Result"],
@@ -195,22 +197,15 @@ test("recovered captures exclude private source data and Memory queue state stay
   await run(
     Effect.gen(function* () {
       const secret = "PRIVATE_CAPTURE_SENTINEL";
+      const retained = yield* retainedTask(testConversations(), "completed");
       const pending = {
-        sessionId: "legacy",
+        sessionId: "retained",
         records: [
           {
-            path: "/runs/" + "a".repeat(64),
+            path: "/tasks/" + "a".repeat(64),
             description: "Result",
             state: {
-              status: "completed",
-              admission: {
-                input: {
-                  source: "/goals/personal",
-                  replyTo: "/goals/personal",
-                  agent: "test",
-                  task: { instructions: "Done", input: [] },
-                },
-              },
+              ...retained.state,
               source: { token: secret },
             },
             messages: [{ type: "Completed", text: "Done", provider: secret }],

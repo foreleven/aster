@@ -35,7 +35,7 @@ export const GoalInputPayload = Schema.Union([
     text: Schema.String,
   }),
   Schema.TaggedStruct("ExecutionFeedback", {
-    runPath: Schema.String,
+    taskPath: Schema.String,
     status: Schema.String,
     terminal: Schema.Boolean,
     text: Schema.String,
@@ -43,15 +43,6 @@ export const GoalInputPayload = Schema.Union([
   Schema.TaggedStruct("GoalStarted", { pursuit: Schema.NonEmptyString }),
 ]);
 export type GoalInputPayload = typeof GoalInputPayload.Type;
-export const GoalInput = Schema.Struct({
-  inputId: Schema.NonEmptyString,
-  goalSlug: Schema.NonEmptyString,
-  ordinal: Schema.Int.check(Schema.isGreaterThan(0)),
-  receivedAt: Schema.NonEmptyString,
-  payload: GoalInputPayload,
-});
-export type GoalInput = typeof GoalInput.Type;
-
 export const RetryGoalTurnInput = Schema.Struct({
   slug: Schema.NonEmptyString,
   requestId: CommandIdentifier,
@@ -59,19 +50,17 @@ export const RetryGoalTurnInput = Schema.Struct({
 });
 export type RetryGoalTurnInput = typeof RetryGoalTurnInput.Type;
 
-/** Public delivery history; Pi's native tool transcript stays private. */
-export const GoalTimelineGroup = Schema.Struct({
-  requestId: Schema.NonEmptyString,
-  ordinal: Schema.Int,
-  status: Schema.Literals(["pending", "running", "completed", "failed", "unknown", "ignored"]),
-  retryOf: Schema.optional(Schema.String),
-  input: GoalInput,
-  response: Schema.optional(Schema.String),
-  error: Schema.optional(Schema.String),
+/** User-facing dialogue projected from Pi entries, never tool or evidence records. */
+export const GoalConversationMessage = Schema.Struct({
+  id: Schema.Int,
+  inputId: Schema.String,
+  role: Schema.Literals(["user", "assistant"]),
+  text: Schema.String,
+  at: Schema.String,
 });
-export type GoalTimelineGroup = typeof GoalTimelineGroup.Type;
+export type GoalConversationMessage = typeof GoalConversationMessage.Type;
 export const GoalTimelinePage = Schema.Struct({
-  groups: Schema.Array(GoalTimelineGroup),
+  messages: Schema.Array(GoalConversationMessage),
   total: Schema.Int,
   nextBefore: Schema.NullOr(Schema.Int),
 });

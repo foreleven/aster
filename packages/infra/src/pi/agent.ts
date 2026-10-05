@@ -142,6 +142,15 @@ export const piExternalAgent = (runtime: PiDurableRuntime): ExternalAgent => {
           ),
           Effect.mapError(failure("lookup")),
         ),
+    followUp: (session, input) =>
+      handle(session).pipe(
+        Effect.flatMap((value) => runtime.followUp(value, input)),
+        Effect.map((execution) => ({
+          ...execution,
+          metadata: { mappingVersion: 1, shardId: runtime.ownerId, requestId: input.requestId },
+        })),
+        Effect.mapError(failure("followUp")),
+      ),
     status: (session) =>
       handle(session).pipe(
         Effect.flatMap(runtime.status),

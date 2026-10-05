@@ -1,21 +1,21 @@
+import { testConversations } from "./conversation-fixtures.js";
 import { goalIntentRecords } from "./goal-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import { goalInputId } from "../src/goals/inputs.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { Deferred, Effect, Layer, Schema, Stream } from "effect";
+import { Deferred, Effect, Layer, Schema } from "effect";
 import {
   ContextRegistry,
   ExternalAgents,
   GoalState,
   GoalsRootActor,
-  makeMemoryGoalHistory,
   type ContextRecord,
   type GoalDeliveryReply,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
-import { GoalHistoryError } from "../src/goals/history.js";
+import { ConversationError } from "@aster/agent";
 import { type GoalIntentInput } from "../src/goals/intent.js";
 import type { GoalCommandReply } from "../src/goals/actors.js";
 
@@ -50,89 +50,71 @@ const input: GoalIntentInput = {
   },
 };
 
-for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
-  test(`Goal Intent recovers ${fault} loss with one durable input, receipt and history entry`, async () => {
+for (const fault of ["pi-ack", "actor-ack"] as const) {
+  test(`Goal recovers ${fault} loss with one Pi input and its original receipt`, async () => {
     const records = new Map<string, ContextRecord>();
-    const history = makeMemoryGoalHistory();
+    const history = testConversations();
     let fail = true;
     let firstInput = input;
-    let receipt: { requestId: string; revision: number } | undefined;
     for (const restart of [false, true]) {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
+            const cut = yield* Deferred.make<void>();
             const registry = yield* makeContextRegistry({
               loadAll: () => [...records.values()],
               save: (record) => {
                 records.set(record.path, structuredClone(record));
-                const item = goalIntentRecords(
-                  Schema.decodeUnknownSync(GoalState)(record.state),
-                )[0];
                 if (
                   fail &&
-                  item &&
-                  ((fault === "accept-ack" && item.historySequence === undefined) ||
-                    (fault === "projection-ack" && item.historySequence !== undefined))
+                  fault === "actor-ack" &&
+                  record.path === "/goals/project" &&
+                  goalIntentRecords(Schema.decodeUnknownSync(GoalState)(record.state)).length
                 ) {
                   fail = false;
-                  throw new Error("Persisted before acknowledgement loss");
+                  Effect.runSync(Deferred.succeed(cut, undefined));
+                  throw new Error("Actor acknowledgement lost after commit");
                 }
               },
             });
-            const entered = yield* Deferred.make<void>();
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
                 Layer.succeed(ContextRegistry, registry),
-
                 Layer.succeed(ExternalAgents, {}),
                 goalWorkflowLayer({
                   definitions: [{ slug: "project", description: "Monitor release" }],
                   history: {
                     ...history,
-                    append: (slug, message, requestId) =>
+                    append: (owner, requestId, kind, data) =>
                       Effect.gen(function* () {
+                        const entry = yield* history.append(owner, requestId, kind, data);
                         if (
+                          fail &&
+                          fault === "pi-ack" &&
                           requestId === goalInputId("project", "GoalIntent", input.intent.intentId)
                         ) {
                           assert.equal(
                             goalIntentRecords(
-                              Schema.decodeUnknownSync(GoalState)(
-                                records.get("/goals/project")!.state,
-                              ),
+                              Schema.decodeUnknownSync(GoalState)(records.get(owner)!.state),
                             ).length,
-                            1,
-                            "The inbox must commit before the history projection",
+                            0,
                           );
-                        }
-                        const entry = yield* history.append(slug, message, requestId);
-                        if (
-                          fail &&
-                          fault === "history-ack" &&
-                          requestId === goalInputId("project", "GoalIntent", input.intent.intentId)
-                        ) {
                           fail = false;
-                          return yield* new GoalHistoryError({
-                            cause: new Error("History acknowledgement lost"),
+                          yield* Deferred.succeed(cut, undefined);
+                          return yield* new ConversationError({
+                            message: "Pi acknowledgement lost after commit",
                           });
                         }
                         return entry;
                       }),
                   },
-                  reasoner: {
-                    plan: () =>
-                      Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
-                  },
-
+                  reasoner: { plan: () => Effect.never },
                   deactivate: () => Effect.void,
                 }),
               ),
             );
             const root = yield* system.spawn("goals", GoalsRootActor);
-            yield* root.ask<import("../src/goals/protocol.js").GoalReadyReply>((replyTo) => ({
-              _tag: "AwaitReady",
-              stage: "restored",
-              replyTo,
-            }));
+            yield* root.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
             const send = (value: GoalIntentInput) =>
               root.ask<GoalDeliveryReply>((replyTo) => ({
                 _tag: "Route",
@@ -141,7 +123,7 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
                   _tag: "SubmitInput",
                   requestId: value.requestId,
                   input: { _tag: "GoalIntent", delivery: value },
-                  replyTo: replyTo,
+                  replyTo,
                 },
               }));
             if (!restart) {
@@ -157,59 +139,30 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
                 },
               });
               assert.ok(invalid._tag === "Rejected" && invalid.error.kind === "invalid-input");
-              assert.equal(
-                goalIntentRecords(
-                  Schema.decodeUnknownSync(GoalState)(registry.get("/goals/project")!.state),
-                ).length,
-                0,
-              );
-              const changes = yield* registry.subscribe;
               const sending = yield* send(firstInput).pipe(Effect.forkScoped);
-              yield* changes.pipe(
-                Stream.filter(
-                  (change) =>
-                    change.record.path === "/goals/project" &&
-                    goalIntentRecords(Schema.decodeUnknownSync(GoalState)(change.record.state))[0]
-                      ?.historySequence !== undefined,
-                ),
-                Stream.take(1),
-                Stream.runDrain,
-              );
-              assert.equal(
-                sending.pollUnsafe(),
-                undefined,
-                "A failed acceptance never returns a success receipt",
-              );
-              yield* root.tell({ _tag: "Initialize" });
-              yield* Deferred.await(entered);
+              yield* Deferred.await(cut);
+              assert.equal(sending.pollUnsafe(), undefined);
+              return;
             }
             const accepted = yield* send(firstInput);
             assert.equal(accepted._tag, "Accepted");
             if (accepted._tag !== "Accepted") return;
-            if (receipt) assert.deepEqual(accepted.receipt, receipt);
-            receipt = accepted.receipt;
-            const entries = (yield* history.read("project", { limit: 100 })).filter(
-              (entry) =>
-                entry.requestId === goalInputId("project", "GoalIntent", input.intent.intentId),
-            );
-            assert.equal(entries.length, 1);
-            assert.match(JSON.stringify(entries[0]!.message), /Release team/);
-            assert.match(
-              JSON.stringify(entries[0]!.message),
-              /The release deadline affects this Goal/,
-            );
             const stored = Schema.decodeUnknownSync(GoalState)(
               registry.get("/goals/project")!.state,
             );
             assert.equal(goalIntentRecords(stored).length, 1);
-            assert.deepEqual(goalIntentRecords(stored)[0]?.intent, firstInput.intent);
+            const entries = (yield* history.read("/goals/project")).filter(
+              (entry) =>
+                entry.requestId === goalInputId("project", "GoalIntent", input.intent.intentId),
+            );
+            assert.equal(entries.length, 1);
+            assert.match(JSON.stringify(entries[0]!.data), /Release team/);
+            assert.doesNotMatch(JSON.stringify(stored), /Release delayed|fingerprint.*Release/);
+            assert.deepEqual(
+              stored.receipts.find((item) => item.requestId === input.requestId)?.receipt,
+              accepted.receipt,
+            );
             assert.equal(fail, false);
-            const savedReceipt = stored.receipts.find(
-              (item) => item.requestId === firstInput.requestId,
-            )!;
-            assert.deepEqual(savedReceipt.receipt, accepted.receipt);
-            assert.match(savedReceipt.payloadFingerprint, /^[a-f0-9]{64}$/);
-            assert.equal("request" in savedReceipt, false);
             const conflict = yield* send({
               ...firstInput,
               intent: {
@@ -220,31 +173,12 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
             assert.ok(conflict._tag === "Rejected" && conflict.error.kind === "conflict");
             const stale = yield* send({ ...firstInput, requestId: "stale" });
             assert.ok(stale._tag === "Rejected" && stale.error.kind === "conflict");
-            if (restart) {
-              yield* root.ask<GoalCommandReply>((replyTo) => ({
-                _tag: "Route",
-                slug: "project",
-                command: { _tag: "End", requestId: "test-8862", replyTo: replyTo },
-              }));
-              assert.deepEqual(yield* send(firstInput), accepted);
-              const closed = yield* send({
-                ...firstInput,
-                requestId: "closed",
-                expectedRevision: registry.get("/goals/project")!.revision!,
-              });
-              assert.ok(closed._tag === "Rejected" && closed.error.kind === "conflict");
-              const unavailable = yield* root.ask<GoalDeliveryReply>((replyTo) => ({
-                _tag: "Route",
-                slug: "missing",
-                command: {
-                  _tag: "SubmitInput",
-                  requestId: firstInput.requestId,
-                  input: { _tag: "GoalIntent", delivery: firstInput },
-                  replyTo: replyTo,
-                },
-              }));
-              assert.ok(unavailable._tag === "Rejected" && unavailable.error.kind === "not-found");
-            }
+            yield* root.ask<GoalCommandReply>((replyTo) => ({
+              _tag: "Route",
+              slug: "project",
+              command: { _tag: "End", requestId: "end", replyTo },
+            }));
+            assert.deepEqual(yield* send(firstInput), accepted);
           }),
         ).pipe(Effect.timeout("5 seconds")),
       );

@@ -286,7 +286,7 @@ for (const status of ["published", "unknown", "sending"] as const) {
           const at = "2026-10-03T00:00:00.000Z";
           yield* clock.adjust(Date.parse(at));
           const date = imDate(at);
-          const source = "/signals/report/runs/one";
+          const source = "/signals/report/tasks/one";
           const assessed = yield* Deferred.make<void>();
           const flushed = yield* Deferred.make<void>();
           const reacted = yield* Deferred.make<void>();

@@ -1,7 +1,6 @@
 import { Option, Schema } from "effect";
 import { contextView } from "../context/view.js";
 import type { ContextViewPolicy } from "../context/definition.js";
-import { publicBusinessMessage } from "../reasoning/public-messages.js";
 import { GoalState } from "./state.js";
 
 /** Display metadata and the latest settled error are derived from canonical Goal state. */
@@ -23,12 +22,14 @@ export const goalView: ContextViewPolicy = {
         title: state.definition.title ?? state.definition.description,
         status: state.status,
         summary: state.summary,
+        ...(state.status === "active" &&
+        latest?.status === "failed" &&
+        !state.inputs.some((input) => ["pending", "running", "unknown"].includes(input.status))
+          ? { retryableInputId: latest.inputId }
+          : {}),
         ...(latest?.status !== "completed" && latest?.error ? { lastError: latest.error } : {}),
       },
-      messages: record.messages.flatMap((message) => {
-        const projected = publicBusinessMessage(message);
-        return projected === undefined ? [] : [projected];
-      }),
+      messages: [],
       projection: { version: 1, visibility: "public" },
     };
   },

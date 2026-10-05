@@ -5,7 +5,7 @@ import { makeContextRegistry } from "@aster/core/testing";
 import { type WritebackOperation } from "@aster/core";
 import { makeLarkChannelWrites, isLarkWritebackEcho } from "@aster/integrations";
 
-const source = "/signals/report/runs/one";
+const source = "/signals/report/tasks/one";
 const target = "/lark/im/chats/oc_test";
 const at = "2026-10-03T00:00:00.000Z";
 const operation: WritebackOperation = {

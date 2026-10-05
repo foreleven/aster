@@ -1,3 +1,5 @@
+import { testConversations } from "./conversation-fixtures.js";
+import { AgentConversations } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -10,11 +12,9 @@ import {
   MemoryBackend,
   DurableContext,
   ExternalAgents,
-  GoalHistoryStore,
   RuntimeIntegrations,
   SystemOneClient,
   defineIntegration,
-  makeMemoryGoalHistory,
 } from "../src/index.js";
 import { makeDurableContext } from "../src/context/kernel.js";
 
@@ -44,7 +44,7 @@ const infrastructure = (drain = Effect.void) =>
       DurableContext,
       makeDurableContext({ load: Effect.succeed([]), save: () => Effect.void }),
     ),
-    Layer.sync(GoalHistoryStore, makeMemoryGoalHistory),
+    Layer.sync(AgentConversations, testConversations),
     Models.layer([
       {
         name: "test",

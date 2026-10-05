@@ -21,11 +21,11 @@ export function WorkPanel({
 }) {
   const [error, setError] = useState("");
   const approvals = useAtomValue(approvalEntries);
-  const runs = related.filter((context) => context.path.includes("/runs/"));
+  const tasks = related.filter((context) => context.path.includes("/tasks/"));
   const signals = related.filter(
     (context) => /^\/signals\/[^/]+$/.test(context.path) && !context.state.deleted,
   );
-  const approvalPaths = runs.map((run) => run.path);
+  const approvalPaths = tasks.map((run) => run.path);
   const hasApprovals = approvals.some((entry) => approvalPaths.includes(entry.contextPath));
   const nameFor = (path: string) =>
     contexts.find((context) => context.path === path)?.description || path;
@@ -51,14 +51,14 @@ export function WorkPanel({
       )}
       <details className="work-section" open>
         <summary>
-          Tasks / Executions <span>({runs.length})</span>
+          Tasks / Executions <span>({tasks.length})</span>
           <ChevronDown size={16} />
         </summary>
         <div className="work-cards">
-          {!runs.length && (
+          {!tasks.length && (
             <p className="quiet-message">No tasks yet. Planned work will appear here.</p>
           )}
-          {runs.map((run) => (
+          {tasks.map((run) => (
             <article className="work-card" key={run.path}>
               <WorkIcon status={run.state.status} />
               <div className="work-card-body">

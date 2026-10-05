@@ -4,13 +4,13 @@ import type { ContextCapture } from "./contracts.js";
 
 export interface CapturePolicy {
   readonly matches: (path: string) => boolean;
-  readonly capture: (record: ContextInput) => ContextCapture | undefined;
+  readonly capture: (record: ContextInput) => Effect.Effect<ContextCapture | undefined>;
 }
 export class ContextCaptures extends Context.Service<
   ContextCaptures,
   {
     readonly register: (policies: readonly CapturePolicy[]) => Effect.Effect<void>;
-    readonly select: (record: ContextInput) => ContextCapture | undefined;
+    readonly select: (record: ContextInput) => Effect.Effect<ContextCapture | undefined>;
   }
 >()("memory/ContextCaptures") {
   static readonly layer = Layer.sync(ContextCaptures, () => {
@@ -21,7 +21,8 @@ export class ContextCaptures extends Context.Service<
           for (const policy of values) policies.add(policy);
         }),
       select: (record) =>
-        [...policies].find((policy) => policy.matches(record.path))?.capture(record),
+        [...policies].find((policy) => policy.matches(record.path))?.capture(record) ??
+        Effect.succeed(undefined),
     };
   });
 }

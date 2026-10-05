@@ -1,136 +1,60 @@
+import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Fiber } from "effect";
-import {
-  GoalActor,
-  makeApplicationApi,
-  makeMemoryGoalHistory,
-  type ContextRecord,
-} from "../src/index.js";
+import { Effect } from "effect";
+import { GoalActor, makeApplicationApi } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { goalWorkingState } from "../src/goals/working-state.js";
 
-for (const phase of ["count", "read"] as const)
-  test(`Goal projection rejects a snapshot changed while history ${phase} is pending`, async () => {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const writes: ContextRecord[] = [];
-          const registry = yield* makeContextRegistry({
-            loadAll: () => [],
-            save: (record) => {
-              writes.push(record);
-            },
-          });
-          const path = "/goals/demo";
-          yield* registry.register(path, GoalActor.context);
-          const initial = yield* registry.commit(
-            {
-              path,
-              description: "Goal",
-              state: {
-                definition: { slug: "demo", description: "Goal" },
-                status: "active",
-                summary: "Original",
-                inputs: [],
-                receipts: [],
-              },
-              messages: [],
-            },
-            { expectedRevision: 0 },
-          );
-          const entered = yield* Deferred.make<void>();
-          const release = yield* Deferred.make<void>();
-          const gate = Deferred.succeed(entered, undefined).pipe(
-            Effect.andThen(Deferred.await(release)),
-          );
-          const history = makeMemoryGoalHistory();
-          const working = goalWorkingState(
-            registry,
-            {
-              ...history,
-              count: (goal) =>
-                phase === "count"
-                  ? gate.pipe(Effect.andThen(history.count(goal)))
-                  : history.count(goal),
-              read: (goal, options) =>
-                phase === "read"
-                  ? gate.pipe(Effect.andThen(history.read(goal, options)))
-                  : history.read(goal, options),
-            },
-            () => path,
-          );
-          const pending = yield* working
-            .save({ summary: "Stale computed answer" })
-            .pipe(Effect.result, Effect.forkScoped);
-          yield* Deferred.await(entered);
-          const newer = yield* registry.commit(
-            {
-              ...initial,
-              state: { ...initial.state, status: "completed", summary: "Newer progress" },
-            },
-            { expectedRevision: 1 },
-          );
-          yield* Deferred.succeed(release, undefined);
-          const result = yield* Fiber.join(pending);
-          assert.equal(result._tag, "Failure");
-          if (result._tag === "Failure") {
-            assert.equal(result.failure._tag, "ContextConflict");
-            if (result.failure._tag === "ContextConflict") {
-              assert.equal(result.failure.expectedRevision, 1);
-              assert.equal(result.failure.actualRevision, 2);
-            }
-          }
-          assert.deepEqual(registry.get(path), newer);
-          assert.equal(writes.length, 2);
-        }),
-      ).pipe(Effect.timeout("5 seconds")),
-    );
-  });
-
-test("Goal public messages show the latest business inputs without a compaction cursor", async () => {
+test("Goal keeps message references while public conversation reads Pi history", async () => {
   await Effect.runPromise(
-    Effect.gen(function* () {
-      const registry = yield* makeContextRegistry();
-      const path = "/goals/demo";
-      yield* registry.register(path, GoalActor.context);
-      yield* registry.commit(
-        {
-          path,
-          description: "Goal",
-          messages: [],
-          state: {
-            definition: { slug: "demo", description: "Goal" },
-            status: "active",
-            summary: "",
-            inputs: [],
-            receipts: [],
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeContextRegistry();
+        const conversations = testConversations();
+        const path = "/goals/demo";
+        yield* registry.register(path, GoalActor.context);
+        yield* registry.commit(
+          {
+            path,
+            description: "Goal",
+            messages: [],
+            state: {
+              definition: { slug: "demo", description: "Goal" },
+              status: "active",
+              summary: "",
+              inputs: [],
+              receipts: [],
+            },
           },
-        },
-        { expectedRevision: 0 },
-      );
-      const history = makeMemoryGoalHistory();
-      for (let index = 1; index <= 105; index++) {
-        yield* history.append(
-          "demo",
-          { role: "user", content: `Input ${index}`, timestamp: index },
-          `input-${index}`,
+          { expectedRevision: 0 },
         );
-      }
-      const working = goalWorkingState(registry, history, () => path);
-      yield* working.save();
-      const record = registry.get(path)!;
-      assert.equal(record.messages.length, 100);
-      assert.deepEqual(record.messages[0], { role: "user", content: "Input 6", timestamp: 6 });
-      assert.deepEqual(record.messages.at(-1), {
-        role: "user",
-        content: "Input 105",
-        timestamp: 105,
-      });
-      assert.equal(yield* history.count("demo"), 105);
-      assert.equal("historyCount" in record.state, false);
-      assert.equal("historyThrough" in record.state, false);
-    }),
+        for (let index = 0; index < 105; index++)
+          yield* conversations.append(path, `input-${index}`, "goal.input", {
+            payload: { _tag: "UserInput", text: `Input ${index}` },
+          });
+        yield* conversations.append(path, "evidence", "goal.input", {
+          payload: { _tag: "GoalStarted", pursuit: "internal" },
+        });
+        yield* conversations.append(path, "reply", "goal.reply", {
+          inputId: "input-104",
+          text: "Here is the result",
+        });
+        yield* goalWorkingState(registry, () => path).save({ summary: "Current understanding" });
+        assert.deepEqual(registry.get(path)!.messages, []);
+        const api = makeApplicationApi({ registry, conversations, inspect: Effect.succeed(null) });
+        const page = yield* api.goals.timeline("demo", { limit: 100 });
+        assert.equal(page.total, 106);
+        assert.equal(page.messages.length, 100);
+        assert.equal(page.messages.at(-1)?.text, "Here is the result");
+        assert.ok(page.nextBefore !== null);
+        const previous = yield* api.goals.timeline("demo", { before: page.nextBefore! });
+        assert.equal(previous.messages.length, 6);
+        assert.ok(
+          page.messages.every((message) => message.role === "user" || message.role === "assistant"),
+        );
+      }),
+    ),
   );
 });
 
@@ -140,14 +64,19 @@ test("Goal public error reflects the latest settled input without storing an err
       const registry = yield* makeContextRegistry();
       const path = "/goals/errors";
       yield* registry.register(path, GoalActor.context);
-      const api = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
+      const api = makeApplicationApi({
+        registry,
+        conversations: testConversations(),
+        inspect: Effect.succeed(null),
+      });
       const definition = { slug: "errors", description: "Observe errors" };
       const first = {
         inputId: "first",
         goalSlug: "errors",
         ordinal: 1,
         receivedAt: "2026-10-05T00:00:00Z",
-        payload: { _tag: "UserInput", text: "First" },
+        kind: "UserInput",
+        entryId: 1,
         status: "failed",
         error: "Model failed",
       };

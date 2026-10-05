@@ -1,3 +1,4 @@
+import { AgentConversations } from "@aster/agent";
 import { IntegrationError } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -9,7 +10,6 @@ import {
   ContextRegistry,
   ContextCaptures,
   DurableContext,
-  GoalHistoryStore,
   SystemOneClient,
   ExternalAgents,
   RuntimeIntegrations,
@@ -17,7 +17,6 @@ import {
   contextView,
   defineIntegration,
   contextPath,
-  makeMemoryGoalHistory,
 } from "@aster/core";
 import { LocalDurableContext } from "@aster/infra";
 import { Models } from "@aster/agent";
@@ -66,7 +65,7 @@ const sourceLayer = (
       yield* captures.register([
         {
           matches: (path) => path === `/${name}`,
-          capture: (record) => ({ sessionId: record.path, records: [record] }),
+          capture: (record) => Effect.succeed({ sessionId: record.path, records: [record] }),
         },
       ]);
       const registry = yield* ContextRegistry;
@@ -106,7 +105,7 @@ const infrastructure = (events: string[], overrides: Partial<MemoryBackend["Serv
   Layer.mergeAll(
     Layer.succeed(ConfigLocation, { baseDir: "/tmp", projectRoot: "/tmp", envPath: "/tmp/.env" }),
     Layer.effect(DurableContext, LocalDurableContext.fromStore()),
-    Layer.sync(GoalHistoryStore, makeMemoryGoalHistory),
+    AgentConversations.memory,
     Models.layer([
       {
         name: "test",

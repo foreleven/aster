@@ -17,7 +17,7 @@ import { contextTools } from "../reasoning/context-tools.js";
 import { contextQueryTools } from "../reasoning/context-query-tools.js";
 import type { TaskMessage } from "@aster/api-contracts";
 import type { GoalSignalInput } from "../signals/goal-command.js";
-import type { StoredGoalInput } from "./inputs.js";
+import type { ResolvedGoalInput } from "./inputs.js";
 import { inputMessage } from "./inputs.js";
 import { goalAgentPrompt } from "./agent-prompt.js";
 
@@ -29,7 +29,7 @@ const tool = <T extends TSchema>(value: AgentTool<T>) => value;
 export interface GoalConversation {
   readonly goal: GoalDefinition;
   readonly model: string;
-  readonly input: StoredGoalInput;
+  readonly input: ResolvedGoalInput;
   readonly registry: ContextRegistry["Service"];
   readonly memory: MemoryRecall["Service"];
   readonly queries?: ContextQueries["Service"];
@@ -37,13 +37,15 @@ export interface GoalConversation {
   readonly contextTokens?: number;
   readonly reserveTokens?: number;
   readonly reconcile: boolean;
-  readonly storageDirectory?: string;
   readonly update: (
     progress: string,
     completed: boolean,
     evidence: readonly string[],
   ) => Effect.Effect<unknown, ApplicationError>;
   readonly startTask: (input: TaskMessage) => Effect.Effect<unknown, ApplicationError>;
+  readonly followupTask: (
+    input: import("@aster/api-contracts").FollowupTaskInput,
+  ) => Effect.Effect<unknown, ApplicationError>;
   readonly signal: (input: GoalSignalInput) => Effect.Effect<unknown, ApplicationError>;
 }
 
@@ -81,6 +83,16 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           _tag: Type.Literal("Goal"),
           target: Type.String({ pattern: "^/goals/[a-z0-9][a-z0-9-]*$" }),
           text: Type.String({ minLength: 1 }),
+        }),
+        Type.Object({
+          _tag: Type.Literal("Agent"),
+          replyTo: Type.String(),
+          task: Type.Object({
+            instructions: Type.String({ minLength: 1 }),
+            input: Type.Array(
+              Type.Object({ content: Type.String(), sources: Type.Array(Type.String()) }),
+            ),
+          }),
         }),
         Type.Object({
           _tag: Type.Literal("Delegate"),
@@ -147,7 +159,7 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
             output(
               Object.values(registry.reader.snapshot()).filter(
                 (record) =>
-                  record.path.startsWith("/runs/") &&
+                  record.path.startsWith("/tasks/") &&
                   ((record.state as { sourcePath?: string }).sourcePath === source ||
                     (record.state as { replyTo?: string }).replyTo === source),
               ),
@@ -209,7 +221,7 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           replay: "never",
           label: "Start asynchronous Task",
           description:
-            "Send a Task to a Goal Actor or an external delegate. Delegate tasks require user confirmation and reply to the specified Goal. Keep the same request identity on unknown outcomes.",
+            "Start sustained work with the internal Agent, send a message to a Goal, or delegate externally. Delegate tasks require user confirmation and reply to the specified Goal. Keep the same request identity on unknown outcomes.",
           parameters: Type.Object({ task: actorTask }),
           execute: (id, args, signal) => {
             const requestId = identity(id);
@@ -224,6 +236,16 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
               signal,
             );
           },
+        }),
+        tool({
+          name: "task_send",
+          replay: "never",
+          label: "Continue Task",
+          description:
+            "Send a correction or follow-up to an existing Task. Completed Tasks can continue the same work.",
+          parameters: Type.Object({ target: Type.String(), text: Type.String({ minLength: 1 }) }),
+          execute: (id, args, signal) =>
+            mutation(options.followupTask({ ...args, source, requestId: identity(id) }), signal),
         }),
         tool({
           name: "set_signal",
@@ -264,7 +286,6 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           requestId: input.inputId,
           reconcile: options.reconcile,
           catalogueId: "aster.goal.conversation.v1",
-          storageDirectory: options.storageDirectory,
           contextBudget: {
             contextTokens: options.contextTokens ?? 200000,
             reserveTokens: options.reserveTokens ?? 8192,
@@ -282,12 +303,9 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
     }),
   );
 });
-export const conversationText = (messages: readonly AgentMessage[]) =>
-  messages
-    .filter((message) => message.role === "assistant")
-    .flatMap((message) =>
-      message.role === "assistant"
-        ? message.content.flatMap((block) => (block.type === "text" ? [block.text] : []))
-        : [],
-    )
-    .join("\n\n");
+export const conversationText = (messages: readonly AgentMessage[]) => {
+  const last = messages.findLast((message) => message.role === "assistant");
+  return last?.role === "assistant" && !last.content.some((block) => block.type === "toolCall")
+    ? last.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n\n")
+    : "";
+};

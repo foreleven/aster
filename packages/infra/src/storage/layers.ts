@@ -2,22 +2,15 @@ import { join } from "node:path";
 import { storageSettings } from "./routing.js";
 import { Effect, Layer } from "effect";
 import { ContextStore } from "./storage.js";
-import { GoalHistoryStore, GoalScreeningStore } from "@aster/core";
+import { GoalScreeningStore } from "@aster/core";
 import { LocalDurableContext } from "./local-durable.js";
 import { makeFileContextStore } from "./file-context-store.js";
-import { makeFileGoalHistory } from "./file-goal-history.js";
 import { makeFileGoalScreeningStore } from "./file-goal-screening.js";
 
 export const FileContextStore = {
   layer: Layer.effect(
     ContextStore,
     Effect.try(() => makeFileContextStore()),
-  ),
-};
-export const FileGoalHistory = {
-  layer: Layer.effect(
-    GoalHistoryStore,
-    storageSettings.pipe(Effect.map(({ root }) => makeFileGoalHistory(join(root, "goals")))),
   ),
 };
 export const FileGoalScreening = {

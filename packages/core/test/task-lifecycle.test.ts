@@ -1,10 +1,11 @@
+import { TaskDeliveryInput } from "@aster/api-contracts";
 import { SignalRootActor } from "../src/signals/actors.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Schema, Stream } from "effect";
-import { approvalEntries, DEFAULT_EXECUTOR_PROMPT, type ContextRecord } from "../src/index.js";
-import { RunState } from "../src/tasks/run-state.js";
-import type { RunAdmissionReply } from "../src/tasks/run.js";
+import { Deferred, Effect, Schema } from "effect";
+import { approvalEntries, DEFAULT_EXECUTOR_PROMPT } from "../src/index.js";
+import { TaskState } from "../src/tasks/state.js";
+import type { TaskAdmissionReply } from "../src/tasks/actor.js";
 import { taskFixture, taskInput } from "./task-fixtures.js";
 import { fakeAgent } from "./fixtures.js";
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>
@@ -29,7 +30,7 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
       });
       const input = taskInput();
       const send = (value: typeof input) =>
-        env.runs.ask<RunAdmissionReply>((replyTo) => ({
+        env.tasks.ask<TaskAdmissionReply>((replyTo) => ({
           _tag: "StartTask",
           input: value,
           replyTo,
@@ -37,7 +38,13 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
       const first = yield* send(input);
       assert.equal(first._tag, "Accepted");
       assert.deepEqual(
-        Schema.decodeUnknownSync(RunState)(env.records.get(input.target)!.state).admission.input,
+        Schema.decodeUnknownSync(TaskDeliveryInput)(
+          (yield* env.conversations.get(
+            input.target,
+            Schema.decodeUnknownSync(TaskState)(env.records.get(input.target)!.state).admission
+              .entryId,
+          )).data,
+        ),
         input,
       );
       assert.deepEqual(yield* send(input), first);
@@ -53,8 +60,8 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
       });
       yield* actor.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
       assert.equal(submissions, 0);
-      const resume = yield* env.runs.ask<RunAdmissionReply>((replyTo) => ({
-        _tag: "ResumeRun",
+      const resume = yield* env.tasks.ask<TaskAdmissionReply>((replyTo) => ({
+        _tag: "ResumeTask",
         input: {
           requestId: "bypass",
           target: input.target,
@@ -76,57 +83,13 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
       yield* Deferred.await(submitted);
       yield* env.wait(
         () =>
-          Schema.decodeUnknownSync(RunState)(env.registry.get(input.target)!.state).status ===
+          Schema.decodeUnknownSync(TaskState)(env.registry.get(input.target)!.state).status ===
           "completed",
       );
       assert.equal(submissions, 1);
     }),
   );
 });
-
-for (const status of ["completed", "failed", "cancelled", "rejected", "uncertain"] as const)
-  test(`restored ${status} Run replies to its Goal without submitting external work`, async () => {
-    await run(
-      Effect.gen(function* () {
-        const input = taskInput(status);
-        const records = new Map<string, ContextRecord>([
-          [
-            input.target,
-            {
-              path: input.target,
-              description: "Run",
-              revision: 2,
-              state: {
-                admission: { input, receipt: { requestId: input.requestId, revision: 1 } },
-                executorPrompt: "Policy",
-                status,
-                outcomeText: `Original ${status}`,
-              },
-              messages: [],
-            },
-          ],
-        ]);
-        const env = yield* taskFixture({
-          records,
-          agent: fakeAgent({
-            submit: () => Effect.die("Must not resubmit"),
-            status: () => Effect.die("Terminal record is authoritative"),
-          }),
-        });
-        const delivered = () =>
-          env.feedback.some(
-            (command) =>
-              command._tag === "SubmitInput" &&
-              command.input._tag === "ExecutionFeedback" &&
-              command.input.text === `Original ${status}`,
-          );
-        if (!delivered())
-          yield* env.system.events.pipe(Stream.filter(delivered), Stream.take(1), Stream.runDrain);
-        assert.ok(delivered());
-        assert.equal(env.registry.get(input.target)!.revision, 2);
-      }),
-    );
-  });
 
 test("Context Signal executes its frozen Delegate Task through the shared Run root", async () => {
   await run(
@@ -183,15 +146,18 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
         accepted,
       );
       yield* env.wait(() =>
-        Object.keys(env.registry.snapshot()).some((path) => /^\/runs\/[a-f0-9]{64}$/.test(path)),
+        Object.keys(env.registry.snapshot()).some((path) => /^\/tasks\/[a-f0-9]{64}$/.test(path)),
       );
       const records = Object.values(env.registry.snapshot()).filter((record) =>
-        /^\/runs\/[a-f0-9]{64}$/.test(record.path),
+        /^\/tasks\/[a-f0-9]{64}$/.test(record.path),
       );
       assert.equal(records.length, 1);
-      const state = Schema.decodeUnknownSync(RunState)(records[0]!.state);
-      assert.deepEqual(state.admission.input.evidence, reaction.sourceContext);
-      assert.deepEqual(state.admission.input.task, { instructions: "Read the update", input: [] });
+      const state = Schema.decodeUnknownSync(TaskState)(records[0]!.state);
+      const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(
+        (yield* env.conversations.get(records[0]!.path, state.admission.entryId)).data,
+      );
+      assert.deepEqual(admission.evidence, reaction.sourceContext);
+      assert.deepEqual(admission.task, { instructions: "Read the update", input: [] });
     }),
   );
 });

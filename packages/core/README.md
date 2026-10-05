@@ -4,23 +4,22 @@ Aster's domain and application runtime, implemented with Effect 4. Concrete stor
 
 `AsterRuntime.layer({ integrations })` assembles shared services and owns root Actors. The host supplies infrastructure Layers and ConfigProvider, then uses `runtime.api` and `runtime.ready`. It does not assemble internal domain services or start integrations separately.
 
-Startup subscribes to Context changes before registering/activating source integrations, restores Signals and Runs, registers Goals, then starts durable reaction processing. Signal execution starts after receiver restoration. Required source readiness precedes Goal activation. Shutdown stops producers, cancels scoped processing, stops Actors and drains accepted capture work before infrastructure release.
+Startup subscribes to Context changes before registering/activating source integrations, restores Signals and Tasks, registers Goals, then starts durable reaction processing. Signal execution starts after receiver restoration. Required source readiness precedes Goal activation. Shutdown stops producers, cancels scoped processing, stops Actors and drains accepted capture work before infrastructure release.
 
 ## Domain modules
 
 - `context/`: validated snapshots, revisioned persistence, public views and durable source events.
 - `reactions/`: System One matching of each active Goal and Context Signal, frozen decisions and receipt-based delivery.
-- `goals/`: durable conversation, Context-only Agent gate, user and Task inputs, progress and history. `/goals/personal` is the default assistant using the ordinary GoalActor.
+- `goals/`: durable conversation, Context-only Agent gate, user and Task inputs, progress and public Pi conversation projection. `/goals/personal` is the default assistant using the ordinary GoalActor.
 - `signals/`: Context-condition and schedule triggers; both deliver frozen Task messages.
-- `tasks/`: Goal/Delegate message dispatch, admitted Runs, confirmation, feedback and optional publication.
-- `delegation/`: executor sessions, status, information requests and uncertain-outcome reconciliation.
+- `tasks/`: Goal/Agent/Delegate dispatch, persistent Tasks, follow-up, confirmation, feedback and publication.
 - `approvals/`: durable human decisions, validation and acknowledgement by the requesting Actor.
 - `memory/`: recall contracts and durable capture orchestration.
 - `runtime/`: assembly, policy registration, integrations, readiness, API and shutdown.
 
-A Task is a message to a Goal or a Delegate. Delegate instructions and evidence are prepared by the caller; the Run freezes executor policy, confirms execution and returns results to the specified Goal. There is no separate PersonalActor, notification processor, Task-preparation model or execution-readiness model.
+A Goal handles simple dialogue and lightweight reads directly. Sustained work uses a persistent Task with internal or external execution; further instructions can steer active work or reactivate completed work. Pi owns all Goal/Task message bodies and native transcripts. Actor state retains references, receipts and lifecycle bookkeeping. The public Goal conversation includes actual users and selected assistant replies; Task details expose execution messages and available tools.
 
-Context changes first pass System One matching. A Goal additionally runs its read-only Agent gate before admitting that evidence to the conversation. User input, Task messages and execution feedback bypass this second gate. Model failures and ignored evidence remain visible. Tool callbacks and asynchronous Actor work preserve their owning Effect scope and generation.
+Context changes first pass System One matching. A Goal additionally runs its read-only Agent gate before admitting that evidence to the conversation. User input, Task messages and execution feedback bypass this second gate. Model failures remain visible; ignored evidence stays outside public chat. Tool callbacks and asynchronous Actor work preserve their owning Effect scope and generation.
 
 All durable domain admissions acknowledge only after commit. Exact retries retain their receipt. Unknown external submission, resume or publication does not permit automatic resubmission. Actor mailboxes own state; public projections exclude credentials, provider handles and native frames. `@aster/core/testing` provides isolated Context fixtures for tests.
 

@@ -3,24 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { Effect, Layer, Schema } from "effect";
-import { ActorSystem, ActorTestKit } from "@aster/actor";
+import { Effect, Layer, Option } from "effect";
 import { Models, type ResolvedModel } from "@aster/agent";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
-import {
-  ContextRegistry,
-  DelegationActor,
-  DelegationState,
-  ExternalAgents,
-  ExternalAgentError,
-  contextSpawnOptions,
-  type DelegationUpdate,
-} from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
 import { makePiAgent } from "../src/pi/agent.js";
-import { makeFileContextStore } from "../src/storage/file-context-store.js";
 
-test("Pi reconciles a lost submission handle through Delegation without another submit and persists history before acknowledgement", async (t) => {
+test("Pi reconciles a lost submission handle by request identity without another submit and persists history before acknowledgement", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "aster-pi-delegation-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   let calls = 0;
@@ -78,63 +66,21 @@ test("Pi reconciles a lost submission handle through Delegation without another 
     Effect.scoped(
       Effect.gen(function* () {
         const agent = yield* makePiAgent(options);
-        const registry = yield* makeContextRegistry(
-          makeFileContextStore(join(directory, "contexts")),
-        );
-        const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
-            Layer.succeed(ExternalAgents, {
-              pi: {
-                ...agent,
-                submit: (task, submission) =>
-                  Effect.gen(function* () {
-                    submissions++;
-                    yield* agent.submit(task, submission);
-                    return yield* new ExternalAgentError({
-                      operation: "submit",
-                      message: "Injected lost handle acknowledgement",
-                    });
-                  }),
-              },
-            }),
-          ),
-        );
-        const parent = yield* ActorTestKit.probe<DelegationUpdate>();
-        const actor = yield* system.spawn(
-          "execution",
-          DelegationActor,
-          contextSpawnOptions("/delegations/test"),
-        );
-        yield* actor.tell({
-          _tag: "Start",
-          request: { runPath: "/runs/test", agent: "pi", task },
-          replyTo: parent.ref,
+        const submission = { requestId: "/tasks/test" };
+        submissions++;
+        yield* agent.submit(task, submission);
+        // Simulate losing the returned handle: recovery only looks up its identity.
+        const located = yield* agent.lookupSubmission!(task, submission);
+        assert.ok(Option.isSome(located));
+        if (Option.isNone(located)) return assert.fail("Expected retained admission");
+        const session = located.value;
+        assert.deepEqual(yield* agent.wait(session), {
+          state: "completed",
+          result: { text: "Task conclusion [source/chat]" },
         });
-        const submitted = yield* parent.take();
-        assert.equal(submitted._tag, "Submitted");
-        const finished = yield* parent.take();
-        assert.equal(finished._tag, "Finished");
-        if (finished._tag !== "Finished") return assert.fail("Expected terminal update");
-        assert.deepEqual(finished.outcome, {
-          _tag: "Completed",
-          text: "Task conclusion [source/chat]",
-        });
-        const record = registry.get("/delegations/test")!;
-        const state = Schema.decodeUnknownSync(DelegationState)(record.state);
-        assert.equal(state.status, "completed");
-        assert.equal(state.result, "Task conclusion [source/chat]");
-        assert.ok(state.session);
-        assert.equal(state.session.metadata?.requestId, "/delegations/test");
-        assert.doesNotMatch(
-          JSON.stringify(record),
-          /private-test-credential|pi\.tool-result|pi\.assistant/,
-        );
-        assert.deepEqual(
-          yield* agent.submit(task, { requestId: "/delegations/test" }),
-          state.session,
-        );
-        return state.session;
+        assert.deepEqual(yield* agent.submit(task, submission), session);
+        assert.doesNotMatch(JSON.stringify(session), /private-test-credential|pi\.tool-result/);
+        return session;
       }),
     ).pipe(Effect.provide(models), Effect.timeout("5 seconds")),
   );

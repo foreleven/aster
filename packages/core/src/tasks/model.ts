@@ -45,6 +45,10 @@ export interface ExternalAgent {
     task: PreparedTask,
     submission: ExecutionSubmission,
   ): Effect.Effect<Option.Option<ExecutionSession>, ExternalAgentError>;
+  followUp(
+    session: ExecutionSession,
+    input: { readonly requestId: string; readonly text: string },
+  ): Effect.Effect<ExecutionSession, ExternalAgentError>;
   status(session: ExecutionSession): Effect.Effect<ExecutionStatus, ExternalAgentError>;
   resume(session: ExecutionSession): Effect.Effect<ExecutionSession, ExternalAgentError>;
   wait(session: ExecutionSession): Effect.Effect<ExecutionStatus, ExternalAgentError>;

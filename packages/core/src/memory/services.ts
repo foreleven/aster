@@ -1,5 +1,6 @@
 import { ContextCaptures } from "./capture.js";
-import { runCapture } from "../tasks/capture.js";
+import { AgentConversations } from "@aster/agent";
+import { taskCapture } from "../tasks/capture.js";
 import type { ActorRef } from "@aster/actor";
 import { Context, Deferred, Effect, Layer } from "effect";
 import { MemoryBackend, MemoryRecall, ContextCaptureSink } from "./contracts.js";
@@ -13,7 +14,7 @@ export const memoryLayer = Layer.effectContext(
     const backend = yield* MemoryBackend;
     const registry = yield* ContextRegistry;
     const captures = yield* ContextCaptures;
-    yield* captures.register([runCapture]);
+    yield* captures.register([taskCapture(yield* AgentConversations)]);
     yield* registry.views.register([memoryView]);
     const modules = yield* RuntimeIntegrations;
     const ready = yield* Deferred.make<ActorRef<MemoryCommand>>();

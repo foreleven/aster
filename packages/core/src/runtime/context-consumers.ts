@@ -77,7 +77,7 @@ export const makeContextMaintenance = (options: {
       options.descriptions.identity(change.record.path),
       options.describe,
     );
-    const capture = options.captures.select(record);
+    const capture = yield* options.captures.select(record);
     if (capture)
       yield* options.capture({
         ...capture,

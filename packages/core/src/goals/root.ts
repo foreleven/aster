@@ -3,7 +3,7 @@ import { ApplicationError } from "@aster/api-contracts";
 import { Deferred, Effect, Layer, Schema } from "effect";
 import { ContextRegistry } from "../context/registry.js";
 import { GoalSettings } from "../config/settings.js";
-import { GoalHistoryStore } from "./history.js";
+import { AgentConversations } from "@aster/agent";
 import { GoalSignals } from "../signals/goal-owner.js";
 import { AgentRunner } from "@aster/agent";
 import { MemoryRecall } from "../memory/contracts.js";
@@ -34,7 +34,7 @@ export class GoalsRootActor extends Actor.Service<
   | ContextRegistry
   | GoalSignals
   | GoalSettings
-  | GoalHistoryStore
+  | AgentConversations
   | AgentRunner
   | MemoryRecall
   | ExternalAgents

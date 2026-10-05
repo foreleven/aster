@@ -1,3 +1,5 @@
+import { testConversations } from "./conversation-fixtures.js";
+import { AgentConversations } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, type ActorRef } from "@aster/actor";
@@ -5,19 +7,18 @@ import { AgentError, type AgentInvocation, type AgentResult } from "@aster/agent
 import { Deferred, Effect, Layer, Schema, Stream } from "effect";
 import {
   ContextRegistry,
+  ContextQueries,
   ExternalAgents,
   GoalSettings,
-  GoalHistoryStore,
   GoalSignals,
   GoalState,
   GoalsRootActor,
-  RunRootActor,
+  TasksRootActor,
   SignalRootActor,
   SignalDefinitions,
   ApprovalQueueActor,
   approvalEntries,
   SignalCommands,
-  makeMemoryGoalHistory,
   type ContextRecord,
   type GoalCommandReply,
   type GoalReadyReply,
@@ -41,20 +42,21 @@ const setup = Effect.fnUntraced(function* (
     store?: ContextStore;
     gate?: (input: AgentInvocation) => Effect.Effect<AgentResult, AgentError>;
     external?: ReturnType<typeof fakeAgent>;
-    history?: ReturnType<typeof makeMemoryGoalHistory>;
+    history?: ReturnType<typeof testConversations>;
   } = {},
 ) {
   const registry = yield* makeContextRegistry(options.store);
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
       Layer.succeed(ContextRegistry, registry),
+      ContextQueries.layer.pipe(Layer.provide(Layer.succeed(ContextRegistry, registry))),
 
       emptyRecall,
       Layer.succeed(GoalSettings, {
         definitions: [{ slug: "project", description: "Improve project reliability" }],
         reasoning: { model: "test" },
       }),
-      Layer.succeed(GoalHistoryStore, options.history ?? makeMemoryGoalHistory()),
+      Layer.succeed(AgentConversations, options.history ?? testConversations()),
       GoalSignals.layer.pipe(
         Layer.provide(
           Layer.succeed(SignalCommands, {
@@ -76,7 +78,7 @@ const setup = Effect.fnUntraced(function* (
   );
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
   const signals: ActorRef<SignalRootCommand> = yield* system.spawn("signals", SignalRootActor);
-  yield* system.spawn("runs", RunRootActor);
+  yield* system.spawn("tasks", TasksRootActor);
   const root = yield* system.spawn("goals", GoalsRootActor);
   yield* root.ask<GoalReadyReply>((replyTo) => ({
     _tag: "AwaitReady",
@@ -121,7 +123,7 @@ test("Goal persists input before acknowledgement, serializes delivery, and start
       records.set(record.path, structuredClone(record));
     },
   };
-  const history = makeMemoryGoalHistory();
+  const history = testConversations();
   let calls = 0;
   await run(
     Effect.gen(function* () {
@@ -140,7 +142,7 @@ test("Goal persists input before acknowledgement, serializes delivery, and start
         { store, history },
       );
       assert.equal(calls, 0);
-      assert.equal(env.state().inputs[0]!.payload._tag, "GoalStarted");
+      assert.equal(env.state().inputs[0]!.kind, "GoalStarted");
       yield* env.activate;
       yield* Deferred.await(entered);
       const input = { _tag: "UserInput" as const, text: "Investigate the build" };
@@ -317,7 +319,7 @@ test("known failures can retry once; uncertain delivery blocks new work and resu
       records.set(record.path, structuredClone(record));
     },
   };
-  const history = makeMemoryGoalHistory();
+  const history = testConversations();
   let original = "";
   await run(
     Effect.gen(function* () {
@@ -427,7 +429,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
       yield* env.wait(() =>
         Object.values(env.registry.snapshot()).some(
           (record) =>
-            record.path.startsWith("/runs/") &&
+            record.path.startsWith("/tasks/") &&
             (record.state as { status?: string }).status === "running",
         ),
       );
@@ -439,18 +441,13 @@ test("Tasks execute independently through shared Run approval and return feedbac
         env
           .state()
           .inputs.some(
-            (input) =>
-              input.payload._tag === "ExecutionFeedback" &&
-              input.payload.text.includes("Root cause identified") &&
-              input.status === "completed",
+            (input) => input.kind === "ExecutionFeedback" && input.status === "completed",
           ),
       );
       assert.equal(submissions, 1);
       assert.equal("tasks" in env.state(), false);
       assert.equal(gates, 0);
-      const feedback = env
-        .state()
-        .inputs.findLast((input) => input.payload._tag === "ExecutionFeedback")!;
+      const feedback = env.state().inputs.findLast((input) => input.kind === "ExecutionFeedback")!;
       assert.equal(feedback.causal?.rootRequestId, "goal:project:initial");
       assert.notEqual(feedback.causal?.rootRequestId, "unrelated-user-turn");
     }),
@@ -503,7 +500,7 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
       records.set(record.path, structuredClone(record));
     },
   };
-  const history = makeMemoryGoalHistory();
+  const history = testConversations();
   let submissions = 0;
   await run(
     Effect.gen(function* () {
@@ -552,7 +549,7 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
       yield* env.wait(() =>
         Object.values(env.registry.snapshot()).some(
           (record) =>
-            record.path.startsWith("/runs/") &&
+            record.path.startsWith("/tasks/") &&
             (record.state as { status?: string }).status === "running",
         ),
       );
@@ -580,10 +577,7 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
         env
           .state()
           .inputs.some(
-            (input) =>
-              input.payload._tag === "ExecutionFeedback" &&
-              input.payload.text.includes("Recovered task result") &&
-              input.status === "completed",
+            (input) => input.kind === "ExecutionFeedback" && input.status === "completed",
           ),
       );
       assert.equal(submissions, 1);
@@ -599,7 +593,7 @@ test("an ended Goal retains uncertain delivery on restart without restarting Pi"
       records.set(record.path, structuredClone(record));
     },
   };
-  const history = makeMemoryGoalHistory();
+  const history = testConversations();
   await run(
     Effect.gen(function* () {
       const entered = yield* Deferred.make<void>();
@@ -673,10 +667,7 @@ test("Goal receipts normalize nested object keys, retain array order and omit du
       );
       const receipt = env.state().receipts.find((item) => item.requestId === delivery.requestId)!;
       assert.deepEqual(Object.keys(receipt).sort(), ["payloadFingerprint", "receipt", "requestId"]);
-      assert.equal(
-        env.state().inputs.filter((item) => item.payload._tag === "TaskMessage").length,
-        1,
-      );
+      assert.equal(env.state().inputs.filter((item) => item.kind === "TaskMessage").length, 1);
     }),
   );
 });

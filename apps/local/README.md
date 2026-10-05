@@ -8,7 +8,7 @@ The local application observes Lark mail and work IM, evaluates Signals, pursues
 
 `AsterRuntime` in core owns domain service construction, root Actors, Context reactions, integration activation, readiness and shutdown. Lark owns IM readiness; memory owns its capture consumer. Local does not inspect IM state, bind ActorRefs, select Signals or initialize Goals. HTTP calls `runtime.api` use cases and maps their errors; it does not construct domain Commands or assemble history. The API remains available while integrations catch up. During shutdown HTTP closes first, then runtime stops sources, subscriptions and Actors, drains captures and releases infrastructure. The process lock remains held until cleanup completes.
 
-External Layers are `ConfiguredDurableInfrastructure.layer`, `FileGoalHistory.layer`, `FileGoalScreening.layer`, `Models.configured`, `SystemOneClientLive.layer` and `AgentMemoryBackend.layer`. Runtime builds `ContextRegistry`, internal reasoning, Task preparation and Goal services. Tests replace these capability Layers with isolated implementations. See [runtime design](../../docs/runtime-design.md) for the graph and contracts.
+External Layers are `ConfiguredDurableInfrastructure.layer`, `FileGoalScreening.layer`, `Models.configured`, `SystemOneClientLive.layer` and `AgentMemoryBackend.layer`. Runtime builds `ContextRegistry`, internal reasoning, Pi conversations, Tasks and Goal services. Tests replace these capability Layers with isolated implementations. See [runtime design](../../docs/runtime-design.md) for the graph and contracts.
 
 ## Configuration sources
 
@@ -18,165 +18,30 @@ For example, `ASTER_HTTP_PORT=4318` changes the HTTP port; `ASTER_CONTEXTS_LARK_
 
 Credential fields accept exact `${ENV_VAR}` references from captured process environment or `.env`, and are retained as Effect `Redacted` until the adapter needs them. Memory `apiKeyEnv` uses the same resolver. Arbitrary prompts remain literal. Relative memory paths resolve beside the config file. Child-process environments are explicitly supplied and service credentials/`ASTER_*` variables are filtered out of external executors.
 
-## Goal tasks, history and timers
+## Goal conversations, Tasks and Signals
 
-Goals keep a flat `state.tasks` list and native `AgentMessage[]` working messages. The Agent has `task_list/get/create/update/delete/execute`, `signal_list/get/create/update/delete`, and paginated `goal_history` tools. Task content changes require the current revision; changing a pending proposal revokes its old confirmation. Task completion and execution completion are separate. Deleted tasks retain their history; running delegations finish, pending ones cannot start. Signals are deleted separately.
+Configured Goals and the built-in `/goals/personal` use the same GoalActor. The main Agent handles simple dialogue and lightweight reads; sustained work uses a persistent Task with internal or external execution. Further instructions steer active work or reactivate a completed Task. Distinct work can create another Task.
 
-Goal-owned Signals notify the Goal to assess evidence. A round may record only a milestone/conclusion, maintain tasks or monitoring, or propose an execution. Goal executions always enter user confirmation; confirming a task does not approve separate external writes. Independent Signals continue to use their configured execution mode.
+All Goal and Task messages live in Pi under `<config.durable.root>/conversations`. Actor state retains business metadata, references and receipts. `GetGoalTimeline` projects actual user messages and selected assistant replies; tool records and raw Context evidence stay out of chat. `GetGoalHistory` reads the same Pi-backed public conversation. There is no independent history.jsonl store. Native compaction retains older history while bounding model context; `config.goals.contextTokens` defaults to 200000 and `reserveTokens` to 8192, capped by the selected model's window.
 
-Full history is stored at `~/.aster/goals/{slug}/history.jsonl`. Context `messages` contain only the working window, alongside `state.summary`; the web inspector's AtomRpc feed reads full history through `GetGoalHistory`; legacy clients can use `GET /api/goals/{slug}/history?before=<sequence>&limit=30`. The Tasks tab shows active tasks and execution links. `config.goals.contextTokens` defaults to 200000 tokens and `reserveTokens` to 8192 tokens. Durable planning uses Pi's native token accounting and compacts at 191808 tokens by default; the configured context window is capped by the model context window. GoalHistory working windows and isolated-run guards retain conservative UTF-8 byte accounting. Older complete exchanges are summarized; full history is retained. Failed compaction preserves the previous summary/boundary and prevents an oversized invocation. Very large exchanges are summarized in bounded evidence pages. Interrupted tool calls retain their original calls plus an explicit unknown-result record, so the next round must inspect current state before retrying.
+Context changes pass System One and then the Goal's read-only relevance gate. User inputs and Task feedback bypass that second gate. Task and Signal tools return durable receipts. Signal triggers are Context conditions or schedules; both freeze and dispatch the same Task protocol. Schedules use `{ type: "once", at }` or `{ type: "cron", expression, timeZone }` inside a Schedule trigger.
 
-Signal `schedule` is a serializable object, converted to Effect scheduling at runtime:
-
-```yaml
-schedule:
-  type: once
-  at: "2026-10-01T20:00:00+08:00"
-# Alternatively:
-# schedule:
-#   type: cron
-#   expression: "0 20 * * *"
-#   timeZone: Asia/Shanghai
-```
-
-Scheduled Signals are assessed on timer occurrences, rather than on every source update. `when` describes what should be assessed; Goal timers wake the Goal to read current evidence. Optional `notBefore` is an absolute timestamp gate. Persisted deadlines survive restart; missed occurrences coalesce into one wake-up, and completed one-time schedules stay completed. Updating/deleting a Signal invalidates old timer messages. Timer delivery never bypasses execution confirmation.
-
-Top-level `agents.doubao.prompt` configures default executor instructions. Defaults allow read-only investigation and new reports/drafts in the dedicated task workspace; existing-file changes and external writes require individual confirmation. The prompt is applied during preparation and Doubao submission, together with the existing `AskOnRisk` interaction bridge. Prepared tasks and confirmation prompts use readable sections rather than compact JSON. Preparation searches memory, expands available candidates, and supplies current Goal/prior execution evidence. Trigger and terminal-outcome memory captures have separate identities; failed captures are persisted and retried every 30 seconds with at most two in flight.
-
-This revision expects fresh local Goal data; existing state is not migrated or automatically deleted. The user handles cleanup before validation. No application startup or live external delegation is required by the automated tests.
-
-## Start
-
-1. Copy `aster.config.example.yaml` in the repository root to `aster.config.yaml`. Set `/lark.config.profile` to a profile from `lark-cli profile list`.
-2. Set `config.system-one` (`url`, `model`, `apiKey`). The example references `TYPESAFE_API_KEY` in the repository root `.env`. Ensure the selected Lark profile can read your account and mailbox. Codex CLI must be installed and authenticated for dynamic descriptions and Signal extraction (verified with `0.156.1`, including named permission profiles).
-3. Run `pnpm install`, then `pnpm start`. Stop with Ctrl+C. The local start command runs the TypeScript sources directly; use `pnpm build` for production artifacts.
-
-The local config, `.env`, and project-local `.aster/` and legacy `.signals/` are ignored by Git. A different config can be selected with `pnpm aster start --config path/to/config.yaml`. Relative memory `dataDir` paths resolve beside the config file.
-
-If the System One service needs a proxy, use `HTTPS_PROXY=http://127.0.0.1:7897 HTTP_PROXY=http://127.0.0.1:7897 pnpm start`. Local memory connections bypass the proxy.
-
-The mail Actor uses its first successful poll as a baseline; historical mail is not ingested. Later polls create `/lark/mail/me/{message_id}` Contexts. Each Context exposes only `path`, fixed `description`, object `state`, and ordered `messages`. Actor services stay private; persisted ingestion positions and execution bookkeeping are currently included in structured state. Public snapshots are persisted under `~/.aster/actors/{path}/state.json` and `messages.jsonl`. Each JSONL line is a domain Message; mailbox Commands are not stored. The store recovers an interrupted two-file commit before loading snapshots.
-
-Root Actors are registered in code, even when their YAML entries are absent. The loader passes root subtrees unchanged; Lark validates its own `children./mail` and optional `children./im` configuration and starts its children. Omitting Lark config uses the CLI's selected profile, the `me` mailbox, and a 30-second poll interval.
-
-Account and mailbox Actors independently load their identity profiles on startup. The common Context processor captures these profiles in separate memory sessions. Ordinary emails do not write activity memory. The configured System One model selects candidates; Codex confirms triggerings. An initialized `/signals/{slug}/runs/{id}` supplies frozen public snapshots of the run and source to one memory session. The session ends after observation processing completes. Auto runs submit to DoubaoWork and collect results in a Delegation Context. Confirm-mode runs appear in the unified approval queue; outcome capture uses a separate memory session.
-
-## System One configuration
-
-The top-level `config.system-one` selects the decision service independently of Contexts and memory models:
-
-```yaml
-config:
-  system-one:
-    url: https://api.typesafe.ai/v1/systemone
-    model: jev-latest
-    apiKey: ${TYPESAFE_API_KEY}
-```
-
-`url` accepts the service root, its `/v1` base, or the full `/v1/systemone` endpoint. `model` is sent on every decision request. `apiKey` accepts a literal string or an exact `${ENV_VAR}` reference resolved from the startup environment, including the project-root `.env`. The settings are required when Signals or Goals are configured. Credentials are not part of public Contexts or memory snapshots.
-
-For the local Laya service:
-
-```yaml
-config:
-  system-one:
-    url: http://10.37.90.111:8000/v1/systemone
-    model: multilingual
-    apiKey: ${LAYA_API_KEY}
-```
-
-The application uses the System One protocol through the TypeSafe SDK with explicit address, model, and credential settings. It does not implicitly select the backend from TypeSafe environment variables.
-
-## Memory configuration
-
-Aster owns `@agentmemory/agentmemory@0.9.29` and its pinned iii engine `0.11.2`. The CLI runs without onboarding or Agent hook installation. On first startup it may download the engine to `~/.agentmemory/bin`. Aster waits for readiness and stops its own worker and engine on exit. Memories remain under `/memory.config.dataDir`.
-
-`/memory` can be omitted to use the defaults: description `My long-term memory`, data directory `~/.aster/memory`, REST port `3111`, synthetic compression, and BM25 recall. The managed service also uses port + 1 (streams), port + 2 (viewer), and port + 46023 (engine), all bound to loopback. The pinned upstream CLI uses global PID files, so this version runs one managed memory instance per user and refuses to adopt an existing daemon.
-
-To enable LLM compression and session summaries:
-
-```yaml
-contexts:
-  /memory:
-    description: My long-term memory
-    config:
-      dataDir: ~/.aster/memory
-      port: 3111
-      llm:
-        provider: openai
-        model: your-model
-        baseUrl: https://your-service/v1
-        apiKeyEnv: MEMORY_LLM_API_KEY
-```
-
-Put `MEMORY_LLM_API_KEY` in the root `.env`. Key values never enter public Contexts. Providers: `openai`, `anthropic`, `minimax`, `gemini`, `openrouter`. Custom `baseUrl` is available for the first three. OpenAI-compatible services must support chat completions; a `/v1/systemone` endpoint alone is insufficient. `autoCompress` defaults to true with an LLM and can be disabled; session summaries still use the LLM. Without an LLM, agentmemory creates short synthetic observations and skips semantic session summaries.
-
-The example config enables MiniMax's China service for memory compression and summaries:
-
-```yaml
-llm:
-  provider: minimax
-  model: MiniMax-M3
-  baseUrl: https://api.minimax.cn/anthropic
-  apiKeyEnv: MINIMAX_API_KEY
-autoCompress: true
-```
-
-Set the named variable in the root `.env`; `apiKeyEnv` may reference any existing key variable. agentmemory's MiniMax provider appends `/v1/messages` to `baseUrl` and uses the Anthropic-compatible protocol. Restart the application after editing model settings. Memory retrieval continues to use BM25 unless embeddings are explicitly enabled.
-
-Embeddings are a separate opt-in:
-
-```yaml
-embedding:
-  provider: local
-```
-
-The local model may download on first use. Remote providers are `openai`, `gemini`, `voyage`, `cohere`, and `openrouter`, with `apiKeyEnv` required. OpenAI/OpenRouter accept `model`; OpenAI accepts an embedding-specific `baseUrl`. Other embedding models are fixed upstream. The pinned package shares a provider's credential between LLM and embeddings, so same-provider configurations need the same key. Configurations that would let an embedding key override the selected LLM are rejected; local/OpenAI embeddings are compatible with any selected LLM.
-
-## Recall
-
-While Aster is running:
-
-```sh
-pnpm aster memory search "What is my work email address"
-pnpm aster memory search "work email" --limit 5 --config path/to/config.yaml
-# Replace the placeholders with obsId and sessionId from a relevant search result.
-pnpm aster memory expand "<obsId>" --session "<sessionId>"
-# Multiple IDs are supported; omit --session when they belong to different sessions.
-pnpm aster memory expand "<obsId-1>" "<obsId-2>"
-```
-
-Search returns `{ mode: "compact", results: [...] }`, with up to 10 candidates by default: `obsId`, `sessionId`, title, type, score, timestamp, and available `sourcePaths`. It does not automatically load narratives, facts, or full observations. `--limit` accepts 1–100. Expand returns `{ mode: "expanded", results: [...], truncated: false }` containing the selected records' details. Each expansion processes at most 20 IDs; `truncated: true` means additional IDs need another call. Both commands support `--config FILE`.
-
-The extraction Agent searches when useful, expands only relevant candidates, then uses their details as evidence. Users can query in natural language; with embeddings disabled, BM25 needs words matching the stored content, which may have been summarized in another language. Empty results call for alternative search terms rather than guessed facts. Retrieval limits and progressive disclosure do not delete or deduplicate stored history.
-
-`sourcePaths` are maintained in a small SQLite provenance index across restarts. A consolidated memory's paths may only become available when expanded, through its original observations. The Agent's permission profile extends Codex’s read-only profile and enables the managed network proxy with only `127.0.0.1` allowed. Project `.env` reads are denied and project service keys are removed from its environment. Memory recall opens the provenance database read-only. These per-invocation settings do not edit the user's global Codex config. `aster context get <path>` reads the evaluation's temporary public snapshot and is intended for the extraction Agent; it is not a live remote Actor read API.
-
-Memory capture is best effort. A compression timeout is logged and leaves the session open. Detailed retries and the memory lifecycle for real delegated execution remain deferred.
-
-## Goals and work IM
-
-The example includes the ongoing Knowledge Engine frontend TL Goal. `config.models` is an array of named entries (`name`, `provider`, `model`, `url`, `apiKey`); `config.goals.model` selects one globally. Supported Goal adapters are `minimax`, `anthropic`, and `openai` (chat completions). `${ENV_VAR}` credentials are resolved when the named model is selected. Goal reasoning uses the pinned latest `@earendil-works/pi-agent-core` and `pi-ai` 1.0.0 packages, independently of the memory LLM and System One model.
-
-Top-level `goals` maps slugs to `{title?, description, completionCriteria?}`. The optional nonblank `title` is the short display name; `description` remains the detailed responsibility used for reasoning. Missing titles fall back to the description. Restarting refreshes the stored display title from configuration without resetting tasks, history or status. Omit completion criteria for a continuing responsibility. The Agent reads Contexts and memory, submits a progress/Signal plan, and actors apply it. Signals belong to SignalsRoot, with one originating Goal each. User messages received during planning are retained for the next evaluation. Ending a Goal deactivates future triggering; already-running delegations can still report.
+Top-level `goals` maps slugs to `{title?, description, completionCriteria?}`. Restart refreshes definitions without erasing work. Goal End deactivates its Signals and cancels unstarted work; submitted Tasks remain responsible for their outcomes. Executor prompts are frozen before external confirmation; result publication requires separate approval.
 
 Enable `contexts./lark.children./im` to observe recent messages from non-muted p2p and group chats. Each poll calls `im +messages-search` for a fixed time window, paginates its messages, then calls `im chat.user_setting batch_query` in groups of ten chat IDs. Muted chats are removed before child Actor updates and summarization. Missing or invalid notification settings fail the poll without advancing its cursor. Startup reads from midnight in `Asia/Shanghai`, or resumes today’s persisted retrieval progress with a one-minute overlap bounded by that midnight. Uninterrupted polling may finish the previous day’s tail across midnight. The cursor lives in private daily progress files, not public Context State. Fetched messages are durably journaled before the cursor advances. The default delay is 15 minutes after each completed polling round. Startup catch-up uses consecutive, serial query windows of at most one hour, committing each window before fetching the next. No full chat enumeration or per-chat history sweep is performed. Existing historical Contexts remain persisted; they are not deleted by this migration. Failed summaries retain their messages and retry locally after 30 seconds even if the chat receives no new messages. Startup actively restores today’s local pending summaries; prior-day backlogs remain untouched. Today’s startup summaries may initiate normal Goal screening.
-
-Goal creation, relevant Context changes screened by System One, user messages, and execution results initiate planning. Signal extraction and whole-Signal readiness are separate checks. Newly planned Signals evaluate the source paths cited in the plan against the planning snapshot. Actual tasks run in isolated `~/.aster/tasks/{run-id}` directories through DoubaoWork. A saved session ID permits result polling after restart; an interrupted submission without an ID is marked uncertain and is not automatically repeated.
 
 Open **http://127.0.0.1:4317** after `pnpm start`. Local start serves the Vite frontend from `apps/web/src` and watches source changes; closing the browser does not stop the actors. Production builds serve `apps/web/dist`. To develop a replacement frontend on its own port, run `pnpm --filter @aster/web dev` alongside the backend.
 
 Public loopback API:
 
-- `GET /api/goals`: Goal Context snapshots with state and ordered messages.
+- `GET /api/goals`: public Goal business snapshots; use GetGoalTimeline for conversation messages.
 - `GET /api/context?path=...`: a public Context, including source and execution evidence.
 - `POST /api/goals/{slug}/messages`: JSON `{ "text": "..." }`, accepted into the Goal mailbox.
 - `POST /api/goals/{slug}/end`: JSON `{}`, end an ongoing Goal.
 - `POST /api/rpc`: typed queries and mutations from `@aster/api-contracts`, served as NDJSON RPC.
-- Personal RPCs include `GetPersonal`, `SendPersonalMessage`, `RetryPersonalInput`, `SendPersonalGoalMessage`, `ApplyPersonalSignal`, and `RespondPersonalApproval`. Goal/Signal command acceptance returns a durable source receipt; inspect the Personal Context outbox for the receiving domain owner's receipt or a rejected/unknown outcome. Signal commands include a full definition, active state, target Context revision and stable request identity; only Personal-owned Signals in the `personal--` namespace are writable and resulting Runs require confirmation. Duplicate operation IDs reconcile the original delivery and never mean a new message.
 - `GET /api/events`: SSE `ready` and `invalidate` events. Invalidation payloads contain `{_tag: "Invalidate", keys: string[]}`. The browser refreshes matching AtomRpc queries; every ready/reconnect refreshes all mounted queries.
 
-The server binds only loopback and checks Host/Origin. Model credentials are not exposed. The React/Vite frontend imports no Actor, Effect, or pi modules and has no filesystem access. Browser verification was unavailable in the development environment; API interactions, builds and actor tests were verified separately.
+The server binds only loopback and checks Host/Origin. Model credentials are not exposed. The React/Vite frontend uses the public application API and imports no Actor or persistence internals. Browser tests use fake transports.
 
 ## IM rolling-summary core verification
 
@@ -186,19 +51,15 @@ After `pnpm build`, run `node --use-env-proxy apps/local/scripts/verify-chat-sum
 
 Follow the JSON event names `chat.summary.*`, `system-one.goals.*`, `goal.planning.*` and `delegation.*` by Context path in startup logs. Live tests reached Goal planning but also exposed inconsistent relevance classification in the configured Laya service; see `docs/im-summary-design.md`.
 
-The app supplies `Models.configured` from `@aster/agent`, which reads `config.models` through the installed ConfigProvider. Lark summarization and Goal reasoning both use its pi-based `Agent.make({ name, tools })` and `agent.run({ messages })`. Each run is an independent conversation, and results are read from that run's tool messages. `summary.model` and `goals.model` can select the same model alias or different ones. The example and local YAML include the explicit summary selection.
+The app supplies `Models.configured` from `@aster/agent`. Lark summarization and Goal reasoning select independent configured model aliases. AgentRunner owns SDK callback lifetime; AgentConversations owns durable Goal and Task writers.
 
-## Unified tasks and approvals
+## Tasks and approvals
 
-Set `config.agent.model` to a name from `config.models`. This internal model prepares Tasks, extracts Signals and initializes Context descriptions. `config.goals.model` and Lark's summary model remain independent. `Signal.agent` selects a code-registered external executor: `codex` or `doubao-delegate`.
+TaskActor owns `/tasks/<identity>`, execution handles, follow-up delivery and results. Internal Tasks use the Goal reasoning model; external Tasks select a configured executor. `InspectTask` returns typed business details and available tool records without provider metadata. `ResumeTask` explicitly reconciles failed or uncertain execution using its original identity and revision; unknown submissions are never repeated automatically.
 
-Run `pnpm start`. The local web app includes the approval queue: confirm a prepared Task, approve/reject an external request or answer its questions. The queue is also exposed as `GET /api/approvals` and `POST /api/approvals/respond` with `{ id, response: { decision: "approve" | "reject" } }` or `{ id, response: { text } }`; multiple questions accept `response.answers` keyed by question ID with arrays of strings. Existing loopback Host/Origin checks apply.
+The local UI includes ApprovalQueue. Confirmation, permission and information requests use `GET /api/approvals` and `POST /api/approvals/respond`, or their typed RPC counterparts. Responses include `{ decision: "approve" | "reject" }`, `{ text }`, or question answers keyed by question ID. Queue admission and response delivery persist before acknowledgement. An empty queue only means that no human decision is pending.
 
-Queue state and messages persist under `~/.aster/actors/approvals/`; Run and Delegation records retain prepared Tasks and real external session/run IDs. On restart, actors are recreated and saved approval results are delivered by Actor path. Receiving a decision does not mean that the external task has completed; use “View task records” for response delivery and execution errors.
-
-Codex requires app-server support. Doubao requires CLI status/wait support and a compatible Work desktop native response bridge. Unsupported approval controls remain recorded with an explicit delivery error; no synthetic chat approval or replacement session is sent.
-
-An empty approval queue can mean no request was ever produced. Signal definitions alone do not create approvals: a Run must prepare a Task, pass readiness and use `confirm`, or an owned external execution must report a pending permission/question. Goal-generated Signals currently use `auto`. The dashboard distinguishes “no requests yet” from acknowledged decisions and surfaces the latest failed Goal evaluation so upstream failures are visible.
+Codex uses app-server; busy follow-ups steer the current turn and completed work continues in the same thread. Pi continues its retained conversation. The Doubao adapter supports initial work and native decision responses but explicitly rejects general follow-up instructions because continuation is not implemented. Adapters own scheduling and uncertain delivery behavior; core does not simulate continuation with replacement submissions.
 
 ## Aster naming and existing data
 
@@ -241,7 +102,7 @@ The HTTP host composes internal `legacy-rest`, `static-assets`, `http-policy`, R
 
 ## Context backend migration
 
-The default backend remains Local. Set `config.durable.root` to choose the directory covered by the process lock (default `~/.aster`). Context files, Goal history, screening logs and routing authority live beneath this root. Relative storage paths resolve beside the config file. Optional `config.durable.pi` and `config.durable.routes` route Context path prefixes to Pi; `agents.pi.model` enables execution on the same Pi owner. See the sample YAML and integrations README for the fields.
+The default backend remains Local. Set `config.durable.root` to choose the directory covered by the process lock (default `~/.aster`). Context files, Pi conversations, screening logs and routing authority live beneath this root. Relative storage paths resolve beside the config file. Optional `config.durable.pi` and `config.durable.routes` route Context path prefixes to Pi; `agents.pi.model` enables execution on the same Pi owner. See the sample YAML and integrations README for the fields.
 
 Stop the app before changing routes, then run:
 
@@ -251,13 +112,3 @@ pnpm aster start --config /absolute/path/to/aster.config.yaml
 ```
 
 Migration uses no models or integrations. It copies and verifies complete snapshots before publishing new authority. Startup rejects a configuration that differs from authority, and rejects stale, missing or conflicting selected data. To roll back, change the routes to Local and run the same migration command; new Pi Context writes are copied back. Retain the Pi directory/owner configuration. This command does not relocate stores or migrate native agent sessions. Do not clear an ownership lock without reconciling the prior process and its unfinished writes.
-
-`RespondPersonalApproval` accepts a caller requestId/causationId, Personal expectedRevision, approvalsRevision, approvalId and response. Its immediate receipt confirms durable Personal admission; the outbox records the ApprovalQueue receipt or rejection. Reconcile an unknown acknowledgement with the original payload and identity. This does not change Signal definitions or grant standing authority.
-
-`InspectPersonalDelegation` accepts a public `/delegations/{id}` path and returns a typed business inspection through Personal's mailbox. It does not call an executor or mutate state, and omits session/provider metadata and native messages. Pi-backed Delegation admission can reconcile a missing handle by original request ID and prepared Task; an absent match never triggers another submission.
-
-`StartPersonalTask` accepts `{ requestId, causationId, expectedRevision, agent, task }`, where `expectedRevision` addresses Personal and `task` contains exact instructions and prepared input/source references. The Personal receipt confirms durable intent admission; its outbox later records the receiving Run receipt. Each independent Run requires readiness and explicit user confirmation before execution.
-
-`ResumePersonalRun` takes `{ requestId, causationId, expectedRevision, runPath, runRevision }`. Its returned revision acknowledges Personal admission. The receiving Run stores its own receipt, and Delegation separately records observation/resumption outcomes. Reconcile an unknown receipt with the same payload; a new request does not override an unknown external resume outcome.
-
-`RequestPersonalApproval` accepts `{ requestId, causationId, expectedRevision, approvalsRevision, contextPath, contextRevision, approvalId }`. The source identifies an existing Run confirmation or current Delegation request. The server derives the entry content and destination; the command returns Personal admission, followed by a separate queue receipt in the outbox. Source/queue conflicts require refreshed revisions and a new command identity, while unknown acknowledgement reconciles the original payload.

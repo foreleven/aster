@@ -1,3 +1,6 @@
+import { createHash } from "node:crypto";
+import { testConversations } from "./conversation-fixtures.js";
+import { AgentConversations } from "@aster/agent";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +14,7 @@ import { makeContextRegistry } from "../src/testing/context.js";
 
 test("durable Goal compacts its native transcript and finishes the same request", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "aster-goal-compaction-"));
+  const conversations = testConversations(directory);
   t.after(() => rm(directory, { recursive: true, force: true }));
   let generations = 0;
   let summaries = 0;
@@ -117,8 +121,9 @@ test("durable Goal compacts its native transcript and finishes the same request"
       executors: [],
       contextTokens: 48000,
       reconcile: false,
-      storageDirectory: directory,
       input: {
+        kind: "UserInput",
+        entryId: 0,
         inputId: "review",
         goalSlug: "test",
         ordinal: 1,
@@ -127,18 +132,30 @@ test("durable Goal compacts its native transcript and finishes the same request"
         payload: { _tag: "UserInput", text: "Review the evidence" },
       },
       update: () => Effect.die("No update expected"),
+      followupTask: () => Effect.die("No follow-up expected"),
       startTask: () => Effect.die("No Task expected"),
       signal: () => Effect.die("No Signal expected"),
     });
   }).pipe(
-    Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))),
+    Effect.provide(
+      AgentRunner.layer.pipe(
+        Layer.provide(models),
+        Layer.provide(Layer.succeed(AgentConversations, conversations)),
+      ),
+    ),
     Effect.timeout("15 seconds"),
   );
   const result = await Effect.runPromise(run);
   assert.equal(conversationText(result.messages), "Review completed");
   assert.ok(summaries > 0, "Native compaction must run before the Goal gives up");
   assert.equal(sawSummary, true);
-  assert.match(await readFile(join(directory, "main.jsonl"), "utf8"), /"kind":"pi.compaction"/);
+  assert.match(
+    await readFile(
+      join(directory, createHash("sha256").update("/goals/test").digest("hex"), "main.jsonl"),
+      "utf8",
+    ),
+    /"kind":"pi.compaction"/,
+  );
   const calls = generations + summaries;
   assert.deepEqual(await Effect.runPromise(run), result);
   assert.equal(generations + summaries, calls, "Completed request replay does not call the model");

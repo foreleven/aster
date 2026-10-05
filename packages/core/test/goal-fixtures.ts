@@ -12,8 +12,4 @@ export const goalTestReply: ReplyTo<GoalCommandReply> = {
 
 /** Observe durable input projection independently of compact command receipts. */
 export const goalIntentRecords = (state: import("../src/goals/state.js").GoalState) =>
-  state.inputs.flatMap((input) =>
-    input.payload._tag === "GoalIntent"
-      ? [{ intent: input.payload.intent, historySequence: input.historySequence }]
-      : [],
-  );
+  state.inputs.filter((input) => input.kind === "GoalIntent");

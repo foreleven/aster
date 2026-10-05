@@ -32,7 +32,7 @@ export const isLarkWritebackEcho = (
   const parsed = Schema.decodeUnknownResult(TextContent)(message.content);
   const text = parsed._tag === "Success" ? parsed.success.text : message.content;
   return Object.values(registry.snapshot()).some((record) => {
-    if (!/^\/(?:runs\/[^/]+|(?:goals|signals)\/[^/]+\/runs\/[^/]+)$/.test(record.path))
+    if (!/^\/(?:runs\/[^/]+|(?:goals|signals)\/[^/]+\/tasks\/[^/]+)$/.test(record.path))
       return false;
     const decoded = Schema.decodeUnknownResult(Admission)(record.state);
     if (decoded._tag === "Failure") return false;

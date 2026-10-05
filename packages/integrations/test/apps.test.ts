@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
+import { AgentConversations } from "@aster/agent";
 import { ActorSystem } from "@aster/actor";
 import {
   ContextQueries,
@@ -57,7 +58,12 @@ const launch = Effect.fnUntraced(function* (
       system,
       handle,
       queries,
-      api: makeApplicationApi({ registry, queries, inspect: Effect.succeed({}) }),
+      api: makeApplicationApi({
+        registry,
+        queries,
+        conversations: yield* AgentConversations.makeMemory(),
+        inspect: Effect.succeed({}),
+      }),
     };
   }).pipe(
     Effect.provide(Layer.merge(RuntimeIntegrations.layer, ContextQueries.layer)),

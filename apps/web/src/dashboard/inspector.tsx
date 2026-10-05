@@ -18,7 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Field, FieldLabel } from "@/components/ui/field";
 import { ArrowRight, Check } from "lucide-react";
 import { Status, Messages } from "./shared";
-import { runStages } from "@/lib/dashboard";
+import { taskStages } from "@/lib/dashboard";
 import { inspectorView, contextViews } from "./state";
 import { projectMessage, summaryText, type DisplayState } from "./model";
 import { titleFor } from "../goals/presentation";
@@ -41,7 +41,7 @@ export function Inspector({
     restricted = c?.projection?.visibility === "restricted",
     goal = restricted ? null : c?.path.match(/^\/goals\/([^/]+)$/);
   const tasks = useAtomValue(contextViews).filter(
-    (context) => /^\/runs\/[^/]+$/.test(context.path) && context.state.sourcePath === c?.path,
+    (context) => /^\/tasks\/[^/]+$/.test(context.path) && context.state.sourcePath === c?.path,
   );
   const summary = summaryText(s.summary);
   const send = useAtomSet(sendGoalMessage, { mode: "promise" });
@@ -113,9 +113,9 @@ export function Inspector({
                 Latest runtime error: {row.actor.lastError}
               </p>
             )}
-            {!restricted && c?.path.includes("/runs/") && (
+            {!restricted && c?.path.includes("/tasks/") && (
               <div className="flow">
-                {runStages(c).map((v, i) => (
+                {taskStages(c).map((v, i) => (
                   <React.Fragment key={v.title}>
                     {i > 0 && <ArrowRight className="size-3 shrink-0 text-muted-foreground" />}
                     <div

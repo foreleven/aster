@@ -1,49 +1,41 @@
-import { Schema } from "effect";
+import { Option, Schema } from "effect";
+import { WritebackOperation } from "@aster/api-contracts";
 import { contextView } from "../context/view.js";
-import { publicBusinessMessage } from "../reasoning/public-messages.js";
-import { WritebackOperation, PreparedTask, RunResumption } from "@aster/api-contracts";
-const optionalString = Schema.optional(Schema.String);
-const view = contextView({
-  state: Schema.Struct({
-    status: Schema.String,
-    admission: Schema.Struct({
-      input: Schema.Struct({
-        source: Schema.String,
-        replyTo: Schema.String,
-        agent: Schema.String,
-        task: PreparedTask,
-      }),
-    }),
-    outcomeText: optionalString,
-    writeback: Schema.optional(WritebackOperation),
-    resumptions: Schema.optional(Schema.Array(RunResumption)),
-  }),
-  projectMessage: publicBusinessMessage,
+import { TaskState } from "./state.js";
+const PublicTask = Schema.Struct({
+  status: TaskState.fields.status,
+  sourcePath: Schema.String,
+  replyTo: Schema.String,
+  agent: Schema.String,
+  inputs: Schema.Int,
+  writeback: Schema.optional(WritebackOperation),
 });
-export const runView = {
-  matches: (path: string) => /^\/runs\/[^/]+$/.test(path),
-  project: (record: Parameters<typeof view.project>[0]) => {
-    const projected = view.project(record);
-    if (!projected) return undefined;
-    const state = projected.state as {
-      admission: {
-        input: { source: string; replyTo: string; agent: string; task: typeof PreparedTask.Type };
-      };
-    };
-    const { admission, ...content } = state;
+export const taskView: import("../context/definition.js").ContextViewPolicy = {
+  matches: (path) => /^\/tasks\/[^/]+$/.test(path),
+  project: (record) => {
+    const canonical = Schema.decodeUnknownOption(TaskState)(record.state);
+    let publicState = Schema.decodeUnknownOption(PublicTask)(record.state);
+    if (Option.isSome(canonical))
+      publicState = Option.some({
+        status: canonical.value.status,
+        sourcePath: canonical.value.admission.input.source,
+        replyTo: canonical.value.admission.input.replyTo,
+        agent: canonical.value.admission.input.agent,
+        inputs: canonical.value.inputs.length,
+        writeback: canonical.value.writeback,
+      });
+    if (Option.isNone(publicState)) return undefined;
     return {
-      ...projected,
-      state: {
-        ...content,
-        sourcePath: admission.input.source,
-        replyTo: admission.input.replyTo,
-        agent: admission.input.agent,
-        task: admission.input.task,
-      },
+      path: record.path,
+      revision: record.revision ?? 0,
+      description: record.description,
+      state: publicState.value,
+      messages: [],
+      projection: { version: 1, visibility: "public" },
     };
   },
 };
 export const tasksRootView = contextView({
-  matches: (path) => path === "/runs",
+  matches: (path) => path === "/tasks",
   state: Schema.Struct({}),
 });

@@ -1,60 +1,41 @@
 # Goals
 
-A Goal coordinates three parallel capabilities:
+A Goal owns a natural conversation, business progress and routing to Tasks and Signals. The default personal assistant is the ordinary `/goals/personal` Goal and starts idle.
 
 ```text
-Goal
-├── Pi conversation — reasoning, user input and feedback
-├── Tasks           — messages to Goal or Delegate Actors
-└── Signals         — conditions and timers
-
-Context change → System One Gate → Goal Agent Gate → Pi conversation
-User input ─────────────────────────────────────────→ Pi conversation
-Task messages / execution feedback ─────────────────→ Pi conversation
+Context change → System One → Context-only Goal gate → Goal conversation
+User input / Task feedback ─────────────────────────→ Goal conversation
+Goal conversation → lightweight tools
+                  → Task → internal Agent or external executor
+                  → Signal → scheduled or Context-triggered Task
 ```
 
-The conversation can request a Task or configure a Signal through tools. Their owners accept and persist those commands. Returning an assistant response does not stop a Task or a Signal. Goal End interrupts its conversation, revokes Task executions that have not started, and deactivates its Signals. Already-submitted external work remains owned by the existing Run and Delegation; interruption does not prove cancellation.
+## Conversation and messages
 
-## Conversation
+Simple exchanges and lightweight Context/memory reads run in the main Agent. Sustained work uses a Task. `start_task` creates work; `task_send` sends instructions to an existing Task, including completed work that should continue. A new topic only needs a Task when it requires sustained work. A Goal turn ending does not stop its Tasks.
 
-Each Goal has one durable Pi session/conversation, identified by its slug. Pi owns the transcript, model/tool rounds, tool-call recovery, queued submissions and native compaction. The existing agent adapter uses a Pi Document for exchange identities and committed result references. Goal does not recreate these mechanisms as an evaluation engine.
+`AgentConversations` owns one Pi conversation per Goal. Pi is the only message store: `goal.input` retains accepted user input, internal evidence and feedback; `goal.reply` retains selected public replies. Native Pi entries retain model and tool activity. There is no GoalHistory service or separate public-chat store. Compaction changes model context, not retained message history.
 
-`goals/conversation.ts` supplies the stable assistant policy, current Context/memory reads, `update_goal`, `start_task` and `set_signal`. Assistant text ends a conversation turn naturally. There is no `finish_turn`, plan result, next-step union, result-application phase or automatic continuation protocol.
+The public Timeline projects actual user inputs and selected assistant replies, with stable Pi entry cursors. It excludes Context envelopes, tool calls/results and intermediate tool-round narration. Context evidence may produce a useful conversational update, but is not itself a public assistant statement. Task completion, failure, blockage and decision requests require visible communication. Empty model replies and exhausted automatic-feedback budgets receive a conservative visible notice for required communication.
 
-`update_goal` asks the Goal mailbox to change business progress. The mailbox verifies the invocation generation and completion evidence. Reads use public Context views; private credentials, execution handles and native tool transcripts remain excluded. Task and Signal commands go to their peer owners and return durable receipts. Unknown mutation outcomes stop further model work through the existing Pi tool fence.
+## State and recovery
 
-## Input and recovery
+GoalState contains `definition`, `status`, `summary`, `inputs` and `receipts`. Input records hold Pi references, input kind, ordering, delivery status, Context gate decision, causality, retry reference and error. Message bodies and response text are not duplicated in Actor state. Receipts retain normalized command fingerprints and the original acceptance revision.
 
-Configured Goal creation commits a deterministic initial input. The built-in `/goals/personal` starts with an empty input queue and otherwise uses the ordinary GoalActor. Runtime activation is an in-memory gate; restarting does not manufacture another initial pursuit.
+Admission commits the message and receipt identity to Pi before the Actor saves its references and acknowledges. Startup recovers admitted entries before creating the configured initial pursuit. Exact retries return their existing receipts; changed reuse fails. One input enters the main conversation at a time. Later inputs are durably accepted while execution is in progress.
 
-`SubmitInput` validates producer authority and commits the input and exact request receipt before acknowledging. One delivery at a time enters Pi with `requestId = inputId`; later inputs remain pending. Input status records only the cross-store handoff: pending, running, completed, failed, unknown or ignored. Context changes additionally retain the Agent Gate decision. There is no frozen Context catalogue or second evaluation journal.
+The Actor mailbox remains the single business-state writer. Agent work returns through `pipeToSelf` with generation checks. Interrupted work reconciles the original Pi request. Known failed inputs support explicit `RetryTurn`; unknown outcomes block later inputs until reconciled. Reply selection commits to Pi before the input settles in Actor state, so completed native exchanges can replay without another model call.
 
-The Goal mailbox is the only writer of Goal state. Asynchronous work returns through `pipeToSelf`, guarded by a generation. On restart, unfinished delivery reuses the same Pi identity and reconciles the existing exchange. Known failures can receive an explicit `RetryTurn`, which creates one successor input. Unknown outcomes block later delivery until reconciled; they never authorize a replacement external submission.
+`update_goal` changes the business summary and optionally completes a Goal with evidence. End interrupts local conversation execution, deactivates owned Signals and cancels Tasks that have not started. Submitted work retains its Task owner; local interruption never proves an external cancellation.
 
-The persisted Goal state has five fields:
+## Context gate
 
-- `definition`: identity, title, description and optional completion criteria. Startup replaces the complete definition with current configuration, including removed optional fields, while preserving work.
-- `status`: active or completed.
-- `summary`: the single current business progress summary.
-- `inputs`: accepted inputs, Context gate decisions, delivery status, responses, errors, per-input causal budgets and history projection markers.
-- `receipts`: request ID, normalized command SHA-256 fingerprint and original commit receipt. Decoding removes fields outside the command contract; canonical JSON sorts object keys and preserves array order, so retries tolerate object key order without accepting changed content.
+System One independently matches every eligible Goal and Context Signal. A Goal then applies a separate read-only Agent gate only to Context evidence. Ignored evidence does not enter the persistent model conversation or public chat. User input, direct Task messages and execution feedback bypass this second gate.
 
-There is no top-level causal chain, error cache, duplicate progress field, completion-origin flag or history count. Execution feedback inherits causality from its admitted Run. The public view derives the latest settled error from inputs; history queries provide totals. Receipts and input admission remain atomic, and recovery retains each input's gate decision and history projection marker.
+Automatic feedback retains its original causal budget. A new conversation turn does not replenish it. Exhausted feedback can produce a visible notice without invoking another model.
 
-Task execution state lives in `/runs/...`; Signal state lives in `/signals/...`; conversation execution state lives in Pi. Goal stores none of their duplicated lifecycle state. Business history is a public input feed, not Pi's transcript. The Timeline reads accepted inputs and conversation responses directly.
+## Related work
 
-## Gates
+Task state lives at `/tasks/<identity>`, Signal state at `/signals/<slug>`, and execution transcripts in Pi. The Goal stores no duplicate Task or Signal lifecycle. Signals freeze exact Task occurrences before delivery; receivers acknowledge durable admission. Runtime restores Task and Signal owners before activating Goals and producers.
 
-The Context reaction owner first runs the existing System One relevance screen. Only admitted evidence reaches the Goal. Before entering the persistent conversation, `goals/gate.ts` runs a separate read-only Goal Agent Gate. An unrelated change is recorded as ignored and never sent to the conversation. Gate failure is visible and may be explicitly retried.
-
-User input, Task feedback and Task messages do not pass through generic Context screening. Feedback carries its original causal budget; starting a new conversation turn does not replenish it. Exhausted automatic feedback remains visible without invoking Pi.
-
-## Tasks and Signals
-
-Goals send `TaskMessage` through a shared dispatcher. A Goal Task delivers text directly; a Delegate Task includes prepared instructions, executor and replyTo Goal. The Run root saves admission and receipt before confirmation and owns external Delegation. Task identity derives from source and tool-call identity. Its work panel reads independent Run Contexts, including Signal Tasks replying to this Goal.
-
-Signals accept direct commands, validate owner/revision/timing and commit the complete trigger, Task and receipt. Both Context and schedule triggers freeze a Task occurrence before dispatch. Receivers acknowledge durable admission. Goal has no Signal proposal batch, subscription facade or notification outbox. Startup restores Signal owners before registering Goals and reattaches Run feedback after receivers exist.
-
-## Scope
-
-This implementation does not migrate historical Goal states, evaluation records or planning protocols. Existing runtime data and credentials are not changed by the rewrite. Verification uses fake models/transports and temporary Pi storage.
+See [conversation design](goal-conversation-design.md), [Tasks](task-delegation-design.md) and [runtime](runtime-design.md). There is no historical-data migration or compatibility protocol.

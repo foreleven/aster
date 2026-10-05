@@ -1,3 +1,5 @@
+import { AgentConversations } from "@aster/agent";
+import { testConversations } from "./conversation-fixtures.js";
 import { AgentRunner } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -14,11 +16,9 @@ import {
   ContextRegistry,
   GoalsRootActor,
   GoalSettings,
-  GoalHistoryStore,
   GoalSignals,
   MemoryRecall,
   ExternalAgents,
-  makeMemoryGoalHistory,
 } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import { startGoalApi } from "../src/http-api.js";
@@ -39,6 +39,7 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
+        const conversations = testConversations();
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
@@ -47,7 +48,7 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
               definitions: [{ slug: "personal", description: "Assistant" }],
               reasoning: { model: "test" },
             }),
-            Layer.succeed(GoalHistoryStore, makeMemoryGoalHistory()),
+            Layer.succeed(AgentConversations, conversations),
             Layer.succeed(GoalSignals, {
               applySignal: () => Effect.die("Unexpected Signal"),
               deactivate: () => Effect.void,
@@ -66,6 +67,7 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
         const goals = yield* system.spawn("goals", GoalsRootActor);
         yield* goals.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
         const application = makeApplicationApi({
+          conversations,
           registry,
           goals,
           inspect: Effect.succeed(null),
@@ -96,7 +98,7 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
         assert.equal(first.exit._tag, "Success");
         assert.equal(first.exit.value, null);
         assert.deepEqual(duplicate.exit, first.exit);
-        assert.equal((yield* application.goals.timeline("personal", {})).groups.length, 1);
+        assert.equal((yield* application.goals.timeline("personal", {})).messages.length, 1);
       }),
     ),
   );
@@ -110,6 +112,7 @@ test("RPC shares typed query contracts and propagates application failures witho
   );
   let submissions = 0;
   const application = makeApplicationApi({
+    conversations: testConversations(),
     registry,
     inspect: Effect.succeed({ phase: "ready", actors: [], events: [] }),
   });
@@ -221,7 +224,11 @@ test("ListContexts encodes cleared optional fields in public state and nested me
   );
   const api = await startGoalApi({
     port: 0,
-    application: makeApplicationApi({ registry, inspect: Effect.succeed(null) }),
+    application: makeApplicationApi({
+      registry,
+      conversations: testConversations(),
+      inspect: Effect.succeed(null),
+    }),
   });
   try {
     const response = await fetch(`${api.url}/api/rpc`, {
@@ -257,7 +264,11 @@ test(
   async () => {
     const registry = await Effect.runPromise(makeContextRegistry());
     await Effect.runPromise(registry.register(record.path, definition));
-    const application = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
+    const application = makeApplicationApi({
+      registry,
+      conversations: testConversations(),
+      inspect: Effect.succeed(null),
+    });
     let active = 0;
     const released = Promise.withResolvers<void>();
     const api = await startGoalApi({
@@ -320,7 +331,11 @@ test("failed persistence and unchanged writes do not invalidate application quer
           },
         });
         yield* registry.register(record.path, definition);
-        const api = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
+        const api = makeApplicationApi({
+          registry,
+          conversations: testConversations(),
+          inspect: Effect.succeed(null),
+        });
         const changes = yield* api.subscribeInvalidations;
         const received: unknown[] = [];
         yield* Stream.runForEach(changes, (change) =>
@@ -357,7 +372,11 @@ test(
     const registry = await Effect.runPromise(makeContextRegistry());
     const entered = Promise.withResolvers<void>();
     let finalized = false;
-    const application = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
+    const application = makeApplicationApi({
+      registry,
+      conversations: testConversations(),
+      inspect: Effect.succeed(null),
+    });
     const api = await startGoalApi({
       port: 0,
       application: {

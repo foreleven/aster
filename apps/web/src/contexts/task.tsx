@@ -5,13 +5,13 @@ import { ApplicationClient, resultError, resultValue } from "../api/client";
 
 const inspection = Atom.family((path: string) =>
   ApplicationClient.query(
-    "InspectDelegation",
+    "InspectTask",
     { path },
     { reactivityKeys: [QueryKeys.all, QueryKeys.context(path)] },
   ),
 );
 
-export function DelegationDetails({
+export function TaskDetails({
   path,
   navigate,
 }: {
@@ -24,15 +24,12 @@ export function DelegationDetails({
   if (error) return <p role="alert">{error}</p>;
   if (!view) return <p role="status">Loading execution…</p>;
   return (
-    <section className="context-work-section" aria-label="Delegation execution">
+    <section className="context-work-section" aria-label="Task execution">
       <h2>Execution</h2>
       <p>
         {view.agent} · {view.status} · Revision {view.revision}
       </p>
       <p>{view.instructions}</p>
-      <button className="outline-action" onClick={() => navigate(view.runPath)}>
-        View Run
-      </button>
       {!view.hasExecution && (
         <p>No execution handle is recorded. The task has not been resubmitted.</p>
       )}
@@ -56,6 +53,12 @@ export function DelegationDetails({
           <button className="outline-action" onClick={() => navigate("/approvals")}>
             View approvals
           </button>
+        </article>
+      ))}
+      {view.messages.map((message) => (
+        <article key={message.id}>
+          <small>{message.kind}</small>
+          <p className="whitespace-pre-wrap">{message.text}</p>
         </article>
       ))}
       {view.sources.length > 0 && (

@@ -4,10 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Effect, Layer } from "effect";
-import { DurableContext, GoalHistoryStore, GoalScreeningStore } from "@aster/core";
+import { DurableContext, GoalScreeningStore } from "@aster/core";
 import { LocalConfig } from "../src/config/provider.js";
 import { ConfiguredDurableInfrastructure } from "../src/storage/configured.js";
-import { FileGoalHistory, FileGoalScreening } from "../src/storage/layers.js";
+import { FileGoalScreening } from "../src/storage/layers.js";
 import { storageSettings, routingAuthorityStore } from "../src/storage/routing.js";
 import { migrateContextStorage } from "../src/storage/migration.js";
 import { makeFileContextStore } from "../src/storage/file-context-store.js";
@@ -65,16 +65,6 @@ test("configured routing opens model-free Pi, persists authority, and keeps jour
     /routing differs/,
   );
   // Journal services resolve configuration independently but share the process lease root.
-  const history = await Effect.runPromise(
-    GoalHistoryStore.pipe(Effect.provide(FileGoalHistory.layer.pipe(Layer.provide(sources)))),
-  );
-  await Effect.runPromise(
-    history.append("test", { role: "user", content: "History evidence", timestamp: 0 }),
-  );
-  assert.match(
-    readFileSync(join(settings.root, "goals/test/history.jsonl"), "utf8"),
-    /History evidence/,
-  );
   const screening = await Effect.runPromise(
     GoalScreeningStore.pipe(Effect.provide(FileGoalScreening.layer.pipe(Layer.provide(sources)))),
   );

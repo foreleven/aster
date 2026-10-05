@@ -4,7 +4,6 @@ import {
   Task,
   SignalTrigger,
   PreparedTask,
-  RunResumption,
   ExecutionResumption,
   type PublicContext,
   type RuntimeEvent,
@@ -15,7 +14,7 @@ import {
 
 const DisplayState = Schema.Struct({
   writeback: Schema.optional(WritebackOperation),
-  resumptions: Schema.optional(Schema.Array(Schema.Union([RunResumption, ExecutionResumption]))),
+  resumptions: Schema.optional(Schema.Array(ExecutionResumption)),
   // Delivery owners expose different payloads; related work only needs their source path.
   deliveries: Schema.optional(
     Schema.Array(Schema.Struct({ input: Schema.Struct({ source: Schema.String }) })),
@@ -40,6 +39,7 @@ const DisplayState = Schema.Struct({
   ),
   status: Schema.optional(Schema.String),
   deleted: Schema.optional(Schema.Boolean),
+  retryableInputId: Schema.optional(Schema.String),
   lastError: Schema.optional(Schema.String),
   completionCriteria: Schema.optional(Schema.String),
   active: Schema.optional(Schema.Boolean),
@@ -60,10 +60,10 @@ const DisplayState = Schema.Struct({
   nextDue: Schema.optional(Schema.Number),
   sourceContext: Schema.optional(Schema.String),
   sourcePath: Schema.optional(Schema.String),
-  runPath: Schema.optional(Schema.String),
+  taskPath: Schema.optional(Schema.String),
   goal: Schema.optional(Schema.String),
   definition: Schema.optional(Schema.Struct({ goal: Schema.optional(Schema.String) })),
-  request: Schema.optional(Schema.Struct({ runPath: Schema.optional(Schema.String) })),
+  request: Schema.optional(Schema.Struct({ taskPath: Schema.optional(Schema.String) })),
   session: Schema.optional(
     Schema.Struct({ sessionId: Schema.String, runId: Schema.optional(Schema.String) }),
   ),
@@ -212,7 +212,7 @@ export const filterRows = (
     const path = row.context?.path ?? row.path;
     const inPage = Match.value(page).pipe(
       Match.when("goals", () => /^\/goals\/[^/]+$/.test(path)),
-      Match.when("signals", () => path.startsWith("/signals/") || path.startsWith("/delegations/")),
+      Match.when("signals", () => path.startsWith("/signals/")),
       Match.orElse(() => true),
     );
     const inFilter = Match.value(filter).pipe(

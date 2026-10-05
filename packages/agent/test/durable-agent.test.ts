@@ -381,8 +381,7 @@ test("durable admission freezes input before submission and commits results befo
       catalogueId?: string;
       callbackFailure?: boolean;
       reconcile?: boolean;
-      replayOnly?: boolean;
-      owner?: "goals" | "personal";
+      owner?: "goals" | "tasks";
     } = {},
   ) =>
     Effect.runPromise(
@@ -396,7 +395,6 @@ test("durable admission freezes input before submission and commits results befo
             catalogueId: options.catalogueId,
             owner: options.owner,
             reconcile: options.reconcile,
-            replayOnly: options.replayOnly,
           },
           onMessage: () => {
             callbacks++;
@@ -417,10 +415,7 @@ test("durable admission freezes input before submission and commits results befo
     await assert.rejects(run("one", { text: "Changed" }), /frozen input/);
     await assert.rejects(run("one", { instructions: "Changed" }), /frozen input/);
     await assert.rejects(run("one", { catalogueId: "changed-tools" }), /frozen input/);
-    await assert.rejects(run("one", { owner: "personal" }), /another Aster owner/);
-    assert.equal(calls, 0);
-    await assert.rejects(run("missing", { replayOnly: true }), /no durable session receipt/);
-    await assert.rejects(run("one", { replayOnly: true }), /unsettled session receipt/);
+    await assert.rejects(run("one", { owner: "tasks" }), /another Aster owner/);
     assert.equal(calls, 0);
     await assert.rejects(run("one", { callbackFailure: true, reconcile: true }), /lost its result/);
     assert.equal(calls, 1);
@@ -431,7 +426,6 @@ test("durable admission freezes input before submission and commits results befo
     assert.deepEqual(
       await run("one", {
         reconcile: true,
-        replayOnly: true,
         text: "New prompt version",
         catalogueId: "new-tools",
       }),
@@ -920,7 +914,7 @@ test("replaying a terminal tool round excludes later results even when call IDs 
   }
 });
 
-test("Goal and Personal durable invocations share storage exclusivity before model admission", async () => {
+test("Goal and Task durable invocations share storage exclusivity before model admission", async () => {
   const directory = await mkdtemp(join(tmpdir(), "aster-ownerless-exclusive-"));
   try {
     await Effect.runPromise(
@@ -954,10 +948,10 @@ test("Goal and Personal durable invocations share storage exclusivity before mod
               storageDirectory: directory,
             },
           }).pipe(Effect.provide(layer));
-          const personal = yield* Agent.make({
+          const task = yield* Agent.make({
             name: "test",
             durable: {
-              owner: "personal",
+              owner: "tasks",
               sessionId: "one",
               requestId: "other",
               storageDirectory: directory,
@@ -966,7 +960,7 @@ test("Goal and Personal durable invocations share storage exclusivity before mod
           const input = { messages: [{ role: "user" as const, content: "Read", timestamp: 0 }] };
           const running = yield* goal.run(input).pipe(Effect.forkScoped);
           yield* Deferred.await(entered);
-          const failure = yield* personal.run(input).pipe(Effect.flip);
+          const failure = yield* task.run(input).pipe(Effect.flip);
           assert.match(failure.message, /owned by another process/);
           assert.equal(calls, 1);
           yield* Deferred.succeed(release, undefined);

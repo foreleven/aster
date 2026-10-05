@@ -1,3 +1,4 @@
+import { testConversations } from "./conversation-fixtures.js";
 import { taskFixture, taskInput } from "./task-fixtures.js";
 import type { TaskDeliveryInput } from "@aster/api-contracts";
 import assert from "node:assert/strict";
@@ -13,8 +14,8 @@ import {
   type ContextRecord,
 } from "../src/index.js";
 
-import { RunState } from "../src/tasks/run-state.js";
-import { runActorPath } from "../src/tasks/address.js";
+import { TaskState } from "../src/tasks/state.js";
+import { taskActorPath } from "../src/tasks/address.js";
 
 const definition: TaskDeliveryInput = {
   ...taskInput("publish"),
@@ -22,6 +23,7 @@ const definition: TaskDeliveryInput = {
 };
 const fixture = (options: {
   records: Map<string, ContextRecord>;
+  conversations?: ReturnType<typeof testConversations>;
   publish: ChannelWrites["Service"]["publish"];
   definition?: TaskDeliveryInput;
   saved?: (record: ContextRecord) => void;
@@ -29,8 +31,8 @@ const fixture = (options: {
   Effect.gen(function* () {
     const env = yield* taskFixture(options);
     const record = () =>
-      Object.values(env.registry.snapshot()).find((record) => /^\/runs\/[^/]+$/.test(record.path));
-    const state = () => record() && Schema.decodeUnknownSync(RunState)(record()!.state);
+      Object.values(env.registry.snapshot()).find((record) => /^\/tasks\/[^/]+$/.test(record.path));
+    const state = () => record() && Schema.decodeUnknownSync(TaskState)(record()!.state);
     const decide = (id: string, decision: "approve" | "reject") =>
       env.approvals.ask<{ error?: string }>((replyTo) => ({
         _tag: "Resolve",
@@ -39,7 +41,7 @@ const fixture = (options: {
         replyTo,
       }));
     const completed = Effect.gen(function* () {
-      yield* env.runs.ask((replyTo) => ({
+      yield* env.tasks.ask((replyTo) => ({
         _tag: "StartTask",
         input: options.definition ?? definition,
         replyTo,
@@ -62,12 +64,14 @@ test("Run persists the result and exact writeback before a separate approval; fo
     Effect.scoped(
       Effect.gen(function* () {
         const records = new Map<string, ContextRecord>();
+        const conversations = testConversations();
         const env = yield* fixture({
           records,
+          conversations,
           publish: (request, authorization) =>
             Effect.sync(() => {
               calls++;
-              const retained = Schema.decodeUnknownSync(RunState)(
+              const retained = Schema.decodeUnknownSync(TaskState)(
                 records.get(request.source)!.state,
               );
               assert.equal(retained.status, "completed");
@@ -91,7 +95,7 @@ test("Run persists the result and exact writeback before a separate approval; fo
         const entry = approvalEntries(env.registry).find((entry) => entry.id === id)!;
         assert.match(entry.request.prompt, /oc_test as user/);
         assert.match(entry.request.prompt, /\n\ndone\n\n/);
-        const actor = yield* env.system.select(runActorPath(env.record()!.path)).resolve();
+        const actor = yield* env.system.select(taskActorPath(env.record()!.path)).resolve();
         yield* actor.tell({
           _tag: "ApprovalResolved",
           requestId: id,
@@ -125,6 +129,7 @@ test("Run persists the result and exact writeback before a separate approval; fo
 for (const outcome of ["published", "unknown", "rejected"] as const) {
   test(`writeback ${outcome} survives restart without another external submission`, async () => {
     const records = new Map<string, ContextRecord>();
+    const conversations = testConversations();
     let calls = 0;
     for (let restart = 0; restart < 2; restart++) {
       await Effect.runPromise(
@@ -132,6 +137,7 @@ for (const outcome of ["published", "unknown", "rejected"] as const) {
           Effect.gen(function* () {
             const env = yield* fixture({
               records,
+              conversations,
               publish: () =>
                 Effect.suspend(() => {
                   calls++;
@@ -149,7 +155,7 @@ for (const outcome of ["published", "unknown", "rejected"] as const) {
             }
             yield* env.until(() => env.state()?.writeback?.status === outcome);
 
-            const actor = yield* env.system.select(runActorPath(env.record()!.path)).resolve();
+            const actor = yield* env.system.select(taskActorPath(env.record()!.path)).resolve();
             yield* actor.tell({ _tag: "Resume", path: env.record()!.path });
             yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
             assert.equal(calls, 1);
@@ -162,6 +168,7 @@ for (const outcome of ["published", "unknown", "rejected"] as const) {
 
 test("interrupted publication remains unknown on recovery, even when the external call might have completed", async () => {
   const records = new Map<string, ContextRecord>();
+  const conversations = testConversations();
   const entered = Deferred.makeUnsafe<void>();
   let calls = 0;
   await Effect.runPromise(
@@ -169,6 +176,7 @@ test("interrupted publication remains unknown on recovery, even when the externa
       Effect.gen(function* () {
         const env = yield* fixture({
           records,
+          conversations,
           publish: () =>
             Effect.gen(function* () {
               calls++;
@@ -188,6 +196,7 @@ test("interrupted publication remains unknown on recovery, even when the externa
       Effect.gen(function* () {
         const env = yield* fixture({
           records,
+          conversations,
           publish: () => Effect.die("Unknown publication must not retry"),
         });
         yield* env.until(() => env.state()?.writeback?.status === "unknown");
@@ -212,7 +221,7 @@ test("rejecting publication keeps the local result and performs no external writ
         yield* env.decide(writebackApprovalId(env.state()!.writeback!.request), "reject");
         yield* env.until(() => env.state()?.writeback?.status === "rejected");
         assert.equal(env.state()!.status, "completed");
-        assert.equal(env.state()!.outcomeText, "done");
+        assert.notEqual(env.state()!.outcomeEntryId, undefined);
       }),
     ).pipe(Effect.timeout("5 seconds")),
   );
@@ -229,7 +238,7 @@ test("a completed Run without an explicit Signal action stays local", async () =
           publish: () => Effect.die(new Error("Local results cannot publish")),
         });
         yield* env.completed;
-        const actor = yield* env.system.select(runActorPath(env.record()!.path)).resolve();
+        const actor = yield* env.system.select(taskActorPath(env.record()!.path)).resolve();
         yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
         assert.equal(env.state()!.writeback, undefined);
         assert.equal(
@@ -244,6 +253,7 @@ test("a completed Run without an explicit Signal action stays local", async () =
 for (const phase of ["sending", "published"] as const) {
   test(`lost ${phase} commit acknowledgement does not repeat publication after owner restart`, async () => {
     const records = new Map<string, ContextRecord>();
+    const conversations = testConversations();
     let calls = 0;
     let lost = false;
     const acknowledgementLost = Deferred.makeUnsafe<void>();
@@ -252,11 +262,12 @@ for (const phase of ["sending", "published"] as const) {
         Effect.gen(function* () {
           const env = yield* fixture({
             records,
+            conversations,
             saved: (record) => {
               if (
                 !lost &&
-                record.path.includes("/runs/") &&
-                Schema.decodeUnknownSync(RunState)(record.state).writeback?.status === phase
+                record.path.includes("/tasks/") &&
+                Schema.decodeUnknownSync(TaskState)(record.state).writeback?.status === phase
               ) {
                 lost = true;
                 Deferred.doneUnsafe(acknowledgementLost, Effect.void);
@@ -283,12 +294,13 @@ for (const phase of ["sending", "published"] as const) {
         Effect.gen(function* () {
           const env = yield* fixture({
             records,
+            conversations,
             publish: () => Effect.die(new Error("Uncertain submission cannot retry")),
           });
           const status = phase === "sending" ? "unknown" : "published";
           yield* env.until(() => env.state()?.writeback?.status === status);
 
-          const actor = yield* env.system.select(runActorPath(env.record()!.path)).resolve();
+          const actor = yield* env.system.select(taskActorPath(env.record()!.path)).resolve();
           yield* actor.tell({ _tag: "Resume", path: env.record()!.path });
           yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
           assert.equal(calls, phase === "sending" ? 0 : 1);

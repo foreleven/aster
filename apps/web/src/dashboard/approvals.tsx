@@ -23,7 +23,7 @@ export function Approvals({
   const entries = contextPaths
     ? allEntries.filter((entry) => contextPaths.includes(entry.contextPath))
     : allEntries;
-  const { runs, failures: goalFailures } = useAtomValue(approvalDiagnostics);
+  const { tasks, failures: goalFailures } = useAtomValue(approvalDiagnostics);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const respondMutation = useAtomSet(respondToApproval, { mode: "promiseExit" });
   const pending = useAtomValue(pendingApprovalResponses);
@@ -59,9 +59,9 @@ export function Approvals({
           <Blank
             title="No approval requests yet"
             detail={
-              runs === 0
+              tasks === 0
                 ? "No Tasks yet. The workflow has not reached task confirmation or external execution."
-                : `There are ${runs} Tasks. No tasks currently require human approval.`
+                : `There are ${tasks} Tasks. No tasks currently require human approval.`
             }
           />
           <p className="text-sm text-muted-foreground">

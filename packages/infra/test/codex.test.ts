@@ -210,3 +210,56 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("Codex steers active work and starts a new turn in the same thread after completion", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const dir = await mkdtemp(join(tmpdir(), "aster-codex-followup-"));
+  const executable = join(dir, "fake-codex");
+  await writeFile(
+    executable,
+    `#!/usr/bin/env node
+const fs = require('node:fs'), readline = require('node:readline'), path = require('node:path');
+const log = path.join(__dirname, 'rpc.jsonl');
+let turn = 0;
+const send = value => process.stdout.write(JSON.stringify(value)+'\\n');
+readline.createInterface({input:process.stdin}).on('line', line => {
+ const m=JSON.parse(line); fs.appendFileSync(log, JSON.stringify(m)+'\\n');
+ const reply=result=>send({id:m.id,result});
+ if(m.method==='initialize') reply({});
+ if(m.method==='thread/start' || m.method==='thread/resume') reply({thread:{id:'thread-1'}});
+ if(m.method==='turn/start') reply({turn:{id:'turn-'+(++turn)}});
+ if(m.method==='turn/steer') reply({turnId:m.params.expectedTurnId});
+ if(m.method==='thread/read') reply({thread:{turns:[{id:'turn-'+turn,status:fs.existsSync(path.join(__dirname,'completed'))?'completed':'inProgress',items:[]}]}});
+});
+`,
+    { mode: 0o700 },
+  );
+  const agent = makeCodexAgent(join(dir, "absent.env"), executable, join(dir, "tasks"));
+  try {
+    const first = await Effect.runPromise(
+      agent.submit({ instructions: "Initial work", input: [] }),
+    );
+    assert.deepEqual(
+      await Effect.runPromise(agent.followUp(first, { requestId: "busy", text: "Add regions" })),
+      first,
+    );
+    await writeFile(join(dir, "completed"), "");
+    const next = await Effect.runPromise(
+      agent.followUp(first, { requestId: "later", text: "Extend report" }),
+    );
+    assert.equal(next.sessionId, first.sessionId);
+    assert.notEqual(next.runId, first.runId);
+    const calls = (await readFile(join(dir, "rpc.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    assert.equal(calls.filter((call) => call.method === "thread/start").length, 1);
+    assert.equal(calls.filter((call) => call.method === "turn/start").length, 2);
+    const steer = calls.find((call) => call.method === "turn/steer");
+    assert.equal(steer.params.expectedTurnId, first.runId);
+    assert.equal(steer.params.input[0].text, "Add regions");
+  } finally {
+    await Effect.runPromise(agent.close());
+    await rm(dir, { recursive: true, force: true });
+  }
+});

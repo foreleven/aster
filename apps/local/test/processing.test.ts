@@ -1,7 +1,8 @@
 import { ContextCaptures, ContextDescriptions, makeContextMaintenance } from "@aster/core";
-import { runCapture } from "@aster/core/testing";
+import { testConversations } from "./conversation-fixtures.js";
+import { taskCapture } from "@aster/core/testing";
 import { larkCaptures, larkDescriptions, larkContextViews } from "@aster/integrations";
-import { TaskRunActor, DEFAULT_EXECUTOR_PROMPT } from "@aster/core";
+import { TaskActor, DEFAULT_EXECUTOR_PROMPT } from "@aster/core";
 import { ContextDescriptionError } from "@aster/core";
 import { ApprovalQueueActor, ExternalAgents } from "@aster/core";
 import assert from "node:assert/strict";
@@ -44,7 +45,8 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         const registry = yield* makeContextRegistry();
         yield* registry.views.register(larkContextViews);
         const capturesPolicy = yield* ContextCaptures;
-        yield* capturesPolicy.register([...larkCaptures, runCapture]);
+        const conversations = testConversations();
+        yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
         const descriptions = yield* ContextDescriptions;
         yield* descriptions.register(larkDescriptions);
 
@@ -116,22 +118,44 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
           expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0,
         });
         const confirmed = registry.reader.get("/lark/mail/me/test")!;
-        const runPath = "/runs/" + "a".repeat(64);
-        yield* registry.register(runPath, TaskRunActor.context);
+        const taskPath = "/tasks/" + "a".repeat(64);
+        const input = {
+          requestId: "task",
+          source: "/signals/review",
+          target: taskPath,
+          createdAt: "2026-10-01T00:00:00Z",
+          agent: "test",
+          task: { instructions: "Review", input: [] },
+          replyTo: "/goals/personal",
+          evidence: confirmed,
+          causal: { rootRequestId: "task", remainingAgentTurns: 3 },
+        };
+        const entry = yield* conversations.append(taskPath, "task", "task.admission", input);
+        yield* registry.register(taskPath, TaskActor.context);
         yield* registry.commit(
           {
-            path: runPath,
+            path: taskPath,
             description: "Review",
             messages: [],
             state: {
               status: "awaiting-confirmation",
+              inputs: [
+                {
+                  requestId: "task",
+                  entryId: entry.id,
+                  receipt: { requestId: "task", revision: 1 },
+                  status: "pending",
+                },
+              ],
+              approvals: [],
               executorPrompt: DEFAULT_EXECUTOR_PROMPT,
               admission: {
+                entryId: entry.id,
                 receipt: { requestId: "task", revision: 1 },
                 input: {
                   requestId: "task",
                   source: "/signals/review",
-                  target: runPath,
+                  target: taskPath,
                   createdAt: "2026-10-01T00:00:00Z",
                   agent: "test",
                   task: { instructions: "Review", input: [] },
@@ -161,7 +185,7 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
   );
   assert.equal(result.captures.length, 1);
   const capture = result.captures[0]!;
-  assert.match(capture.sessionId, /^\/runs\/[a-f0-9]{64}:trigger$/);
+  assert.match(capture.sessionId, /^\/tasks\/[a-f0-9]{64}:trigger$/);
   assert.equal((capture.records[1]!.state as { subject: string }).subject, "Confirmed request");
   assert.equal("type" in result.snapshot[capture.records[0]!.path]!, false);
   assert.deepEqual(result.descriptionInputs[0], {
@@ -182,7 +206,8 @@ test("discovered account and mailbox identities use separate sessions; no captur
         const registry = yield* makeContextRegistry();
         yield* registry.views.register(larkContextViews);
         const capturesPolicy = yield* ContextCaptures;
-        yield* capturesPolicy.register([...larkCaptures, runCapture]);
+        const conversations = testConversations();
+        yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
         const descriptions = yield* ContextDescriptions;
         yield* descriptions.register(larkDescriptions);
 

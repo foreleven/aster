@@ -11,7 +11,7 @@ export const GoalSubmission = Schema.Union([
   Schema.TaggedStruct("UserInput", { text: Schema.NonEmptyString }),
   Schema.TaggedStruct("GoalIntent", { delivery: GoalIntentInput }),
   Schema.TaggedStruct("ExecutionFeedback", {
-    runPath: Schema.String,
+    taskPath: Schema.String,
     text: Schema.String,
     terminal: Schema.Boolean,
     status: Schema.optional(Schema.String),

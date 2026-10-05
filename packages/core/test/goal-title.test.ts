@@ -1,3 +1,4 @@
+import { testConversations } from "./conversation-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -10,7 +11,6 @@ import {
   GoalState,
   GoalsRootActor,
   makeApplicationApi,
-  makeMemoryGoalHistory,
   parseConfig,
   type ContextRecord,
 } from "../src/index.js";
@@ -61,7 +61,7 @@ test("Goal config readers retain optional titles and reject blank or non-string 
 });
 
 test("Goal startup refreshes the entire definition without losing work", async () => {
-  const history = makeMemoryGoalHistory();
+  const history = testConversations();
   let saved: ContextRecord | undefined;
   for (const definition of [
     { slug: "project", description: "Detailed responsibility" },
@@ -106,7 +106,11 @@ test("Goal startup refreshes the entire definition without losing work", async (
           );
           const root = yield* system.spawn("goals", GoalsRootActor);
           yield* root.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
-          const api = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
+          const api = makeApplicationApi({
+            registry,
+            conversations: history,
+            inspect: Effect.succeed(null),
+          });
           const record = yield* api.context("/goals/project");
           const canonical = registry.get(record.path)!;
           const state = Schema.decodeUnknownSync(GoalState)(canonical.state);
@@ -127,7 +131,7 @@ test("Goal startup refreshes the entire definition without losing work", async (
           } else {
             // Retain completed business progress while refreshing display metadata.
             const message = { role: "user" as const, content: "Keep existing work", timestamp: 1 };
-            yield* history.append("project", message);
+            yield* history.append("/goals/project", "kept", "test.record", message);
             yield* registry.commit(
               {
                 ...canonical,
@@ -136,7 +140,7 @@ test("Goal startup refreshes the entire definition without losing work", async (
                   status: "completed",
                   summary: "Existing conclusions",
                 },
-                messages: (yield* history.read("project")).map((entry) => entry.message),
+                messages: [],
               },
               { expectedRevision: registry.get(record.path)?.revision ?? 0 },
             );

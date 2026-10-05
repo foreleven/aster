@@ -1,45 +1,37 @@
-# Task delivery and delegation
+# Task delivery and execution
 
-A Task sends work to an Actor. A Goal Task is a text message addressed to a Goal. A Delegate Task contains an executor name, prepared instructions/material, an explicit replyTo Goal and an optional publication action. Signals execute Tasks on a Context condition or a schedule; Goal tools use the same delivery path.
+Task describes work delivered to an Actor. `Goal` sends a message to a Goal; `Agent` starts an internal Agent; `Delegate` selects an external executor. Both execution variants have one persistent Task owner at `/tasks/<sha256(source, requestId)>`. There is no separate business Run or Delegation owner.
 
-## Admission
+## Admission and conversation
 
-`TaskMessage` carries requestId, source, task, createdAt, causal budget and optional frozen public Context evidence. Signal occurrences retain the complete envelope before delivery. Goal tool identities derive from the input and tool call. Retry never changes creation time, instructions or evidence.
+`TaskMessage` carries stable request identity, source, creation time, causal budget and optional frozen public Context evidence. Signals retain an exact occurrence before delivery; Goal tool identities derive from input and tool-call identity. Receivers validate source authority and reject changed identity reuse.
 
-Goal Tasks use `SubmitInput(TaskMessage)`. Delegate Tasks use `StartTask` and create `/runs/<sha256(source, requestId)>` under `/user/runs`. Targets validate ownership and retain an exact-input receipt before acknowledgement. Signal deliveries must match their committed occurrence. The Run also verifies its executor and reply Goal before admission.
+TaskActor commits instructions/evidence as `task.admission` in Pi, then saves business metadata, Pi references and the receipt before acknowledging. `task.input` retains follow-up instructions and their original receipts. Startup recovers Pi admissions whose Actor handoff was interrupted. Actor state does not duplicate message bodies.
 
-The Run stores its admitted input, executor policy, status, approval IDs, optional resumptions, outcome and publication. The policy is frozen before confirmation and is combined with the admitted instructions and evidence for both confirmation and submission. There is no model-driven Task preparation or readiness stage.
+A Task retains its identity across follow-ups and completed-work reactivation. Each instruction has its own request identity and delivery status. Exact retries return their original receipts even after completion. Rejected, cancelled and uncertain Tasks do not accept new work that would bypass reconciliation.
 
-## Execution
+## Execution and follow-up
 
-```text
-awaiting-confirmation → ready → submitting → running / waiting_input
-                    ↘ rejected               ↓
-                                  completed / failed / cancelled / uncertain
-```
+Internal execution uses a dedicated Pi conversation and AgentRunner. Execution is asynchronous to both the Task mailbox and the main Goal conversation. Busy instructions use native Pi steering when its runner is active; otherwise they remain pending for the next invocation. Completed Task follow-ups use the same retained working context.
 
-Only a matching persisted ApprovalQueue decision can move an awaiting-confirmation Run forward. Sending a bare `ApprovalResolved` command cannot grant permission. Delegate owns external session/run handles and all provider metadata. Stable Run admission is separate from external submission.
+External execution freezes executor policy and requires confirmation through ApprovalQueue. Only a matching persisted decision permits submission. The adapter owns busy follow-up behavior: Codex steers an active turn and starts a new turn in the same thread after completion; Pi retains context through its execution conversation. The current Doubao adapter explicitly rejects follow-up delivery because it has no implemented continuation API.
 
-Delegation persists submission intent before calling the executor and the returned handle before reporting it. A missing handle after interruption is uncertain, not permission to submit again. `lookupSubmission` is an optional read-only reconciliation capability. A found handle is saved; missing, failed or unsupported lookup leaves uncertainty visible.
+Task tracks pending, sending, accepted, completed, rejected and unknown inputs independently of provider rounds. Generation checks discard superseded observations. External acceptance saves the returned handle and input status together. A provider round ending does not complete inputs still awaiting delivery.
 
-Authoritative failure, cancellation and completion remain distinct from transport uncertainty. Terminal outcomes are committed before notifying Run and replayed after restart without requiring an executor. Run forwards feedback asynchronously to its replyTo Goal using a deterministic receipt identity. A missing Goal acknowledgement retries the same message in a scoped Effect. Durable terminal state supports replay after restart. Goal receipt deduplication prevents duplicate conversation inputs.
+`task.result` stores outcome text and its covered input references in Pi before the Actor commits terminal state, result reference and optional publication. Recovery can finish this handoff without executing again. Feedback goes to the reply Goal with a deterministic identity and retries missing acknowledgement within the owning Scope. Terminal replay requires no configured executor.
 
-## Approvals and explicit resumption
+## Uncertainty and approvals
 
-ApprovalQueue owns pending human confirmation, permission and information requests. Resolve commits a validated answer before acknowledging the caller. Repeating the same resolved answer returns success; replacing it fails. The queue redelivers resolved answers until the owning Actor acknowledges them. Revocation tombstones prevent stale enqueue from reopening withdrawn requests. General progress and results appear in Goal conversations, not in a second notification system.
+Sending markers precede external I/O. An interrupted submission or answer is uncertain and is never automatically sent again. Explicit `ResumeTask` carries request identity and expected revision. It observes the original execution, optionally uses read-only `lookupSubmission`, and resumes only an authoritative resumable failure. Resumption markers prevent another request ID from bypassing an unknown external outcome.
 
-`ResumeRun` targets a failed or uncertain Run with requestId and expectedRevision. Run commits the exact input and receipt before handing it to Delegation. Delegation observes the original handle and resumes only a reported resumable failure. It saves a resume marker before external I/O. An interrupted or ambiguous resume remains unknown; a new request ID cannot bypass that marker. Pending confirmation and completed execution cannot be resumed.
+ApprovalQueue owns confirmation, permission and information requests. Resolve persists validated answers before acknowledgement; owners acknowledge delivery. Task persists answer sending/sent/unknown markers. Queue revocation tombstones prevent stale requests reopening. Progress and results appear in Goal conversations rather than a second notification store.
 
-`InspectDelegation` exposes status, result, requests and source references through the application API. Provider metadata and native messages remain private.
+`InspectTask` returns instructions, follow-ups, outcomes, available native tool records, source references and decision requests. Provider handles and metadata remain private. External providers own their private transcripts; Aster retains its messages and returned results in Pi.
 
-## Publication
+## Publication and lifetime
 
-A Delegate Task can request `PublishResult` with an exact Channel path and sending identity. Completion freezes the result and action into the Run's writeback record in the same commit. Publication requires a separate approval of destination, identity and content; Task confirmation does not authorize publication.
+An explicit `PublishResult` action freezes destination, sending identity and result for separate human approval. Execution confirmation does not authorize publication. Task saves authorization and a sending marker before invoking ChannelWrites. Published, rejected and unknown delivery remain separate from Task completion; recovery does not resend uncertain operations.
 
-The Run verifies the committed approval, retains authorization and saves `sending` before calling `ChannelWrites` through `pipeToSelf`. Outcomes are `published`, `rejected` or `unknown`, separate from Task completion. Recovery never resends a `sending` or `unknown` operation. Adapters own credentials and verify the retained exact request and grant before submission.
+Infrastructure Layers own external adapters and their release. SDK boundaries forward cancellation without equating local interruption with remote cancellation. Ending a Goal revokes unstarted Tasks; submitted work stays with its existing owner. Capture handoff and shutdown drain remain durable.
 
-## Resource ownership
-
-ExternalAgents and ChannelWrites are Effect capabilities; infrastructure Layers acquire and release adapters. Native Promise boundaries forward cancellation and use tagged errors. Local interruption does not prove external cancellation. Ending a Goal cancels work that has not begun, while submitted execution remains under its Run/Delegation. Capture handoff and shutdown drain remain durable.
-
-Tests use fake transports, real Actor mailboxes, Deferred and TestClock. They verify admission order, duplicate receipts, approval authority, Goal feedback, recovery, uncertain submission and publication without calling external services.
+Tests use fake transports, real Actor mailboxes, Deferred and temporary Pi stores. They cover responsive follow-up, reactivation, admission/result handoff recovery, stale completions, approval authority, uncertain delivery and exact publication grants.

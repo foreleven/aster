@@ -5,14 +5,13 @@ import { Cause, Exit, Schema } from "effect";
 import {
   ApplicationError,
   contextQueryKeys,
-  type ResumeRunDeliveryInput,
+  type ResumeTaskDeliveryInput,
 } from "@aster/api-contracts";
-import { resumeRun } from "../api/client";
-const pendingResumes = Atom.make<Record<string, ResumeRunDeliveryInput>>({}).pipe(Atom.keepAlive);
+import { resumeTask } from "../api/client";
+const pendingResumes = Atom.make<Record<string, ResumeTaskDeliveryInput>>({}).pipe(Atom.keepAlive);
 import type { ContextView } from "../dashboard/model";
-import { runStages } from "../lib/dashboard";
 
-export function TaskRunDetails({
+export function TaskControls({
   context,
   navigate,
 }: {
@@ -21,8 +20,8 @@ export function TaskRunDetails({
 }) {
   const pending = useAtomValue(pendingResumes);
   const setPending = useAtomSet(pendingResumes);
-  const resume = useAtomSet(resumeRun, { mode: "promiseExit" });
-  const busy = useAtomValue(resumeRun).waiting;
+  const resume = useAtomSet(resumeTask, { mode: "promiseExit" });
+  const busy = useAtomValue(resumeTask).waiting;
   const [error, setError] = useState("");
   async function submit() {
     if (busy || context.revision === undefined) return;
@@ -43,11 +42,9 @@ export function TaskRunDetails({
       Object.fromEntries(Object.entries(previous).filter(([key]) => key !== context.path)),
     );
   }
-  const task = context.state.task;
   const publication = context.state.writeback;
   return (
-    <section className="context-summary" aria-label="Task Run">
-      <h2>Prepared Task</h2>
+    <section className="context-summary" aria-label="Task controls">
       {(["failed", "uncertain"].includes(context.state.status ?? "") || pending[context.path]) && (
         <>
           <button
@@ -70,48 +67,6 @@ export function TaskRunDetails({
           {"error" in item && item.error ? `: ${item.error}` : ""}
         </p>
       ))}
-      {task && "instructions" in task ? (
-        <>
-          <p className="whitespace-pre-wrap">{task.instructions}</p>
-          {task.input.map((item, index) => (
-            <article className="context-work-card" key={index}>
-              <p className="whitespace-pre-wrap">{item.content}</p>
-              {item.sources.map((source, sourceIndex) =>
-                source.startsWith("/") ? (
-                  <button
-                    className="outline-action"
-                    key={sourceIndex}
-                    onClick={() => navigate(source)}
-                  >
-                    {source}
-                  </button>
-                ) : (
-                  <p key={sourceIndex}>{source}</p>
-                ),
-              )}
-            </article>
-          ))}
-        </>
-      ) : (
-        <p>No prepared Task recorded yet.</p>
-      )}
-      <ol aria-label="Run stages">
-        {runStages(context).map((stage) => (
-          <li key={stage.title}>
-            {stage.title}:{" "}
-            {stage.done ? "Completed" : stage.active ? "Current stage" : "Not reached"}
-          </li>
-        ))}
-      </ol>
-      {context.state.status === "awaiting-confirmation" && (
-        <p>This Task requires your confirmation before execution.</p>
-      )}
-      {context.state.outcomeText && (
-        <>
-          <h2>Outcome</h2>
-          <p className="whitespace-pre-wrap">{context.state.outcomeText}</p>
-        </>
-      )}
       {publication && (
         <article className="context-work-card" aria-label="External publication">
           <h2>External publication</h2>

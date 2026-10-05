@@ -12,10 +12,9 @@ export {
   GoalsRootCommand,
 } from "./goals/actors.js";
 export * from "./signals/actors.js";
-export * from "./tasks/run.js";
+export * from "./tasks/actor.js";
 export * from "./signals/goal-owner.js";
 export * from "./decisions/system-one.js";
-export * from "./delegation/actor.js";
 export * from "./signals/detect.js";
 export * from "./reasoning/context-description.js";
 export * from "./tasks/model.js";
@@ -30,7 +29,6 @@ export {
 } from "@aster/api-contracts";
 export * from "./reasoning/structured.js";
 export * from "./approvals/actor.js";
-export * from "./goals/history.js";
 export * from "./goals/intent.js";
 export * from "./goals/screening.js";
 export * from "./config/settings.js";
@@ -46,10 +44,8 @@ export * from "./runtime/runtime.js";
 export * from "./context/errors.js";
 export * from "./signals/errors.js";
 export * from "./tasks/errors.js";
-export * from "./delegation/errors.js";
 export * from "./runtime/errors.js";
-export * from "./delegation/state.js";
-export * from "./tasks/run-state.js";
+export * from "./tasks/state.js";
 
 export * from "./tasks/outcome.js";
 export * from "./signals/state.js";

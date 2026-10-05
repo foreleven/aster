@@ -47,25 +47,28 @@ async function setup(page, data = fixture()) {
         case "ListApprovals":
           value = data.contexts.find((c) => c.path === "/approvals")?.state.entries ?? [];
           break;
-        case "InspectDelegation": {
+        case "InspectTask": {
           const record = data.contexts.find((item) => item.path === body.path);
           const state = record.state;
+          const task = state.task ??
+            state.request?.task ?? { instructions: record.description, input: [] };
           value = {
             path: record.path,
-            revision: record.revision,
-            runPath: state.request.runPath,
-            agent: state.request.agent,
+            revision: record.revision ?? 0,
+            taskPath: record.path,
+            agent: state.agent ?? state.request?.agent ?? "test",
             status: state.status,
-            instructions: state.request.task.instructions,
-            sources: state.request.task.input.flatMap((item) => item.sources),
+            instructions: task.instructions,
+            sources: task.input.flatMap((item) => item.sources),
             hasExecution: !!state.session,
-            ...(state.result ? { result: state.result } : {}),
-            ...(state.error ? { error: state.error } : {}),
-            requests: Object.entries(state.requests).map(([id, request]) => ({
+            result: state.result ?? state.outcomeText,
+            error: state.error,
+            messages: [],
+            requests: Object.entries(state.requests ?? {}).map(([id, request]) => ({
               id,
               kind: request.kind,
               prompt: request.prompt,
-              responseStatus: state.responses[id]?.status ?? "pending",
+              responseStatus: state.responses?.[id]?.status ?? "pending",
             })),
           };
           break;
@@ -76,14 +79,39 @@ async function setup(page, data = fixture()) {
         }
         case "GetGoalTimeline": {
           const timeline = data.timelines?.[body.slug] ?? { groups: [] };
-          const groups = timeline.groups
-            .filter((group) => group.ordinal < (body.before ?? Infinity))
+          const all =
+            timeline.messages ??
+            timeline.groups.flatMap((group) => [
+              ...(group.input.payload._tag === "UserInput"
+                ? [
+                    {
+                      id: group.ordinal * 2 - 1,
+                      inputId: group.requestId,
+                      role: "user",
+                      text: group.input.payload.text,
+                      at: group.input.receivedAt,
+                    },
+                  ]
+                : []),
+              ...(group.response
+                ? [
+                    {
+                      id: group.ordinal * 2,
+                      inputId: group.requestId,
+                      role: "assistant",
+                      text: group.response,
+                      at: group.input.receivedAt,
+                    },
+                  ]
+                : []),
+            ]);
+          const messages = all
+            .filter((message) => message.id < (body.before ?? Infinity))
             .slice(-30);
           value = {
-            ...timeline,
-            groups,
-            total: timeline.groups.length,
-            nextBefore: groups[0]?.ordinal > 1 ? groups[0].ordinal : null,
+            messages,
+            total: all.length,
+            nextBefore: all.some((message) => message.id < messages[0]?.id) ? messages[0].id : null,
           };
           break;
         }
@@ -130,14 +158,14 @@ async function setup(page, data = fixture()) {
             });
           break;
         }
-        case "ResumeRun": {
+        case "ResumeTask": {
           writes.push({ tag: rpc.tag, body });
           const run = data.contexts.find((item) => item.path === body.target);
           run.state.resumptions = [
             {
               input: body,
               receipt: { requestId: body.requestId, revision: run.revision + 1 },
-              status: "delivered",
+              status: "done",
             },
           ];
           run.revision++;
@@ -274,7 +302,7 @@ test("Goal summaries and responses render Markdown", async ({ page }) => {
   const { errors } = await setup(page, data);
   await page.goto("/?context=%2Fgoals%2Fengine");
 
-  for (const selector of [".goal-description", ".conversation-response"]) {
+  for (const selector of [".goal-description", ".conversation-assistant"]) {
     const content = page.locator(selector);
     await expect(content.getByRole("heading", { name: "Travel options" })).toBeVisible();
     await expect(content.locator("strong").filter({ hasText: "Family trip" })).toBeVisible();
@@ -313,7 +341,7 @@ test("Goal timeline omits internal Agent tool exchanges", async ({ page }) => {
     },
   );
   const { errors } = await setup(page, data);
-  await expect(page.locator(".goal-timeline .timeline-event")).toHaveCount(1);
+  await expect(page.locator(".goal-timeline .conversation-entry")).toHaveCount(1);
   await expect(page.getByText("search_contexts", { exact: true })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
@@ -392,8 +420,7 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   const { fileURLToPath } = await import("node:url");
   const requireLocal = createRequire(new URL("../../local/package.json", import.meta.url));
   const { Effect, Layer, Schema } = await import(requireLocal.resolve("effect"));
-  const { makeApplicationApi, GoalActor, makeMemoryGoalHistory } =
-    await import("../../../packages/core/dist/index.js");
+  const { makeApplicationApi, GoalActor } = await import("../../../packages/core/dist/index.js");
   const { ActorSystem, Actor } = await import("../../../packages/actor/dist/index.js");
   const { startGoalApi } = await import("../../local/dist/http-api.js");
   const { makeContextRegistry } = await import("../../../packages/core/dist/testing/context.js");
@@ -432,11 +459,14 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   page.on("console", (message) => {
     if (message.type() === "error" || message.type() === "warning") errors.push(message.text());
   });
-  const history = makeMemoryGoalHistory();
+  const { AgentConversations } = await import("../../../packages/agent/dist/index.js");
+  const history = await Effect.runPromise(
+    AgentConversations.makeMemory().pipe(Effect.provideService(Scope.Scope, scope)),
+  );
   const api = await startGoalApi({
     application: makeApplicationApi({
       registry,
-      history,
+      conversations: history,
       inspect: system.inspect({ metadata: ["contextPath"] }).pipe(
         Effect.map((actors) => ({
           actors: actors.map(({ metadata, ...actor }) => ({
@@ -461,10 +491,9 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
       page.getByRole("dialog").getByText("No messages yet", { exact: true }),
     ).toBeVisible();
     await Effect.runPromise(
-      history.append("real-http", {
-        role: "assistant",
-        content: [{ type: "text", text: "Live HTTP and SSE updates received" }],
-        timestamp: Date.now(),
+      history.append("/goals/real-http", "reply", "goal.reply", {
+        inputId: "input",
+        text: "Live HTTP and SSE updates received",
       }),
     );
     const updated = {
@@ -500,16 +529,12 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
 
 test("Goal errors and absent runs remain explicit", async ({ page }) => {
   const data = fixture();
-  data.contexts = data.contexts.filter((context) => !context.path.includes("/runs/"));
+  data.contexts = data.contexts.filter((context) => !context.path.includes("/tasks/"));
   data.contexts.find((context) => context.path === "/approvals").state.entries = [];
   data.contexts.find((context) => context.path === "/goals/engine").messages = [
     { type: "error", text: "Goal conversation failed", at, references: [] },
   ];
-  Object.assign(data.timelines.engine.groups[0], {
-    status: "failed",
-    error: "Goal conversation failed",
-    response: undefined,
-  });
+  data.timelines.engine.groups[0].response = "Goal conversation failed";
   await setup(page, data);
   await expect(page.getByText("Goal conversation failed", { exact: true })).toBeVisible();
   await expect(page.getByText("No tasks yet. Planned work will appear here.")).toBeVisible();
@@ -520,7 +545,7 @@ test("Goal input history loads older messages and displays independent Tasks", a
   const goal = data.contexts.find((c) => c.path === "/goals/engine");
   goal.state.summary = "Key conclusions saved";
   data.contexts.push({
-    path: "/runs/goal--analysis",
+    path: "/tasks/goal--analysis",
     description: "Analyze compatibility",
     state: {
       sourcePath: goal.path,
@@ -834,7 +859,7 @@ test("invalid dashboard fields report a projection error while preserving raw Co
   expect(errors).toEqual([]);
 });
 
-test("reference layout has a fixed composer, scoped work, and working timeline filters", async ({
+test("reference layout has a fixed composer, scoped work, and separate user notes", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1487, height: 1058 });
@@ -842,7 +867,7 @@ test("reference layout has a fixed composer, scoped work, and working timeline f
   await expect(page).toHaveTitle(/Aster/);
   await expect(page).toHaveURL(/127\.0\.0\.1:4329/);
   await expect(page.locator("vite-error-overlay")).toHaveCount(0);
-  await expect(page.locator(".goal-timeline .timeline-event")).toHaveCount(3);
+  await expect(page.locator(".goal-timeline .conversation-entry")).toHaveCount(5);
   await expect(
     page.getByRole("button", { name: "Google Flights – HND to CTS", exact: true }),
   ).toBeVisible();
@@ -852,12 +877,9 @@ test("reference layout has a fixed composer, scoped work, and working timeline f
     true,
   );
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeInViewport();
-  await page.getByLabel("Filter timeline events").selectOption("signals");
-  await expect(page.locator(".goal-timeline .timeline-event")).toHaveCount(0);
   await page.getByRole("tab", { name: "Notes", exact: true }).click();
-  await expect(page.locator(".goal-timeline .timeline-event")).toHaveCount(2);
+  await expect(page.locator(".goal-timeline .conversation-entry")).toHaveCount(2);
   await page.getByRole("tab", { name: "Timeline", exact: true }).click();
-  await page.getByLabel("Filter timeline events").selectOption("all");
   await page.getByRole("button", { name: "Google Flights – HND to CTS", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("Google Flights – HND to CTS");
   await page.keyboard.press("Escape");
@@ -1017,12 +1039,12 @@ test("Delegation workspace uses business inspection and refreshes after committe
 }) => {
   const data = personalFixture();
   const record = {
-    path: "/delegations/execution",
+    path: `/tasks/${"a".repeat(64)}`,
     revision: 3,
     description: "Release execution",
     state: {
       request: {
-        runPath: "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+        taskPath: "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
         agent: "pi",
         task: {
           instructions: "Analyze release evidence",
@@ -1057,7 +1079,7 @@ test("Delegation workspace uses business inspection and refreshes after committe
   record.revision = 4;
   await page.evaluate(() => window.testEvents.emit("ready"));
   await expect(page.getByText("Release review completed", { exact: true })).toBeVisible();
-  expect(reads.filter((tag) => tag === "InspectDelegation").length).toBeGreaterThan(1);
+  expect(reads.filter((tag) => tag === "InspectTask").length).toBeGreaterThan(1);
   expect(errors).toEqual([]);
 });
 
@@ -1068,7 +1090,7 @@ test("Run resumption preserves uncertain admission across navigation and reconne
   const personal = data.contexts.find((item) => item.path === "/goals/personal");
   const run = data.contexts.find(
     (item) =>
-      item.path === "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+      item.path === "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
   );
   run.revision = 7;
   run.state.status = "failed";
@@ -1077,7 +1099,7 @@ test("Run resumption preserves uncertain admission across navigation and reconne
   let frozen;
   await page.route("**/api/rpc{,/}", async (route) => {
     const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "ResumeRun" || frozen) return route.fallback();
+    if (rpc.tag !== "ResumeTask" || frozen) return route.fallback();
     frozen = rpc.payload;
     await route.fulfill({
       contentType: "application/ndjson",
@@ -1121,8 +1143,8 @@ test("Run resumption preserves uncertain admission across navigation and reconne
     .first()
     .click();
   await page.getByRole("button", { name: "Reconcile resumption", exact: true }).click();
-  await expect(page.getByText("Resumption delivered", { exact: true })).toBeVisible();
-  expect(writes.at(-1)).toEqual({ tag: "ResumeRun", body: frozen });
+  await expect(page.getByText("Resumption done", { exact: true })).toBeVisible();
+  expect(writes.at(-1)).toEqual({ tag: "ResumeTask", body: frozen });
   expect(frozen).toMatchObject({ expectedRevision: 7, target: run.path });
   expect(errors).toEqual([]);
 });
@@ -1171,41 +1193,33 @@ test("Timeline refreshes older deliveries after reconnect and displays newly acc
   page,
 }) => {
   const data = fixture();
-  const template = data.timelines.engine.groups[0];
-  data.timelines.engine.groups = Array.from({ length: 65 }, (_, i) => ({
-    ...template,
-    requestId: `input-${i + 1}`,
-    ordinal: i + 1,
-    response: `Response ${i + 1}`,
-    input: { ...template.input, inputId: `input-${i + 1}`, ordinal: i + 1 },
+  data.timelines.engine.messages = Array.from({ length: 65 }, (_, i) => ({
+    id: i + 1,
+    inputId: `input-${i + 1}`,
+    role: "assistant",
+    text: `Response ${i + 1}`,
+    at,
   }));
-  const older = data.timelines.engine.groups[10];
-  older.status = "unknown";
   const { errors } = await setup(page, data);
   await expect(page.locator(".conversation-entry")).toHaveCount(30);
   await page.getByRole("button", { name: "Load earlier messages" }).click();
   await expect(page.locator(".conversation-entry")).toHaveCount(60);
-  await expect(page.locator("#input-input-11")).toContainText("unknown");
-  older.status = "completed";
-  data.timelines.engine.groups.push({
-    requestId: "pending-note",
-    ordinal: 66,
-    status: "pending",
-    input: {
-      inputId: "pending-note",
-      goalSlug: "engine",
-      ordinal: 66,
-      receivedAt: at,
-      payload: { _tag: "UserInput", text: "Please verify the release date" },
-    },
+  await expect(page.getByText("Response 11", { exact: true })).toBeVisible();
+  data.timelines.engine.messages.push({
+    id: 66,
+    inputId: "pending-note",
+    role: "user",
+    text: "Please verify the release date",
+    at,
   });
   await page.evaluate(() => window.testEvents.emit("ready"));
-  await expect(page.locator("#input-input-11")).toContainText("completed");
-  await expect(page.locator("#input-pending-note")).toContainText("Please verify the release date");
+  await expect(page.getByText("Response 11", { exact: true })).toBeVisible();
+  await expect(page.getByText("Please verify the release date", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Load earlier messages" }).click();
   await expect(page.locator(".conversation-entry")).toHaveCount(66);
   await page.getByRole("tab", { name: "Notes", exact: true }).click();
-  await expect(page.locator("#input-pending-note")).toBeVisible();
+  await expect(page.getByText("Please verify the release date", { exact: true })).toBeVisible();
+  await expect(page.getByText("Response 11", { exact: true })).toHaveCount(0);
   expect(errors).toEqual([]);
 });
 
@@ -1213,7 +1227,7 @@ test("Run publication shows separate approval and retained unknown outcome after
   page,
 }) => {
   const data = personalFixture();
-  const source = "/runs/cb4e6fd93a8701d7e1020404e479c56377824d8bf23e8426fb3943480e9d7534";
+  const source = "/tasks/cb4e6fd93a8701d7e1020404e479c56377824d8bf23e8426fb3943480e9d7534";
   const operation = {
     request: {
       requestId: "publish-one",
@@ -1282,7 +1296,7 @@ test("Run publication shows separate approval and retained unknown outcome after
   await page.evaluate(() => window.testEvents.emit("ready"));
   await expect(publication.getByText("Status: unknown")).toBeVisible();
   await expect(publication.getByText(/Automatic resend is disabled/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Outcome", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Result", exact: true })).toBeVisible();
   await expect(page.getByText(operation.request.content, { exact: true })).toHaveCount(2);
   await expect(publication.getByRole("button", { name: /retry|resend/i })).toHaveCount(0);
   run.state.writeback = { ...run.state.writeback, status: "published", externalId: "om_receipt" };
@@ -1304,6 +1318,8 @@ test("Goal turn retry retains its request identity after an unknown acknowledgem
   const group = data.timelines.engine.groups[1];
   group.status = "failed";
   group.error = "Provider failed before producing a result";
+  const goal = data.contexts.find((context) => context.path === "/goals/engine");
+  goal.state.retryableInputId = group.requestId;
   const { errors } = await setup(page, data);
   const requests = [];
   await page.route("**/api/rpc{,/}", async (route) => {
@@ -1311,7 +1327,7 @@ test("Goal turn retry retains its request identity after an unknown acknowledgem
     if (rpc.tag !== "RetryGoalTurn") return route.fallback();
     requests.push(rpc.payload);
     const first = requests.length === 1;
-    if (!first) group.status = "running";
+    if (!first) delete goal.state.retryableInputId;
     await route.fulfill({
       contentType: "application/ndjson",
       body:

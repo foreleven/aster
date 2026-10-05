@@ -1,20 +1,25 @@
-import { ExternalAgents } from "./model.js";
-import { runActorPath } from "./address.js";
-import { ApplicationError, TaskDeliveryInput, ResumeRunDeliveryInput } from "@aster/api-contracts";
+import type { TaskServices } from "./actor.js";
+import { taskActorPath } from "./address.js";
+import {
+  ApplicationError,
+  TaskDeliveryInput,
+  ResumeTaskDeliveryInput,
+  FollowupTaskInput,
+} from "@aster/api-contracts";
 import { Effect, Layer, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ContextRegistry } from "../context/registry.js";
 import { defineContext } from "../context/definition.js";
-import { RunState } from "./run-state.js";
-import { taskPath } from "./admission.js";
-import { TaskRunActor, StartTask, ResumeRun, RunReady } from "./run.js";
+import { TaskState } from "./state.js";
+import { taskPathFor } from "./admission.js";
+import { TaskActor, StartTask, ResumeTask, FollowupTask, TaskReady } from "./actor.js";
 import type { ActorRef } from "@aster/actor";
-import type { RunCommand } from "./run.js";
+import type { TaskCommand } from "./actor.js";
 
-const Command = Schema.Union([StartTask, ResumeRun, RunReady]);
-export type RunRootCommand = typeof Command.Type;
+const Command = Schema.Union([StartTask, ResumeTask, FollowupTask, TaskReady]);
+export type TasksRootCommand = typeof Command.Type;
 /** Owns asynchronous Tasks sent to delegate Actors; conversations do not own execution. */
-export class RunRootActor extends ContextActor.Service<RunRootActor, ExternalAgents>()(
+export class TasksRootActor extends ContextActor.Service<TasksRootActor, TaskServices>()(
   "tasks/Root",
   {
     command: Command,
@@ -25,73 +30,72 @@ export class RunRootActor extends ContextActor.Service<RunRootActor, ExternalAge
   },
 ) {
   static readonly layer = Layer.effect(
-    RunRootActor,
+    TasksRootActor,
     Effect.gen(function* () {
       const registry = yield* ContextRegistry;
-      return RunRootActor.of({
+      return TasksRootActor.of({
         started: (actor) =>
           Effect.gen(function* () {
-            if (!registry.get("/runs"))
+            if (!registry.get("/tasks"))
               yield* registry
                 .commit(
-                  { path: "/runs", description: "One-time tasks", state: {}, messages: [] },
+                  { path: "/tasks", description: "Persistent Tasks", state: {}, messages: [] },
                   { expectedRevision: 0 },
                 )
                 .pipe(Effect.orDie);
             for (const record of Object.values(registry.snapshot())) {
-              if (!/^\/runs\/[a-f0-9]{64}$/.test(record.path)) continue;
-              const state = Schema.decodeUnknownSync(RunState)(record.state);
+              if (!/^\/tasks\/[a-f0-9]{64}$/.test(record.path)) continue;
+              const state = Schema.decodeUnknownSync(TaskState)(record.state);
               if (!state.admission || state.admission.input.target !== record.path) continue;
-              yield* actor
-                .spawn(record.path.slice("/runs/".length), TaskRunActor)
-                .pipe(Effect.orDie);
+              yield* actor.spawn(record.path.slice("/tasks/".length), TaskActor).pipe(Effect.orDie);
             }
           }),
         receive: (command, actor) =>
           Effect.gen(function* () {
             if (command._tag === "Ready") {
               for (const child of yield* actor.children())
-                yield* (child as ActorRef<RunCommand>)
+                yield* (child as ActorRef<TaskCommand>)
                   .ask<void>((replyTo) => ({ _tag: "Ready", replyTo }))
                   .pipe(Effect.orDie);
               return yield* command.replyTo.tell(undefined);
             }
-            if (command._tag === "ResumeRun") {
-              const input = yield* Schema.decodeUnknownEffect(ResumeRunDeliveryInput)(
-                command.input,
-              ).pipe(Effect.result);
+            if (command._tag === "ResumeTask" || command._tag === "FollowupTask") {
+              const input = yield* Schema.decodeUnknownEffect(
+                command._tag === "ResumeTask" ? ResumeTaskDeliveryInput : FollowupTaskInput,
+              )(command.input).pipe(Effect.result);
               if (input._tag === "Failure")
                 return yield* command.replyTo.tell({
                   _tag: "Rejected",
                   error: new ApplicationError({
                     kind: "invalid-input",
-                    message: "Invalid Run resumption",
+                    message: "Invalid Task resumption",
                   }),
                 });
               const path = input.success.target;
               if (!registry.get(path))
                 return yield* command.replyTo.tell({
                   _tag: "Rejected",
-                  error: new ApplicationError({ kind: "not-found", message: "Run not found" }),
+                  error: new ApplicationError({ kind: "not-found", message: "Task not found" }),
                 });
-              const runtimePath = runActorPath(path);
+              const runtimePath = taskActorPath(path);
               const target = yield* actor.select(runtimePath).resolve().pipe(Effect.option);
               if (target._tag === "None")
                 return yield* command.replyTo.tell({
                   _tag: "Rejected",
                   error: new ApplicationError({
                     kind: "unavailable",
-                    message: "Run owner is unavailable; no replacement owner was created",
+                    message: "Task owner is unavailable; no replacement owner was created",
                   }),
                 });
-              return yield* target.value.tell({ ...command, input: input.success });
+              return yield* target.value.tell(command);
             }
             const decoded = yield* Schema.decodeUnknownEffect(TaskDeliveryInput)(
               command.input,
             ).pipe(Effect.result);
             if (
               decoded._tag === "Failure" ||
-              decoded.success.target !== taskPath(decoded.success.source, decoded.success.requestId)
+              decoded.success.target !==
+                taskPathFor(decoded.success.source, decoded.success.requestId)
             )
               return yield* command.replyTo.tell({
                 _tag: "Rejected",
@@ -100,10 +104,10 @@ export class RunRootActor extends ContextActor.Service<RunRootActor, ExternalAge
                   message: "Invalid Task command identity",
                 }),
               });
-            const name = decoded.success.target.slice("/runs/".length);
+            const name = decoded.success.target.slice("/tasks/".length);
             const child =
-              ((yield* actor.child(name)) as ActorRef<RunCommand> | undefined) ??
-              (yield* actor.spawn(name, TaskRunActor).pipe(Effect.orDie));
+              ((yield* actor.child(name)) as ActorRef<TaskCommand> | undefined) ??
+              (yield* actor.spawn(name, TaskActor).pipe(Effect.orDie));
             yield* child.tell({ ...command, input: decoded.success });
           }),
       });

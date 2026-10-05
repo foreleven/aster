@@ -1,3 +1,4 @@
+import { DurableSteers } from "./durable-steers.js";
 import { isJsonValue, type Context as ChordContext, type JsonValue } from "@earendil-works/chord";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import {
@@ -30,6 +31,7 @@ import { admitExchange, completeExchange, lookupExchange } from "./durable-excha
 import { DurableAgentFailure } from "./durable-error.js";
 import { entriesFor, fenceTools, generationFence, hasUnknownToolOutcome } from "./durable-tools.js";
 import type { AgentMessage, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
+import type { ConversationDriver } from "./conversations.js";
 import type { ResolvedModel } from "./index.js";
 
 const durableContext = (signal?: AbortSignal): ChordContext =>
@@ -73,8 +75,8 @@ export const durableTool = (tool: AgentTool): ToolRegistration =>
 export const durableModels = (
   resolved: ResolvedModel,
   beforeModel?: (signal?: AbortSignal) => Promise<void>,
+  models = createModels(),
 ) => {
-  const models = createModels();
   const providerStreams: ProviderStreams = {
     stream: (model, context, options) =>
       lazyStream(model, async () => {
@@ -125,9 +127,7 @@ export interface DurableRunOptions {
   readonly catalogueId?: string;
   /** Recover saved work without issuing a new provider request for an accepted exchange. */
   readonly reconcile?: boolean;
-  /** Inspect a legacy request result only; never admit, resume, or call the provider. */
-  readonly replayOnly?: boolean;
-  readonly owner?: "goals" | "personal";
+  readonly owner?: "goals" | "tasks";
   readonly sessionId: string;
   readonly requestId: string;
   readonly storageDirectory?: string;
@@ -150,6 +150,16 @@ const closeDurableStorage = async (resource: {
   }
 };
 
+const abortDurableConversation = async (harness: Harness) => {
+  try {
+    const conversation = await harness.root(BACKGROUND_CONTEXT);
+    await conversation.abort(BACKGROUND_CONTEXT);
+    await conversation.waitForIdle(BACKGROUND_CONTEXT);
+  } catch (cause) {
+    throw new DurableCloseFailure(cause);
+  }
+};
+
 export const durableDirectory = (options: DurableRunOptions) =>
   options.storageDirectory ??
   join(homedir(), ".aster", options.owner ?? "goals", options.sessionId, "pi");
@@ -166,6 +176,7 @@ export const runDurableAgent = async (input: {
   ) => Promise<AgentMessage[]>;
   readonly durable: DurableRunOptions;
   readonly signal?: AbortSignal;
+  readonly driver?: ConversationDriver;
 }) => {
   const context = durableContext(input.signal);
   const budget = input.durable.contextBudget;
@@ -173,8 +184,10 @@ export const runDurableAgent = async (input: {
     ? { ...input.resolved, model: { ...input.resolved.model, contextWindow: budget.contextTokens } }
     : input.resolved;
   const directory = durableDirectory(input.durable);
-  const storage = await openNodeJsonlStorage(directory, context, { fsync: true });
-  const registry = createRegistry();
+  const storage = input.driver
+    ? undefined
+    : await openNodeJsonlStorage(directory, context, { fsync: true });
+  const registry = input.driver?.registry ?? createRegistry();
   const unsafeTools = new Set(
     input.tools.filter((tool) => tool.replay !== "safe").map((tool) => tool.name),
   );
@@ -187,7 +200,7 @@ export const runDurableAgent = async (input: {
         : undefined,
   );
   const extension: Extension = defineExtension({
-    name: `aster-${input.durable.owner === "personal" ? "personal" : "goal"}-tools:${input.durable.sessionId}`,
+    name: `aster-${input.durable.owner === "tasks" ? "task" : "goal"}-tools:${input.durable.sessionId}`,
     tools: fenceTools(input.tools.map(durableTool), unsafeTools),
     hooks: [
       hook(GenerationTask, {
@@ -200,36 +213,53 @@ export const runDurableAgent = async (input: {
   let harness: Harness;
   let observingAccepted = false;
   let providerBlocked = false;
+  let completed = false;
   try {
-    harness = await Harness.open(
-      storage,
-      {
-        models: durableModels(resolved, async (signal) => {
-          if (observingAccepted) {
-            providerBlocked = true;
-            throw new Error(
-              "Accepted Agent outcome is uncertain; reconciliation cannot issue another provider request",
-            );
-          }
-          await fence.beforeModel(signal);
-        }),
-        registry,
-        // Let Pi compact at generation boundaries before preparing the request.
-        // Keep half the input budget verbatim, leaving space for the summary
-        // and future tool results. Blocking compaction stays owned by the run.
-        settings: budget && {
-          compaction: {
+    const configuredModels = durableModels(
+      resolved,
+      async (signal) => {
+        if (observingAccepted) {
+          providerBlocked = true;
+          throw new Error(
+            "Accepted Agent outcome is uncertain; reconciliation cannot issue another provider request",
+          );
+        }
+        await fence.beforeModel(signal);
+      },
+      input.driver?.models,
+    );
+    if (input.driver)
+      input.driver.settings.compaction = budget
+        ? {
             enabled: true,
             reserveTokens: budget.reserveTokens,
             keepRecentTokens: Math.floor((budget.contextTokens - budget.reserveTokens) / 2),
             backgroundTokens: 0,
+          }
+        : undefined;
+    harness =
+      input.driver?.harness ??
+      (await Harness.open(
+        storage!,
+        {
+          models: configuredModels,
+          registry,
+          // Let Pi compact at generation boundaries before preparing the request.
+          // Keep half the input budget verbatim, leaving space for the summary
+          // and future tool results. Blocking compaction stays owned by the run.
+          settings: budget && {
+            compaction: {
+              enabled: true,
+              reserveTokens: budget.reserveTokens,
+              keepRecentTokens: Math.floor((budget.contextTokens - budget.reserveTokens) / 2),
+              backgroundTokens: 0,
+            },
           },
         },
-      },
-      context,
-    );
+        context,
+      ));
   } catch (cause) {
-    await closeDurableStorage(storage);
+    if (storage) await closeDurableStorage(storage);
     throw cause;
   }
   try {
@@ -248,24 +278,14 @@ export const runDurableAgent = async (input: {
     const content = inputText(input.messages);
     // Pi deduplicates request IDs by submission type only. Aster additionally
     // freezes the complete input/configuration before any scheduler is resumed.
-    const existing =
-      input.durable.reconcile || input.durable.replayOnly
-        ? await lookupExchange(
-            harness,
-            JSON.stringify([input.durable.owner ?? "goals", input.durable.sessionId]),
-            input.durable.requestId,
-            context,
-          )
-        : undefined;
-    if (input.durable.replayOnly && !existing)
-      throw new DurableAgentFailure({
-        message:
-          "Legacy request has no durable session receipt; no work was resumed. Submit a new instruction after reviewing the retained history.",
-      });
-    if (input.durable.replayOnly && existing?.resultEntries == null)
-      throw new Error(
-        "Legacy request has an unsettled session receipt and no frozen snapshot. Restore the matching application version to reconcile it; no provider request was issued.",
-      );
+    const existing = input.durable.reconcile
+      ? await lookupExchange(
+          harness,
+          JSON.stringify([input.durable.owner ?? "goals", input.durable.sessionId]),
+          input.durable.requestId,
+          context,
+        )
+      : undefined;
     const submitted =
       existing &&
       (await harness.commit(
@@ -331,6 +351,7 @@ export const runDurableAgent = async (input: {
         .flatMap((entry) => entry.model ?? [])
         .filter((message) => message.role !== "user" && message.role !== "system");
       for (const message of messages) await input.onMessage?.(message);
+      completed = true;
       return { messages };
     }
     const assertKnownOutcome = async () => {
@@ -426,6 +447,44 @@ export const runDurableAgent = async (input: {
       }
       return { messages, resultEntryIds };
     };
+    const steering: Array<Promise<Awaited<ReturnType<typeof conversation.submit>>>> = [];
+    const admitSteering = (requestId: string, text: string, steerContext: typeof context) => {
+      const pending = (async () => {
+        await harness.commit(async (tx) => {
+          const doc = await tx.doc(DurableSteers, conversation.id);
+          const existing = doc.inputs.find((item) => item.requestId === requestId);
+          if (existing && (existing.text !== text || existing.parent !== input.durable.requestId))
+            throw new Error("Steering identity conflicts with its admitted input");
+          if (!existing) {
+            doc.inputs.push({ requestId, text, parent: input.durable.requestId });
+            await tx.appendEntry(conversation.id, {
+              kind: "app.aster.message",
+              data: {
+                requestId: `steer:${requestId}`,
+                kind: "task.steer",
+                data: { requestId, parent: input.durable.requestId },
+                at: new Date().toISOString(),
+              },
+            });
+          }
+        }, steerContext);
+        return conversation.submit(
+          { type: "input", content: text, requestId: `steer:${requestId}`, whenBusy: "steer" },
+          steerContext,
+        );
+      })();
+      steering.push(pending);
+      return pending;
+    };
+    const retainedSteers = await harness.commit(
+      async (tx) =>
+        (await tx.doc(DurableSteers, conversation.id)).inputs.filter(
+          (item) => item.parent === input.durable.requestId,
+        ),
+      context,
+    );
+    for (const item of retainedSteers) admitSteering(item.requestId, item.text, context);
+    if (input.driver) input.driver.steering = admitSteering;
     const collected = await collect(submission);
     let messages = collected.messages;
     const resultEntryIds = collected.resultEntryIds;
@@ -472,22 +531,38 @@ export const runDurableAgent = async (input: {
         throw new DurableAgentFailure({ message: error });
       }
     }
+    // Closing admission is synchronous with observing an empty batch. A follow-up
+    // admitted during collection is included, even if Pi started another generation.
+    for (let index = 0; index < steering.length; index++) {
+      const next = await collect(await steering[index]!);
+      messages.push(...next.messages);
+      resultEntryIds.push(...next.resultEntryIds);
+    }
+    if (input.driver) delete input.driver.steering;
+    const selected = new Set(resultEntryIds);
+    messages = (await readEntries({}))
+      .filter((entry) => selected.has(Number(entry.id)))
+      .flatMap((entry) => entry.model ?? [])
+      .filter((message) => message.role !== "user" && message.role !== "system");
     await completeExchange(
       harness,
       {
         conversationId: conversation.id,
         requestId: input.durable.requestId,
-        entryIds: [...new Set(resultEntryIds)],
+        entryIds: [...new Set(resultEntryIds)].sort((a, b) => a - b),
       },
       context,
     );
     for (const message of messages)
       if (message.role === "assistant" || message.role === "toolResult")
         await input.onMessage?.(message);
+    completed = true;
     return { messages };
   } finally {
+    if (input.driver) delete input.driver.steering;
     // Shutdown uncertainty takes precedence over an ordinary run failure: the
     // enclosing Effect must quarantine ownership even if a result was committed.
-    await closeDurableStorage(harness);
+    if (!input.driver) await closeDurableStorage(harness);
+    else if (!completed) await abortDurableConversation(harness);
   }
 };

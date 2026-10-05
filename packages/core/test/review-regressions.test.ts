@@ -1,3 +1,4 @@
+import { testConversations } from "./conversation-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -14,7 +15,6 @@ import {
   SignalActor,
   SignalDefinitions,
   makeApplicationApi,
-  makeMemoryGoalHistory,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
@@ -30,16 +30,16 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
         const registry = yield* makeContextRegistry();
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const underlying = makeMemoryGoalHistory();
+        const underlying = testConversations();
         const history = {
           ...underlying,
-          append: (goal: string, message: Parameters<typeof underlying.append>[1]) =>
+          append: (goal: string, requestId: string, kind: string, data: unknown) =>
             Effect.gen(function* () {
-              if (message.role === "user" && message.content === "Durable input") {
+              if (JSON.stringify(data).includes("Durable input")) {
                 yield* Deferred.succeed(entered, undefined);
                 yield* Deferred.await(release);
               }
-              return yield* underlying.append(goal, message);
+              return yield* underlying.append(goal, requestId, kind, data);
             }),
         };
         const system = yield* ActorSystem.make().pipe(
@@ -61,7 +61,7 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
         const api = makeApplicationApi({
           registry,
           goals: root,
-          history,
+          conversations: history,
           inspect: system.inspect(),
         });
         const sending = yield* api.goals
@@ -70,8 +70,8 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
         yield* Deferred.await(entered);
         assert.equal(sending.pollUnsafe(), undefined);
         assert.equal(
-          (yield* history.read("project")).some(
-            (entry) => entry.message.role === "user" && entry.message.content === "Durable input",
+          (yield* history.read("/goals/project")).some((entry) =>
+            JSON.stringify(entry.data).includes("Durable input"),
           ),
           false,
         );
@@ -84,8 +84,8 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
           true,
         );
         assert.equal(
-          (yield* history.read("project")).some(
-            (entry) => entry.message.role === "user" && entry.message.content === "Durable input",
+          (yield* history.read("/goals/project")).some((entry) =>
+            JSON.stringify(entry.data).includes("Durable input"),
           ),
           true,
         );

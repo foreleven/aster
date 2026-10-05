@@ -59,7 +59,7 @@ export function fixture() {
         actor("/user/signals/progress", "/signals/progress"),
         actor(
           "/user/signals/progress/run-1",
-          "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+          "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
         ),
         actor("/user/approvals", "/approvals"),
         actor("/user/memory", "/memory"),
@@ -115,7 +115,7 @@ export function fixture() {
         active: true,
       }),
       context(
-        "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+        "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
         "Summarize Knowledge Engine project progress",
         {
           status: "awaiting-confirmation",
@@ -137,7 +137,7 @@ export function fixture() {
           {
             id: "approval-1",
             target: "/user/signals/progress/run-1",
-            contextPath: "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+            contextPath: "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
             kind: "confirmation",
             status: "pending",
             request: {
@@ -150,7 +150,7 @@ export function fixture() {
           {
             id: "question-1",
             target: "/user/signals/progress/run-1",
-            contextPath: "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+            contextPath: "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
             kind: "input",
             status: "pending",
             request: {
@@ -170,7 +170,7 @@ export function fixture() {
       }),
       context("/memory", "Long-term work memory", { status: "ready" }),
       context(
-        "/runs/8c5bccef7d6ef2ca671af0ccf2cf36a5052148b44d2beee086cb3467a09f4884",
+        "/tasks/8c5bccef7d6ef2ca671af0ccf2cf36a5052148b44d2beee086cb3467a09f4884",
         "Historical execution record",
         { status: "completed" },
         [{ type: "Completed", text: "Historical result", at }],
@@ -344,18 +344,18 @@ export function designFixture() {
   };
   const run = data.contexts.find(
     (context) =>
-      context.path === "/runs/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+      context.path === "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
   );
   run.description = "Compare flights";
-  run.path = "/runs/goal--flights";
+  run.path = "/tasks/goal--flights";
   run.state.status = "running";
   run.state.sourcePath = "/goals/engine";
   data.contexts.push(
-    context("/runs/goal--visa", "Check visa rules", {
+    context("/tasks/goal--visa", "Check visa rules", {
       status: "waiting_input",
       sourcePath: "/goals/engine",
     }),
-    context("/runs/goal--hotels", "Search hotel prices", {
+    context("/tasks/goal--hotels", "Search hotel prices", {
       status: "uncertain",
       sourcePath: "/goals/engine",
     }),
@@ -407,7 +407,7 @@ export function designFixture() {
       messages: [],
     })),
     ...["visa", "hotels"].map((slug) => ({
-      path: `/runs/${createHash("sha256").update(slug).digest("hex")}`,
+      path: `/tasks/${createHash("sha256").update(slug).digest("hex")}`,
       description: `Trip ${slug} execution`,
       state: { status: "waiting_input", definition: { goal: "engine" } },
       messages: [],

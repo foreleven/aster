@@ -201,7 +201,9 @@ test("memory handoff failures remain retryable; the durable sink owns deduplicat
           Effect.sync(() => {
             if (++attempts === 1) throw new Error("capture handoff failed");
           }),
-        captures: { select: (record) => ({ sessionId: "session", records: [record] }) },
+        captures: {
+          select: (record) => Effect.succeed({ sessionId: "session", records: [record] }),
+        },
         descriptions: { identity: () => undefined },
         describe: () => Effect.succeed("unused"),
       });

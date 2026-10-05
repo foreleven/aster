@@ -20,6 +20,7 @@ import { summaryText, type ContextView } from "../dashboard/model";
 import { references } from "../lib/dashboard";
 import { Markdown } from "../components/markdown";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
+import { RetryTurn } from "./retry-turn";
 import { Timeline } from "./timeline";
 import { WorkPanel } from "./work-panel";
 import { dateLabel, EmptyState, lastActivity, Pill, slugFor, titleFor } from "./presentation";
@@ -39,7 +40,6 @@ export function GoalWorkspace({
   const [text, setText] = useState("");
   const [error, setError] = useState("");
   const [tab, setTab] = useState("timeline");
-  const [filter, setFilter] = useState("all");
   const [confirmEnd, setConfirmEnd] = useState(false);
   const send = useAtomSet(sendGoalMessage, { mode: "promise" });
   const end = useAtomSet(endGoal, { mode: "promise" });
@@ -173,26 +173,17 @@ export function GoalWorkspace({
             <TabsContent value="timeline">
               <div className="timeline-heading">
                 <h2>Goal Timeline</h2>
-                <select
-                  aria-label="Filter timeline events"
-                  value={filter}
-                  onChange={(event) => setFilter(event.target.value)}
-                >
-                  <option value="all">All events</option>
-                  <option value="notes">Your notes</option>
-                  <option value="tasks">Tasks / Executions</option>
-                  <option value="signals">Signals</option>
-                  <option value="results">Results</option>
-                  <option value="progress">Progress</option>
-                </select>
               </div>
-              <Timeline slug={slug} filter={filter} inspect={inspect} />
+              {goal.state.retryableInputId && (
+                <RetryTurn slug={slug} turnId={goal.state.retryableInputId} />
+              )}
+              <Timeline slug={slug} />
             </TabsContent>
             <TabsContent value="notes">
               <div className="timeline-heading">
                 <h2>Notes</h2>
               </div>
-              <Timeline slug={slug} filter="notes" inspect={inspect} />
+              <Timeline slug={slug} userOnly />
             </TabsContent>
             <TabsContent value="related">
               <div className="timeline-heading">

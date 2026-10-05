@@ -1,3 +1,7 @@
+import { AgentConversations, AgentRunner } from "@aster/agent";
+import { testConversations } from "./conversation-fixtures.js";
+import { emptyRecall } from "./workflow-fixtures.js";
+import { GoalSettings, ContextQueries } from "../src/index.js";
 import { Actor, ActorSystem } from "@aster/actor";
 import { Clock, Effect, Layer, Schema, Stream } from "effect";
 import {
@@ -6,7 +10,8 @@ import {
   SignalDefinitions,
   ContextRegistry,
   ExternalAgents,
-  RunRootActor,
+  TasksRootActor,
+  TaskState,
   defineContext,
   type ContextRecord,
   type ExternalAgent,
@@ -14,13 +19,13 @@ import {
 import { GoalCommand } from "../src/goals/protocol.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { fakeAgent } from "./fixtures.js";
-import { taskPath } from "../src/tasks/admission.js";
+import { taskPathFor } from "../src/tasks/admission.js";
 import type { TaskDeliveryInput } from "@aster/api-contracts";
 
 export const taskInput = (requestId = "task", source = "/goals/personal"): TaskDeliveryInput => ({
   requestId,
   source,
-  target: taskPath(source, requestId),
+  target: taskPathFor(source, requestId),
   createdAt: "2026-10-01T00:00:00Z",
   agent: "test",
   task: { instructions: "Read evidence", input: [] },
@@ -31,8 +36,11 @@ export const taskFixture = Effect.fnUntraced(function* (
   options: {
     records?: Map<string, ContextRecord>;
     agent?: ExternalAgent;
+    agents?: ExternalAgents["Service"];
+    runner?: AgentRunner["Service"];
     clock?: Clock.Clock;
     publish?: ChannelWrites["Service"]["publish"];
+    conversations?: AgentConversations["Service"];
     saved?: (record: ContextRecord) => void;
   } = {},
 ) {
@@ -83,10 +91,19 @@ export const taskFixture = Effect.fnUntraced(function* (
       },
       { expectedRevision: 0 },
     );
+  const conversations = options.conversations ?? testConversations();
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
       Layer.succeed(ContextRegistry, registry),
-      Layer.succeed(ExternalAgents, { test: options.agent ?? fakeAgent() }),
+      Layer.succeed(AgentConversations, conversations),
+      Layer.succeed(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
+      Layer.succeed(
+        AgentRunner,
+        options.runner ?? AgentRunner.make(() => Effect.die("Unexpected internal execution")),
+      ),
+      ContextQueries.layer.pipe(Layer.provide(Layer.succeed(ContextRegistry, registry))),
+      emptyRecall,
+      Layer.succeed(ExternalAgents, options.agents ?? { test: options.agent ?? fakeAgent() }),
       Layer.succeed(SignalDefinitions, []),
       Layer.succeed(Clock.Clock, options.clock ?? (yield* Clock.Clock)),
       Layer.succeed(ChannelWrites, {
@@ -96,13 +113,58 @@ export const taskFixture = Effect.fnUntraced(function* (
   );
   yield* system.spawn("goals", GoalRoot);
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
-  const runs = yield* system.spawn("runs", RunRootActor);
-  yield* runs.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+  const tasks = yield* system.spawn("tasks", TasksRootActor);
+  yield* tasks.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
   const wait = (predicate: () => boolean) =>
     Effect.gen(function* () {
       const changes = yield* registry.subscribe;
       if (!predicate())
         yield* changes.pipe(Stream.filter(predicate), Stream.take(1), Stream.runDrain);
     });
-  return { system, registry, records, feedback, approvals, runs, wait };
+  return { conversations, system, registry, records, feedback, approvals, tasks, wait };
+});
+
+export const retainedTask = Effect.fnUntraced(function* (
+  messages: ReturnType<typeof testConversations>,
+  status: TaskState["status"] = "uncertain",
+) {
+  const input = taskInput();
+  const entry = yield* messages.append(input.target, input.requestId, "task.admission", input);
+  const { task: _task, ...identity } = input;
+  const terminal = ["completed", "failed", "cancelled", "uncertain"].includes(status);
+  const inputs: TaskState["inputs"] = [
+    {
+      requestId: input.requestId,
+      entryId: entry.id,
+      receipt: { requestId: input.requestId, revision: 1 },
+      status: terminal ? "completed" : "accepted",
+    },
+  ];
+  const outcome = terminal
+    ? yield* messages.append(input.target, "original-result", "task.result", {
+        text: "Original result",
+        status,
+        inputs,
+      })
+    : undefined;
+  const state: TaskState = {
+    admission: {
+      input: identity,
+      entryId: entry.id,
+      receipt: { requestId: input.requestId, revision: 1 },
+    },
+    executorPrompt: "Test policy",
+    status,
+    inputs,
+    approvals: [],
+    ...(outcome ? { outcomeEntryId: outcome.id } : {}),
+    ...(status === "running" ? { session: { sessionId: "original" } } : {}),
+  };
+  return {
+    path: input.target,
+    description: "Retained Task",
+    revision: 2,
+    messages: [],
+    state,
+  } satisfies ContextRecord;
 });

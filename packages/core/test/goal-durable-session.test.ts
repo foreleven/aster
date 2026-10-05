@@ -1,3 +1,5 @@
+import { testConversations } from "./conversation-fixtures.js";
+import { AgentConversations } from "@aster/agent";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +13,7 @@ import { makeContextRegistry } from "../src/testing/context.js";
 
 test("reopened Goal sessions keep their policy and history while tools read the new turn", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "aster-goal-current-"));
+  const conversations = testConversations(directory);
   t.after(() => rm(directory, { recursive: true, force: true }));
   let calls = 0;
   let initialPolicy: string | undefined;
@@ -110,8 +113,9 @@ test("reopened Goal sessions keep their policy and history while tools read the 
           memory: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
           executors: [],
           reconcile: false,
-          storageDirectory: directory,
           input: {
+            kind: "UserInput",
+            entryId: 0,
             inputId: `turn-${turn}`,
             goalSlug: "test",
             ordinal: turn + 1,
@@ -120,11 +124,17 @@ test("reopened Goal sessions keep their policy and history while tools read the 
             payload: { _tag: "UserInput", text: "Continue the Goal" },
           },
           update: () => Effect.die("No update expected"),
+          followupTask: () => Effect.die("No follow-up expected"),
           startTask: () => Effect.die("No Task expected"),
           signal: () => Effect.die("No Signal expected"),
         });
       }).pipe(
-        Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))),
+        Effect.provide(
+          AgentRunner.layer.pipe(
+            Layer.provide(models),
+            Layer.provide(Layer.succeed(AgentConversations, conversations)),
+          ),
+        ),
         Effect.timeout("10 seconds"),
       ),
     );

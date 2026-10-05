@@ -1,3 +1,5 @@
+import { AgentConversations } from "@aster/agent";
+import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AgentRunner, Agent, AgentError, Models } from "@aster/agent";
@@ -104,7 +106,12 @@ test("AgentRunner cancellation releases memory tools before SDK idle for descrip
           );
           const memory = { search: () => blocked, expand: () => Effect.succeed({ results: [] }) };
           const run = yield* makeStructuredReasoning("test", memory).pipe(
-            Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))),
+            Effect.provide(
+              AgentRunner.layer.pipe(
+                Layer.provide(models),
+                Layer.provide(Layer.succeed(AgentConversations, testConversations())),
+              ),
+            ),
           );
           const work = makeDescriptionInitializer((prompt, schema) => run(prompt, schema, {}))(
             identity,

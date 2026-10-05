@@ -39,4 +39,4 @@ export const resultError = <A, E>(result: AsyncResult.AsyncResult<A, E>): string
   return error instanceof Error ? error.message : String(error);
 };
 
-export const resumeRun = ApplicationClient.mutation("ResumeRun");
+export const resumeTask = ApplicationClient.mutation("ResumeTask");

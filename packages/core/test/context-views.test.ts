@@ -1,3 +1,4 @@
+import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
@@ -7,7 +8,6 @@ import {
   defineContext,
   makeApplicationApi,
   makeContextMaintenance,
-  makeMemoryGoalHistory,
   type ContextRecord,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
@@ -32,7 +32,7 @@ const fixtures = [
     "/delegations/work",
     {
       status: "waiting_input",
-      request: { runPath: "/signals/watch/runs/one", agent: "fake", task },
+      request: { taskPath: "/signals/watch/tasks/one", agent: "fake", task },
       session: { sessionId: secret, metadata: { token: secret } },
       requests: { permission: request },
       responses: {},
@@ -42,7 +42,7 @@ const fixtures = [
       { role: "toolResult", content: secret },
     ],
   ),
-  record("/signals/watch/runs/one", { status: "running", source: { private: secret }, task }, [
+  record("/signals/watch/tasks/one", { status: "running", source: { private: secret }, task }, [
     { type: "Triggered", sourceContext: { private: secret } },
   ]),
   record("/signals/watch", {
@@ -124,9 +124,11 @@ test("application reads project business fields and history without altering can
     Effect.gen(function* () {
       const registry = yield* makeContextRegistry({ loadAll: () => fixtures, save: () => {} });
       const before = registry.snapshot();
-      const history = makeMemoryGoalHistory();
-      yield* history.append("project", { role: "user", content: "Public input", timestamp: 1 });
-      yield* history.append("project", {
+      const history = testConversations();
+      yield* history.append("/goals/project", "public", "goal.input", {
+        payload: { _tag: "UserInput", text: "Public input" },
+      });
+      yield* history.append("/goals/project", "tool", "tool.record", {
         role: "toolResult",
         toolCallId: "call",
         toolName: "private",
@@ -134,7 +136,11 @@ test("application reads project business fields and history without altering can
         isError: false,
         timestamp: 2,
       });
-      const api = makeApplicationApi({ registry, history, inspect: Effect.succeed(null) });
+      const api = makeApplicationApi({
+        registry,
+        conversations: history,
+        inspect: Effect.succeed(null),
+      });
       assertPublic(yield* api.contexts);
       assertPublic(yield* api.dashboard);
       assertPublic(yield* api.goals.list);
@@ -143,18 +149,19 @@ test("application reads project business fields and history without altering can
       const delegation = yield* api.context("/delegations/work");
       const goal = yield* api.context("/goals/project");
       assert.equal("evaluations" in goal.state, false);
-      assert.equal((delegation.state as { status: string }).status, "waiting_input");
-      assert.equal(delegation.messages.length, 1);
+      assert.equal(delegation.projection?.visibility, "restricted");
+      assert.equal(delegation.messages.length, 0);
       assert.deepEqual((yield* api.context("/unknown")).projection, {
         version: 1,
         visibility: "restricted",
         reason: "missing-policy",
       });
       const last = yield* api.goals.history("project", { limit: 1 });
-      assert.deepEqual(last, { entries: [], total: 2, nextBefore: 2 });
-      const first = yield* api.goals.history("project", { before: last.nextBefore!, limit: 1 });
-      assert.equal(first.entries[0]?.seq, 1);
-      assert.equal(first.nextBefore, null);
+      assert.equal(last.entries.length, 1);
+      assert.equal(last.total, 1);
+      assert.equal(last.nextBefore, null);
+      assert.match(JSON.stringify(last), /Public input/);
+      assertPublic(last);
       assert.deepEqual(registry.snapshot(), before);
       assert.ok(JSON.stringify(before).includes(secret));
       Object.assign(delegation.state, { status: "tampered" });
@@ -200,7 +207,9 @@ test("owner policies fail closed and project the original change for reactions a
             assert.equal((capture.records[0]!.state as { summary: string }).summary, "first");
             captured = true;
           }),
-        captures: { select: (source) => ({ sessionId: "capture", records: [source] }) },
+        captures: {
+          select: (source) => Effect.succeed({ sessionId: "capture", records: [source] }),
+        },
         descriptions: { identity: () => undefined },
         describe: () => Effect.succeed("source"),
       })({ record: source });

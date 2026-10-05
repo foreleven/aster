@@ -85,9 +85,9 @@ export function references(record?: ContextView) {
         state.sourceContext,
         state.sourcePath,
         state.replyTo,
-        state.runPath,
+        state.taskPath,
         state.definition?.goal && `/goals/${state.definition.goal}`,
-        state.request?.runPath,
+        state.request?.taskPath,
         state.goal && `/goals/${state.goal}`,
         ...(state.task && "input" in state.task
           ? state.task.input.flatMap((item) => item.sources)
@@ -98,22 +98,21 @@ export function references(record?: ContextView) {
     ),
   ];
 }
-export const isRunPath = (path: string) => /^\/runs\/[a-f0-9]{64}$/.test(path);
-export function runStages(record: ContextView) {
-  const types = new Set((record?.messages || []).map((m) => m.type));
+export const isTaskPath = (path: string) => /^\/tasks\/[a-f0-9]{64}$/.test(path);
+export function taskStages(record: ContextView) {
   const status = record?.state?.status;
   return [
     {
       title: "Task confirmation",
-      done: types.has("Delegating"),
+      done: !["awaiting-confirmation", "rejected"].includes(status ?? ""),
       active: status === "awaiting-confirmation",
     },
     {
-      title: "Agent delegation",
-      done: types.has("Completed"),
+      title: "Execution",
+      done: status === "completed",
       active: ["submitting", "running", "waiting_input"].includes(status ?? ""),
     },
-    { title: "Result delivery", done: types.has("Completed"), active: false },
+    { title: "Result delivery", done: status === "completed", active: false },
   ];
 }
 

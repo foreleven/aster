@@ -1,3 +1,4 @@
+import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect } from "effect";
@@ -45,7 +46,11 @@ test("archived Lark contexts remain readable through integration family policies
       ];
       const registry = yield* makeContextRegistry({ loadAll: () => records, save: () => {} });
       yield* registry.views.register(larkContextViews);
-      const api = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
+      const api = makeApplicationApi({
+        registry,
+        conversations: testConversations(),
+        inspect: Effect.succeed(null),
+      });
       const views = yield* api.contexts;
       assert.equal(JSON.stringify(views).includes(secret), false);
       assert.ok(views.every((record) => record.projection?.visibility === "public"));

@@ -1,3 +1,4 @@
+import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { once } from "node:events";
@@ -44,7 +45,11 @@ test(
     const api = await startGoalApi({
       port: 0,
       application: {
-        ...makeApplicationApi({ registry, inspect: Effect.succeed(null) }),
+        ...makeApplicationApi({
+          registry,
+          conversations: testConversations(),
+          inspect: Effect.succeed(null),
+        }),
         dashboard: Effect.gen(function* () {
           const request = yield* Effect.serviceOption(HttpServerRequest.HttpServerRequest);
           assert.ok(Option.isSome(request));
@@ -100,7 +105,11 @@ test(
     const api = await startGoalApi({
       port: 0,
       application: {
-        ...makeApplicationApi({ registry, inspect: Effect.succeed(null) }),
+        ...makeApplicationApi({
+          registry,
+          conversations: testConversations(),
+          inspect: Effect.succeed(null),
+        }),
         dashboard: Effect.sync(() => started.resolve()).pipe(
           Effect.andThen(Effect.never),
           Effect.ensuring(
@@ -149,6 +158,7 @@ test("Goal HTTP API reads public messages, routes user input, and rejects cross-
   const commands: GoalsRootCommand[] = [];
   const api = await startGoalApi({
     application: makeApplicationApi({
+      conversations: testConversations(),
       registry,
       goals: goalRef(commands),
       inspect: Effect.succeed(null),
@@ -203,7 +213,11 @@ test("Goal HTTP API reads public messages, routes user input, and rejects cross-
 test("approval API validates responses and preserves same-origin checks", async () => {
   const registry = await Effect.runPromise(makeContextRegistry());
   const received: unknown[] = [];
-  const base = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
+  const base = makeApplicationApi({
+    registry,
+    conversations: testConversations(),
+    inspect: Effect.succeed(null),
+  });
   const api = await startGoalApi({
     application: {
       ...base,
@@ -266,6 +280,7 @@ test("dashboard returns public contexts and runtime observations with origin pro
   );
   const api = await startGoalApi({
     application: makeApplicationApi({
+      conversations: testConversations(),
       registry,
       inspect: Effect.succeed({
         actors: [{ path: "/user/goals/test", mailboxSize: 2 }],
@@ -289,7 +304,6 @@ test("dashboard returns public contexts and runtime observations with origin pro
 });
 
 test("Goal feed paginates full history independently of its working messages", async () => {
-  const { makeMemoryGoalHistory } = await import("@aster/core");
   const registry = await Effect.runPromise(makeContextRegistry());
   await Effect.runPromise(registry.register("/goals/feed", GoalActor.context));
   await Effect.runPromise(
@@ -309,23 +323,29 @@ test("Goal feed paginates full history independently of its working messages", a
       { expectedRevision: registry.get("/goals/feed")?.revision ?? 0 },
     ),
   );
-  const history = makeMemoryGoalHistory();
+  const history = testConversations();
   for (let i = 0; i < 65; i++)
     await Effect.runPromise(
-      history.append("feed", { role: "user", content: `Record ${i}`, timestamp: i }),
+      history.append("/goals/feed", `input-${i}`, "goal.input", {
+        payload: { _tag: "UserInput", text: `Record ${i}` },
+      }),
     );
   const api = await startGoalApi({
-    application: makeApplicationApi({ registry, history, inspect: Effect.succeed(null) }),
+    application: makeApplicationApi({
+      registry,
+      conversations: history,
+      inspect: Effect.succeed(null),
+    }),
     port: 0,
   });
   try {
     const page = (await (await fetch(`${api.url}/api/goals/feed/history`)).json()) as any;
     assert.equal(page.entries.length, 30);
-    assert.equal(page.entries[0].seq, 36);
+    assert.equal(page.entries[0].message.content, "Record 35");
     const older = (await (
       await fetch(`${api.url}/api/goals/feed/history?before=${page.nextBefore}`)
     ).json()) as any;
-    assert.equal(older.entries.at(-1).seq, 35);
+    assert.equal(older.entries.at(-1).message.content, "Record 34");
     assert.equal((await fetch(`${api.url}/api/goals/feed/history?limit=200`)).status, 400);
   } finally {
     await api.close();

@@ -1,7 +1,7 @@
 import { Markdown } from "../components/markdown";
 import { ProcessingDetails } from "./processing";
-import { DelegationDetails } from "./delegation";
-import { TaskRunDetails } from "./task-run";
+import { TaskDetails } from "./task";
+import { TaskControls } from "./task-controls";
 import React, { useState } from "react";
 import { useAtomValue } from "@effect/atom-react";
 import { approvalEntries } from "../dashboard/state";
@@ -10,7 +10,7 @@ import type { ContextView } from "../dashboard/model";
 import { summaryText } from "../dashboard/model";
 import { Messages, Status } from "../dashboard/shared";
 import { Approvals } from "../dashboard/approvals";
-import { references, isRunPath } from "../lib/dashboard";
+import { references, isTaskPath } from "../lib/dashboard";
 import { contextTitle } from "./navigation";
 
 const linkedPaths = references;
@@ -30,7 +30,7 @@ export function ContextWorkspace({
   const approvals = useAtomValue(approvalEntries);
   const summary = summaryText(context.state.summary);
   const restricted = context.projection?.visibility === "restricted";
-  const isDelegation = !restricted && /^\/delegations\/[^/]+$/.test(context.path);
+  const isTask = !restricted && /^\/tasks\/[^/]+$/.test(context.path);
   const forward = new Set(linkedPaths(context));
   const related = contexts.filter(
     (candidate) =>
@@ -82,14 +82,14 @@ export function ContextWorkspace({
               <Markdown>{summary}</Markdown>
             </section>
           )}
-          {!restricted && isRunPath(context.path) && (
-            <TaskRunDetails context={context} navigate={navigate} />
+          {!restricted && isTaskPath(context.path) && (
+            <TaskControls context={context} navigate={navigate} />
           )}
           {!restricted &&
             (context.path === "/system-one" ? (
               <ProcessingDetails owner="system-one" navigate={navigate} />
-            ) : isDelegation ? (
-              <DelegationDetails path={context.path} navigate={navigate} />
+            ) : isTask ? (
+              <TaskDetails path={context.path} navigate={navigate} />
             ) : context.path === "/approvals" ? (
               <Approvals inspect={navigate} report={setError} />
             ) : (
@@ -103,7 +103,7 @@ export function ContextWorkspace({
               {error}
             </p>
           )}
-          {!restricted && !isDelegation && (
+          {!restricted && !isTask && (
             <details className="context-state">
               <summary>View Context state</summary>
               <pre>{JSON.stringify(context.rawState, null, 2)}</pre>
@@ -114,7 +114,7 @@ export function ContextWorkspace({
       <aside className="work-panel context-related" aria-label="Related work" id="context-work">
         <header className="work-panel-heading">
           <h2>Related work</h2>
-          <p>Linked contexts, runs, and deliveries.</p>
+          <p>Linked contexts, tasks, and deliveries.</p>
         </header>
         <section className="context-work-section">
           <h3>

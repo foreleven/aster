@@ -161,7 +161,7 @@ export class MemoryActor extends ContextActor.Service<
               Effect.gen(function* () {
                 // Recover the gap between source commit and durable capture admission.
                 for (const record of Object.values(registry.snapshot())) {
-                  const input = captures.select(record);
+                  const input = yield* captures.select(record);
                   if (input) yield* admit(input);
                 }
                 yield* context.pipeToSelf(Effect.sleep("30 seconds"), () => ({ _tag: "Retry" }));

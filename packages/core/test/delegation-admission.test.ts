@@ -1,120 +1,71 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem, ActorTestKit } from "@aster/actor";
-import { Effect, Layer, Option, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import {
-  ContextRegistry,
-  DelegationActor,
-  DelegationState,
-  ExternalAgents,
+  TaskState,
+  type TaskAdmissionReply,
   ExternalAgentError,
-  contextSpawnOptions,
   makeApplicationApi,
-  type ContextRecord,
-  type DelegationUpdate,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { taskFixture, taskInput, retainedTask } from "./task-fixtures.js";
+import { testConversations } from "./conversation-fixtures.js";
 import { fakeAgent } from "./fixtures.js";
 
-const request = {
-  runPath: "/signals/watch/runs/execution",
-  agent: "test",
-  task: { instructions: "Read evidence", input: [{ content: "Evidence", sources: ["/source"] }] },
-};
-const retained = (): ContextRecord => ({
-  path: "/delegations/execution",
-  description: "Retained execution",
-  revision: 2,
-  messages: [],
-  state: {
-    request,
-    status: "uncertain",
-    error: "Handle acknowledgement was lost",
-    requests: {},
-    responses: {},
-  },
-});
-
 for (const result of ["found", "missing", "unsupported", "failed"] as const) {
-  test(`Delegation recovery with ${result} admission never submits a replacement`, async () => {
+  test(`Task reconciliation with ${result} submission never submits a replacement`, async () => {
+    const conversations = testConversations();
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const records = new Map([[retained().path, retained()]]);
-          const registry = yield* makeContextRegistry({
-            loadAll: () => [...records.values()],
-            save: (record) => {
-              records.set(record.path, structuredClone(record));
-            },
-          });
+          const record = yield* retainedTask(conversations);
           let lookups = 0;
-          const agent = fakeAgent({
-            submit: () => Effect.die(new Error("Recovery must not submit")),
-            resume: () => Effect.die(new Error("Inspection must not resume failed work")),
-            ...(result === "unsupported"
-              ? {}
-              : {
-                  lookupSubmission: (
-                    task: typeof request.task,
-                    submission: { requestId: string },
-                  ) =>
-                    Effect.gen(function* () {
-                      lookups++;
-                      assert.deepEqual(task, request.task);
-                      assert.equal(submission.requestId, "/delegations/execution");
-                      if (result === "failed")
-                        return yield* new ExternalAgentError({
-                          operation: "lookup",
-                          message: "Admission unavailable",
-                        });
-                      return result === "found"
-                        ? Option.some({ sessionId: "retained-session", runId: "retained-run" })
-                        : Option.none();
-                    }),
-                }),
-            status: () =>
-              Effect.succeed({ state: "completed", result: { text: "Existing result" } }),
+          const env = yield* taskFixture({
+            conversations,
+            records: new Map([[record.path, record]]),
+            agent: fakeAgent({
+              submit: () => Effect.die("Recovery must not submit"),
+              resume: () => Effect.die("Completed work must not resume"),
+              ...(result === "unsupported"
+                ? {}
+                : {
+                    lookupSubmission: (task, submission) =>
+                      Effect.gen(function* () {
+                        lookups++;
+                        assert.equal(submission.requestId, record.path);
+                        assert.match(task.instructions, /Test policy/);
+                        if (result === "failed")
+                          return yield* new ExternalAgentError({
+                            operation: "lookup",
+                            message: "Unavailable",
+                          });
+                        return result === "found"
+                          ? Option.some({ sessionId: "original" })
+                          : Option.none();
+                      }),
+                  }),
+              status: () =>
+                Effect.succeed({ state: "completed", result: { text: "Existing result" } }),
+            }),
           });
-          const system = yield* ActorSystem.make().pipe(
-            ActorSystem.provide(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(ExternalAgents, { test: agent }),
-            ),
+          const response = yield* env.tasks.ask<TaskAdmissionReply>((replyTo) => ({
+            _tag: "ResumeTask",
+            input: {
+              requestId: "reconcile",
+              target: record.path,
+              expectedRevision: env.registry.get(record.path)!.revision!,
+            },
+            replyTo,
+          }));
+          assert.equal(response._tag, "Accepted");
+          const state = () =>
+            Schema.decodeUnknownSync(TaskState)(env.registry.get(record.path)!.state);
+          yield* env.wait(
+            () => state().resumptions?.[0]?.status === (result === "found" ? "done" : "unknown"),
           );
-          const parent = yield* ActorTestKit.probe<DelegationUpdate>();
-          const actor = yield* system.spawn(
-            "delegation",
-            DelegationActor,
-            contextSpawnOptions(retained().path),
-          );
-          yield* actor.tell({ _tag: "Start", request, replyTo: parent.ref, recovering: true });
-          const first = yield* parent.take();
-          const saved = () =>
-            Schema.decodeUnknownSync(DelegationState)(records.get(retained().path)!.state);
           if (result === "found") {
-            assert.equal(first._tag, "Submitted");
-            assert.equal(
-              saved().session?.sessionId,
-              "retained-session",
-              "the recovered handle commits before notification",
-            );
-            assert.equal(
-              saved().error,
-              undefined,
-              "resolved uncertainty does not remain a current error",
-            );
-            const finished = yield* parent.take();
-            assert.deepEqual(finished, {
-              _tag: "Finished",
-              outcome: { _tag: "Completed", text: "Existing result" },
-            });
-            assert.equal(saved().status, "completed");
-          } else {
-            assert.equal(first._tag, "Finished");
-            if (first._tag === "Finished") assert.equal(first.outcome._tag, "Uncertain");
-            assert.equal(saved().status, "uncertain");
-            assert.equal(saved().session, undefined);
-          }
+            yield* env.wait(() => state().status === "completed");
+            assert.equal(state().session?.sessionId, "original");
+          } else assert.equal(state().status, "uncertain");
           assert.equal(lookups, result === "unsupported" ? 0 : 1);
         }),
       ).pipe(Effect.timeout("5 seconds")),
@@ -122,54 +73,38 @@ for (const result of ["found", "missing", "unsupported", "failed"] as const) {
   });
 }
 
-test("Application API inspects retained Delegation business data without provider metadata or executor calls", async () => {
+test("Task inspection excludes provider metadata and performs no execution", async () => {
+  const conversations = testConversations();
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const record: ContextRecord = {
-          ...retained(),
+        const original = yield* retainedTask(conversations, "completed");
+        const record = {
+          ...original,
           state: {
-            ...retained().state,
-            status: "waiting_input",
+            ...original.state,
             session: { sessionId: "id", metadata: { credential: "private-token" } },
-            requests: {
-              approval: {
-                id: "provider-request",
-                kind: "approval",
-                prompt: "Allow work?",
-                metadata: { token: "private-token" },
-              },
-            },
           },
-          messages: [{ type: "native-frame", token: "private-token" }],
         };
-        const registry = yield* makeContextRegistry({ loadAll: () => [record], save: () => {} });
-        const api = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
-        const view = yield* api.inspectDelegation(record.path);
-        assert.deepEqual(view, {
-          path: record.path,
-          revision: 2,
-          runPath: request.runPath,
-          agent: "test",
-          status: "waiting_input",
-          instructions: "Read evidence",
-          sources: ["/source"],
-          hasExecution: true,
-          error: "Handle acknowledgement was lost",
-          requests: [
-            { id: "approval", kind: "approval", prompt: "Allow work?", responseStatus: "pending" },
-          ],
+        const env = yield* taskFixture({
+          conversations,
+          records: new Map([[record.path, record]]),
+          agents: {},
         });
-        assert.doesNotMatch(JSON.stringify(view), /private-token|metadata|native-frame/);
+        const api = makeApplicationApi({
+          registry: env.registry,
+          conversations,
+          inspect: Effect.succeed(null),
+        });
+        const view = yield* api.inspectTask(record.path);
+        assert.equal(view.instructions, taskInput().task.instructions);
+        assert.equal(view.result, "Original result");
+        assert.doesNotMatch(JSON.stringify(view), /private-token|metadata|sessionId/);
+        assert.equal((yield* api.inspectTask("/personal").pipe(Effect.flip)).kind, "invalid-input");
         assert.equal(
-          (yield* api.inspectDelegation("/personal").pipe(Effect.flip)).kind,
-          "invalid-input",
-        );
-        assert.equal(
-          (yield* api.inspectDelegation("/delegations/missing").pipe(Effect.flip)).kind,
+          (yield* api.inspectTask(`/tasks/${"0".repeat(64)}`).pipe(Effect.flip)).kind,
           "not-found",
         );
-        assert.equal(registry.get(record.path)?.revision, 2);
       }),
     ).pipe(Effect.timeout("5 seconds")),
   );

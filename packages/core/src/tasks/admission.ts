@@ -4,24 +4,24 @@ import { ApplicationError, TaskMessage, TaskDeliveryInput, type Task } from "@as
 import { Effect, Schema } from "effect";
 import type { ContextRegistry } from "../context/registry.js";
 
-export const taskPath = (source: string, requestId: string) =>
-  `/runs/${createHash("sha256")
+export const taskPathFor = (source: string, requestId: string) =>
+  `/tasks/${createHash("sha256")
     .update(JSON.stringify([source, requestId]))
     .digest("hex")}`;
 export const delegateInput = (
   message: TaskMessage,
-  task: Extract<Task, { _tag: "Delegate" }>,
+  task: Extract<Task, { _tag: "Delegate" | "Agent" }>,
 ): TaskDeliveryInput => ({
   requestId: message.requestId,
   source: message.source,
-  target: taskPath(message.source, message.requestId),
+  target: taskPathFor(message.source, message.requestId),
   createdAt: message.createdAt,
   causal: message.causal,
-  evidence: message.evidence,
-  agent: task.agent,
+  ...(message.evidence ? { evidence: message.evidence } : {}),
+  agent: task._tag === "Agent" ? "internal" : task.agent,
   task: task.task,
   replyTo: task.replyTo,
-  action: task.action,
+  ...(task._tag === "Delegate" && task.action ? { action: task.action } : {}),
 });
 const Occurrences = Schema.Struct({
   occurrences: Schema.Array(Schema.Struct({ message: TaskMessage })),

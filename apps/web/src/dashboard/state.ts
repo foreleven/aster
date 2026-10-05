@@ -9,7 +9,7 @@ import {
 } from "../api/client";
 import { connection } from "../api/events";
 import { projectContext, eventPath, type DashboardRow } from "./model";
-import { rowsFor, references, isRunPath } from "../lib/dashboard";
+import { rowsFor, references, isTaskPath } from "../lib/dashboard";
 
 // Decode only when Context data changes, independently of the telemetry refresh cadence.
 export const contextViews = Atom.make((get) =>
@@ -80,7 +80,7 @@ export const inspectorView = Atom.family((path: string) =>
       ? get(contextViews)
           .filter(
             (c) =>
-              c.state.request?.runPath === context?.path ||
+              c.state.request?.taskPath === context?.path ||
               c.state.sourcePath === context?.path ||
               `/goals/${c.state.goal || c.state.definition?.goal}` === context?.path,
           )
@@ -96,7 +96,7 @@ export const inspectorView = Atom.family((path: string) =>
 export const approvalDiagnostics = Atom.make((get) => {
   const contexts = get(contextViews);
   return {
-    runs: contexts.filter((c) => isRunPath(c.path)).length,
+    tasks: contexts.filter((c) => isTaskPath(c.path)).length,
     failures: contexts
       .filter((c) => /^\/goals\/[^/]+$/.test(c.path))
       .flatMap((c) => {

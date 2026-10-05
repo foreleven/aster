@@ -1,17 +1,17 @@
 import { validateTaskMessage } from "../tasks/admission.js";
 import { Effect, Match, Schema } from "effect";
-import { ApplicationError, TaskAdmission } from "@aster/api-contracts";
+import { ApplicationError, CausalChain } from "@aster/api-contracts";
 import type { goalWorkingState } from "./working-state.js";
-import type { GoalHistory } from "./history.js";
+import type { AgentConversations } from "@aster/agent";
 import type { ContextRegistry } from "../context/registry.js";
 import type { GoalRequestData, GoalReceipt } from "./protocol.js";
-import { goalInputs } from "./inputs.js";
+import { goalInputs, goalInputId } from "./inputs.js";
 
 /** Variant-specific authority checks and input/receipt commits share the Goal mailbox. */
 export const goalAdmission = (
   registry: ContextRegistry["Service"],
   working: ReturnType<typeof goalWorkingState>,
-  history: GoalHistory,
+  history: AgentConversations["Service"],
 ) => {
   const inputs = goalInputs(working, history);
   return Effect.fn("Goal.submitInput")(function* (request: GoalRequestData, record: GoalReceipt) {
@@ -59,8 +59,8 @@ export const goalAdmission = (
           if (
             state().inputs.some(
               (item) =>
-                item.payload._tag === "GoalIntent" &&
-                item.payload.intent.intentId === intent.intentId,
+                item.inputId ===
+                goalInputId(state().definition.slug, "GoalIntent", intent.intentId),
             )
           )
             return yield* new ApplicationError({
@@ -115,13 +115,17 @@ export const goalAdmission = (
       Match.tag("ExecutionFeedback", (input) =>
         Effect.gen(function* () {
           const run = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({ admission: TaskAdmission }),
-          )(registry.get(input.runPath)?.state).pipe(
+            Schema.Struct({
+              admission: Schema.Struct({
+                input: Schema.Struct({ replyTo: Schema.String, causal: CausalChain }),
+              }),
+            }),
+          )(registry.get(input.taskPath)?.state).pipe(
             Effect.mapError(
               () =>
                 new ApplicationError({
                   kind: "invalid-input",
-                  message: "Execution feedback Run is missing or invalid",
+                  message: "Execution feedback Task is missing or invalid",
                 }),
             ),
           );
@@ -134,7 +138,7 @@ export const goalAdmission = (
           yield* inputs.accept(
             {
               _tag: "ExecutionFeedback",
-              runPath: input.runPath,
+              taskPath: input.taskPath,
               status,
               terminal: input.terminal,
               text: input.text,

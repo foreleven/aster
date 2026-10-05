@@ -1,2 +1,2 @@
-/** Callers validate RunPath before selecting an execution owner. */
-export const runActorPath = (path: string) => `/user${path}`;
+/** Callers validate TaskPath before selecting an execution owner. */
+export const taskActorPath = (path: string) => `/user${path}`;

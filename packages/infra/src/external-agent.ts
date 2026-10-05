@@ -14,6 +14,11 @@ export interface ExternalAgentDriver {
   readonly capabilities: string;
   readonly executorPrompt?: string;
   submit(task: PreparedTask, signal: AbortSignal): Promise<ExecutionSession>;
+  followUp(
+    session: ExecutionSession,
+    input: { requestId: string; text: string },
+    signal: AbortSignal,
+  ): Promise<ExecutionSession>;
   status(session: ExecutionSession, signal: AbortSignal): Promise<ExecutionStatus>;
   resume(session: ExecutionSession, signal: AbortSignal): Promise<ExecutionSession>;
   wait(session: ExecutionSession, signal: AbortSignal): Promise<ExecutionStatus>;
@@ -39,16 +44,20 @@ export const adaptExternalAgent = (driver: ExternalAgentDriver): ManagedExternal
     Effect.tryPromise({
       try: run,
       catch: (cause) =>
-        new ExternalAgentError({
-          operation: name,
-          cause,
-          message: cause instanceof Error ? cause.message : String(cause),
-        }),
+        cause instanceof ExternalAgentError
+          ? cause
+          : new ExternalAgentError({
+              operation: name,
+              cause,
+              message: cause instanceof Error ? cause.message : String(cause),
+            }),
     });
   return {
     capabilities: driver.capabilities,
     ...(driver.executorPrompt === undefined ? {} : { executorPrompt: driver.executorPrompt }),
     submit: (task) => operation("submit", (signal) => driver.submit(task, signal)),
+    followUp: (session, input) =>
+      operation("followUp", (signal) => driver.followUp(session, input, signal)),
     status: (session) => operation("status", (signal) => driver.status(session, signal)),
     resume: (session) => operation("resume", (signal) => driver.resume(session, signal)),
     wait: (session) => operation("wait", (signal) => driver.wait(session, signal)),

@@ -1,14 +1,17 @@
 import { Schema } from "effect";
 import { ContextRevision } from "./command.js";
 
-export const DelegationPath = Schema.String.check(Schema.isPattern(/^\/delegations\/[^/]+$/));
+const InspectionTaskPath = Schema.String.check(Schema.isPattern(/^\/tasks\/[^/]+$/));
 /** Business inspection deliberately excludes provider metadata, native frames and credential handles. */
-export const DelegationInspection = Schema.Struct({
-  path: DelegationPath,
+export const TaskInspection = Schema.Struct({
+  path: InspectionTaskPath,
   revision: ContextRevision,
-  runPath: Schema.String,
+  taskPath: Schema.String,
   agent: Schema.String,
   status: Schema.Literals([
+    "ready",
+    "rejected",
+    "awaiting-confirmation",
     "submitting",
     "uncertain",
     "running",
@@ -31,6 +34,9 @@ export const DelegationInspection = Schema.Struct({
       }),
     ),
   ),
+  messages: Schema.Array(
+    Schema.Struct({ id: Schema.Int, kind: Schema.String, text: Schema.String, at: Schema.String }),
+  ),
   requests: Schema.Array(
     Schema.Struct({
       id: Schema.String,
@@ -40,4 +46,4 @@ export const DelegationInspection = Schema.Struct({
     }),
   ),
 });
-export type DelegationInspection = typeof DelegationInspection.Type;
+export type TaskInspection = typeof TaskInspection.Type;

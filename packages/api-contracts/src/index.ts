@@ -1,4 +1,4 @@
-import { ResumeRunDeliveryInput } from "./run-command.js";
+import { ResumeTaskDeliveryInput } from "./task-control.js";
 import { ContextQueryInput, ContextQueryResult, ContextQueryError } from "./context-query.js";
 export * from "./context-query.js";
 import { RecoveryInput, ProcessingOwner, ProcessingSnapshot } from "./recovery.js";
@@ -7,10 +7,11 @@ import { GoalTimelinePage, RetryGoalTurnInput } from "./goal-timeline.js";
 export * from "./goal-timeline.js";
 export * from "./causal.js";
 export * from "./writeback.js";
-export * from "./run-command.js";
+export * from "./task-control.js";
 export * from "./task-command.js";
-import { DelegationInspection, DelegationPath } from "./delegation.js";
-export * from "./delegation.js";
+import { TaskInspection } from "./task-inspection.js";
+import { TaskPath } from "./task-control.js";
+export * from "./task-inspection.js";
 import { CommandReceipt } from "./command.js";
 export * from "./command.js";
 export * from "./signal-command.js";
@@ -49,14 +50,14 @@ export const QueryInvalidation = Schema.TaggedStruct("Invalidate", {
 });
 export type QueryInvalidation = typeof QueryInvalidation.Type;
 export const ApplicationRpcs = RpcGroup.make(
-  Rpc.make("ResumeRun", {
-    payload: ResumeRunDeliveryInput,
+  Rpc.make("ResumeTask", {
+    payload: ResumeTaskDeliveryInput,
     success: CommandReceipt,
     error: ApplicationError,
   }),
-  Rpc.make("InspectDelegation", {
-    payload: { path: DelegationPath },
-    success: DelegationInspection,
+  Rpc.make("InspectTask", {
+    payload: { path: TaskPath },
+    success: TaskInspection,
     error: ApplicationError,
   }),
   Rpc.make("InspectProcessing", {

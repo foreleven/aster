@@ -1,7 +1,7 @@
-import { inspectDelegation } from "../delegation/inspection.js";
-import type { RunRootCommand } from "../tasks/root.js";
-import type { RunAdmissionReply } from "../tasks/run.js";
-import { ResumeRunDeliveryInput } from "@aster/api-contracts";
+import { inspectTask } from "../tasks/inspection.js";
+import type { TasksRootCommand } from "../tasks/root.js";
+import type { TaskAdmissionReply } from "../tasks/actor.js";
+import { ResumeTaskDeliveryInput } from "@aster/api-contracts";
 import { randomUUID } from "node:crypto";
 import { ContextQueries, ContextQueryError, type ContextQueryInput } from "../context/queries.js";
 import { inspectProcessing } from "./processing.js";
@@ -20,8 +20,7 @@ import { PublicContext as ContextRecord } from "@aster/api-contracts";
 import type { ContextRegistry } from "../context/registry.js";
 import { publicJson } from "../context/json.js";
 import { PublicApprovalEntry } from "../approvals/view.js";
-import { publicBusinessMessage } from "../reasoning/public-messages.js";
-import type { GoalHistory } from "../goals/history.js";
+import type { AgentConversations } from "@aster/agent";
 import type { GoalCommand, GoalCommandReply, GoalsRootCommand } from "../goals/actors.js";
 import { approvalEntries, type ApprovalCommand } from "../approvals/actor.js";
 import type { ApprovalResponse } from "../tasks/model.js";
@@ -30,9 +29,9 @@ import type { ApprovalResponse } from "../tasks/model.js";
 export const makeApplicationApi = (options: {
   readonly registry: ContextRegistry["Service"];
   readonly queries?: ContextQueries["Service"];
-  readonly history?: GoalHistory;
+  readonly conversations: AgentConversations["Service"];
   readonly goals?: ActorRef<GoalsRootCommand>;
-  readonly runs?: ActorRef<RunRootCommand>;
+  readonly tasks?: ActorRef<TasksRootCommand>;
   readonly approvals?: ActorRef<ApprovalCommand>;
   readonly inspect: Effect.Effect<unknown>;
   readonly recoverProcessing?: (
@@ -79,26 +78,16 @@ export const makeApplicationApi = (options: {
     if (reply._tag === "Rejected") return yield* reply.error;
   });
   return {
-    inspectDelegation: (path: string) =>
-      inspectDelegation(path, (path) =>
-        Effect.suspend(() => {
-          const record = registry.get(path);
-          return record
-            ? Effect.succeed(record)
-            : Effect.fail(
-                new ApplicationError({ kind: "not-found", message: "Delegation not found" }),
-              );
-        }),
-      ),
-    resumeRun: (input: ResumeRunDeliveryInput) =>
+    inspectTask: (path: string) => inspectTask(registry, options.conversations, path),
+    resumeTask: (input: ResumeTaskDeliveryInput) =>
       Effect.gen(function* () {
-        if (!options.runs)
+        if (!options.tasks)
           return yield* new ApplicationError({
             kind: "unavailable",
             message: "Task owner unavailable",
           });
-        const reply = yield* options.runs
-          .ask<RunAdmissionReply>((replyTo) => ({ _tag: "ResumeRun", input, replyTo }))
+        const reply = yield* options.tasks
+          .ask<TaskAdmissionReply>((replyTo) => ({ _tag: "ResumeTask", input, replyTo }))
           .pipe(
             Effect.mapError(
               () =>
@@ -210,7 +199,7 @@ export const makeApplicationApi = (options: {
         return reply.receipt;
       }),
       timeline: (slug: string, page: { before?: number; limit?: number } = {}) =>
-        goalTimeline(registry, slug, page),
+        goalTimeline(registry, options.conversations, slug, page),
       list: wireContexts.pipe(
         Effect.map((records) => records.filter((record) => /^\/goals\/[^/]+$/.test(record.path))),
       ),
@@ -227,43 +216,17 @@ export const makeApplicationApi = (options: {
       end: (slug: string, requestId: string = randomUUID()) =>
         route(slug, { _tag: "End", requestId }),
       history: (slug: string, page: { before?: number; limit?: number } = {}) =>
-        Effect.gen(function* () {
-          yield* requireGoal(slug);
-          if (!options.history)
-            return yield* new ApplicationError({
-              kind: "not-found",
-              message: "Goal history unavailable",
-            });
-          const count = yield* options.history.count(slug);
-          const before = page.before ?? count + 1;
-          const limit = page.limit ?? 30;
-          if (
-            !Number.isInteger(before) ||
-            before < 1 ||
-            !Number.isInteger(limit) ||
-            limit < 1 ||
-            limit > 100
-          )
-            return yield* new ApplicationError({
-              kind: "invalid-input",
-              message: "Invalid history page",
-            });
-          const after = Math.max(0, before - limit - 1);
-          const entries = yield* options.history.read(slug, { after, before, limit });
-          return {
-            entries: entries.flatMap((entry) => {
-              const message = publicBusinessMessage(entry.message);
-              return message === undefined ? [] : [{ ...entry, message }];
-            }),
-            total: count,
-            nextBefore: after > 0 ? (entries[0]?.seq ?? null) : null,
-          };
-        }).pipe(
-          Effect.catchTag("GoalHistoryError", () =>
-            Effect.fail(
-              new ApplicationError({ kind: "unavailable", message: "Goal history unavailable" }),
-            ),
-          ),
+        goalTimeline(registry, options.conversations, slug, page).pipe(
+          Effect.map((page) => ({
+            entries: page.messages.map((entry) => ({
+              seq: entry.id,
+              at: entry.at,
+              requestId: entry.inputId,
+              message: { role: entry.role, content: entry.text, timestamp: Date.parse(entry.at) },
+            })),
+            total: page.total,
+            nextBefore: page.nextBefore,
+          })),
         ),
     },
     approvals: {

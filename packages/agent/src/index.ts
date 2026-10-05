@@ -11,6 +11,8 @@ import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { Config, ConfigProvider, Context, Effect, Layer, Redacted, Schema } from "effect";
 import { withAgentCallbacks, type AgentCallbackInvoker } from "./agent-callbacks.js";
 import { secretConfig } from "./configuration.js";
+import { AgentConversations } from "./conversations.js";
+export { AgentConversations, ConversationError, ConversationEntry } from "./conversations.js";
 import { PiStorageLease } from "./pi-storage-lease.js";
 export { PiStorageLease, PiStorageLeaseError } from "./pi-storage-lease.js";
 import {
@@ -155,6 +157,7 @@ export const Agent = {
   }): Effect.Effect<Agent, AgentError, Models> =>
     Effect.gen(function* () {
       const models = yield* Models;
+      const conversations = yield* Effect.serviceOption(AgentConversations);
       const resolved = yield* models.resolve(options.name);
       const requestedBudget = yield* Schema.decodeUnknownEffect(
         Schema.optional(DurableContextBudget),
@@ -179,6 +182,78 @@ export const Agent = {
         run: ({ messages }) =>
           Effect.suspend(() => {
             const durable = options.durable;
+            if (durable && conversations._tag === "Some")
+              return conversations.value
+                .driver(`/${durable.owner ?? "goals"}/${durable.sessionId}`)
+                .pipe(
+                  Effect.mapError(
+                    (cause) =>
+                      new AgentError("Conversation unavailable", [], { cause, outcome: "unknown" }),
+                  ),
+                  Effect.flatMap((driver) =>
+                    driver
+                      .exclusive(
+                        Effect.acquireUseRelease(
+                          Effect.sync(() => {
+                            const controller = new AbortController();
+                            const task = runDurableAgent({
+                              resolved,
+                              messages,
+                              tools,
+                              resultTool: options.resultTool,
+                              onMessage: options.onMessage,
+                              transformContext: options.transformContext,
+                              durable: { ...durable, contextBudget },
+                              signal: controller.signal,
+                              driver,
+                            });
+                            return { controller, task };
+                          }),
+                          ({ controller, task }) =>
+                            Effect.tryPromise({
+                              try: (signal) => {
+                                const abort = () => controller.abort();
+                                signal.addEventListener("abort", abort, { once: true });
+                                return task.finally(() =>
+                                  signal.removeEventListener("abort", abort),
+                                );
+                              },
+                              catch: (cause) =>
+                                new AgentError(
+                                  cause instanceof Error ? cause.message : String(cause),
+                                  [],
+                                  {
+                                    cause,
+                                    outcome:
+                                      cause instanceof DurableAgentFailure ? "failed" : "unknown",
+                                  },
+                                ),
+                            }),
+                          ({ controller, task }) =>
+                            Effect.gen(function* () {
+                              controller.abort();
+                              const failed = yield* Effect.promise(() =>
+                                task.then(
+                                  () => false,
+                                  (cause) => cause instanceof DurableCloseFailure,
+                                ),
+                              );
+                              if (failed) yield* driver.quarantine;
+                            }),
+                        ),
+                      )
+                      .pipe(
+                        Effect.catchTag("ConversationError", (cause) =>
+                          Effect.fail(
+                            new AgentError("Conversation unavailable", [], {
+                              cause,
+                              outcome: "unknown",
+                            }),
+                          ),
+                        ),
+                      ),
+                  ),
+                );
             if (durable)
               return Effect.scoped(
                 Effect.gen(function* () {
@@ -384,9 +459,13 @@ export class AgentRunner extends Context.Service<
     AgentRunner,
     Effect.gen(function* () {
       const models = yield* Models;
+      const conversations = yield* AgentConversations;
       return AgentRunner.make(
         Effect.fn("AgentRunner.run")(function* ({ messages, ...options }) {
-          const agent = yield* Agent.make(options).pipe(Effect.provideService(Models, models));
+          const agent = yield* Agent.make(options).pipe(
+            Effect.provideService(Models, models),
+            Effect.provideService(AgentConversations, conversations),
+          );
           return yield* agent.run({ messages });
         }),
       );

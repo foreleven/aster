@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
+import { AgentConversations } from "@aster/agent";
 import { Context, Clock, Effect, Option, Schema } from "effect";
 import {
   WritebackRequest,
@@ -10,9 +11,9 @@ import {
 } from "@aster/api-contracts";
 import { approvalEntries, sendApproval } from "../approvals/actor.js";
 import { ContextRegistry } from "../context/registry.js";
-import type { RunState } from "./run-state.js";
+import type { TaskState } from "./state.js";
 import type { ActorContext } from "@aster/actor";
-import type { RunCommand } from "./run.js";
+import type { TaskCommand } from "./actor.js";
 
 export class ChannelWriteError extends Schema.TaggedError<ChannelWriteError>()(
   "ChannelWriteError",
@@ -53,11 +54,12 @@ const publicationId = (source: string) =>
 /** This intent is committed with the execution result, before any approval or I/O. */
 export const planWriteback = (
   source: string,
-  state: RunState,
+  state: TaskState,
+  text: string,
   at: string,
 ): WritebackOperation | undefined => {
   if (state.writeback) return state.writeback;
-  if (state.status !== "completed" || !state.admission.input.action || !state.outcomeText?.trim())
+  if (state.status !== "completed" || !state.admission.input.action || !text.trim())
     return undefined;
   const requestId = publicationId(source);
   return {
@@ -69,7 +71,7 @@ export const planWriteback = (
       causationId: state.admission.input.requestId,
       createdAt: at,
       action: state.admission.input.action,
-      content: state.outcomeText,
+      content: text,
       // Publication is the end of this automatic chain. Channel echo must not
       // manufacture fresh authorization or replenish the causal budget.
       causal: { rootRequestId: state.admission.input.causal.rootRequestId, remainingAgentTurns: 0 },
@@ -77,20 +79,28 @@ export const planWriteback = (
   };
 };
 
-/** All methods run on the Run mailbox. Only publish leaves it via pipeToSelf. */
-export const makeRunWriteback = Effect.fn("Run.writeback")(function* (options: {
+/** All methods run on the Task mailbox. Only publish leaves it via pipeToSelf. */
+export const makeTaskWriteback = Effect.fn("Task.writeback")(function* (options: {
   path: () => string;
-  state: () => RunState;
+  state: () => TaskState;
 }) {
   const registry = yield* ContextRegistry;
+  const messages = yield* AgentConversations;
   const channel = yield* Effect.serviceOption(ChannelWrites);
   const generation = yield* Effect.sync(randomUUID);
   const at = Clock.currentTimeMillis.pipe(Effect.map((now) => new Date(now).toISOString()));
-  const save = Effect.fn("Run.saveWriteback")(function* (operation: WritebackOperation) {
+  const save = Effect.fn("Task.saveWriteback")(function* (operation: WritebackOperation) {
     const current = registry.get(options.path())!;
     const previous = options.state();
-    const timestamp = yield* at;
     const text = `External publication ${operation.status}: ${operation.request.action.channelPath}${operation.error ? `. ${operation.error}` : ""}`;
+    yield* messages
+      .append(
+        options.path(),
+        `publication:${operation.request.requestId}:${operation.status}`,
+        "task.publication",
+        { text },
+      )
+      .pipe(Effect.orDie);
     yield* registry
       .commit(
         {
@@ -99,24 +109,13 @@ export const makeRunWriteback = Effect.fn("Run.writeback")(function* (options: {
             ...previous,
             writeback: operation,
           },
-          messages: [
-            ...current.messages,
-            {
-              type: "WritebackChanged",
-              at: timestamp,
-              text,
-              requestId: operation.request.requestId,
-              causationId: operation.request.causationId,
-              status: operation.status,
-              contextPath: operation.request.action.channelPath,
-            },
-          ],
+          messages: [],
         },
         { expectedRevision: current.revision ?? 0 },
       )
       .pipe(Effect.orDie);
   });
-  const approval = (operation: WritebackOperation, actor: ActorContext<RunCommand>) => {
+  const approval = (operation: WritebackOperation, actor: ActorContext<TaskCommand>) => {
     const id = writebackApprovalId(operation.request);
     return {
       id,
@@ -127,7 +126,9 @@ export const makeRunWriteback = Effect.fn("Run.writeback")(function* (options: {
       request: { id, kind: "approval" as const, prompt: writebackPrompt(operation.request) },
     };
   };
-  const dispatch = Effect.fn("Run.dispatchWriteback")(function* (actor: ActorContext<RunCommand>) {
+  const dispatch = Effect.fn("Task.dispatchWriteback")(function* (
+    actor: ActorContext<TaskCommand>,
+  ) {
     const operation = options.state().writeback;
     if (!operation || operation.status !== "authorized" || !operation.authorization) return;
     yield* save({ ...operation, status: "sending", submittedAt: yield* at });
@@ -146,20 +147,18 @@ export const makeRunWriteback = Effect.fn("Run.writeback")(function* (options: {
       result,
     }));
   });
-  const recover = Effect.fn("Run.recoverWriteback")(function* (actor: ActorContext<RunCommand>) {
+  const recover = Effect.fn("Task.recoverWriteback")(function* (actor: ActorContext<TaskCommand>) {
     const state = options.state();
     const operation = state.writeback;
     if (!operation) return;
     if (
-      state.status !== "completed" ||
       operation.request.requestId !== publicationId(options.path()) ||
       operation.request.taskSource !== state.admission.input.source ||
       operation.request.source !== options.path() ||
-      !isDeepStrictEqual(operation.request.action, state.admission.input.action) ||
-      operation.request.content !== state.outcomeText
+      !isDeepStrictEqual(operation.request.action, state.admission.input.action)
     )
       return yield* Effect.die(
-        new Error("Writeback intent disagrees with its committed Run result"),
+        new Error("Writeback intent disagrees with its committed Task result"),
       );
     if (operation.status === "sending") {
       yield* save({
@@ -180,9 +179,9 @@ export const makeRunWriteback = Effect.fn("Run.writeback")(function* (options: {
       });
     yield* dispatch(actor);
   });
-  const resolve = Effect.fn("Run.authorizeWriteback")(function* (
+  const resolve = Effect.fn("Task.authorizeWriteback")(function* (
     requestId: string,
-    actor: ActorContext<RunCommand>,
+    actor: ActorContext<TaskCommand>,
   ) {
     const operation = options.state().writeback;
     if (!operation || requestId !== writebackApprovalId(operation.request)) return false;
@@ -218,7 +217,7 @@ export const makeRunWriteback = Effect.fn("Run.writeback")(function* (options: {
     yield* dispatch(actor);
     return true;
   });
-  const finish = Effect.fn("Run.finishWriteback")(function* (
+  const finish = Effect.fn("Task.finishWriteback")(function* (
     command: typeof WritebackFinished.Type,
   ) {
     const operation = options.state().writeback;

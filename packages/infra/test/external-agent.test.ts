@@ -5,6 +5,7 @@ import { ExternalAgentError } from "@aster/core";
 import { adaptExternalAgent, type ExternalAgentDriver } from "../src/external-agent.js";
 
 const driver = (overrides: Partial<ExternalAgentDriver>): ExternalAgentDriver => ({
+  followUp: async (session) => session,
   capabilities: "Test executor",
   submit: async () => ({ sessionId: "original" }),
   status: async () => ({ state: "running" }),

@@ -1,14 +1,9 @@
+import { testConversations } from "./conversation-fixtures.js";
+import { AgentConversations } from "@aster/agent";
 import { AgentRunner, AgentError, type AgentInvocation, type AgentResult } from "@aster/agent";
 import { ConfigProvider, Effect, Layer, Option, Schema } from "effect";
 
-import {
-  MemoryRecall,
-  GoalSettings,
-  GoalSignals,
-  GoalHistoryStore,
-  makeMemoryGoalHistory,
-  type ContextRecord,
-} from "../src/index.js";
+import { MemoryRecall, GoalSettings, GoalSignals, type ContextRecord } from "../src/index.js";
 
 export const emptyRecall = Layer.succeed(MemoryRecall, {
   search: () => Effect.succeed({ results: [] }),
@@ -82,7 +77,7 @@ export interface GoalScenario {
   };
 
   readonly deactivate: GoalSignals["Service"]["deactivate"];
-  readonly history?: GoalHistoryStore["Service"];
+  readonly history?: AgentConversations["Service"];
   readonly contextTokens?: number;
   readonly reserveTokens?: number;
 }
@@ -101,7 +96,7 @@ export const goalWorkflowLayer = (scenario: GoalScenario) =>
       ...scenario,
       applySignal: () => Effect.die("Unexpected Signal mutation"),
     }),
-    Layer.succeed(GoalHistoryStore, scenario.history ?? makeMemoryGoalHistory()),
+    Layer.succeed(AgentConversations, scenario.history ?? testConversations()),
     modelReplyLayer("submit_relevance", () =>
       Effect.succeed(
         agentResult("submit_relevance", { relevant: true, reason: "Relevant test evidence" }),

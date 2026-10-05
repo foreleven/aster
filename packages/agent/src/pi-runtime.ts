@@ -28,7 +28,16 @@ import { entriesFor, hasUnknownToolOutcome, fenceTools, generationFence } from "
 
 export class PiRuntimeError extends Data.TaggedError("PiRuntimeError")<{
   readonly operation:
-    "open" | "submit" | "status" | "wait" | "resume" | "close" | "context" | "recover" | "lookup";
+    | "open"
+    | "submit"
+    | "status"
+    | "wait"
+    | "resume"
+    | "close"
+    | "context"
+    | "recover"
+    | "lookup"
+    | "followUp";
   readonly cause: unknown;
 }> {}
 
@@ -36,6 +45,7 @@ const AdmissionRequest = Schema.Struct({
   requestId: Schema.NonEmptyString,
   prompt: Schema.NonEmptyString,
   instructions: Schema.String,
+  previous: Schema.optional(Schema.Struct({ sessionId: Schema.String, runId: Schema.String })),
 });
 const Input = Schema.Struct({
   ...AdmissionRequest.fields,
@@ -126,7 +136,9 @@ const openDriver = async (
         await conversation.waitForIdle(context);
         await runtime.commit(async (tx) => {
           const entries = await entriesFor(tx, conversation.id);
-          const messages = entries.flatMap((entry) => entry.model ?? []);
+          const messages = entries
+            .filter((entry) => settled.status === "done" && entry.id === settled.answer)
+            .flatMap((entry) => entry.model ?? []);
           const answer = messages
             .filter((message) => message.role === "assistant")
             .find((message) => message.stopReason === "stop");
@@ -297,7 +309,12 @@ const openDriver = async (
       Match.exhaustive,
     );
   };
-  const executionInput = (request: { requestId: string; prompt: string; instructions: string }) =>
+  const executionInput = (request: {
+    requestId: string;
+    prompt: string;
+    instructions: string;
+    previous?: PiExecutionHandle;
+  }) =>
     Schema.decodeUnknownSync(Input)({
       ...request,
       catalogueId: options.catalogueId,
@@ -329,6 +346,54 @@ const openDriver = async (
     } while (cursor);
     return undefined;
   };
+  const submit = async (
+    request: {
+      requestId: string;
+      prompt: string;
+      instructions: string;
+      previous?: PiExecutionHandle;
+    },
+    context: ChordContext,
+  ) => {
+    const input = executionInput(request);
+    const root = await harness.root(context);
+    const handle = await root.commit(async (tx) => {
+      const existing = await findAdmission(tx, input);
+      if (existing) return existing;
+      const parentTask = request.previous ? await find(tx, request.previous) : undefined;
+      const parent = parentTask
+        ? (await tx.scanConversations({ ownerTaskId: parentTask.id }, 1)).items[0]
+        : undefined;
+      const tail = parent
+        ? (await tx.scanEntries({ conversationId: parent.id }, 1)).items[0]
+        : undefined;
+      const taskId = await tx.createTask(execution, input, {
+        ownership: { kind: "conversation" },
+      });
+      const child =
+        parent && tail
+          ? await tx.forkConversation(parent.id, tail.id, { ownership: { kind: "task", taskId } })
+          : await tx.createConversation({ ownership: { kind: "task", taskId } });
+      await configure(tx, child.id, {
+        model: input.model,
+        instructions: input.instructions,
+        extensions: [extension],
+      });
+      await tx.appendEntry(root.id, {
+        kind: "app.aster.execution.accepted",
+        data: {
+          mappingVersion: 1,
+          requestId: input.requestId,
+          taskId,
+          conversationId: child.id,
+          input,
+        },
+      });
+      return { sessionId: String(child.id), runId: String(taskId) };
+    }, context);
+    harness.resume();
+    return handle;
+  };
   return {
     session: harness,
     // Admission inspection neither creates work nor resumes the Harness.
@@ -342,38 +407,23 @@ const openDriver = async (
           context,
         ),
       ),
-    submit: async (
-      request: { requestId: string; prompt: string; instructions: string },
+    submit,
+    followUp: async (
+      handle: PiExecutionHandle,
+      input: { requestId: string; text: string },
       context: ChordContext,
     ) => {
-      const input = executionInput(request);
-      const root = await harness.root(context);
-      const handle = await root.commit(async (tx) => {
-        const existing = await findAdmission(tx, input);
-        if (existing) return existing;
-        const taskId = await tx.createTask(execution, input, {
-          ownership: { kind: "conversation" },
-        });
-        const child = await tx.createConversation({ ownership: { kind: "task", taskId } });
-        await configure(tx, child.id, {
-          model: input.model,
-          instructions: input.instructions,
-          extensions: [extension],
-        });
-        await tx.appendEntry(root.id, {
-          kind: "app.aster.execution.accepted",
-          data: {
-            mappingVersion: 1,
-            requestId: input.requestId,
-            taskId,
-            conversationId: child.id,
-            input,
-          },
-        });
-        return { sessionId: String(child.id), runId: String(taskId) };
-      }, context);
-      harness.resume();
-      return handle;
+      const previous = await harness.commit((tx) => find(tx, handle), context);
+      const original = Schema.decodeUnknownSync(Input)(previous.input);
+      return submit(
+        {
+          requestId: input.requestId,
+          prompt: input.text,
+          instructions: original.instructions,
+          previous: handle,
+        },
+        context,
+      );
     },
     status: async (handle: PiExecutionHandle, context: ChordContext) =>
       project(await harness.commit((tx) => find(tx, handle), context)),
@@ -502,6 +552,19 @@ const make = Effect.fn("PiDurableAgentRuntime.make")(function* (options: {
       mutate("submit", (driver, context) => driver.submit(request, context)),
     lookup: (request: { requestId: string; prompt: string; instructions: string }) =>
       mutate("lookup", (driver, context) => driver.lookup(request, context)),
+    followUp: (handle: PiExecutionHandle, input: { requestId: string; text: string }) =>
+      call("wait", (driver, context) => driver.wait(handle, context)).pipe(
+        Effect.flatMap((result) =>
+          result.state === "unknown"
+            ? Effect.fail(
+                new PiRuntimeError({
+                  operation: "followUp",
+                  cause: "Previous execution requires reconciliation",
+                }),
+              )
+            : mutate("followUp", (driver, context) => driver.followUp(handle, input, context)),
+        ),
+      ),
     status: (handle: PiExecutionHandle) =>
       mutate("status", (driver, context) => driver.status(handle, context)),
     resume: (handle: PiExecutionHandle) =>

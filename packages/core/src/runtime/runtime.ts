@@ -9,7 +9,7 @@ import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster
 import type { ReactionCommand } from "../reactions/actor.js";
 import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
 import { GoalScreeningStore } from "../goals/screening.js";
-import { RunRootActor } from "../tasks/root.js";
+import { TasksRootActor } from "../tasks/root.js";
 import type { RuntimeEvent, RuntimePhase } from "@aster/api-contracts";
 import { RuntimeConfigurationError } from "./errors.js";
 import { ActorSystem, type ActorRef } from "@aster/actor";
@@ -35,7 +35,7 @@ import { GoalSettings, signalSettings } from "../config/settings.js";
 import { SignalCommands } from "../signals/commands.js";
 import { SignalDefinitions, SignalRootActor } from "../signals/actors.js";
 import { SystemOneClient } from "../decisions/system-one.js";
-import { GoalHistoryStore } from "../goals/history.js";
+import { AgentConversations } from "@aster/agent";
 import { GoalsRootActor } from "../goals/actors.js";
 import { GoalSignals } from "../signals/goal-owner.js";
 import { ExternalAgents } from "../tasks/model.js";
@@ -54,7 +54,7 @@ type ActorServices =
   | AgentRunner
   | MemoryRecall
   | ContextQueries
-  | GoalHistoryStore
+  | AgentConversations
   | GoalSettings
   | ContextRegistry
   | SignalDefinitions
@@ -76,7 +76,7 @@ const acquireRuntime = Effect.gen(function* () {
     return yield* new RuntimeConfigurationError({
       message: "Signals and Goals require config.system-one",
     });
-  const history = yield* GoalHistoryStore;
+  const conversations = yield* AgentConversations;
   const endpoint = yield* SignalCommands;
   const capture = yield* ContextCaptureSink;
   const modules = (yield* RuntimeIntegrations).installed();
@@ -89,7 +89,7 @@ const acquireRuntime = Effect.gen(function* () {
     AgentRunner,
     MemoryRecall,
     ContextQueries,
-    GoalHistoryStore,
+    AgentConversations,
     GoalSettings,
     ContextRegistry,
     SignalDefinitions,
@@ -169,8 +169,8 @@ const acquireRuntime = Effect.gen(function* () {
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
   const signals = yield* system.spawn("signals", SignalRootActor);
   yield* signals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
-  const runs = yield* system.spawn("runs", RunRootActor);
-  yield* runs.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+  const tasks = yield* system.spawn("tasks", TasksRootActor);
+  yield* tasks.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
   yield* endpoint.bind(signals);
   const goals = settings.definitions.length
     ? yield* system.spawn("goals", GoalsRootActor)
@@ -246,10 +246,10 @@ const acquireRuntime = Effect.gen(function* () {
     }),
     registry,
     queries: yield* ContextQueries,
-    history,
+    conversations,
     goals,
     approvals,
-    runs,
+    tasks,
     inspect: Effect.gen(function* () {
       // The host owns domain metadata and the dashboard contract; actor stays domain-neutral.
       const actors = (yield* system.inspect({ metadata: ["contextPath"] })).map(

@@ -6,7 +6,7 @@ import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
-import { DEFAULT_EXECUTOR_PROMPT, taskPrompt } from "@aster/core";
+import { DEFAULT_EXECUTOR_PROMPT, taskPrompt, ExternalAgentError } from "@aster/core";
 import type { ExecutionSession } from "@aster/core";
 import { respondDoubaoNative } from "./native-response.js";
 import { agentEnvironment } from "../process/environment.js";
@@ -89,6 +89,13 @@ export const makeDoubaoAgent = (
         runId: String(receipt.runId),
         metadata: { workspace },
       };
+    },
+    async followUp() {
+      throw new ExternalAgentError({
+        operation: "followUp",
+        outcome: "rejected",
+        message: "The configured Doubao adapter does not support follow-up instructions",
+      });
     },
     async status(session, signal) {
       return doubaoStatus(await run(["sessions", "status", ...args(session)], signal));

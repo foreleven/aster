@@ -285,6 +285,43 @@ export const makeCodexAgent = (
       sessions.set(session.sessionId, session);
       return session;
     },
+    async followUp(session, input, signal) {
+      await waitFor(ensure(), signal);
+      const status = await read(session, signal);
+      if (status.state === "running" || status.state === "waiting_input") {
+        await call(
+          "turn/steer",
+          {
+            threadId: session.sessionId,
+            expectedTurnId: session.runId,
+            input: [{ type: "text", text: input.text, text_elements: [] }],
+          },
+          signal,
+        );
+        return session;
+      }
+      if (status.state === "unknown")
+        throw new Error("Reconcile the current Codex turn before sending more input");
+      if (!owned.has(session.sessionId)) {
+        await call(
+          "thread/resume",
+          { threadId: session.sessionId, approvalPolicy: "on-request", sandbox: "workspace-write" },
+          signal,
+        );
+        owned.add(session.sessionId);
+      }
+      const { turn } = await call(
+        "turn/start",
+        {
+          threadId: session.sessionId,
+          input: [{ type: "text", text: input.text, text_elements: [] }],
+        },
+        signal,
+      );
+      const next = { ...session, runId: turn.id };
+      sessions.set(next.sessionId, next);
+      return next;
+    },
     status: read,
     async resume(session, signal) {
       const status = await read(session, signal);
