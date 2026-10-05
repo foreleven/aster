@@ -129,11 +129,9 @@ test("Goal progress publishes atomically, omits bookkeeping, and reaches Persona
               status: "active",
               summary: "",
               progress: "",
-              tasks: [],
+              inputs: [],
               historyThrough: 0,
               historyCount: 0,
-              pendingEvaluation: false,
-              receivedEvents: [],
               causal: { rootRequestId: "review-request", remainingAgentTurns: 1 },
             },
           },
@@ -144,9 +142,8 @@ test("Goal progress publishes atomically, omits bookkeeping, and reaches Persona
           makeMemoryGoalHistory(),
           () => ({ slug: "review", description: "Review" }),
           () => path,
-          10000,
         );
-        yield* working.save({ summary: "Compacted context", pendingEvaluation: true });
+        yield* working.save({ summary: "Compacted context", historyCount: 1 });
         assert.equal(
           Schema.decodeUnknownSync(BusinessOutbox)(registry.get(path)!.state).businessOutbox.length,
           0,
@@ -154,7 +151,7 @@ test("Goal progress publishes atomically, omits bookkeeping, and reaches Persona
         yield* working.save({ progress: "Reviewed the release evidence." });
         yield* working.save({
           progress: "Reviewed the release evidence.",
-          pendingEvaluation: false,
+          historyCount: 0,
         });
         yield* working.save({ lastError: "One decision needs clarification." });
         yield* working.save({ lastError: "One decision needs clarification." });

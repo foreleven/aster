@@ -122,7 +122,7 @@ The queue owns approval request handling and result routing; the invocation Acto
 
 A single persistent `/approvals` Context is owned by ApprovalQueueActor. Its state contains current approval entries (awaiting user input, resolved awaiting delivery acknowledgement, acknowledged); its messages record requests, user responses and acknowledgements. Each entry retains its unique request ID, normalized absolute destination Actor path and related Run/Delegation paths. Recovery loads the queue and continues delivery of resolved entries not yet acknowledged.
 
-Approval activity does not trigger generic System One discovery. The existing `defineContext` option `signalSource` is opt-in; the approval Context leaves it false. `makeContextProcessor` gates both Goal relevance evaluation and Signal screening through this option, stateChanged and per-update evaluate. The Goal runtime's evidence evaluation also skips Contexts without signalSource. Approval changes still persist and notify subscribers. Delivery of an approval response is an explicit Actor command, not a new Signal trigger.
+Approval activity does not trigger generic System One discovery. The existing `defineContext` option `signalSource` is opt-in; the approval Context leaves it false. `makeContextProcessor` gates both Goal relevance evaluation and Signal screening through this option, stateChanged and per-update evaluate. Goal candidates then pass a separate read-only Agent Gate before entering the Pi conversation. Approval changes still persist and notify subscribers. Delivery of an approval response is an explicit Actor command, not a new Signal trigger.
 
 ## Implementation scope
 

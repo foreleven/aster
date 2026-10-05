@@ -11,19 +11,15 @@ export {
   GoalDeliveryReply,
   GoalReadyReply,
   GoalsRootCommand,
-  type GoalMessage,
 } from "./goals/actors.js";
 export * from "./signals/actors.js";
 export * from "./tasks/run.js";
-export * from "./goals/plan.js";
-export * from "./goals/reasoner.js";
-export * from "./goals/signal-coordination.js";
+export * from "./signals/goal-owner.js";
 export * from "./decisions/system-one.js";
 export * from "./context/processing.js";
 export * from "./delegation/actor.js";
 export * from "./signals/detect.js";
 export * from "./context/description.js";
-export * from "./goals/agent-reasoner.js";
 export * from "./signals/execution-gate.js";
 export * from "./signals/extractor.js";
 export * from "./tasks/model.js";
@@ -41,7 +37,6 @@ export * from "./approvals/actor.js";
 export * from "./goals/history.js";
 export * from "./goals/intent.js";
 export * from "./goals/screening.js";
-export * from "./goals/tasks.js";
 export * from "./config/settings.js";
 export * from "./context/memory.js";
 export * from "./runtime/integration.js";
@@ -56,7 +51,6 @@ export * from "./runtime/runtime.js";
 export * from "./context/errors.js";
 export * from "./signals/errors.js";
 export * from "./tasks/errors.js";
-export * from "./goals/errors.js";
 export * from "./delegation/errors.js";
 export * from "./runtime/errors.js";
 export * from "./delegation/state.js";
@@ -84,3 +78,4 @@ export * from "./goals/intent.js";
 export * from "./memory/actor.js";
 
 export * from "./context/queries.js";
+export * from "./goals/conversation.js";

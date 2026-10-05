@@ -1,9 +1,9 @@
 import { ApplicationError, CommandReceipt, CausalChain } from "@aster/api-contracts";
-import { GoalToolError } from "./tasks.js";
+
 import { Context, Effect, Layer, Schema } from "effect";
 import type { ActorRef, AskTimeoutError } from "@aster/actor";
 import { ContextRegistry } from "../context/registry.js";
-import type { GoalCommand } from "./actors.js";
+import type { GoalCommand } from "../goals/protocol.js";
 import { SignalDefinition } from "../config/schema.js";
 import type { GoalSignalInput } from "../signals/goal-command.js";
 import type {
@@ -21,15 +21,15 @@ export class GoalSignals extends Context.Service<
     readonly reconcile: (
       goal: string,
       subscriber: ActorRef<GoalCommand>,
-    ) => Effect.Effect<readonly ActorRef<unknown>[], GoalToolError | AskTimeoutError>;
-    readonly applySignal?: (
+    ) => Effect.Effect<readonly ActorRef<unknown>[], ApplicationError | AskTimeoutError>;
+    readonly applySignal: (
       input: GoalSignalInput,
       subscriber: ActorRef<GoalCommand>,
     ) => Effect.Effect<CommandReceipt, ApplicationError>;
     readonly deactivate: (
       goal: string,
       subscriber: ActorRef<GoalCommand>,
-    ) => Effect.Effect<void, GoalToolError | AskTimeoutError>;
+    ) => Effect.Effect<void, ApplicationError | AskTimeoutError>;
   }
 >()("goals/Signals") {
   static readonly layer = Layer.effect(
@@ -63,7 +63,10 @@ export const makeGoalSignalCommands = (
     Effect.gen(function* () {
       const existing = registry.get(`/signals/${definition.slug}`);
       if (existing && (existing.state as { goal?: string }).goal !== goal)
-        return yield* new GoalToolError({ message: "Signal belongs to another owner" });
+        return yield* new ApplicationError({
+          kind: "conflict",
+          message: "Signal belongs to another owner",
+        });
       const result = yield* root.ask<SignalConfigureReply>((replyTo) => ({
         _tag: "Upsert",
         causal,
@@ -75,7 +78,7 @@ export const makeGoalSignalCommands = (
         replyTo,
       }));
       if (result._tag === "Rejected")
-        return yield* new GoalToolError({ message: result.error.message });
+        return yield* new ApplicationError({ kind: "conflict", message: result.error.message });
       return result.ref;
     });
 

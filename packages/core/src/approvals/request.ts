@@ -10,7 +10,6 @@ import { Effect, Schema } from "effect";
 import type { ContextRegistry } from "../context/registry.js";
 import { RunState } from "../tasks/run-state.js";
 import { DelegationState } from "../delegation/state.js";
-import { GoalState } from "../goals/state.js";
 import { taskPrompt } from "../tasks/model.js";
 import { runActorPath } from "../tasks/address.js";
 
@@ -62,19 +61,13 @@ export const requestedApproval = Effect.fn("ApprovalQueue.requestedApproval")(fu
       input.approvalId !== `${source.path}:confirm`
     )
       return yield* unavailable();
-    if (run.goalTask) {
-      const owner = registry.get(run.goalTask.goalPath);
-      const goal = yield* Schema.decodeUnknownEffect(GoalState)(owner?.state).pipe(
-        Effect.mapError(unavailable),
-      );
-      const task = goal.tasks.find((item) => item.id === run.goalTask!.taskId);
-      if (
-        goal.status !== "active" ||
-        task?.status !== "open" ||
-        task.revision !== run.goalTask.revision
-      )
-        return yield* unavailable();
-    }
+    const owner = run.admission?.input.source;
+    if (
+      owner?.startsWith("/goals/") &&
+      (registry.get(owner)?.state as { status?: string } | undefined)?.status !== "active"
+    )
+      return yield* unavailable();
+
     return {
       id: input.approvalId,
       contextPath: source.path,

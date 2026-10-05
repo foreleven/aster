@@ -1,3 +1,4 @@
+import { goalIntentRecords } from "./goal-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import { goalInputId } from "../src/goals/inputs.js";
 import assert from "node:assert/strict";
@@ -32,7 +33,7 @@ const input: GoalIntentInput = {
       contextPath: "/lark/im/chats/release",
       actorPath: "/lark/im/chats/release",
       name: "Release team",
-      kind: "lark-chat",
+      kind: "context",
     },
     content: {
       summary: "Release delayed pending API review",
@@ -65,7 +66,9 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
               loadAll: () => [...records.values()],
               save: (record) => {
                 records.set(record.path, structuredClone(record));
-                const item = Schema.decodeUnknownSync(GoalState)(record.state).intents?.[0];
+                const item = goalIntentRecords(
+                  Schema.decodeUnknownSync(GoalState)(record.state),
+                )[0];
                 if (
                   fail &&
                   item &&
@@ -93,9 +96,11 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
                           requestId === goalInputId("project", "GoalIntent", input.intent.intentId)
                         ) {
                           assert.equal(
-                            Schema.decodeUnknownSync(GoalState)(
-                              records.get("/goals/project")!.state,
-                            ).intents?.length,
+                            goalIntentRecords(
+                              Schema.decodeUnknownSync(GoalState)(
+                                records.get("/goals/project")!.state,
+                              ),
+                            ).length,
                             1,
                             "The inbox must commit before the history projection",
                           );
@@ -155,8 +160,9 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
               });
               assert.ok(invalid._tag === "Rejected" && invalid.error.kind === "invalid-input");
               assert.equal(
-                Schema.decodeUnknownSync(GoalState)(registry.get("/goals/project")!.state).intents
-                  ?.length,
+                goalIntentRecords(
+                  Schema.decodeUnknownSync(GoalState)(registry.get("/goals/project")!.state),
+                ).length,
                 0,
               );
               const changes = yield* registry.subscribe;
@@ -165,7 +171,7 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
                 Stream.filter(
                   (change) =>
                     change.path === "/goals/project" &&
-                    Schema.decodeUnknownSync(GoalState)(change.record.state).intents?.[0]
+                    goalIntentRecords(Schema.decodeUnknownSync(GoalState)(change.record.state))[0]
                       ?.historySequence !== undefined,
                 ),
                 Stream.take(1),
@@ -197,8 +203,8 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
             const stored = Schema.decodeUnknownSync(GoalState)(
               registry.get("/goals/project")!.state,
             );
-            assert.equal(stored.intents?.length, 1);
-            assert.deepEqual(stored.intents?.[0]?.input, firstInput);
+            assert.equal(goalIntentRecords(stored).length, 1);
+            assert.deepEqual(goalIntentRecords(stored)[0]?.input, firstInput);
             assert.equal(fail, false);
             const conflict = yield* send({
               ...firstInput,

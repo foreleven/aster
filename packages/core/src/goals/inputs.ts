@@ -15,6 +15,11 @@ import type { GoalState } from "./state.js";
 
 export const StoredGoalInput = Schema.Struct({
   ...GoalInput.fields,
+  status: Schema.Literals(["pending", "running", "completed", "failed", "unknown", "ignored"]),
+  relevant: Schema.optional(Schema.Boolean),
+  response: Schema.optional(Schema.String),
+  error: Schema.optional(Schema.String),
+  retryOf: Schema.optional(Schema.String),
   causal: Schema.optional(CausalChain),
   historySequence: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
 });
@@ -30,6 +35,7 @@ export const newGoalInput = (
   at: string,
 ): StoredGoalInput => ({
   inputId: goalInputId(state.slug, payload._tag, key),
+  status: "pending",
   goalSlug: state.slug,
   ordinal: (state.inputs?.at(-1)?.ordinal ?? 0) + 1,
   receivedAt: at,
@@ -42,11 +48,6 @@ export const inputMessage = (input: StoredGoalInput): AgentMessage =>
       role: "user" as const,
       content:
         "Begin pursuing the configured Goal now. Use relevant read-only tools, gather evidence and provide useful findings before asking about optional preferences.",
-      timestamp: Date.parse(input.receivedAt),
-    })),
-    Match.tag("Continuation", ({ objective, previousResultId }) => ({
-      role: "user" as const,
-      content: `[Goal continuation of ${previousResultId}]\n${objective}`,
       timestamp: Date.parse(input.receivedAt),
     })),
     Match.tag("UserInput", ({ text }) => ({
@@ -70,30 +71,11 @@ export const goalInputs = (working: ReturnType<typeof goalWorkingState>, history
         .append(working.state().slug, inputMessage(input), input.inputId)
         .pipe(Effect.orDie);
       const state = working.state();
-      const payload = input.payload;
       yield* working
         .save({
           inputs: state.inputs!.map((item) =>
             item.inputId === input.inputId ? { ...item, historySequence: entry.seq } : item,
           ),
-          ...(payload._tag === "GoalIntent"
-            ? {
-                intents: state.intents?.map((item) =>
-                  item.input.intent.intentId === payload.intent.intentId
-                    ? { ...item, historySequence: entry.seq }
-                    : item,
-                ),
-              }
-            : {}),
-          ...(payload._tag === "PersonalMessage"
-            ? {
-                deliveries: state.deliveries?.map((item) =>
-                  item.input.requestId === payload.requestId
-                    ? { ...item, historySequence: entry.seq }
-                    : item,
-                ),
-              }
-            : {}),
         })
         .pipe(Effect.orDie);
     }
@@ -102,6 +84,7 @@ export const goalInputs = (working: ReturnType<typeof goalWorkingState>, history
     payload: GoalInputPayload,
     key: string,
     patch: Partial<GoalState> = {},
+    expectedRevision?: number,
   ) {
     const state = working.state();
     const input = newGoalInput(state, payload, key, DateTime.formatIso(yield* DateTime.now));
@@ -113,8 +96,35 @@ export const goalInputs = (working: ReturnType<typeof goalWorkingState>, history
       });
     if (!prior)
       yield* working
-        .save({ ...patch, inputs: [...(state.inputs ?? []), { ...input, causal: patch.causal }] })
-        .pipe(Effect.orDie);
+        .save(
+          {
+            ...patch,
+            inputs: [
+              ...(state.inputs ?? []),
+              {
+                ...input,
+                causal: patch.causal,
+                ...(state.status === "active"
+                  ? {}
+                  : { status: "ignored" as const, response: "Feedback recorded after Goal ended" }),
+              },
+            ],
+          },
+          expectedRevision,
+        )
+        .pipe(
+          Effect.catchTag("ContextConflict", (error) =>
+            expectedRevision === undefined
+              ? Effect.die(error)
+              : Effect.fail(
+                  new ApplicationError({
+                    kind: "conflict",
+                    message: "Goal revision changed; refresh the target before submitting",
+                  }),
+                ),
+          ),
+          Effect.catchTags({ ContextCommitError: Effect.die, ContextValidationError: Effect.die }),
+        );
     yield* project();
     return !prior;
   });

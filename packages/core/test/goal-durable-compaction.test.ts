@@ -5,8 +5,14 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
-import { Effect, Layer } from "effect";
-import { makeGoalReasoner } from "../src/index.js";
+import { Effect, Layer, Schema } from "effect";
+import {
+  runGoalConversation,
+  makeContextRegistry,
+  conversationText,
+  defineContext,
+  contextView,
+} from "../src/index.js";
 
 test("durable Goal compacts its native transcript and finishes the same request", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "aster-goal-compaction-"));
@@ -49,7 +55,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
             model: "test",
             api: "openai-completions",
             timestamp: 0,
-            stopReason: isSummary ? "stop" : "toolUse",
+            stopReason: isSummary || generations > 24 ? "stop" : "toolUse",
             content: isSummary
               ? [
                   {
@@ -64,21 +70,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
                     name: "read_context",
                     arguments: { path: "/source", offset: page * 2000 },
                   }))
-                : [
-                    {
-                      type: "toolCall",
-                      id: `call-${generations}`,
-                      name: "finish_turn",
-                      arguments: {
-                        disposition: "no_change",
-                        progress: "Review completed",
-                        nextStep: { _tag: "WaitForEvent", references: ["/source"] },
-                        evidence: ["/source"],
-                        taskChanges: [],
-                        signalChanges: [],
-                      },
-                    },
-                  ],
+                : [{ type: "text", text: "Review completed" }],
             usage: {
               input: inputTokens,
               output: 100,
@@ -89,41 +81,67 @@ test("durable Goal compacts its native transcript and finishes the same request"
             },
           };
           const stream = createAssistantMessageEventStream();
-          stream.push({ type: "done", reason: isSummary ? "stop" : "toolUse", message });
+          stream.push({
+            type: "done",
+            reason: isSummary || generations > 24 ? "stop" : "toolUse",
+            message,
+          });
           return stream;
         },
       }),
   });
   const run = Effect.gen(function* () {
-    const reasoner = yield* makeGoalReasoner(
-      "test",
-      {
-        search: () => Effect.succeed([]),
-        expand: () => Effect.succeed([]),
-      },
-      { contextTokens: 48000 },
-    );
-    return yield* reasoner.plan({
-      goal: { slug: "test", description: "Review evidence" },
-      current: { path: "/goals/test", description: "Review evidence", state: {}, messages: [] },
-      contexts: {
-        "/source": {
+    const registry = yield* makeContextRegistry({
+      loadAll: () => [
+        {
           path: "/source",
           description: "Evidence",
           state: { evidence: "detail ".repeat(3000) },
           messages: [],
         },
+      ],
+      save: () => {},
+    });
+    // The fixture is explicitly public evidence, using a registered Context projection.
+    yield* registry.register(
+      "/source",
+      defineContext({
+        identity: "Evidence",
+        state: Schema.Struct({ evidence: Schema.String }),
+        message: Schema.Never,
+        view: contextView({
+          state: Schema.Struct({ evidence: Schema.String }),
+          message: Schema.Never,
+        }),
+      }),
+    );
+    return yield* runGoalConversation({
+      goal: { slug: "test", description: "Review evidence" },
+      model: "test",
+      registry,
+      memory: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
+      executors: [],
+      contextTokens: 48000,
+      reconcile: false,
+      storageDirectory: directory,
+      input: {
+        inputId: "review",
+        goalSlug: "test",
+        ordinal: 1,
+        receivedAt: "2026-10-01T00:00:00Z",
+        status: "pending",
+        payload: { _tag: "UserInput", text: "Review the evidence" },
       },
-      signals: [],
-      reason: "Review",
-      durable: { sessionId: "test", requestId: "review", storageDirectory: directory },
+      update: () => Effect.die("No update expected"),
+      startTask: () => Effect.die("No Task expected"),
+      signal: () => Effect.die("No Signal expected"),
     });
   }).pipe(
     Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))),
     Effect.timeout("15 seconds"),
   );
   const result = await Effect.runPromise(run);
-  assert.equal(result.progress, "Review completed");
+  assert.equal(conversationText(result.messages), "Review completed");
   assert.ok(summaries > 0, "Native compaction must run before the Goal gives up");
   assert.equal(sawSummary, true);
   assert.match(await readFile(join(directory, "main.jsonl"), "utf8"), /"kind":"pi.compaction"/);

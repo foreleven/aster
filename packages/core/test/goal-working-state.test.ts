@@ -33,13 +33,9 @@ for (const phase of ["count", "read"] as const)
                 status: "active",
                 summary: "Original",
                 progress: "Original",
-                tasks: [],
+                inputs: [],
                 historyThrough: 0,
-                agentThrough: 0,
                 historyCount: 0,
-                pendingEvaluation: false,
-                receivedEvents: [],
-                receivedIntents: [],
               },
               messages: [],
             },
@@ -66,7 +62,6 @@ for (const phase of ["count", "read"] as const)
             },
             () => ({ slug: "demo", description: "Goal" }),
             () => path,
-            10000,
           );
           const pending = yield* working
             .save({ summary: "Stale computed answer" })
@@ -95,3 +90,55 @@ for (const phase of ["count", "read"] as const)
       ).pipe(Effect.timeout("5 seconds")),
     );
   });
+
+test("Goal public messages show the latest business inputs without a compaction cursor", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* makeContextRegistry();
+      const path = "/goals/demo";
+      yield* registry.register(path, GoalActor.context);
+      yield* registry.commit(
+        {
+          path,
+          description: "Goal",
+          messages: [],
+          state: {
+            slug: "demo",
+            description: "Goal",
+            status: "active",
+            summary: "",
+            progress: "",
+            inputs: [],
+            historyCount: 0,
+          },
+        },
+        { expectedRevision: 0 },
+      );
+      const history = makeMemoryGoalHistory();
+      for (let index = 1; index <= 105; index++) {
+        yield* history.append(
+          "demo",
+          { role: "user", content: `Input ${index}`, timestamp: index },
+          `input-${index}`,
+        );
+      }
+      const working = goalWorkingState(
+        registry,
+        history,
+        () => ({ slug: "demo", description: "Goal" }),
+        () => path,
+      );
+      yield* working.save();
+      const record = registry.get(path)!;
+      assert.equal(record.messages.length, 100);
+      assert.deepEqual(record.messages[0], { role: "user", content: "Input 6", timestamp: 6 });
+      assert.deepEqual(record.messages.at(-1), {
+        role: "user",
+        content: "Input 105",
+        timestamp: 105,
+      });
+      assert.equal(working.state().historyCount, 105);
+      assert.equal("historyThrough" in record.state, false);
+    }),
+  );
+});

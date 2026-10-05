@@ -5,7 +5,6 @@ import {
   CausalChain,
   CommandReceipt,
   GoalDeliveryInput,
-  RetryGoalSignalInput,
 } from "@aster/api-contracts";
 import { GoalIntentInput } from "./intent.js";
 
@@ -25,8 +24,6 @@ export const GoalSubmission = Schema.Union([
     text: Schema.String,
     terminal: Schema.Boolean,
     status: Schema.optional(Schema.String),
-    taskId: Schema.optional(Schema.String),
-    evaluationId: Schema.optional(Schema.String),
     causal: Schema.optional(CausalChain),
   }),
 ]);
@@ -34,12 +31,10 @@ export type GoalSubmission = typeof GoalSubmission.Type;
 const submit = { requestId: Schema.NonEmptyString, input: GoalSubmission };
 const end = { requestId: Schema.NonEmptyString };
 const retry = { requestId: Schema.NonEmptyString, turnId: Schema.NonEmptyString };
-const signal = { requestId: Schema.NonEmptyString, input: RetryGoalSignalInput };
 export const GoalRequestData = Schema.Union([
   Schema.TaggedStruct("SubmitInput", submit),
   Schema.TaggedStruct("End", end),
   Schema.TaggedStruct("RetryTurn", retry),
-  Schema.TaggedStruct("RetrySignalDelivery", signal),
 ]);
 export type GoalRequestData = typeof GoalRequestData.Type;
 export const GoalCommandReply = Schema.Union([
@@ -54,7 +49,6 @@ export const GoalCommand = Schema.Union([
   Schema.TaggedStruct("SubmitInput", { ...submit, replyTo }),
   Schema.TaggedStruct("End", { ...end, replyTo }),
   Schema.TaggedStruct("RetryTurn", { ...retry, replyTo }),
-  Schema.TaggedStruct("RetrySignalDelivery", { ...signal, replyTo }),
 ]);
 export type GoalCommand = typeof GoalCommand.Type;
 export const GoalRequestRecord = Schema.Struct({

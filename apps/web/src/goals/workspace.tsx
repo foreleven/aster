@@ -57,14 +57,7 @@ export function GoalWorkspace({
         context.state.sourcePath === goal.path),
   );
   const relatedPaths = [
-    ...new Set([
-      ...references(goal),
-      ...related.map((context) => context.path),
-      ...(goal.state.tasks ?? []).flatMap((task) => [
-        ...(task.evidence ?? []),
-        ...(task.execution ? [task.execution.runPath] : []),
-      ]),
-    ]),
+    ...new Set([...references(goal), ...related.map((context) => context.path)]),
   ];
   const activity = lastActivity(goal);
   const summary = summaryText(goal.state.summary) || goal.state.progress;

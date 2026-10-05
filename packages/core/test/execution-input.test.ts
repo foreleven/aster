@@ -81,7 +81,7 @@ test("execution input expands bounded recall before reasoning and uses the admit
   const linked = {
     ...source,
     path: "/signals/review/runs/linked",
-    state: { goalTask: { goalPath: source.path } },
+    state: { sourcePath: source.path },
   };
   mockReasoning(t, ({ messages }, options) =>
     Effect.sync(() => {

@@ -126,7 +126,7 @@ export class PersonalActions extends Context.Service<
               message: "Task commands unavailable",
             });
           const reply = yield* root
-            .ask<RunAdmissionReply>((replyTo) => ({ _tag: "StartPersonalTask", input, replyTo }))
+            .ask<RunAdmissionReply>((replyTo) => ({ _tag: "StartTask", input, replyTo }))
             .pipe(
               Effect.mapError(
                 () =>

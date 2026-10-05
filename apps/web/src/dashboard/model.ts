@@ -12,16 +12,7 @@ import {
 } from "@aster/api-contracts";
 
 // Public Contexts stay open-ended. The dashboard only decodes the fields it presents.
-const DisplayTask = Schema.Struct({
-  id: Schema.String,
-  title: Schema.String,
-  instructions: Schema.String,
-  status: Schema.String,
-  result: Schema.optional(Schema.String),
-  updatedAt: Schema.optional(Schema.String),
-  evidence: Schema.optional(Schema.Array(Schema.String)),
-  execution: Schema.optional(Schema.Struct({ runPath: Schema.String, status: Schema.String })),
-});
+
 const DisplayState = Schema.Struct({
   writeback: Schema.optional(WritebackOperation),
   resumptions: Schema.optional(Schema.Array(Schema.Union([RunResumption, ExecutionResumption]))),
@@ -71,7 +62,6 @@ const DisplayState = Schema.Struct({
     ]),
   ),
   historyCount: Schema.optional(Schema.Number),
-  tasks: Schema.optional(Schema.Array(DisplayTask)),
   sourceContext: Schema.optional(Schema.String),
   sourcePath: Schema.optional(Schema.String),
   runPath: Schema.optional(Schema.String),

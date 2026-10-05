@@ -6,14 +6,14 @@ import { ContextActor } from "../context/actor.js";
 import { ContextRegistry } from "../context/registry.js";
 import { defineContext } from "../context/model.js";
 import { RunState } from "./run-state.js";
-import { personalTaskPath } from "./admission.js";
-import { SignalRunActor, StartPersonalTask, ResumePersonalRun } from "./run.js";
+import { taskPath } from "./admission.js";
+import { SignalRunActor, StartTask, ResumePersonalRun } from "./run.js";
 import type { ActorRef } from "@aster/actor";
 import type { RunCommand } from "./run.js";
 
-const Command = Schema.Union([StartPersonalTask, ResumePersonalRun]);
+const Command = Schema.Union([StartTask, ResumePersonalRun]);
 export type RunRootCommand = typeof Command.Type;
-/** Owns only independent Personal Runs; Goal and Signal children keep their original owners. */
+/** Owns asynchronous Tasks submitted by Personal and Goals; conversations do not own execution. */
 export class RunRootActor extends ContextActor.Service<RunRootActor, TaskExecutionServices>()(
   "tasks/Root",
   {
@@ -40,7 +40,7 @@ export class RunRootActor extends ContextActor.Service<RunRootActor, TaskExecuti
                 )
                 .pipe(Effect.orDie);
             for (const record of Object.values(registry.snapshot())) {
-              if (!/^\/runs\/personal--[a-f0-9]{64}$/.test(record.path)) continue;
+              if (!/^\/runs\/(?:personal|goal)--[a-f0-9]{64}$/.test(record.path)) continue;
               const state = Schema.decodeUnknownSync(RunState)(record.state);
               if (!state.admission || state.admission.input.target !== record.path) continue;
               yield* actor
@@ -85,7 +85,7 @@ export class RunRootActor extends ContextActor.Service<RunRootActor, TaskExecuti
             ).pipe(Effect.result);
             if (
               decoded._tag === "Failure" ||
-              decoded.success.target !== personalTaskPath(decoded.success.requestId)
+              decoded.success.target !== taskPath(decoded.success.source, decoded.success.requestId)
             )
               return yield* command.replyTo.tell({
                 _tag: "Rejected",

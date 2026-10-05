@@ -18,7 +18,7 @@ import { Field, FieldLabel } from "@/components/ui/field";
 import { ArrowRight, Check } from "lucide-react";
 import { Status, Messages } from "./shared";
 import { runStages } from "@/lib/dashboard";
-import { inspectorView } from "./state";
+import { inspectorView, contextViews } from "./state";
 import { projectMessage, summaryText, type DisplayState } from "./model";
 import { titleFor } from "../goals/presentation";
 export function Inspector({
@@ -39,6 +39,9 @@ export function Inspector({
     s: DisplayState = c?.state || {},
     restricted = c?.projection?.visibility === "restricted",
     goal = restricted ? null : c?.path.match(/^\/goals\/([^/]+)$/);
+  const tasks = useAtomValue(contextViews).filter(
+    (context) => /^\/runs\/[^/]+$/.test(context.path) && context.state.sourcePath === c?.path,
+  );
   const summary = summaryText(s.summary);
   const send = useAtomSet(sendGoalMessage, { mode: "promise" });
   const end = useAtomSet(endGoal, { mode: "promise" });
@@ -163,11 +166,7 @@ export function Inspector({
                 <TabsTrigger value="messages">
                   Messages · {goal ? s.historyCount || 0 : c?.messages.length || 0}
                 </TabsTrigger>
-                {goal && (
-                  <TabsTrigger value="tasks">
-                    Tasks · {(s.tasks || []).filter((t) => t.status !== "deleted").length}
-                  </TabsTrigger>
-                )}
+                {goal && <TabsTrigger value="tasks">Tasks · {tasks.length}</TabsTrigger>}
                 {!restricted && <TabsTrigger value="state">State</TabsTrigger>}
                 <TabsTrigger value="runtime">Runtime details</TabsTrigger>
                 <TabsTrigger value="events">Runtime events</TabsTrigger>
@@ -181,28 +180,25 @@ export function Inspector({
               </TabsContent>
               {goal && (
                 <TabsContent value="tasks">
-                  {(s.tasks || [])
-                    .filter((t) => t.status !== "deleted")
-                    .map((task) => (
-                      <article className="message" key={task.id}>
-                        <div className="flex justify-between">
-                          <b>{task.title}</b>
-                          <Status value={task.status} />
-                        </div>
-                        <p className="my-2 whitespace-pre-wrap">{task.instructions}</p>
-                        {task.execution && (
-                          <Button
-                            variant="link"
-                            onClick={() => task.execution && inspect(task.execution.runPath)}
-                          >
-                            Execution: {task.execution.status}
-                          </Button>
-                        )}
-                        {task.result && (
-                          <p className="whitespace-pre-wrap text-sm">{task.result}</p>
-                        )}
-                      </article>
-                    ))}
+                  {tasks.map((task) => (
+                    <article className="message" key={task.path}>
+                      <div className="flex justify-between">
+                        <b>{task.description}</b>
+                        <Status value={task.state.status} />
+                      </div>
+                      <p className="my-2 whitespace-pre-wrap">
+                        {typeof task.state.task === "string"
+                          ? task.state.task
+                          : task.state.task?.instructions}
+                      </p>
+                      <Button variant="link" onClick={() => inspect(task.path)}>
+                        View execution
+                      </Button>
+                      {task.state.outcomeText && (
+                        <p className="whitespace-pre-wrap text-sm">{task.state.outcomeText}</p>
+                      )}
+                    </article>
+                  ))}
                 </TabsContent>
               )}
               <TabsContent value="state">

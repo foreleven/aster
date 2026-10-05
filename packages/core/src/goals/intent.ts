@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
 import { Schema } from "effect";
-import { CommandReceipt } from "@aster/api-contracts";
 import type { AgentMessage } from "@aster/agent";
 import type { ContextRecord } from "../context/model.js";
 import type { GoalRelevance } from "./relevance.js";
-import { chatSummaryText } from "./screening.js";
+import { contextSummaryText } from "./screening.js";
 
 import { GoalIntent } from "@aster/api-contracts";
 export { GoalIntent } from "@aster/api-contracts";
@@ -20,18 +19,12 @@ export const GoalIntentInput = Schema.Struct({
 });
 export type GoalIntentInput = typeof GoalIntentInput.Type;
 
-export const ReceivedGoalIntent = Schema.Struct({
-  input: GoalIntentInput,
-  receipt: CommandReceipt,
-  historySequence: Schema.optional(Schema.Int.check(Schema.isGreaterThan(0))),
-});
-
 export const makeGoalIntent = (
   record: ContextRecord,
   relevance: GoalRelevance,
   createdAt: string,
 ): GoalIntent => {
-  const summary = chatSummaryText(record);
+  const summary = contextSummaryText(record);
   const summaryFingerprint = relevance.screening.summaryFingerprint;
   const summaryRevision = relevance.screening.summaryRevision;
   const intentId = createHash("sha256")
@@ -45,7 +38,7 @@ export const makeGoalIntent = (
       contextPath: record.path,
       actorPath: record.path,
       name: rawChat.chat?.name?.trim() || record.description,
-      kind: "lark-chat",
+      kind: "context",
     },
     content: { summary, summaryRevision, summaryFingerprint },
     relevance: {

@@ -10,13 +10,6 @@ import { ContextRecord } from "../context/model.js";
 import { SignalDefinition } from "../config/schema.js";
 import { Task } from "./model.js";
 
-export const GoalTaskReference = Schema.Struct({
-  goalPath: Schema.String,
-  evaluationId: Schema.optional(Schema.String),
-  taskId: Schema.String,
-  revision: Schema.Number,
-});
-
 const fields = {
   writeback: Schema.optional(WritebackOperation),
   causal: Schema.optional(CausalChain),
@@ -28,7 +21,6 @@ const fields = {
   sourcePath: Schema.String,
   definition: SignalDefinition,
   source: ContextRecord,
-  goalTask: Schema.optional(GoalTaskReference),
   approvals: Schema.optional(Schema.Array(Schema.String)),
   // The durable session belongs to Delegation. A recovered completion can arrive
   // without a new Submitted notification, so the Run's display ID is optional.

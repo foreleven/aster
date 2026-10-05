@@ -143,9 +143,7 @@ test("application reads project business fields and history without altering can
       for (const fixture of fixtures) assertPublic(yield* api.context(fixture.path));
       const delegation = yield* api.context("/delegations/work");
       const goal = yield* api.context("/goals/project");
-      const journal = (goal.state as { evaluations: { result: { progress: string } }[] })
-        .evaluations;
-      assert.equal(journal[0].result.progress, "Public conclusion");
+      assert.equal("evaluations" in goal.state, false);
       assert.equal((delegation.state as { status: string }).status, "waiting_input");
       assert.equal(delegation.messages.length, 1);
       assert.deepEqual((yield* api.context("/unknown")).projection, {
@@ -278,44 +276,6 @@ test("owner policies fail closed and project the original change for reactions a
       );
       assert.equal(archived.projection?.visibility, "public");
       assertPublic(archived);
-    }),
-  );
-});
-
-test("Goal reasoning receives public current state and a projected Context catalogue", async () => {
-  const { evaluateGoal } = await import("../src/goals/evaluation.js");
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const registry = yield* makeContextRegistry({ loadAll: () => fixtures, save: () => {} });
-      const history = makeMemoryGoalHistory();
-      let called = false;
-      const result = yield* evaluateGoal({
-        history,
-        reason: "input",
-        requestId: "evaluation",
-        reconcile: false,
-        input: {
-          goal: { slug: "project", description: "Project" },
-          inputs: [],
-          current: registry.project(registry.get("/goals/project")!),
-          contexts: registry.publicSnapshot(),
-          signals: [],
-          historyAfter: 0,
-          historyThrough: 0,
-        },
-        reasoner: {
-          plan: (input) =>
-            Effect.sync(() => {
-              assertPublic(input.current);
-              assertPublic(input.contexts);
-              assert.equal(input.contexts["/unknown"]?.projection?.visibility, "restricted");
-              called = true;
-              return { progress: "Reviewed", completed: false, evidence: [], signals: [] };
-            }),
-        },
-      });
-      assert.equal(result.plan.progress, "Reviewed");
-      assert.ok(called);
     }),
   );
 });

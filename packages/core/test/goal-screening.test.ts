@@ -120,7 +120,7 @@ test("Goal screening scores each Goal independently and records admitted evidenc
     records.map((record) => record.admitted),
     [true, false],
   );
-  assert.ok(records.every((record) => record.input.chatSummary.includes("launch")));
+  assert.ok(records.every((record) => record.input.contextSummary.includes("launch")));
 });
 
 test("invalid Goal screening scores fail closed", async () => {

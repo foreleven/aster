@@ -23,9 +23,7 @@ const decodeMemoryCandidates = Schema.decodeUnknownEffect(
     ),
   }),
 );
-const decodeGoalTaskOwner = Schema.decodeUnknownOption(
-  Schema.Struct({ goalTask: Schema.Struct({ goalPath: Schema.String }) }),
-);
+const decodeTaskOwner = Schema.decodeUnknownOption(Schema.Struct({ sourcePath: Schema.String }));
 
 const priorWorkCatalogue = (
   source: ContextRecord,
@@ -41,8 +39,8 @@ const priorWorkCatalogue = (
           record.path === source.path ||
           record.path.startsWith(`${source.path}/`) ||
           Option.exists(
-            decodeGoalTaskOwner(record.state),
-            ({ goalTask }) => goalTask.goalPath === source.path,
+            decodeTaskOwner(record.state),
+            ({ sourcePath }) => sourcePath === source.path,
           ),
       )
       .slice(-12),

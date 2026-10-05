@@ -1142,8 +1142,9 @@
   }
 }
 
-/* Business evaluations group accepted input, conclusions and their durable outputs. */
-.evaluation-card {
+/* Conversation entries group accepted input and the assistant response. */
+.evaluation-card,
+.conversation-entry {
   border: 1px solid var(--goal-line);
   border-radius: 12px;
   margin: 0 0 20px;
@@ -1151,8 +1152,8 @@
   overflow-wrap: anywhere;
 }
 .evaluation-header,
-.timeline-input header,
-.timeline-output header {
+.conversation-entry > header,
+.timeline-input header {
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
@@ -1175,15 +1176,14 @@
   margin-bottom: 10px;
 }
 .timeline-input p,
-.evaluation-conclusion > p {
+.conversation-response > p {
   white-space: pre-wrap;
   line-height: 1.6;
   margin: 8px 0;
 }
 .timeline-input > time,
 .timeline-input details,
-.evaluation-run,
-.timeline-output header > span {
+.conversation-entry > header {
   font-size: 12px;
   color: var(--goal-muted);
 }
@@ -1197,36 +1197,15 @@
 .input-rationale {
   font-size: 13px;
 }
-.evaluation-conclusion {
+.conversation-response {
   padding: 10px 2px;
 }
-.evaluation-conclusion > .markdown-content {
+.conversation-response > .markdown-content {
   margin: 8px 0;
 }
-.timeline-output {
-  border-top: 1px solid var(--goal-line);
-  padding: 12px 0;
-}
-.evaluation-run {
-  border-top: 1px solid var(--goal-line);
-  padding-top: 12px;
-  margin-top: 8px;
-}
-.evaluation-run dl {
-  display: grid;
-  grid-template-columns: auto 1fr;
-  gap: 8px;
-}
-.evaluation-run dd {
-  margin: 0;
-}
-.timeline-pending h3 {
-  font-size: 13px;
-  color: var(--goal-muted);
-  margin: 12px 0;
-}
 @media (max-width: 600px) {
-  .evaluation-card {
+  .evaluation-card,
+  .conversation-entry {
     padding: 12px;
   }
 }

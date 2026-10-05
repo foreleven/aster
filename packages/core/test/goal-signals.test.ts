@@ -1,7 +1,8 @@
+import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit } from "@aster/actor";
-import { Effect, Layer, Schema } from "effect";
+import { Clock, Effect, Layer, Schema, Stream } from "effect";
 import {
   defineContext,
   ContextRegistry,
@@ -12,192 +13,190 @@ import {
   type ContextRecord,
   type GoalCommand,
 } from "../src/index.js";
-import type { SignalCommandReply, SignalConfigureReply } from "../src/signals/actors.js";
+import type { SignalCommandReply } from "../src/signals/actors.js";
 import type { GoalSignalInput } from "../src/signals/goal-command.js";
-import { fakeAgent, preparationLayer } from "./fixtures.js";
-
+import { preparationLayer } from "./fixtures.js";
 const input: GoalSignalInput = {
-  requestId: "goal-signal-1",
-  evaluationId: "evaluation-1",
+  requestId: "create",
   source: "/goals/release",
   target: "/signals/release--watch",
-  expectedRevision: 0,
-  operation: "create",
-  definition: {
-    slug: "release--watch",
-    when: "Blockers change",
-    task: "Review blockers",
-    agent: "test",
-    mode: "confirm",
-    schedule: { type: "once", at: "2099-01-01T00:00:00Z" },
+  change: {
+    operation: "create",
+    definition: {
+      when: "Blockers change",
+      task: "Notify the Goal",
+      schedule: { type: "once", at: "2099-01-01T00:00:00Z" },
+    },
   },
-  causal: { rootRequestId: "user-1", remainingAgentTurns: 3 },
-  createdAt: "2026-10-02T00:00:00Z",
+  causal: { rootRequestId: "user", remainingAgentTurns: 3 },
 };
-const fixture = (records: Map<string, ContextRecord>) =>
-  Effect.gen(function* () {
-    const registry = yield* makeContextRegistry({
-      loadAll: () => [...records.values()],
-      save: (record) => {
-        records.set(record.path, structuredClone(record));
-      },
-    });
-    yield* registry.register(
-      "/goals/release",
-      defineContext({
-        identity: "Goal publisher",
-        state: Schema.Record(Schema.String, Schema.Unknown),
-        message: Schema.Unknown,
-      }),
-    );
-    const system = yield* ActorSystem.make().pipe(
-      ActorSystem.provide(
-        Layer.succeed(ContextRegistry, registry),
-        Layer.succeed(SignalDefinitions, []),
-        preparationLayer,
-        Layer.succeed(ExternalAgents, {
-          test: fakeAgent({ submit: () => Effect.die("Unexpected execution") }),
-        }),
-      ),
-    );
-    const root = yield* system.spawn("signals", SignalRootActor);
-    const subscriber = yield* ActorTestKit.probe<GoalCommand>();
-    const command = (value: GoalSignalInput) =>
-      root.ask<SignalCommandReply>((replyTo) => ({
-        _tag: "ApplyGoalCommand",
-        input: value,
-        subscriber: subscriber.ref,
-        replyTo,
-      }));
-    const publish = (value: GoalSignalInput, tasks: readonly unknown[] = []) =>
-      Effect.gen(function* () {
-        const previous = registry.get(value.source);
-        yield* registry.commit(
-          {
-            path: value.source,
-            description: "Release",
-            state: {
-              status: "active",
-              tasks,
-              signalOutbox: [{ input: value, status: "pending", attempts: 0 }],
-            },
-            messages: [],
-          },
-          { expectedRevision: previous?.revision ?? 0 },
-        );
-      });
-    return { registry, root, subscriber, command, publish };
+const setup = Effect.fnUntraced(function* (
+  records: Map<string, ContextRecord>,
+  clock?: Clock.Clock,
+) {
+  const registry = yield* makeContextRegistry({
+    loadAll: () => [...records.values()],
+    save: (record) => {
+      records.set(record.path, structuredClone(record));
+    },
   });
-
-test("Goal Signal receipt survives restart and unchanged reattachment without a second revision", async () => {
+  yield* registry.register(
+    input.source,
+    defineContext({
+      identity: "Goal",
+      state: Schema.Record(Schema.String, Schema.Unknown),
+      message: Schema.Unknown,
+    }),
+  );
+  if (!registry.get(input.source))
+    yield* registry.commit(
+      { path: input.source, description: "Goal", state: { status: "active" }, messages: [] },
+      { expectedRevision: 0 },
+    );
+  const system = yield* ActorSystem.make().pipe(
+    ActorSystem.provide(
+      Layer.succeed(Clock.Clock, clock ?? (yield* Clock.Clock)),
+      Layer.succeed(ContextRegistry, registry),
+      Layer.succeed(SignalDefinitions, []),
+      Layer.succeed(ExternalAgents, {}),
+      preparationLayer,
+    ),
+  );
+  const root = yield* system.spawn("signals", SignalRootActor);
+  const subscriber = yield* ActorTestKit.probe<GoalCommand>();
+  const command = (value: GoalSignalInput) =>
+    root.ask<SignalCommandReply>((replyTo) => ({
+      _tag: "ApplyGoalCommand",
+      input: value,
+      subscriber: subscriber.ref,
+      replyTo,
+    }));
+  const wait = (predicate: () => boolean) =>
+    Effect.scoped(
+      Effect.gen(function* () {
+        const changes = yield* registry.subscribe;
+        if (!predicate())
+          yield* changes.pipe(Stream.filter(predicate), Stream.take(1), Stream.runDrain);
+      }),
+    );
+  return { registry, command, subscriber, wait };
+});
+test("Signal owns direct command receipts across restarts, rejects stale changes and preserves ownership", async () => {
   const records = new Map<string, ContextRecord>();
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const env = yield* fixture(records);
-        yield* env.publish(input);
-        assert.deepEqual(yield* env.command(input), {
-          _tag: "Accepted",
-          receipt: { requestId: input.requestId, revision: 1 },
-        });
-        const snapshot = env.registry.get(input.target)!;
-        assert.equal(
-          (snapshot.state as { goalCommandReceipts: unknown[] }).goalCommandReceipts.length,
-          1,
-        );
-        assert.equal(
-          (yield* env.command({ ...input, definition: { ...input.definition, task: "Changed" } }))
-            ._tag,
-          "Rejected",
-        );
-        assert.deepEqual(env.registry.get(input.target), snapshot);
-      }),
-    ).pipe(Effect.timeout("5 seconds")),
-  );
-  const original = structuredClone(records.get(input.target)!);
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const env = yield* fixture(records);
-        const reattach = yield* env.root.ask<SignalConfigureReply>((replyTo) => ({
-          _tag: "Upsert",
-          definition: input.definition,
-          goal: "release",
-          active: true,
-          subscriber: env.subscriber.ref,
-          replyTo,
-        }));
-        assert.equal(reattach._tag, "Accepted");
-        assert.deepEqual(env.registry.get(input.target), original);
-        assert.deepEqual(yield* env.command(input), {
-          _tag: "Accepted",
-          receipt: { requestId: input.requestId, revision: 1 },
-        });
-        const update: GoalSignalInput = {
-          ...input,
-          requestId: "update",
-          expectedRevision: 1,
-          operation: "update",
-          definition: {
-            slug: input.definition.slug,
-            when: "Changed",
-            task: "Inspect",
-            mode: "confirm",
-            agent: "test",
-          },
-        };
-        yield* env.publish(update);
-        assert.equal((yield* env.command(update))._tag, "Accepted");
-        assert.equal(env.registry.get(input.target)?.revision, 2);
-        assert.equal("schedule" in env.registry.get(input.target)!.state, false);
-        assert.equal("nextDue" in env.registry.get(input.target)!.state, false);
-        // Original replay remains stable even after a later update and publisher journal change.
-        assert.deepEqual(yield* env.command(input), {
-          _tag: "Accepted",
-          receipt: { requestId: input.requestId, revision: 1 },
-        });
-        const stale = { ...update, requestId: "stale" };
-        yield* env.publish(stale);
-        assert.equal((yield* env.command(stale))._tag, "Rejected");
-        assert.equal(env.registry.get(input.target)?.revision, 2);
-      }),
-    ).pipe(Effect.timeout("5 seconds")),
-  );
+  for (const restart of [false, true])
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const env = yield* setup(records);
+          assert.deepEqual(yield* env.command(input), {
+            _tag: "Accepted",
+            receipt: { requestId: "create", revision: 1 },
+          });
+          const before = env.registry.get(input.target)!;
+          assert.equal(
+            (yield* env.command({
+              ...input,
+              change: { operation: "create", definition: { task: "Different" } },
+            }))._tag,
+            "Rejected",
+          );
+          assert.deepEqual(env.registry.get(input.target), before);
+          if (!restart) return;
+          const update: GoalSignalInput = {
+            ...input,
+            requestId: "update",
+            change: {
+              operation: "update",
+              revision: 1,
+              definition: { schedule: null, when: "New condition" },
+            },
+          };
+          assert.equal((yield* env.command(update))._tag, "Accepted");
+          assert.equal(
+            (env.registry.get(input.target)!.state as { schedule?: unknown }).schedule,
+            undefined,
+          );
+          assert.equal((yield* env.command({ ...update, requestId: "stale" }))._tag, "Rejected");
+          assert.equal((yield* env.command({ ...input, source: "/goals/other" }))._tag, "Rejected");
+          assert.deepEqual(yield* env.command(input), {
+            _tag: "Accepted",
+            receipt: { requestId: "create", revision: 1 },
+          });
+          assert.equal(
+            (yield* env.command({
+              ...input,
+              requestId: "delete",
+              change: { operation: "delete", revision: 2 },
+            }))._tag,
+            "Accepted",
+          );
+          assert.equal(
+            (env.registry.get(input.target)!.state as { deleted: boolean }).deleted,
+            true,
+          );
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
 });
 
-test("Goal Signal receiver requires published intent, live Task and correct ownership", async () => {
+test("Signal timer lives outside conversation, reschedules by revision and sends evidence without executing Tasks", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const env = yield* fixture(new Map());
-        assert.equal((yield* env.command(input))._tag, "Rejected");
-        const missingTask = { ...input, definition: { ...input.definition, taskId: "missing" } };
-        yield* env.publish(missingTask);
-        assert.equal((yield* env.command(missingTask))._tag, "Rejected");
-        assert.equal(env.registry.get(input.target), undefined);
-        yield* env.publish(missingTask, [{ id: "missing", status: "open" }]);
-        assert.equal((yield* env.command(missingTask))._tag, "Accepted");
-        const snapshot = env.registry.get(input.target)!;
-        const stolen = yield* env.root.ask<SignalConfigureReply>((replyTo) => ({
-          _tag: "Upsert",
-          definition: input.definition,
-          goal: "other",
-          active: true,
-          subscriber: env.subscriber.ref,
-          replyTo,
-        }));
-        assert.equal(stolen._tag, "Rejected");
-        assert.deepEqual(env.registry.get(input.target), snapshot);
-        // A deleted Task must not prevent removing its monitor.
-        const remove: GoalSignalInput = {
-          ...missingTask,
-          requestId: "delete",
-          operation: "delete",
-          expectedRevision: 1,
-        };
-        yield* env.publish(remove, [{ id: "missing", status: "deleted" }]);
-        assert.equal((yield* env.command(remove))._tag, "Accepted");
-        assert.equal((env.registry.get(input.target)!.state as { deleted: boolean }).deleted, true);
+        const clock = yield* TestClock.make();
+        const start = Date.parse("2026-10-01T00:00:00Z");
+        yield* clock.adjust(start);
+        const env = yield* setup(new Map(), clock);
+        yield* env.command({
+          ...input,
+          change: {
+            operation: "create",
+            definition: { schedule: { type: "once", at: new Date(start + 10000).toISOString() } },
+          },
+        });
+        yield* env.wait(
+          () =>
+            (env.registry.get(input.target)?.state as { nextDue?: number }).nextDue ===
+            start + 10000,
+        );
+        yield* env.command({
+          ...input,
+          requestId: "reschedule",
+          change: {
+            operation: "update",
+            revision: 1,
+            definition: { schedule: { type: "once", at: new Date(start + 20000).toISOString() } },
+          },
+        });
+        yield* clock.adjust(11000);
+        assert.equal(
+          (env.registry.get(input.target)!.state as { occurrences?: unknown[] }).occurrences
+            ?.length ?? 0,
+          0,
+        );
+        yield* clock.adjust(10000);
+        const occurrence = yield* env.subscriber.take();
+        assert.equal(occurrence._tag, "SubmitInput");
+        if (occurrence._tag !== "SubmitInput") return;
+        assert.equal(occurrence.input._tag, "SignalOccurrence");
+        yield* occurrence.replyTo.tell({
+          _tag: "Accepted",
+          receipt: { requestId: occurrence.requestId, revision: 1 },
+        });
+        yield* env.wait(
+          () =>
+            (env.registry.get(input.target)!.state as { occurrences: { delivered: boolean }[] })
+              .occurrences[0]?.delivered === true,
+        );
+        assert.equal(
+          Object.keys(env.registry.snapshot()).some((path) => path.includes("/runs/")),
+          false,
+        );
+        yield* clock.adjust(60000);
+        assert.equal(
+          (env.registry.get(input.target)!.state as { occurrences: unknown[] }).occurrences.length,
+          1,
+        );
       }),
     ).pipe(Effect.timeout("5 seconds")),
   );

@@ -109,9 +109,6 @@ const RunView = Schema.Struct({
   definition: Schema.optional(SignalDefinition),
   outcomeText: optionalString,
   approvals: Schema.optional(Schema.Array(Schema.String)),
-  goalTask: Schema.optional(
-    Schema.Struct({ goalPath: Schema.String, taskId: Schema.String, revision: Schema.Number }),
-  ),
   resumptions: Schema.optional(Schema.Array(RunResumption)),
 });
 const DelegationView = Schema.Struct({
@@ -162,28 +159,7 @@ const SignalView = Schema.Struct({
   ),
 });
 const GoalView = Schema.Struct({
-  nextStep: GoalState.fields.nextStep,
   completionOrigin: GoalState.fields.completionOrigin,
-  deactivation: GoalState.fields.deactivation,
-  signalOutbox: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        input: Schema.Struct({
-          requestId: Schema.String,
-          evaluationId: Schema.String,
-          target: Schema.String,
-          operation: Schema.String,
-        }),
-        status: Schema.String,
-        attempts: Schema.Number,
-        error: Schema.optional(Schema.String),
-        receipt: Schema.optional(
-          Schema.Struct({ requestId: Schema.String, revision: Schema.Number }),
-        ),
-      }),
-    ),
-  ),
-  evaluations: GoalState.fields.evaluations,
   title: GoalState.fields.title,
   status: optionalString,
   description: optionalString,
@@ -191,9 +167,7 @@ const GoalView = Schema.Struct({
   summary: optionalString,
   progress: optionalString,
   lastError: optionalString,
-  tasks: Schema.optional(GoalState.fields.tasks),
   historyCount: Schema.optional(Schema.Number),
-  deliveries: GoalState.fields.deliveries,
 });
 export const coreContextViews = [
   contextView({

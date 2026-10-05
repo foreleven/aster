@@ -1,11 +1,11 @@
+const context = (path, description, state = {}, messages = []) => ({
+  path,
+  description,
+  state,
+  messages,
+});
 export const at = "2026-09-29T12:30:00Z";
 export function fixture() {
-  const context = (path, description, state = {}, messages = []) => ({
-    path,
-    description,
-    state,
-    messages,
-  });
   const actor = (path, contextPath) => ({
     path,
     contextPath,
@@ -27,30 +27,23 @@ export function fixture() {
       engine: {
         groups: [
           {
-            evaluationId: "evaluation-1",
+            requestId: "input-1",
             ordinal: 1,
             status: "completed",
-            startedAt: at,
-            inputs: [
-              {
-                inputId: "input-1",
-                goalSlug: "engine",
-                ordinal: 1,
-                receivedAt: at,
-                payload: { _tag: "Startup", reason: "Start monitoring project progress" },
+            input: {
+              inputId: "input-1",
+              goalSlug: "engine",
+              ordinal: 1,
+              receivedAt: "2026-09-29T12:30:00Z",
+              payload: {
+                _tag: "GoalStarted",
+                pursuit: "initial",
               },
-            ],
-            disposition: "advance",
-            conclusion: {
-              text: "Monitoring project progress. Next, track integration and validation results.",
-              evidence: [],
-              applied: true,
             },
-            outputs: [],
-            agentRun: { sessionId: "engine", requestId: "evaluation-1" },
+            response:
+              "Monitoring project progress. Next, track integration and validation results.",
           },
         ],
-        pendingInputs: [],
       },
     },
     runtime: {
@@ -182,37 +175,10 @@ export function fixture() {
 /** Reference-shaped public records, used only by browser tests and isolated visual QA. */
 export function designFixture() {
   const data = fixture();
-  const now = "2025-01-14T10:24:00+09:00";
   const goal = data.contexts.find((context) => context.path === "/goals/engine");
   goal.description = "Plan our Hokkaido trip";
   goal.state.summary =
     "Planning a 7–8 day trip to Hokkaido in late Jan 2026 for two people. We’re looking for a mix of snow activities, good food, and a relaxed pace. Currently comparing flight and hotel options, checking visa requirements, and watching for price drops. No bookings yet.";
-  goal.state.tasks = [
-    {
-      id: "flights",
-      title: "Compare flights",
-      instructions: "Search for best fares from Tokyo to Sapporo (Jan 20–28)",
-      status: "open",
-      execution: { runPath: "/signals/progress/runs/run-1", status: "running" },
-      updatedAt: now,
-    },
-    {
-      id: "visa",
-      title: "Check visa rules",
-      instructions: "Confirm entry requirements for our nationality and stay duration.",
-      status: "open",
-      execution: { runPath: "/signals/visa/runs/run-1", status: "waiting_input" },
-      updatedAt: "2025-01-14T07:24:00+09:00",
-    },
-    {
-      id: "hotels",
-      title: "Search hotel prices",
-      instructions: "Find and compare hotels in Sapporo, Otaru, and Niseko.",
-      status: "open",
-      execution: { runPath: "/signals/hotels/runs/run-1", status: "uncertain" },
-      updatedAt: "2025-01-14T08:17:00+09:00",
-    },
-  ];
   const event = (type, text, hour, day = "14", references = []) => ({
     type,
     text,
@@ -277,143 +243,77 @@ export function designFixture() {
   data.timelines.engine = {
     groups: [
       {
-        evaluationId: "trip-1",
+        requestId: "trip-input-1",
         ordinal: 1,
         status: "completed",
-        startedAt: "2025-01-13T14:21:00+09:00",
-        inputs: [
-          {
-            inputId: "trip-input-1",
-            goalSlug: "engine",
-            ordinal: 1,
-            receivedAt: "2025-01-13T14:21:00+09:00",
-            payload: {
-              _tag: "UserInput",
-              text: "Priorities: snow activities, seafood, an onsen and a day trip to Otaru. Keep hotel changes to a minimum.",
-            },
+        input: {
+          inputId: "trip-input-1",
+          goalSlug: "engine",
+          ordinal: 1,
+          receivedAt: "2025-01-13T14:21:00+09:00",
+          payload: {
+            _tag: "UserInput",
+            text: "Priorities: snow activities, seafood, an onsen and a day trip to Otaru. Keep hotel changes to a minimum.",
           },
-        ],
-        disposition: "advance",
-        conclusion: {
-          text: "Start with flights and entry requirements. No bookings yet.",
-          evidence: [],
-          applied: true,
         },
-        outputs: [
-          {
-            id: "visa",
-            kind: "task",
-            target: "visa",
-            operation: "create",
-            title: "Check visa rules",
-            status: "applied",
-          },
-          {
-            id: "holiday",
-            kind: "signal",
-            target: "/signals/holiday",
-            operation: "create",
-            title: "Local holiday availability",
-            status: "applied",
-          },
-        ],
-        agentRun: { sessionId: "engine", requestId: "trip-1" },
+        response: "Start with flights and entry requirements. No bookings yet.",
       },
       {
-        evaluationId: "trip-2",
+        requestId: "trip-input-2",
         ordinal: 2,
         status: "completed",
-        startedAt: "2025-01-14T08:50:00+09:00",
-        inputs: [
-          {
-            inputId: "trip-input-2",
-            goalSlug: "engine",
-            ordinal: 2,
-            receivedAt: "2025-01-14T08:50:00+09:00",
-            payload: {
-              _tag: "UserInput",
-              text: "Let’s check Jan 21–28. Compare fares and monitor for price drops.",
-            },
+        input: {
+          inputId: "trip-input-2",
+          goalSlug: "engine",
+          ordinal: 2,
+          receivedAt: "2025-01-14T08:50:00+09:00",
+          payload: {
+            _tag: "UserInput",
+            text: "Let’s check Jan 21–28. Compare fares and monitor for price drops.",
           },
-        ],
-        disposition: "advance",
-        conclusion: {
-          text: "Watch flight prices while the hotel search continues.",
-          evidence: [],
-          applied: true,
         },
-        outputs: [
-          {
-            id: "price-watch",
-            kind: "signal",
-            target: "/signals/progress",
-            operation: "create",
-            title: "Flight price drops below ¥4,000",
-            status: "applied",
-          },
-        ],
-        agentRun: { sessionId: "engine", requestId: "trip-2" },
+        response: "Watch flight prices while the hotel search continues.",
       },
       {
-        evaluationId: "trip-3",
+        requestId: "trip-input-3",
         ordinal: 3,
         status: "completed",
-        startedAt: now,
-        inputs: [
-          {
-            inputId: "trip-input-3",
-            goalSlug: "engine",
-            ordinal: 3,
-            receivedAt: now,
-            payload: {
-              _tag: "GoalIntent",
-              intent: {
-                intentId: "fare-update",
-                goalSlug: "engine",
-                source: {
-                  contextPath: "/sources/flights",
-                  actorPath: "/user/lark/im/travel",
-                  name: "Hokkaido travel group",
-                  kind: "lark-chat",
-                },
-                content: {
-                  summary: "ANA fares from HND to CTS fell to ¥3,800 for Jan 21.",
-                  summaryRevision: "7",
-                  summaryFingerprint: "fare-v7",
-                },
-                relevance: {
-                  score: 0.94,
-                  rationale: "The fare matches your dates and falls below the ¥4,000 target.",
-                  screeningRecordId: "screening-7",
-                  threshold: 0.7,
-                  policyVersion: "v1",
-                },
-                createdAt: now,
+        input: {
+          inputId: "trip-input-3",
+          goalSlug: "engine",
+          ordinal: 3,
+          receivedAt: "2025-01-14T10:24:00+09:00",
+          payload: {
+            _tag: "GoalIntent",
+            intent: {
+              intentId: "fare-update",
+              goalSlug: "engine",
+              source: {
+                contextPath: "/sources/flights",
+                actorPath: "/user/lark/im/travel",
+                name: "Hokkaido travel group",
+                kind: "context",
               },
+              content: {
+                summary: "ANA fares from HND to CTS fell to ¥3,800 for Jan 21.",
+                summaryRevision: "7",
+                summaryFingerprint: "fare-v7",
+              },
+              relevance: {
+                score: 0.94,
+                rationale: "The fare matches your dates and falls below the ¥4,000 target.",
+                screeningRecordId: "screening-7",
+                threshold: 0.7,
+                policyVersion: "v1",
+              },
+              createdAt: "2025-01-14T10:24:00+09:00",
             },
           },
-        ],
-        disposition: "advance",
-        conclusion: {
-          text: "Compare return fares before choosing a flight. The price check is running; no booking has been made.",
-          evidence: ["/sources/flights", "/sources/skyscanner", "/sources/ana"],
-          applied: true,
         },
-        outputs: [
-          {
-            id: "compare",
-            kind: "task",
-            target: "flights",
-            operation: "execute",
-            title: "Compare flights",
-            status: "applied",
-            runPath: "/signals/progress/runs/run-1",
-          },
-        ],
-        agentRun: { sessionId: "engine", requestId: "trip-3" },
+        response:
+          "Compare return fares before choosing a flight. The price check is running; no booking has been made.",
       },
     ],
-    pendingInputs: [],
   };
   goal.state.historyCount = goal.messages.length;
   const signal = data.contexts.find((context) => context.path === "/signals/progress");
@@ -431,7 +331,19 @@ export function designFixture() {
   };
   const run = data.contexts.find((context) => context.path === "/signals/progress/runs/run-1");
   run.description = "Compare flights";
+  run.path = "/runs/goal--flights";
   run.state.status = "running";
+  run.state.sourcePath = "/goals/engine";
+  data.contexts.push(
+    context("/runs/goal--visa", "Check visa rules", {
+      status: "waiting_input",
+      sourcePath: "/goals/engine",
+    }),
+    context("/runs/goal--hotels", "Search hotel prices", {
+      status: "uncertain",
+      sourcePath: "/goals/engine",
+    }),
+  );
   data.contexts.find((context) => context.path === "/approvals").state.entries = [];
   data.contexts.push(
     {
@@ -457,7 +369,7 @@ export function designFixture() {
     ].map(([slug, description, status]) => ({
       path: `/goals/${slug}`,
       description,
-      state: { status, tasks: [] },
+      state: { status },
       messages: [],
     })),
     ...[

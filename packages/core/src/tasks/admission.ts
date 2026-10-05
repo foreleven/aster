@@ -18,3 +18,10 @@ export const personalTaskIntent = (
   target: personalTaskPath(identity.requestId),
   expectedRevision: 0,
 });
+
+export const taskPath = (source: string, requestId: string) =>
+  source === "/personal"
+    ? personalTaskPath(requestId)
+    : `/runs/goal--${createHash("sha256")
+        .update(JSON.stringify([source, requestId]))
+        .digest("hex")}`;

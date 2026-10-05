@@ -5,8 +5,6 @@ import type { GoalHistory } from "./history.js";
 import type { ContextRegistry } from "../context/registry.js";
 import type { GoalRequestRecord } from "./protocol.js";
 import { goalInputs } from "./inputs.js";
-import { goalInbox } from "./inbox.js";
-import { goalIntentInbox } from "./intent-inbox.js";
 
 /** Variant-specific authority checks and input/receipt commits share the Goal mailbox. */
 export const goalAdmission = (
@@ -15,8 +13,6 @@ export const goalAdmission = (
   history: GoalHistory,
 ) => {
   const inputs = goalInputs(working, history);
-  const personal = goalInbox(registry, working, history);
-  const intents = goalIntentInbox(registry, working, history);
   return Effect.fn("Goal.submitInput")(function* (admission: GoalRequestRecord) {
     const { request, receipt } = admission;
     if (request._tag !== "SubmitInput")
@@ -39,7 +35,33 @@ export const goalAdmission = (
               kind: "invalid-input",
               message: "Delivery identity mismatch",
             });
-          return (yield* personal.accept(delivery, admission)).receipt;
+          if (
+            delivery.target !== current().path ||
+            !delivery.text.trim() ||
+            !Number.isFinite(Date.parse(delivery.createdAt))
+          )
+            return yield* new ApplicationError({
+              kind: "invalid-input",
+              message: "Invalid Goal delivery target or content",
+            });
+          yield* inputs.accept(
+            {
+              _tag: "PersonalMessage",
+              source: "/personal",
+              requestId: delivery.requestId,
+              text: delivery.text,
+            },
+            delivery.requestId,
+            {
+              ...patch,
+              causal: delivery.causal ?? {
+                rootRequestId: delivery.causationId,
+                remainingAgentTurns: 4,
+              },
+            },
+            delivery.expectedRevision,
+          );
+          return receipt;
         }),
       ),
       Match.tag("GoalIntent", ({ delivery }) =>
@@ -49,7 +71,44 @@ export const goalAdmission = (
               kind: "invalid-input",
               message: "Intent identity mismatch",
             });
-          return (yield* intents.accept(delivery, admission)).receipt;
+          const intent = delivery.intent;
+          if (delivery.target !== current().path || intent.goalSlug !== state().slug)
+            return yield* new ApplicationError({
+              kind: "invalid-input",
+              message: "Goal intent target mismatch",
+            });
+          if (
+            !intent.content.summary.trim() ||
+            !intent.relevance.rationale.trim() ||
+            !Number.isFinite(Date.parse(intent.createdAt))
+          )
+            return yield* new ApplicationError({
+              kind: "invalid-input",
+              message: "Goal intent requires dated evidence and rationale",
+            });
+          if (intent.relevance.score < intent.relevance.threshold)
+            return yield* new ApplicationError({
+              kind: "invalid-input",
+              message: "Goal intent does not meet its screening threshold",
+            });
+          if (
+            state().inputs?.some(
+              (item) =>
+                item.payload._tag === "GoalIntent" &&
+                item.payload.intent.intentId === intent.intentId,
+            )
+          )
+            return yield* new ApplicationError({
+              kind: "conflict",
+              message: "Goal intent ID belongs to another request",
+            });
+          yield* inputs.accept(
+            { _tag: "GoalIntent", intent },
+            intent.intentId,
+            { ...patch, causal: { rootRequestId: delivery.causationId, remainingAgentTurns: 4 } },
+            delivery.expectedRevision,
+          );
+          return receipt;
         }),
       ),
       Match.tag("UserInput", ({ text }) =>
@@ -57,7 +116,6 @@ export const goalAdmission = (
           yield* inputs.accept({ _tag: "UserInput", text }, request.requestId, {
             ...patch,
             causal,
-            pendingEvaluation: true,
           });
           return receipt;
         }),
@@ -81,8 +139,6 @@ export const goalAdmission = (
             {
               ...patch,
               causal: input.causal ?? causal,
-              pendingEvaluation: true,
-              receivedEvents: [...state().receivedEvents, input.id],
             },
           );
           return receipt;
@@ -92,30 +148,26 @@ export const goalAdmission = (
         Effect.gen(function* () {
           const run = registry.get(input.runPath)?.state as
             | {
-                goalTask?: { goalPath: string; taskId: string };
+                admission?: { input: { source: string } };
                 signalSlug?: string;
               }
             | undefined;
           const signal = (
             run?.signalSlug ? registry.get(`/signals/${run.signalSlug}`)?.state : undefined
           ) as { goal?: string } | undefined;
-          if (!run || (run.goalTask?.goalPath !== current().path && signal?.goal !== state().slug))
+          if (
+            !run ||
+            (run.admission?.input.source !== current().path && signal?.goal !== state().slug)
+          )
             return yield* new ApplicationError({
               kind: "invalid-input",
               message: "Execution feedback does not belong to this Goal",
-            });
-          if (input.taskId !== undefined && input.taskId !== run.goalTask?.taskId)
-            return yield* new ApplicationError({
-              kind: "invalid-input",
-              message: "Execution Task identity mismatch",
             });
           const status = input.status ?? (input.terminal ? "completed" : "running");
           yield* inputs.accept(
             {
               _tag: "ExecutionFeedback",
               runPath: input.runPath,
-              taskId: input.taskId,
-              evaluationId: input.evaluationId,
               status,
               terminal: input.terminal,
               text: input.text,
@@ -124,17 +176,6 @@ export const goalAdmission = (
             {
               ...patch,
               causal: input.causal ?? state().causal,
-              pendingEvaluation: (input.terminal && active) || state().pendingEvaluation,
-              tasks: state().tasks.map((task) =>
-                task.id === input.taskId && task.execution?.runPath === input.runPath
-                  ? {
-                      ...task,
-                      execution: { ...task.execution, status },
-                      ...(input.terminal ? { result: input.text } : {}),
-                    }
-                  : task,
-              ),
-              receivedEvents: [...state().receivedEvents, request.requestId],
             },
           );
           return receipt;

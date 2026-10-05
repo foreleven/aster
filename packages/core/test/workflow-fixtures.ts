@@ -10,7 +10,6 @@ import {
   GoalHistoryStore,
   makeMemoryGoalHistory,
   type TaskExecution,
-  type GoalReasoner,
   type PersonalReasoner,
   type ContextRecord,
 } from "../src/index.js";
@@ -41,7 +40,7 @@ const agentFailure = (cause: Error) => new AgentError(cause.message, [], { cause
 
 /** Each fake handles one model protocol and delegates other invocations to the preceding fake. */
 export const modelReplyLayer = (
-  resultTool: string,
+  resultTool: string | undefined,
   execute: (invocation: AgentInvocation) => Effect.Effect<AgentResult, AgentError>,
 ) =>
   Layer.effect(
@@ -203,13 +202,24 @@ export const personalReasoningLayer = (scenario: PersonalReasoner) =>
       )
     : personalDisabled;
 
-export type GoalScenario = GoalSignals["Service"] & {
+export interface GoalScenario {
   readonly definitions: GoalSettings["Service"]["definitions"];
-  readonly reasoner: GoalReasoner;
+  readonly reasoner: {
+    readonly plan: (input: {
+      current: ContextRecord;
+      messages: readonly import("@aster/agent").AgentMessage[];
+    }) => Effect.Effect<
+      { progress: string; completed: boolean; evidence: readonly string[] },
+      Error
+    >;
+  };
+  readonly signals: GoalSignals["Service"]["signals"];
+  readonly reconcile: GoalSignals["Service"]["reconcile"];
+  readonly deactivate: GoalSignals["Service"]["deactivate"];
   readonly history?: GoalHistoryStore["Service"];
   readonly contextTokens?: number;
   readonly reserveTokens?: number;
-};
+}
 export const goalWorkflowLayer = (scenario: GoalScenario) =>
   Layer.mergeAll(
     emptyRecall,
@@ -221,47 +231,37 @@ export const goalWorkflowLayer = (scenario: GoalScenario) =>
         reserveTokens: scenario.reserveTokens,
       },
     }),
-    Layer.succeed(GoalSignals, scenario),
+    Layer.succeed(GoalSignals, {
+      ...scenario,
+      applySignal: () => Effect.die("Unexpected Signal mutation"),
+    }),
     Layer.succeed(GoalHistoryStore, scenario.history ?? makeMemoryGoalHistory()),
-    modelReplyLayer("finish_turn", (input) =>
+    modelReplyLayer("submit_relevance", () =>
+      Effect.succeed(
+        agentResult("submit_relevance", { relevant: true, reason: "Relevant test evidence" }),
+      ),
+    ),
+    modelReplyLayer(undefined, (input) =>
       Effect.gen(function* () {
-        const current = yield* readPages(input, "goal_current");
-        const contexts = yield* readContexts(input);
-        const plan = yield* scenario.reasoner
+        const current = yield* callTool(input, "goal_current", {});
+        const response = yield* scenario.reasoner
           .plan({
-            goal: current.goal,
-            reason: current.admittedPurpose,
-            current: contexts[`/goals/${current.goal.slug}`]!,
-            contexts,
-            signals: scenario.signals(current.goal.slug),
-            durable: input.durable!,
+            current: {
+              path: `/goals/${current.goal.slug}`,
+              description: current.goal.description,
+              state: current.state,
+              messages: [],
+            },
             messages: input.messages.filter((message) => message.role !== "system"),
-            history: scenario.history,
           })
-          .pipe(
-            Effect.mapError(
-              (cause) => new AgentError(cause.message, [], { cause, outcome: cause.outcome }),
-            ),
-          );
-        // Older workflow scenarios predate the v2 model protocol; emit their equivalent current result.
-        const result =
-          "nextStep" in plan || input.durable?.reconcile || input.durable?.replayOnly
-            ? plan
-            : {
-                version: 2,
-                turnId: input.durable!.requestId,
-                resultId: input.durable!.requestId,
-                disposition: plan.disposition ?? "advance",
-                progress: plan.progress,
-                evidence: plan.evidence,
-                taskChanges: plan.taskChanges,
-                signalChanges: plan.signalChanges,
-                nextStep:
-                  plan.completed && current.goal.completionCriteria && plan.evidence.length
-                    ? { _tag: "Complete", evidence: plan.evidence }
-                    : { _tag: "WaitForEvent", references: [`/goals/${current.goal.slug}`] },
-              };
-        return agentResult("finish_turn", JSON.parse(JSON.stringify(result)));
+          .pipe(Effect.mapError(agentFailure));
+        yield* callTool(input, "update_goal", {
+          progress: response.progress,
+          completed:
+            response.completed && !!current.goal.completionCriteria && !!response.evidence.length,
+          evidence: response.evidence,
+        });
+        return { messages: [] };
       }),
     ),
   );

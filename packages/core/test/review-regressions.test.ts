@@ -18,7 +18,6 @@ import {
   makeApplicationApi,
   makeContextRegistry,
   makeMemoryGoalHistory,
-  decideTaskOperation,
   type GoalCommand,
   type RunState,
 } from "../src/index.js";
@@ -40,7 +39,7 @@ const base = {
   task: { instructions: "Task", input: [] },
 };
 
-test("Goal API waits for durable history and evaluation intent; stopped roots fail instead of accepting", async () => {
+test("Goal API waits for durable input and history; stopped roots fail instead of accepting", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -97,8 +96,9 @@ test("Goal API waits for durable history and evaluation intent; stopped roots fa
         yield* Deferred.succeed(release, undefined);
         yield* Fiber.join(sending);
         assert.equal(
-          (registry.get("/goals/project")!.state as { pendingEvaluation: boolean })
-            .pendingEvaluation,
+          (registry.get("/goals/project")!.state as { inputs: { status: string }[] }).inputs.some(
+            (input) => input.status === "pending",
+          ),
           true,
         );
         assert.equal(
@@ -232,26 +232,6 @@ test("Run keeps authoritative failure/cancellation distinct from uncertain exter
           yield* Fiber.join(finished).pipe(Effect.timeout("2 seconds"));
           const saved = registry.get("/runs/review")!.state as RunState;
           assert.equal(saved.status, status === "unknown" ? "uncertain" : status);
-          const decision = decideTaskOperation(
-            [
-              {
-                id: "task",
-                title: "Task",
-                instructions: "Task",
-                status: "open",
-                revision: 1,
-                evidence: [],
-                createdAt: "now",
-                updatedAt: "now",
-                execution: { runPath: "/runs/review", status: saved.status, revision: 1 },
-              },
-            ],
-            { operation: "task_execute", id: "task", revision: 1 },
-            { at: "now", runPath: "/runs/new", execution: { status: saved.status, revision: 1 } },
-          );
-          assert.equal(decision._tag, "Success");
-          if (decision._tag === "Success")
-            assert.equal(decision.success._tag, status === "unknown" ? "Read" : "Execute");
         }),
       ),
     );

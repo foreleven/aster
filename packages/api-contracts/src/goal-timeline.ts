@@ -8,7 +8,7 @@ export const GoalIntent = Schema.Struct({
     contextPath: Schema.String,
     actorPath: Schema.String,
     name: Schema.String,
-    kind: Schema.Literal("lark-chat"),
+    kind: Schema.Literal("context"),
   }),
   content: Schema.Struct({
     summary: Schema.String,
@@ -41,19 +41,11 @@ export const GoalInputPayload = Schema.Union([
   }),
   Schema.TaggedStruct("ExecutionFeedback", {
     runPath: Schema.String,
-    taskId: Schema.optional(Schema.String),
-    evaluationId: Schema.optional(Schema.String),
     status: Schema.String,
     terminal: Schema.Boolean,
     text: Schema.String,
   }),
   Schema.TaggedStruct("GoalStarted", { pursuit: Schema.NonEmptyString }),
-  Schema.TaggedStruct("Continuation", {
-    objective: Schema.NonEmptyString,
-    previousResultId: Schema.NonEmptyString,
-  }),
-  // Historical startup records remain readable; new activations never create them.
-  Schema.TaggedStruct("Startup", { reason: Schema.String }),
 ]);
 export type GoalInputPayload = typeof GoalInputPayload.Type;
 export const GoalInput = Schema.Struct({
@@ -65,22 +57,6 @@ export const GoalInput = Schema.Struct({
 });
 export type GoalInput = typeof GoalInput.Type;
 
-export const GoalNextStep = Schema.Union([
-  Schema.TaggedStruct("Continue", {
-    objective: Schema.NonEmptyString,
-    previousResultId: Schema.NonEmptyString,
-  }),
-  Schema.TaggedStruct("WaitForInput", {
-    questions: Schema.Array(Schema.NonEmptyString).check(Schema.isMinLength(1)),
-  }),
-  Schema.TaggedStruct("WaitForEvent", {
-    references: Schema.Array(Schema.NonEmptyString).check(Schema.isMinLength(1)),
-  }),
-  Schema.TaggedStruct("Complete", {
-    evidence: Schema.Array(Schema.NonEmptyString).check(Schema.isMinLength(1)),
-  }),
-]);
-export type GoalNextStep = typeof GoalNextStep.Type;
 export const RetryGoalTurnInput = Schema.Struct({
   slug: Schema.NonEmptyString,
   requestId: CommandIdentifier,
@@ -88,68 +64,20 @@ export const RetryGoalTurnInput = Schema.Struct({
 });
 export type RetryGoalTurnInput = typeof RetryGoalTurnInput.Type;
 
-export const GoalTaskOutput = Schema.Struct({
-  id: Schema.NonEmptyString,
-  taskId: Schema.String,
-  operation: Schema.String,
-  title: Schema.String,
-  runPath: Schema.optional(Schema.String),
-});
-export type GoalTaskOutput = typeof GoalTaskOutput.Type;
-
-export const GoalTimelineOutput = Schema.Struct({
-  id: Schema.String,
-  kind: Schema.Literals(["task", "signal"]),
-  target: Schema.String,
-  operation: Schema.String,
-  title: Schema.String,
-  status: Schema.String,
-  runPath: Schema.optional(Schema.String),
-  attempts: Schema.optional(Schema.Int),
-  error: Schema.optional(Schema.String),
-});
+/** Public delivery history; Pi's native tool transcript stays private. */
 export const GoalTimelineGroup = Schema.Struct({
-  evaluationId: Schema.NonEmptyString,
+  requestId: Schema.NonEmptyString,
   ordinal: Schema.Int,
-  status: Schema.Literals([
-    "pending",
-    "running",
-    "failed",
-    "reconciliation_required",
-    "completed",
-    "partially_applied",
-  ]),
+  status: Schema.Literals(["pending", "running", "completed", "failed", "unknown", "ignored"]),
   retryOf: Schema.optional(Schema.String),
-  startedAt: Schema.String,
-  finishedAt: Schema.optional(Schema.String),
-  inputs: Schema.Array(GoalInput),
-  disposition: Schema.optional(Schema.Literals(["advance", "no_change", "ignored"])),
-  conclusion: Schema.optional(
-    Schema.Struct({
-      text: Schema.String,
-      evidence: Schema.Array(Schema.String),
-      applied: Schema.Boolean,
-    }),
-  ),
-  outputs: Schema.Array(GoalTimelineOutput),
+  input: GoalInput,
+  response: Schema.optional(Schema.String),
   error: Schema.optional(Schema.String),
-  nextStep: Schema.optional(GoalNextStep),
-  agentRun: Schema.Struct({ sessionId: Schema.String, requestId: Schema.String }),
 });
 export type GoalTimelineGroup = typeof GoalTimelineGroup.Type;
 export const GoalTimelinePage = Schema.Struct({
   groups: Schema.Array(GoalTimelineGroup),
-  pendingInputs: Schema.Array(GoalInput),
   total: Schema.Int,
   nextBefore: Schema.NullOr(Schema.Int),
 });
 export type GoalTimelinePage = typeof GoalTimelinePage.Type;
-
-/** A user-authorized replay of one frozen, idempotent Signal command. */
-export const RetryGoalSignalInput = Schema.Struct({
-  slug: Schema.NonEmptyString,
-  requestId: CommandIdentifier,
-  operationId: CommandIdentifier,
-  expectedAttempts: Schema.Int.check(Schema.isGreaterThan(0)),
-});
-export type RetryGoalSignalInput = typeof RetryGoalSignalInput.Type;

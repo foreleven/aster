@@ -33,7 +33,7 @@ import { SignalDefinitions, SignalRootActor } from "../signals/actors.js";
 import { SystemOneClient } from "../decisions/system-one.js";
 import { GoalHistoryStore } from "../goals/history.js";
 import { GoalsRootActor } from "../goals/actors.js";
-import { GoalSignals } from "../goals/signal-coordination.js";
+import { GoalSignals } from "../signals/goal-owner.js";
 import { ExternalAgents } from "../tasks/model.js";
 import { makeConfiguredSignalExtractor } from "../signals/extractor.js";
 import { MemoryRecall } from "../context/memory.js";
@@ -68,9 +68,9 @@ const acquireRuntime = Effect.gen(function* () {
   const definitions = yield* SignalDefinitions;
   const decisions = yield* SystemOneClient;
   if ((settings.definitions.length || definitions.length) && decisions.configured === false)
-    return yield* Effect.fail(
-      new RuntimeConfigurationError({ message: "Signals and Goals require config.system-one" }),
-    );
+    return yield* new RuntimeConfigurationError({
+      message: "Signals and Goals require config.system-one",
+    });
   const history = yield* GoalHistoryStore;
   const endpoint = yield* SignalCommands;
   const capture = yield* ContextCaptureSink;

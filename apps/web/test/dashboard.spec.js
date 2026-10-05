@@ -76,7 +76,7 @@ async function setup(page, data = fixture()) {
           break;
         }
         case "GetGoalTimeline": {
-          const timeline = data.timelines?.[body.slug] ?? { groups: [], pendingInputs: [] };
+          const timeline = data.timelines?.[body.slug] ?? { groups: [] };
           const groups = timeline.groups
             .filter((group) => group.ordinal < (body.before ?? Infinity))
             .slice(-30);
@@ -116,14 +116,19 @@ async function setup(page, data = fixture()) {
           goal.messages.push({ role: "user", content: body.text, timestamp: Date.parse(at) });
           goal.state.historyCount = goal.messages.length;
           data.timelines ??= {};
-          const timeline = (data.timelines[body.slug] ??= { groups: [], pendingInputs: [] });
-          if (!timeline.pendingInputs.some((input) => input.inputId === body.requestId))
-            timeline.pendingInputs.push({
-              inputId: body.requestId,
-              goalSlug: body.slug,
-              ordinal: goal.messages.length,
-              receivedAt: at,
-              payload: { _tag: "UserInput", text: body.text },
+          const timeline = (data.timelines[body.slug] ??= { groups: [] });
+          if (!timeline.groups.some((group) => group.requestId === body.requestId))
+            timeline.groups.push({
+              requestId: body.requestId,
+              ordinal: timeline.groups.length + 1,
+              status: "pending",
+              input: {
+                inputId: body.requestId,
+                goalSlug: body.slug,
+                ordinal: timeline.groups.length + 1,
+                receivedAt: at,
+                payload: { _tag: "UserInput", text: body.text },
+              },
             });
           break;
         }
@@ -384,7 +389,7 @@ test("Goal title appears in navigation and inspector while Details keeps the des
   expect(errors).toEqual([]);
 });
 
-test("Goal summaries and conclusions render Markdown", async ({ page }) => {
+test("Goal summaries and responses render Markdown", async ({ page }) => {
   const data = fixture();
   const markdown = [
     "## Travel options",
@@ -402,11 +407,11 @@ test("Goal summaries and conclusions render Markdown", async ({ page }) => {
   const goal = data.contexts.find((context) => context.path === "/goals/engine");
   goal.state.summary = markdown;
   goal.state.progress = markdown;
-  data.timelines.engine.groups[0].conclusion.text = markdown;
+  data.timelines.engine.groups[0].response = markdown;
   const { errors } = await setup(page, data);
   await page.goto("/?context=%2Fgoals%2Fengine");
 
-  for (const selector of [".goal-description", ".evaluation-conclusion"]) {
+  for (const selector of [".goal-description", ".conversation-response"]) {
     const content = page.locator(selector);
     await expect(content.getByRole("heading", { name: "Travel options" })).toBeVisible();
     await expect(content.locator("strong").filter({ hasText: "Family trip" })).toBeVisible();
@@ -473,7 +478,7 @@ test("mobile keeps navigation, composer, and Goal work accessible without overfl
   await expect(
     page.getByRole("heading", { name: "Another active goal", exact: true }),
   ).toBeVisible();
-  await expect(page.getByRole("heading", { name: "No messages yet" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "No conversation yet" })).toBeVisible();
   await page.getByRole("link", { name: "View tasks and signals" }).click();
   await expect(page.getByRole("complementary", { name: "Goal work" })).toBeVisible();
   await page.screenshot({ path: "/tmp/aster-goals-mobile.png", fullPage: true });
@@ -539,11 +544,9 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
       status: "active",
       progress: "",
       summary: "",
-      tasks: [],
+      inputs: [],
       historyThrough: 0,
       historyCount: 0,
-      pendingEvaluation: false,
-      receivedEvents: [],
     },
     messages: [],
   };
@@ -640,32 +643,33 @@ test("Goal errors and absent runs remain explicit", async ({ page }) => {
   data.contexts = data.contexts.filter((context) => !context.path.includes("/runs/"));
   data.contexts.find((context) => context.path === "/approvals").state.entries = [];
   data.contexts.find((context) => context.path === "/goals/engine").messages = [
-    { type: "error", text: "Goal Agent returned no plan", at, references: [] },
+    { type: "error", text: "Goal conversation failed", at, references: [] },
   ];
   Object.assign(data.timelines.engine.groups[0], {
     status: "failed",
-    error: "Goal Agent returned no plan",
-    conclusion: undefined,
+    error: "Goal conversation failed",
+    response: undefined,
   });
   await setup(page, data);
-  await expect(page.getByText("Goal Agent returned no plan", { exact: true })).toBeVisible();
+  await expect(page.getByText("Goal conversation failed", { exact: true })).toBeVisible();
   await expect(page.getByText("No tasks yet. Planned work will appear here.")).toBeVisible();
 });
 
-test("Goal feed loads older native messages and displays flat tasks", async ({ page }) => {
+test("Goal input history loads older messages and displays independent Tasks", async ({ page }) => {
   const data = fixture();
   const goal = data.contexts.find((c) => c.path === "/goals/engine");
   goal.state.summary = "Key conclusions saved";
   goal.state.historyCount = 65;
-  goal.state.tasks = [
-    {
-      id: "analysis",
-      title: "Analyze compatibility",
-      instructions: "Check existing evidence",
-      status: "open",
-      revision: 1,
+  data.contexts.push({
+    path: "/runs/goal--analysis",
+    description: "Analyze compatibility",
+    state: {
+      sourcePath: goal.path,
+      status: "running",
+      task: { instructions: "Check existing evidence", input: [] },
     },
-  ];
+    messages: [],
+  });
   goal.messages = Array.from({ length: 65 }, (_, i) => ({
     role: "user",
     content: `Historical observation ${i + 1}`,
@@ -937,7 +941,7 @@ test("invalid dashboard fields report a projection error while preserving raw Co
   const data = fixture();
   data.contexts.find((c) => c.path === "/goals/engine").state = {
     status: "active",
-    tasks: "invalid-task-list",
+    progress: { invalid: "invalid-progress" },
     customEvidence: { source: "kept verbatim" },
   };
   const { errors } = await setup(page, data);
@@ -947,7 +951,7 @@ test("invalid dashboard fields report a projection error while preserving raw Co
   await page.getByRole("button", { name: "Goal actions" }).click();
   await page.getByRole("menuitem", { name: "Inspect goal" }).click();
   await page.getByRole("dialog").getByRole("tab", { name: "State", exact: true }).click();
-  await expect(page.getByRole("dialog").locator("pre")).toContainText("invalid-task-list");
+  await expect(page.getByRole("dialog").locator("pre")).toContainText("invalid-progress");
   await expect(page.getByRole("dialog").locator("pre")).toContainText("kept verbatim");
   expect(errors).toEqual([]);
 });
@@ -971,13 +975,12 @@ test("reference layout has a fixed composer, scoped work, and working timeline f
   );
   await expect(page.getByRole("button", { name: "Send", exact: true })).toBeInViewport();
   await page.getByLabel("Filter timeline events").selectOption("signals");
-  await expect(page.locator(".goal-timeline .timeline-event")).toHaveCount(2);
+  await expect(page.locator(".goal-timeline .timeline-event")).toHaveCount(0);
   await page.getByRole("tab", { name: "Notes", exact: true }).click();
   await expect(page.locator(".goal-timeline .timeline-event")).toHaveCount(2);
   await page.getByRole("tab", { name: "Timeline", exact: true }).click();
   await page.getByLabel("Filter timeline events").selectOption("all");
-  await page.getByText("View 3 context items", { exact: true }).click();
-  await page.getByRole("button", { name: "/sources/flights", exact: true }).click();
+  await page.getByRole("button", { name: "Google Flights – HND to CTS", exact: true }).click();
   await expect(page.getByRole("dialog")).toContainText("Google Flights – HND to CTS");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Add context reference" }).click();
@@ -1820,225 +1823,47 @@ test("Personal business progress links to its source and preserves display-only 
   expect(errors).toEqual([]);
 });
 
-test("Timeline refreshes mutable older groups after reconnect and keeps pending notes distinct", async ({
+test("Timeline refreshes older deliveries after reconnect and displays newly accepted notes", async ({
   page,
 }) => {
   const data = fixture();
   const template = data.timelines.engine.groups[0];
   data.timelines.engine.groups = Array.from({ length: 65 }, (_, i) => ({
     ...template,
-    evaluationId: `evaluation-${i + 1}`,
+    requestId: `input-${i + 1}`,
     ordinal: i + 1,
-    conclusion: { text: `Conclusion ${i + 1}`, evidence: [], applied: true },
-    inputs: [{ ...template.inputs[0], inputId: `input-${i + 1}` }],
-    agentRun: { sessionId: "engine", requestId: `evaluation-${i + 1}` },
+    response: `Response ${i + 1}`,
+    input: { ...template.input, inputId: `input-${i + 1}`, ordinal: i + 1 },
   }));
   const older = data.timelines.engine.groups[10];
-  older.status = "partially_applied";
-  older.outputs = [
-    {
-      id: "delivery-11",
-      kind: "signal",
-      target: "/signals/progress",
-      operation: "create",
-      title: "Watch integration",
-      status: "unknown",
-    },
-  ];
+  older.status = "unknown";
   const { errors } = await setup(page, data);
-  await expect(page.locator(".evaluation-card")).toHaveCount(30);
-  await page.getByRole("button", { name: "Load earlier records" }).click();
-  await expect(page.locator(".evaluation-card")).toHaveCount(60);
-  await expect(page.locator("#evaluation-evaluation-11")).toContainText("create · unknown");
+  await expect(page.locator(".conversation-entry")).toHaveCount(30);
+  await page.getByRole("button", { name: "Load earlier messages" }).click();
+  await expect(page.locator(".conversation-entry")).toHaveCount(60);
+  await expect(page.locator("#input-input-11")).toContainText("unknown");
   older.status = "completed";
-  older.outputs[0].status = "applied";
-  data.timelines.engine.pendingInputs.push({
-    inputId: "pending-note",
-    goalSlug: "engine",
+  data.timelines.engine.groups.push({
+    requestId: "pending-note",
     ordinal: 66,
-    receivedAt: at,
-    payload: { _tag: "UserInput", text: "Please verify the release date" },
+    status: "pending",
+    input: {
+      inputId: "pending-note",
+      goalSlug: "engine",
+      ordinal: 66,
+      receivedAt: at,
+      payload: { _tag: "UserInput", text: "Please verify the release date" },
+    },
   });
   await page.evaluate(() => window.testEvents.emit("ready"));
-  await expect(page.locator("#evaluation-evaluation-11")).toContainText("create · applied");
-  await expect(page.locator(".timeline-pending")).toContainText("Please verify the release date");
-  await expect(page.locator(".evaluation-card")).toHaveCount(60);
-  await page.getByRole("button", { name: "Load earlier records" }).click();
-  await expect(page.locator(".evaluation-card")).toHaveCount(65);
-  await expect(page.getByRole("button", { name: "Load earlier records" })).toHaveCount(0);
+  await expect(page.locator("#input-input-11")).toContainText("completed");
+  await expect(page.locator("#input-pending-note")).toContainText("Please verify the release date");
+  await page.getByRole("button", { name: "Load earlier messages" }).click();
+  await expect(page.locator(".conversation-entry")).toHaveCount(66);
   await page.getByRole("tab", { name: "Notes", exact: true }).click();
-  await expect(page.locator(".timeline-pending")).toContainText("Please verify the release date");
-  await expect(page.locator(".evaluation-conclusion")).toHaveCount(0);
+  await expect(page.locator("#input-pending-note")).toBeVisible();
   expect(errors).toEqual([]);
 });
-
-test("Goal Signal retry keeps its authorization identity across navigation and an unknown acknowledgement", async ({
-  page,
-}) => {
-  const data = designFixture();
-  const group = data.timelines.engine.groups[1];
-  group.status = "partially_applied";
-  group.outputs[0].status = "unknown";
-  group.outputs[0].attempts = 3;
-  const { errors } = await setup(page, data);
-  const requests = [];
-  await page.route("**/api/rpc{,/}", async (route) => {
-    const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "RetryGoalSignal") return route.fallback();
-    requests.push(rpc.payload);
-    const first = requests.length === 1;
-    if (!first) {
-      group.outputs[0].status = "delivered";
-      group.outputs[0].attempts = 4;
-      group.status = "completed";
-    }
-    await route.fulfill({
-      contentType: "application/ndjson",
-      body:
-        JSON.stringify({
-          _tag: "Exit",
-          requestId: rpc.id,
-          exit: first
-            ? {
-                _tag: "Failure",
-                cause: [
-                  {
-                    _tag: "Fail",
-                    error: {
-                      _tag: "ApplicationError",
-                      kind: "unavailable",
-                      message: "Retry acknowledgement missing",
-                    },
-                  },
-                ],
-              }
-            : { _tag: "Success", value: { requestId: rpc.payload.requestId, revision: 42 } },
-        }) + "\n",
-    });
-  });
-  await page.getByRole("button", { name: "Retry delivery", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Retry acknowledgement missing");
-  await page.screenshot({ path: "/tmp/aster-goal-signal-retry.png" });
-  await page.getByRole("tab", { name: "Notes", exact: true }).click();
-  await page.getByRole("tab", { name: "Timeline", exact: true }).click();
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await expect(page.getByRole("button", { name: "Check retry receipt" })).toBeVisible();
-  expect(requests).toHaveLength(1);
-  await page.getByRole("button", { name: "Check retry receipt" }).click();
-  await expect(page.locator("#evaluation-trip-2")).toContainText("create · delivered");
-  expect(requests).toHaveLength(2);
-  expect(requests[1]).toEqual(requests[0]);
-  expect(requests[0].operationId).toBe("price-watch");
-  expect(requests[0].expectedAttempts).toBe(3);
-  await expect(page.getByRole("button", { name: "Check retry receipt" })).toHaveCount(0);
-  expect(errors).toEqual([]);
-});
-
-for (const owner of ["system-one", "notifications"]) {
-  test(`${owner} recovery preserves authorization after navigation and reconnect`, async ({
-    page,
-  }) => {
-    const data = fixture();
-    const title =
-      owner === "system-one" ? "Context reaction processing" : "Business notification delivery";
-    const entry = {
-      id: "work-1",
-      kind: owner === "system-one" ? "screening" : "notification",
-      source: "/lark/im/chats/chat-1",
-      target: owner === "system-one" ? "/system-one" : "/personal",
-      status: owner === "system-one" ? "failed" : "unknown",
-      attempts: 3,
-      error: "Previous attempt failed",
-    };
-    data.processing = { [owner]: { owner, revision: 10, entries: [entry] } };
-    data.contexts.push({
-      path: `/${owner}`,
-      revision: 10,
-      description: title,
-      state: {},
-      messages: [],
-    });
-    const { errors } = await setup(page, data);
-    const requests = [];
-    await page.route("**/api/rpc{,/}", async (route) => {
-      const rpc = JSON.parse(route.request().postData().trim());
-      if (rpc.tag !== "RecoverProcessing") return route.fallback();
-      requests.push(rpc.payload);
-      const first = requests.length === 1;
-      if (!first) {
-        entry.status = owner === "system-one" ? "completed" : "delivered";
-        entry.error = undefined;
-        entry.attempts = 4;
-        data.processing[owner].revision = 12;
-      }
-      await route.fulfill({
-        contentType: "application/ndjson",
-        body:
-          JSON.stringify({
-            _tag: "Exit",
-            requestId: rpc.id,
-            exit: first
-              ? {
-                  _tag: "Failure",
-                  cause: [
-                    {
-                      _tag: "Fail",
-                      error: {
-                        _tag: "ApplicationError",
-                        kind: "unavailable",
-                        message: "Recovery acknowledgement missing",
-                      },
-                    },
-                  ],
-                }
-              : { _tag: "Success", value: { requestId: rpc.payload.requestId, revision: 11 } },
-          }) + "\n",
-      });
-    });
-    const open = () =>
-      page
-        .getByRole("navigation")
-        .getByRole("button", { name: new RegExp(title) })
-        .click();
-    await open();
-    await page
-      .getByRole("button", {
-        name: owner === "system-one" ? "Retry screening" : "Retry delivery",
-        exact: true,
-      })
-      .click();
-    await expect(page.getByRole("alert")).toContainText("Recovery acknowledgement missing");
-    await page
-      .getByRole("navigation")
-      .getByRole("button", { name: /Monitor Knowledge Engine/ })
-      .click();
-    await open();
-    await page.evaluate(() => window.testEvents.emit("ready"));
-    await expect(page.getByRole("button", { name: "Check recovery receipt" })).toBeVisible();
-    await page.screenshot({ path: `/tmp/aster-${owner}-pending-desktop.png` });
-    await page.setViewportSize({ width: 390, height: 844 });
-    await expect(page.getByRole("button", { name: "Check recovery receipt" })).toBeVisible();
-    expect(
-      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-    ).toBe(true);
-    await expect(page.locator(".breadcrumbs")).toHaveCount(1);
-    await page.evaluate(
-      () => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))),
-    );
-    await page.screenshot({ path: `/tmp/aster-${owner}-pending-mobile.png` });
-    expect(requests).toHaveLength(1);
-    await page.getByRole("button", { name: "Check recovery receipt" }).click();
-    await expect(page.getByRole("region", { name: "Processing recovery" })).toContainText(
-      owner === "system-one" ? "Screening · completed" : "Delivery · delivered",
-    );
-    expect(requests).toHaveLength(2);
-    expect(requests[0]).toEqual(requests[1]);
-    expect(requests[0].expectedRevision).toBe(10);
-    await expect(page.getByRole("button", { name: "Check recovery receipt" })).toHaveCount(0);
-    await page.screenshot({ path: `/tmp/aster-${owner}-recovery.png` });
-    expect(errors).toEqual([]);
-  });
-}
 
 test("Run publication shows separate approval and retained unknown outcome after reconnect", async ({
   page,
@@ -2176,6 +2001,6 @@ test("Goal turn retry retains its request identity after an unknown acknowledgem
   await expect(page.getByRole("button", { name: "Retry turn", exact: true })).toHaveCount(0);
   expect(requests).toHaveLength(2);
   expect(requests[1]).toEqual(requests[0]);
-  expect(requests[0].turnId).toBe(group.evaluationId);
+  expect(requests[0].turnId).toBe(group.requestId);
   expect(errors).toEqual([]);
 });

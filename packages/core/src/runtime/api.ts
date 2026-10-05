@@ -6,7 +6,6 @@ import { goalTimeline } from "../goals/timeline.js";
 import { Effect, Schema, Stream } from "effect";
 import {
   ApplicationError,
-  RetryGoalSignalInput,
   RetryGoalTurnInput,
   contextQueryKeys,
   RuntimeSnapshot,
@@ -18,12 +17,7 @@ import type { ContextRegistry } from "../context/registry.js";
 import { publicJson } from "../context/json.js";
 import { PublicApprovalEntry, publicBusinessMessage } from "../context/business-view.js";
 import type { GoalHistory } from "../goals/history.js";
-import type {
-  GoalDeliveryReply,
-  GoalCommand,
-  GoalCommandReply,
-  GoalsRootCommand,
-} from "../goals/actors.js";
+import type { GoalCommand, GoalCommandReply, GoalsRootCommand } from "../goals/actors.js";
 import { approvalEntries, type ApprovalCommand } from "../approvals/actor.js";
 import type { ApprovalResponse } from "../tasks/model.js";
 import type { PersonalCommand } from "../personal/actor.js";
@@ -168,39 +162,6 @@ export const makeApplicationApi = (options: {
                   kind: "unavailable",
                   message: "Retry acknowledgement missing; reuse the same request identity",
                 }),
-            ),
-          );
-        if (reply._tag === "Rejected") return yield* reply.error;
-        return reply.receipt;
-      }),
-      retrySignal: Effect.fn("ApplicationApi.retryGoalSignal")(function* (
-        raw: RetryGoalSignalInput,
-      ) {
-        const input = yield* Schema.decodeUnknownEffect(RetryGoalSignalInput)(raw).pipe(
-          Effect.mapError(
-            () => new ApplicationError({ kind: "invalid-input", message: "Invalid Signal retry" }),
-          ),
-        );
-        yield* requireGoal(input.slug);
-        if (!options.goals)
-          return yield* new ApplicationError({
-            kind: "unavailable",
-            message: "No Goals configured",
-          });
-        const reply = yield* options.goals
-          .ask<GoalDeliveryReply>((replyTo) => ({
-            _tag: "Route",
-            slug: input.slug,
-            command: { _tag: "RetrySignalDelivery", requestId: input.requestId, input, replyTo },
-          }))
-          .pipe(
-            Effect.catchTag("AskTimeoutError", () =>
-              Effect.fail(
-                new ApplicationError({
-                  kind: "unavailable",
-                  message: "Retry acknowledgement missing; reuse the same request identity",
-                }),
-              ),
             ),
           );
         if (reply._tag === "Rejected") return yield* reply.error;

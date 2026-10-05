@@ -14,13 +14,7 @@ import { references, time, isRunPath } from "../lib/dashboard";
 import { contextTitle } from "./navigation";
 import type { PersonalCommands } from "./personal";
 
-const linkedPaths = (context: ContextView) => [
-  ...references(context),
-  ...(context.state.tasks ?? []).flatMap((task) => [
-    ...(task.evidence ?? []),
-    ...(task.execution ? [task.execution.runPath] : []),
-  ]),
-];
+const linkedPaths = references;
 
 export function ContextWorkspace({
   context,

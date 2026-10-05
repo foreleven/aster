@@ -87,7 +87,7 @@ test("configured routing opens model-free Pi, persists authority, and keeps jour
       summaryRevision: "1",
       summaryFingerprint: "f1",
       input: {
-        chatSummary: "Evidence",
+        contextSummary: "Evidence",
         goalTitle: "Test",
         goalDescription: "Test",
         goalSummary: "",

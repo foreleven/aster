@@ -106,7 +106,7 @@ test("Goal startup persists titles and refreshes restored titles without losing 
               state: { ...previous.state, title: title ?? description },
             });
           } else {
-            // Emulate a pre-title persisted Goal with progress, a task and native history.
+            // Retain completed business progress while refreshing display metadata.
             const message = { role: "user" as const, content: "Keep existing work", timestamp: 1 };
             yield* history.append("project", message);
             const { title: _title, ...legacyState } = state;
@@ -118,21 +118,9 @@ test("Goal startup persists titles and refreshes restored titles without losing 
                   status: "completed",
                   summary: "Existing conclusions",
                   progress: "Finished",
-                  historyCount: 1,
-                  tasks: [
-                    {
-                      id: "task",
-                      title: "Saved task",
-                      instructions: "Retain",
-                      status: "completed",
-                      revision: 1,
-                      evidence: [],
-                      createdAt: "2026-10-01",
-                      updatedAt: "2026-10-01",
-                    },
-                  ],
+                  historyCount: yield* history.count("project"),
                 },
-                messages: [message],
+                messages: (yield* history.read("project")).map((entry) => entry.message),
               },
               { expectedRevision: registry.get(record.path)?.revision ?? 0 },
             );

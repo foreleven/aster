@@ -137,7 +137,7 @@ const fixture = (
     const status = () =>
       Schema.decodeUnknownSync(PersonalState)(registry.get("/personal")!.state).outbox?.[0];
     const command = (input: TaskDeliveryInput) =>
-      runs.ask<RunAdmissionReply>((replyTo) => ({ _tag: "StartPersonalTask", input, replyTo }));
+      runs.ask<RunAdmissionReply>((replyTo) => ({ _tag: "StartTask", input, replyTo }));
     const run = (path: string) => {
       const record = registry.get(path);
       return record && Schema.decodeUnknownSync(RunState)(record.state);

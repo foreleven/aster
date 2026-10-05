@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
 import { Effect, Layer } from "effect";
-import { makeGoalReasoner } from "../src/index.js";
+import { runGoalConversation, makeContextRegistry, conversationText } from "../src/index.js";
 
 test("reopened Goal sessions keep their policy and history while tools read the new turn", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "aster-goal-current-"));
@@ -45,7 +45,6 @@ test("reopened Goal sessions keep their policy and history while tools read the 
             assert.match(JSON.stringify(context.messages), /PRIVATE_summary_0/);
             assert.doesNotMatch(JSON.stringify(context.messages), /PRIVATE_summary_1/);
           }
-          let turnId = "";
           if (!reading) {
             const response = context.messages.findLast(
               (message) => message.role === "toolResult" && message.toolName === "goal_current",
@@ -54,12 +53,9 @@ test("reopened Goal sessions keep their policy and history while tools read the 
             const content = response.content[0]!;
             assert.ok(content.type === "text");
             const page = JSON.parse(content.text);
-            assert.equal(page.nextOffset, null);
-            const current = JSON.parse(page.content);
-            assert.equal(current.turnId, `turn-${turn}`);
-            assert.equal(current.summary, `PRIVATE_summary_${turn}`);
+            const current = page;
+            assert.equal(current.state.summary, `PRIVATE_summary_${turn}`);
             assert.equal(current.goal.description, `PRIVATE_goal_${turn}`);
-            turnId = current.turnId;
           }
           const message: AssistantMessage = {
             role: "assistant",
@@ -67,28 +63,10 @@ test("reopened Goal sessions keep their policy and history while tools read the 
             model: "test",
             api: "openai-completions",
             timestamp: 0,
-            stopReason: "toolUse",
-            content: [
-              {
-                type: "toolCall",
-                id: `call-${calls}`,
-                name: reading ? "goal_current" : "finish_turn",
-                arguments: reading
-                  ? {}
-                  : {
-                      disposition: "advance",
-                      progress: `Recorded turn ${turn}`,
-                      nextStep: {
-                        _tag: "Continue",
-                        objective: "Inspect remaining evidence",
-                        previousResultId: turnId,
-                      },
-                      evidence: [],
-                      taskChanges: [],
-                      signalChanges: [],
-                    },
-              },
-            ],
+            stopReason: reading ? "toolUse" : "stop",
+            content: reading
+              ? [{ type: "toolCall", id: `call-${calls}`, name: "goal_current", arguments: {} }]
+              : [{ type: "text", text: `Recorded turn ${turn}` }],
             usage: {
               input: 100,
               output: 100,
@@ -99,7 +77,7 @@ test("reopened Goal sessions keep their policy and history while tools read the 
             },
           };
           const stream = createAssistantMessageEventStream();
-          stream.push({ type: "done", reason: "toolUse", message });
+          stream.push({ type: "done", reason: reading ? "toolUse" : "stop", message });
           return stream;
         },
       }),
@@ -107,23 +85,36 @@ test("reopened Goal sessions keep their policy and history while tools read the 
   const run = (turn: number) =>
     Effect.runPromise(
       Effect.gen(function* () {
-        const reasoner = yield* makeGoalReasoner("test", {
-          search: () => Effect.succeed([]),
-          expand: () => Effect.succeed([]),
+        const registry = yield* makeContextRegistry({
+          loadAll: () => [
+            {
+              path: "/goals/test",
+              description: "Goal",
+              state: { summary: `PRIVATE_summary_${turn}` },
+              messages: [],
+            },
+          ],
+          save: () => {},
         });
-        return yield* reasoner.plan({
+        return yield* runGoalConversation({
           goal: { slug: "test", description: `PRIVATE_goal_${turn}` },
-          current: {
-            path: "/goals/test",
-            description: "Goal",
-            state: { summary: `PRIVATE_summary_${turn}` },
-            messages: [],
+          model: "test",
+          registry,
+          memory: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
+          executors: [],
+          reconcile: false,
+          storageDirectory: directory,
+          input: {
+            inputId: `turn-${turn}`,
+            goalSlug: "test",
+            ordinal: turn + 1,
+            receivedAt: "2026-10-01T00:00:00Z",
+            status: "pending",
+            payload: { _tag: "UserInput", text: "Continue the Goal" },
           },
-          contexts: {},
-          signals: [],
-          reason: "Review",
-          messages: [{ role: "user", content: "Continue the Goal", timestamp: 0 }],
-          durable: { sessionId: "test", requestId: `turn-${turn}`, storageDirectory: directory },
+          update: () => Effect.die("No update expected"),
+          startTask: () => Effect.die("No Task expected"),
+          signal: () => Effect.die("No Signal expected"),
         });
       }).pipe(
         Effect.provide(AgentRunner.layer.pipe(Layer.provide(models))),
@@ -132,8 +123,8 @@ test("reopened Goal sessions keep their policy and history while tools read the 
     );
   const first = await run(0);
   const next = await run(1);
-  assert.equal(first.progress, "Recorded turn 0");
-  assert.equal(next.progress, "Recorded turn 1");
+  assert.equal(conversationText(first.messages), "Recorded turn 0");
+  assert.equal(conversationText(next.messages), "Recorded turn 1");
   assert.equal(calls, 4);
   assert.deepEqual(await run(0), first);
   assert.equal(calls, 4, "Replaying a completed turn must not call the model again");

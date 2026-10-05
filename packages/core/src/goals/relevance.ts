@@ -6,7 +6,7 @@ import type { SystemOneClient } from "../decisions/system-one.js";
 import {
   GoalScreeningStore,
   screeningDecision,
-  chatSummaryText,
+  contextSummaryText,
   type GoalScreeningRecord,
 } from "./screening.js";
 
@@ -30,7 +30,7 @@ export const relevantGoals = (
   } = {},
 ) =>
   Effect.gen(function* () {
-    const summary = chatSummaryText(record);
+    const summary = contextSummaryText(record);
     if (!goals.length || !summary.trim()) return [];
     const summaryFingerprint = createHash("sha256")
       .update(JSON.stringify({ path: record.path, summary }))

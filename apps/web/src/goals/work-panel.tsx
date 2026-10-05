@@ -20,17 +20,11 @@ export function WorkPanel({
 }) {
   const [error, setError] = useState("");
   const approvals = useAtomValue(approvalEntries);
-  const tasks = (goal.state.tasks ?? []).filter((task) => task.status !== "deleted");
-  const taskRuns = new Set(
-    tasks.flatMap((task) => (task.execution ? [task.execution.runPath] : [])),
-  );
-  const runs = related.filter(
-    (context) => context.path.includes("/runs/") && !taskRuns.has(context.path),
-  );
+  const runs = related.filter((context) => context.path.includes("/runs/"));
   const signals = related.filter(
     (context) => /^\/signals\/[^/]+$/.test(context.path) && !context.state.deleted,
   );
-  const approvalPaths = [...taskRuns, ...runs.map((run) => run.path)];
+  const approvalPaths = runs.map((run) => run.path);
   const hasApprovals = approvals.some((entry) => approvalPaths.includes(entry.contextPath));
   const nameFor = (path: string) =>
     contexts.find((context) => context.path === path)?.description || path;
@@ -56,53 +50,13 @@ export function WorkPanel({
       )}
       <details className="work-section" open>
         <summary>
-          Tasks / Executions <span>({tasks.length + runs.length})</span>
+          Tasks / Executions <span>({runs.length})</span>
           <ChevronDown size={16} />
         </summary>
         <div className="work-cards">
-          {!tasks.length && !runs.length && (
+          {!runs.length && (
             <p className="quiet-message">No tasks yet. Planned work will appear here.</p>
           )}
-          {tasks.map((task) => {
-            const execution = task.execution;
-            const status =
-              task.status === "completed" ? "completed" : execution?.status || task.status;
-            return (
-              <article className="work-card" key={task.id}>
-                <WorkIcon status={status} />
-                <div className="work-card-body">
-                  <div className="work-card-title">
-                    <h3>
-                      {execution ? (
-                        <button
-                          className="work-title-link"
-                          aria-label={`View execution: ${task.title}`}
-                          onClick={() => inspect(execution.runPath)}
-                        >
-                          {task.title}
-                        </button>
-                      ) : (
-                        task.title
-                      )}
-                    </h3>
-                    <Pill status={status} />
-                  </div>
-                  <p>{task.instructions}</p>
-                  {task.updatedAt && (
-                    <small>
-                      Updated {dateLabel(task.updatedAt)} · {clockLabel(task.updatedAt)}
-                    </small>
-                  )}
-                  {task.result && (
-                    <details className="task-result">
-                      <summary>View result</summary>
-                      <p>{task.result}</p>
-                    </details>
-                  )}
-                </div>
-              </article>
-            );
-          })}
           {runs.map((run) => (
             <article className="work-card" key={run.path}>
               <WorkIcon status={run.state.status} />

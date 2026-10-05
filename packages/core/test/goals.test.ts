@@ -1,13 +1,9 @@
-import { goalWorkflowLayer } from "./workflow-fixtures.js";
-import { goalTestReply } from "./goal-fixtures.js";
 import { preparationLayer, fakeAgent } from "./fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import { ContextRegistry, makeContextRegistry } from "../src/index.js";
 import { Effect, Layer } from "effect";
-import { GoalsRootActor } from "../src/index.js";
-import type { StoredGoalPlan as GoalPlan } from "../src/goals/plan.js";
 import { ExternalAgents, DelegationActor } from "../src/index.js";
 import { SignalActor, SignalDefinitions, SignalRootActor, SignalRunActor } from "../src/index.js";
 
@@ -41,76 +37,6 @@ test("Signal configuration omits an unassigned goal from public state", async ()
         const state = registry.get("/signals/review")!.state;
         assert.equal(Object.hasOwn(state, "goal"), false);
         assert.doesNotThrow(() => JSON.stringify(state));
-      }),
-    ),
-  );
-});
-
-test("a user message during planning is retained for a second evaluation without steer", async () => {
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        const calls: unknown[] = [];
-        let finish: ((plan: GoalPlan) => void) | undefined;
-        const plan = { progress: "Monitoring", completed: true, evidence: [], signals: [] };
-        const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
-            preparationLayer,
-            Layer.succeed(ExternalAgents, {}),
-            goalWorkflowLayer({
-              definitions: [{ slug: "project", description: "Monitor project progress over time" }],
-              reasoner: {
-                plan: (input) =>
-                  Effect.suspend(() => {
-                    calls.push(input);
-                    if (calls.length === 1)
-                      return Effect.callback<GoalPlan>((resume) => {
-                        finish = (value) => resume(Effect.succeed(value));
-                      });
-                    return Effect.succeed(plan);
-                  }),
-              },
-              signals: () => [],
-              reconcile: () => Effect.succeed([]),
-              deactivate: () => Effect.void,
-            }),
-          ),
-        );
-        const goals = yield* system.spawn("goals", GoalsRootActor);
-        yield* goals.tell({ _tag: "Initialize" });
-        yield* until(() => !!finish);
-        yield* goals.tell({
-          _tag: "Route",
-          slug: "project",
-          command: {
-            _tag: "SubmitInput",
-            requestId: "test-3475",
-            input: { _tag: "UserInput", text: "Prioritize frontend dependencies" },
-            replyTo: goalTestReply,
-          },
-        });
-        yield* until(() =>
-          JSON.stringify(registry.get("/goals/project")!.messages).includes(
-            "Prioritize frontend dependencies",
-          ),
-        );
-        finish!(plan);
-        yield* until(() => calls.length === 2);
-        yield* until(
-          () =>
-            (registry.get("/goals/project")!.state as { summary: string }).summary === "Monitoring",
-        );
-        const record = registry.get("/goals/project")!;
-        assert.equal((record.state as { status: string }).status, "active");
-        assert.ok(
-          record.messages.some(
-            (message) =>
-              (message as { content?: string }).content === "Prioritize frontend dependencies",
-          ),
-        );
-        assert.match(JSON.stringify(calls[1]), /Prioritize frontend dependencies/);
       }),
     ),
   );

@@ -124,7 +124,7 @@ export function Approvals({
           </p>
           {goalFailures.map((failure) => (
             <Alert variant="destructive" key={failure.path}>
-              <AlertTitle>Goal evaluation incomplete</AlertTitle>
+              <AlertTitle>Goal conversation interrupted</AlertTitle>
               <AlertDescription>
                 <p>{failure.text}</p>
                 <Button variant="outline" size="sm" onClick={() => inspect(failure.path)}>
