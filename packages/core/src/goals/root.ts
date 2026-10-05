@@ -6,7 +6,7 @@ import { GoalSettings } from "../config/settings.js";
 import { GoalHistoryStore } from "./history.js";
 import { GoalSignals } from "../signals/goal-owner.js";
 import { AgentRunner } from "@aster/agent";
-import { MemoryRecall } from "../context/memory.js";
+import { MemoryRecall } from "../memory/contracts.js";
 import { ExternalAgents } from "../tasks/model.js";
 import { GoalActor, type GoalMailbox } from "./actors.js";
 import { GoalCommand, GoalReadyReply } from "./protocol.js";

@@ -34,11 +34,10 @@ type SetEmail = typeof SetEmail.Type;
 class MailMessageActor extends ContextActor.Service<MailMessageActor>()("mail/MessageActor", {
   command: SetEmail,
   context: defineContext({
-    identity: "An email in a connected mailbox",
     view: mailMessageView,
     state: MailMessage,
     message: Schema.Never,
-    signalSource: true,
+    changes: "durable-state",
   }),
 }) {
   static readonly layer = Layer.effect(
@@ -89,7 +88,6 @@ class MailboxActor extends ContextActor.Service<MailboxActor, MailSettings | Mai
   {
     command: MailboxCommand,
     context: defineContext({
-      identity: "A connected mailbox",
       view: mailboxView,
       state: MailboxState,
       message: Schema.Never,
@@ -283,7 +281,6 @@ export class MailRootActor extends ContextActor.Service<
 >()("mail/RootActor", {
   command: Schema.Never,
   context: defineContext({
-    identity: "Connected mailboxes",
     view: mailRootView,
     state: MailRootState,
     message: Schema.Never,

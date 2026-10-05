@@ -1,6 +1,6 @@
 import { SignalDetectionError } from "./errors.js";
 import type { ActorRef } from "@aster/actor";
-import type { ContextRecord } from "../context/model.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { choice, type DecisionError } from "../decisions/system-one.js";
 import { Effect } from "effect";
 import type { SignalDefinition } from "../config/schema.js";

@@ -26,7 +26,7 @@ import {
 } from "@aster/api-contracts";
 import { Clock, Effect, Layer, Match, Schema } from "effect";
 import { ContextActor, contextPath } from "../context/actor.js";
-import { defineContext } from "../context/model.js";
+import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
 import { makePersonalReasoner, PersonalProcessingError } from "./reasoner.js";
 import { PersonalActions } from "./actions.js";
@@ -110,8 +110,7 @@ export class PersonalAgentActor extends ContextActor.Service<PersonalAgentActor>
   {
     command: PersonalCommand,
     context: defineContext({
-      identity: "Personal Agent",
-      signalSource: false,
+      changes: "none",
       state: PersonalState,
       message: PersonalMessage,
     }),
@@ -139,7 +138,7 @@ export class PersonalAgentActor extends ContextActor.Service<PersonalAgentActor>
         readRecord(path).pipe(
           Effect.map((record): PersonalReply => ({
             _tag: "Snapshot",
-            record: registry.project(record),
+            record: registry.views.project(record),
           })),
         );
       const accept = Effect.fn("PersonalAgent.accept")(function* (
@@ -536,7 +535,7 @@ export class PersonalAgentActor extends ContextActor.Service<PersonalAgentActor>
             Match.tag("ListContexts", () =>
               Effect.sync((): PersonalReply => ({
                 _tag: "Contexts",
-                records: Object.values(registry.publicSnapshot()),
+                records: Object.values(registry.reader.snapshot()),
               })),
             ),
             Match.tag("Accept", ({ input }) => accept(input)),

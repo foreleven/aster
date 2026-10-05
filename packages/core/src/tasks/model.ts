@@ -2,7 +2,7 @@ import { ApprovalResponse, InputRequest, PreparedTask } from "@aster/api-contrac
 export { ApprovalResponse, InputRequest } from "@aster/api-contracts";
 import { Context, Effect, Option, Schema } from "effect";
 import type { ExternalAgentError, TaskPreparationError } from "./errors.js";
-import type { ContextRecord } from "../context/model.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import type { SignalDefinition } from "../config/schema.js";
 
 export const Task = PreparedTask;

@@ -3,7 +3,7 @@ import { SignalReactionReceipt } from "./reaction.js";
 import { GoalSignalReceipt } from "./goal-command.js";
 import { Schema } from "effect";
 import { SignalDefinition } from "../config/schema.js";
-import { ContextRecord } from "../context/model.js";
+import { PublicContext as ContextRecord } from "@aster/api-contracts";
 
 const Occurrence = Schema.Struct({
   causal: Schema.optional(CausalChain),

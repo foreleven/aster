@@ -58,7 +58,6 @@ export class LarkImActor extends ContextActor.Service<LarkImActor, ImServices>()
   command: ImCommand,
   context: defineContext({
     view: imChannelView,
-    identity: "Work Lark IM integration",
     state: Schema.Struct({
       ready: Schema.Boolean,
       chats: Schema.Number,
@@ -134,7 +133,7 @@ export class LarkImActor extends ContextActor.Service<LarkImActor, ImServices>()
                   state: { ready: false, chats: Number(object(previous?.state).chats ?? 0) },
                   messages: [],
                 },
-                { evaluate: false, expectedRevision: previous?.revision ?? 0 },
+                { mode: "bootstrap", expectedRevision: previous?.revision ?? 0 },
               )
               .pipe(Effect.asVoid, Effect.orDie);
             yield* context.self.tell({ _tag: "Poll" });

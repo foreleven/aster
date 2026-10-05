@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { Schema } from "effect";
 import type { AgentMessage } from "@aster/agent";
-import type { ContextRecord } from "../context/model.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import type { GoalRelevance } from "./relevance.js";
 import { contextSummaryText } from "./screening.js";
 

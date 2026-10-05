@@ -1,6 +1,6 @@
 import { Type, type AgentTool, type TSchema } from "@aster/agent";
 import { Effect } from "effect";
-import type { ContextQueries } from "./queries.js";
+import type { ContextQueries } from "../context/queries.js";
 
 type Invoke = <A, E>(effect: Effect.Effect<A, E>, signal?: AbortSignal) => Promise<A>;
 const tool = <T extends TSchema>(value: AgentTool<T>) => value;

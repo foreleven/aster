@@ -9,7 +9,7 @@ export interface ExecutionCapabilities {
 
 import { choice, type SystemOneClient } from "../decisions/system-one.js";
 import type { SignalDefinition } from "../config/schema.js";
-import type { ContextRecord } from "../context/model.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 
 export const makeExecutionGate =
   (client: SystemOneClient, capabilities: (agent: string) => ExecutionCapabilities) =>

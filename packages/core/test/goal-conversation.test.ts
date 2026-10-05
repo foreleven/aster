@@ -17,14 +17,13 @@ import {
   ApprovalQueueActor,
   approvalEntries,
   makeGoalSignalCommands,
-  makeContextRegistry,
   makeMemoryGoalHistory,
-  type ContextStore,
   type ContextRecord,
   type GoalCommandReply,
   type GoalReadyReply,
   type SignalRootCommand,
 } from "../src/index.js";
+import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
 import type { GoalSubmission } from "../src/goals/protocol.js";
 import { fakeAgent, preparationLayer } from "./fixtures.js";
 import { agentResult, emptyRecall, modelReplyLayer } from "./workflow-fixtures.js";

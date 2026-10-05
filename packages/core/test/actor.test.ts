@@ -8,9 +8,9 @@ import {
   contextPath,
   contextSpawnOptions,
   defineContext,
-  makeContextRegistry,
   spawnContextChild,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 const Command = Schema.Union([
   Schema.TaggedStruct("Set", { value: Schema.Number }),
@@ -23,7 +23,6 @@ const Command = Schema.Union([
 class Counter extends ContextActor.Service<Counter>()("test/ContextCounter", {
   command: Command,
   context: defineContext({
-    identity: "Counter",
     state: Schema.Struct({ value: Schema.Number }),
     message: Schema.String,
   }),
@@ -35,7 +34,6 @@ class Counter extends ContextActor.Service<Counter>()("test/ContextCounter", {
       return Counter.of({
         started: (actor) => {
           const path = contextPath(actor);
-          assert.equal(registry.definition(path), Counter.context);
           return registry
             .commit(
               registry.get(path) ?? {
@@ -82,7 +80,6 @@ class Parent extends ContextActor.Service<Parent>()("test/ContextParent", {
     replyTo: ReplyTo<readonly ActorRef<typeof Command.Type>[]>(),
   }),
   context: defineContext({
-    identity: "Parent Context",
     state: Schema.Struct({}),
     message: Schema.Never,
   }),
@@ -170,8 +167,11 @@ test("explicit public paths propagate to direct and virtual children independent
             }))).path,
           );
         assert.deepEqual(paths, ["/accounts/work/me/one", "/accounts/work/direct"]);
-        assert.equal(registry.definition("/accounts/work"), Parent.context);
-        assert.equal(registry.definition("/physical"), undefined);
+        yield* registry.commit(
+          { path: "/accounts/work", description: "Parent", state: {}, messages: [] },
+          { expectedRevision: 0 },
+        );
+        assert.equal(registry.get("/physical"), undefined);
       }),
     ),
   );

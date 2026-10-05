@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect } from "effect";
-import { makeApplicationApi, makeContextRegistry } from "@aster/core";
+import { makeApplicationApi } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import { larkContextViews, makeImSummaryGate } from "@aster/integrations";
 
 const secret = "PRIVATE_LARK_SENTINEL";
@@ -43,7 +44,7 @@ test("archived Lark contexts remain readable through integration family policies
         },
       ];
       const registry = yield* makeContextRegistry({ loadAll: () => records, save: () => {} });
-      yield* registry.registerViews(larkContextViews);
+      yield* registry.views.register(larkContextViews);
       const api = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
       const views = yield* api.contexts;
       assert.equal(JSON.stringify(views).includes(secret), false);

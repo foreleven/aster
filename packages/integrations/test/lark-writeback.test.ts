@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect } from "effect";
-import { makeContextRegistry, type WritebackOperation } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
+import { type WritebackOperation } from "@aster/core";
 import { makeLarkChannelWrites, isLarkWritebackEcho } from "@aster/integrations";
 
 const source = "/signals/report/runs/one";

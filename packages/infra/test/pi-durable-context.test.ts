@@ -100,13 +100,11 @@ test("Pi Context commits its entry, snapshot, receipts, outbox and mapping in on
         yield* registry.register(
           input.path,
           defineContext({
-            identity: "test",
             state: Schema.Record(Schema.String, Schema.Unknown),
             message: Schema.Unknown,
           }),
         );
         const saved = yield* registry.commit(input, { expectedRevision: 0 });
-        assert.equal(backend.kind, "pi");
         assert.equal(saved.revision, 1);
         assert.equal(batches.length, 1);
         assert.deepEqual(

@@ -1,3 +1,4 @@
+import { ContextCaptures } from "../src/memory/capture.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -5,14 +6,13 @@ import { Clock, Deferred, Effect, Fiber, Layer, Option, Queue, Schema, Stream } 
 import { TestClock } from "effect/testing";
 import {
   ContextRegistry,
-  makeContextRegistry,
   MemoryActor,
   MemoryBackend,
   MemoryCaptureError,
   type ContextCapture,
   type ContextRecord,
-  type ContextStore,
 } from "../src/index.js";
+import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
 
 const input: ContextCapture = {
   sessionId: "/goals/project/runs/one:outcome:completed",
@@ -67,6 +67,7 @@ const boot = Effect.fnUntraced(function* (
   const registry = yield* makeContextRegistry(store);
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
+      ContextCaptures.layer,
       Layer.succeed(ContextRegistry, registry),
       Layer.succeed(MemoryBackend, impl),
       ...(clock ? [Layer.succeed(Clock.Clock, clock)] : []),
@@ -231,7 +232,7 @@ test("recovered captures exclude private source data and Memory queue state stay
         ),
       );
       yield* Deferred.await(captured);
-      const view = registry.project(registry.get("/memory")!);
+      const view = registry.views.project(registry.get("/memory")!);
       assert.equal(view.projection?.visibility, "public");
       assert.equal("pending" in view.state, false);
     }),
@@ -271,6 +272,7 @@ test("backend defects reach Actor supervision without becoming capture success",
       const release = yield* Deferred.make<void>();
       const system = yield* ActorSystem.make().pipe(
         ActorSystem.provide(
+          ContextCaptures.layer,
           Layer.succeed(ContextRegistry, registry),
           Layer.succeed(
             MemoryBackend,

@@ -5,12 +5,11 @@ import {
   childActorName,
   childContextPath,
   defineContext,
-  makeContextRegistry,
-  makeContextProcessor,
+  makeContextMaintenance,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 const definition = defineContext({
-  identity: "Test Context",
   state: Schema.Struct({ value: Schema.Number }),
   message: Schema.String,
 });
@@ -69,9 +68,7 @@ test("only public Schema fields notify automatically; snapshots and descriptions
     state: { value: 1 },
     messages: ["one"],
   });
-  assert.deepEqual(result.events, [
-    { path: "/x", created: true, stateChanged: true, record: result.record },
-  ]);
+  assert.deepEqual(result.events, [{ record: result.record }]);
 });
 
 test("dynamic description initializes once and preserves content updated during Agent work", async () => {
@@ -125,16 +122,16 @@ test("invalid public state and unregistered Context paths are rejected", async (
   }
 });
 
-test("message-only and description-only updates do not mark state as changed", async () => {
+test("every changed commit publishes its detached revision", async () => {
   const changes = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
         yield* registry.register("/x", definition);
-        const changes: boolean[] = [];
+        const changes: number[] = [];
         yield* Stream.runForEach(registry.changes, (change) =>
           Effect.sync(() => {
-            changes.push(change.stateChanged);
+            changes.push(change.record.revision);
           }),
         ).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
@@ -161,7 +158,7 @@ test("message-only and description-only updates do not mark state as changed", a
       }),
     ),
   );
-  assert.deepEqual(changes, [true, false, false, true]);
+  assert.deepEqual(changes, [1, 2, 3, 4]);
 });
 
 test("storage adapters cannot mutate the registry through loaded or saved record references", async () => {
@@ -188,33 +185,31 @@ test("storage adapters cannot mutate the registry through loaded or saved record
   assert.deepEqual(registry.get("/x")?.state, { value: 2 });
 });
 
-test("a failed memory handoff is retried on the next change before capture deduplication", async () => {
+test("memory handoff failures remain retryable; the durable sink owns deduplication", async () => {
   let attempts = 0;
   await Effect.runPromise(
     Effect.gen(function* () {
       const registry = yield* makeContextRegistry();
-      yield* registry.register("/x", {
-        ...definition,
-        capture: (record) => ({ sessionId: "session", records: [record] }),
-      });
+      yield* registry.register("/x", definition);
       const record = { path: "/x", description: "x", state: { value: 1 }, messages: [] };
       yield* registry.commit(record, {
         expectedRevision: registry.get(record.path)?.revision ?? 0,
       });
-      const process = makeContextProcessor(
+      const process = makeContextMaintenance({
         registry,
-        () =>
+        capture: () =>
           Effect.sync(() => {
             if (++attempts === 1) throw new Error("capture handoff failed");
           }),
-        () => Effect.void,
-        () => Effect.sync(() => "unused"),
-      );
-      const change = { path: "/x", record, created: false, stateChanged: true };
+        captures: { select: (record) => ({ sessionId: "session", records: [record] }) },
+        descriptions: { identity: () => undefined },
+        describe: () => Effect.succeed("unused"),
+      });
+      const change = { record: registry.get("/x")! };
       assert.equal((yield* Effect.exit(process(change)))._tag, "Failure");
       yield* process(change);
       yield* process(change);
-      assert.equal(attempts, 2);
+      assert.equal(attempts, 3);
     }),
   );
 });

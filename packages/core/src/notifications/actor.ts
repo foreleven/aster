@@ -1,12 +1,12 @@
 import { RecoveryInput, RecoveryReply, RecoveryReceipt } from "@aster/api-contracts";
-import { recoveryReplay } from "../context/recovery.js";
+import { recoveryReplay } from "../commands/recovery.js";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ReplyTo, type ActorContext, type ActorRef } from "@aster/actor";
 import { BusinessNotification, CommandReceipt, ApplicationError } from "@aster/api-contracts";
 import { Effect, Layer, Match, Option, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
-import { defineContext } from "../context/model.js";
+import { defineContext } from "../context/definition.js";
 import { contextView } from "../context/view.js";
 import { ContextRegistry } from "../context/registry.js";
 import type { PersonalCommand, PersonalReply } from "../personal/actor.js";
@@ -70,7 +70,6 @@ export class NotificationsActor extends ContextActor.Service<NotificationsActor>
   {
     command: Commands,
     context: defineContext({
-      identity: "Business notification delivery",
       state: NotificationState,
       message: Schema.Never,
       view: contextView({

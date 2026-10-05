@@ -8,8 +8,8 @@ import {
   ExternalAgents,
   SignalDefinitions,
   SignalRootActor,
-  makeContextRegistry,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { fakeAgent, preparationLayer } from "./fixtures.js";
 
 test("Signal configuration can progress while a Run has not acknowledged durable initialization", async () => {

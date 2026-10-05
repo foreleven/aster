@@ -15,18 +15,17 @@ import { Effect, Schema } from "effect";
 import {
   contextView,
   defineContext,
-  LocalDurableContext,
   makeContextRegistryWithBackend,
   type ContextRecord,
 } from "@aster/core";
+import { LocalDurableContext } from "../src/storage/local-durable.js";
 import { makeFileContextStore } from "../src/storage/file-context-store.js";
 import { PiDurableContext } from "../src/storage/pi-durable-context.js";
 
 const definition = defineContext({
-  identity: "Source",
   state: Schema.Struct({ summary: Schema.String, credential: Schema.String }),
   message: Schema.String,
-  signalSource: true,
+  changes: "durable-state",
   view: contextView({ state: Schema.Struct({ summary: Schema.String }), message: Schema.String }),
 });
 const source = {
@@ -52,29 +51,27 @@ test("file pending recovery restores the source and reaction handoff after a nat
   t.after(() => rmSync(root, { recursive: true, force: true }));
   await Effect.runPromise(
     Effect.gen(function* () {
-      const registry = makeContextRegistryWithBackend(
-        yield* LocalDurableContext.fromStore(makeFileContextStore(root)),
-      );
+      const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
+      const registry = makeContextRegistryWithBackend(backend);
       yield* registry.register(source.path, definition);
       yield* registry.commit(
         { ...source, state: { ...source.state, summary: "Before" } },
-        { expectedRevision: 0, evaluate: false },
+        { expectedRevision: 0, mode: "bootstrap" },
       );
       const statePath = join(root, "source/state.json");
       renameSync(statePath, `${statePath}.previous`);
       mkdirSync(statePath);
       const failed = yield* registry.commit(source, { expectedRevision: 1 }).pipe(Effect.result);
       assert.equal(failed._tag, "Failure");
-      assert.equal(registry.get(source.path)?.reactionEvents, undefined);
+      assert.equal(backend.journal().length, 0);
       assert.ok(existsSync(join(root, "source/.pending.json")));
       rmSync(statePath, { recursive: true });
-      const restored = makeContextRegistryWithBackend(
-        yield* LocalDurableContext.fromStore(makeFileContextStore(root)),
-      );
+      const recoveredBackend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
+      const restored = makeContextRegistryWithBackend(recoveredBackend);
       yield* restored.register(source.path, definition);
       const accepted = restored.get(source.path)!;
-      assertHandoff(accepted);
-      assert.deepEqual(makeFileContextStore(root).loadAll(), [accepted]);
+      assertHandoff(recoveredBackend.exportRecords()[0]!);
+      assert.deepEqual(makeFileContextStore(root).loadAll(), recoveredBackend.exportRecords());
       const duplicate = yield* restored.commit(source, { expectedRevision: 2 });
       assert.deepEqual(duplicate, accepted);
     }),
@@ -89,21 +86,23 @@ test("Pi reopens atomic source handoffs and preserves them through later owner w
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = makeContextRegistryWithBackend(
-            yield* PiDurableContext.directory({ directory: root, shardId: "reactions" }),
-          );
+          const backend = yield* PiDurableContext.directory({
+            directory: root,
+            shardId: "reactions",
+          });
+          const registry = makeContextRegistryWithBackend(backend);
           yield* registry.register(source.path, definition);
-          if (!restart) committed = yield* registry.commit(source, { expectedRevision: 0 });
-          else assert.deepEqual(registry.get(source.path), committed);
-          assertHandoff(registry.get(source.path)!);
+          if (!restart) {
+            yield* registry.commit(source, { expectedRevision: 0 });
+            committed = backend.exportRecords()[0]!;
+          } else assert.deepEqual(backend.exportRecords()[0], committed);
+          assertHandoff(backend.exportRecords()[0]!);
           if (restart) {
-            const later = yield* registry.commit(
-              { ...source, messages: ["Evidence", "New message"], reactionEvents: [] },
-              { expectedRevision: 1 },
-            );
+            const forged = { ...source, messages: ["Evidence", "New message"], reactionEvents: [] };
+            const later = yield* registry.commit(forged, { expectedRevision: 1 });
             assert.equal(later.revision, 2);
-            assert.deepEqual(later.reactionEvents, committed?.reactionEvents);
-            assert.equal("reactionEvents" in registry.project(later), false);
+            assert.deepEqual(backend.exportRecords()[0]!.reactionEvents, committed?.reactionEvents);
+            assert.equal("reactionEvents" in registry.views.project(later), false);
           }
         }),
       ),
@@ -116,12 +115,11 @@ test("corrupt pending reaction envelopes fail before recovery rewrites committed
   t.after(() => rmSync(root, { recursive: true, force: true }));
   await Effect.runPromise(
     Effect.gen(function* () {
-      const registry = makeContextRegistryWithBackend(
-        yield* LocalDurableContext.fromStore(makeFileContextStore(root)),
-      );
+      const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
+      const registry = makeContextRegistryWithBackend(backend);
       yield* registry.register(source.path, definition);
       const committed = yield* registry.commit(source, { expectedRevision: 0 });
-      const event = committed.reactionEvents![0]!;
+      const event = backend.exportRecords()[0]!.reactionEvents![0]!;
       const statePath = join(root, "source/state.json");
       const messagesPath = join(root, "source/messages.jsonl");
       const pendingPath = join(root, "source/.pending.json");

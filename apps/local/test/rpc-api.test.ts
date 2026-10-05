@@ -11,15 +11,14 @@ import {
   defineContext,
   contextView,
   makeApplicationApi,
-  makeContextRegistry,
   ContextRegistry,
   PersonalAgentActor,
   PersonalActions,
 } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import { startGoalApi } from "../src/http-api.js";
 
 const definition = defineContext({
-  identity: "API test Goal",
   view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
   state: Schema.Struct({ value: Schema.Number }),
   message: Schema.Unknown,
@@ -173,7 +172,6 @@ test("ListContexts encodes cleared optional fields in public state and nested me
     registry.register(
       path,
       defineContext({
-        identity: "Goal with optional fields",
         view: contextView({
           state: Schema.Struct({
             lastError: Schema.optional(Schema.String),

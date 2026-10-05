@@ -12,9 +12,9 @@ import {
   defineContext,
   contextView,
   makeApplicationApi,
-  makeContextRegistry,
   type ContextRecord,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 const input = {
   requestId: "request-1",
@@ -90,7 +90,7 @@ test("Personal processes one durable input at a time and commits only its own re
         yield* changes.pipe(
           Stream.filter(
             (change) =>
-              change.path === "/personal" &&
+              change.record.path === "/personal" &&
               Schema.decodeUnknownSync(PersonalState)(change.record.state).processedThrough ===
                 secondReceipt.sequence,
           ),
@@ -403,7 +403,7 @@ test("Personal input and retry receipt survive a complete runtime restart withou
           receipt = accepted;
           const record = yield* api.personal.get;
           assert.equal(record.revision, 2);
-          assert.deepEqual(record, registry.project(records.get("/personal")!));
+          assert.deepEqual(record, registry.views.project(records.get("/personal")!));
           assert.equal(record.messages.length, 1);
           const message = Schema.decodeUnknownSync(PersonalMessage)(record.messages[0]);
           assert.equal(message.payload.text, input.text);
@@ -518,7 +518,6 @@ test("Personal reads public snapshots by command and does not ingest ContextChan
         yield* registry.register(
           "/source",
           defineContext({
-            identity: "Public source",
             view: contextView({
               state: Schema.Struct({ value: Schema.Number }),
               message: Schema.String,

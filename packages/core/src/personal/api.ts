@@ -13,7 +13,7 @@ import {
 import { Effect, Schema } from "effect";
 import type { PersonalCommand, PersonalReply } from "./actor.js";
 import { publicJson } from "../context/json.js";
-import { ContextRecord } from "../context/model.js";
+import { PublicContext as ContextRecord } from "@aster/api-contracts";
 
 export const makePersonalApi = (actor?: ActorRef<PersonalCommand>) => {
   const ask = Effect.fn("PersonalApi.ask")(function* (

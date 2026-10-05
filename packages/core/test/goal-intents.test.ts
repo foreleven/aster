@@ -10,11 +10,11 @@ import {
   ExternalAgents,
   GoalState,
   GoalsRootActor,
-  makeContextRegistry,
   makeMemoryGoalHistory,
   type ContextRecord,
   type GoalDeliveryReply,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { GoalHistoryError } from "../src/goals/history.js";
 import { type GoalIntentInput } from "../src/goals/intent.js";
 import type { GoalCommandReply } from "../src/goals/actors.js";
@@ -170,7 +170,7 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
               yield* changes.pipe(
                 Stream.filter(
                   (change) =>
-                    change.path === "/goals/project" &&
+                    change.record.path === "/goals/project" &&
                     goalIntentRecords(Schema.decodeUnknownSync(GoalState)(change.record.state))[0]
                       ?.historySequence !== undefined,
                 ),

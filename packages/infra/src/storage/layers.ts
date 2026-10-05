@@ -1,12 +1,9 @@
 import { join } from "node:path";
 import { storageSettings } from "./routing.js";
 import { Effect, Layer } from "effect";
-import {
-  ContextStore,
-  GoalHistoryStore,
-  GoalScreeningStore,
-  LocalDurableContext,
-} from "@aster/core";
+import { ContextStore } from "./storage.js";
+import { GoalHistoryStore, GoalScreeningStore } from "@aster/core";
+import { LocalDurableContext } from "./local-durable.js";
 import { makeFileContextStore } from "./file-context-store.js";
 import { makeFileGoalHistory } from "./file-goal-history.js";
 import { makeFileGoalScreeningStore } from "./file-goal-screening.js";

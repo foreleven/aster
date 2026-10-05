@@ -1,3 +1,6 @@
+import { DurableContext } from "../src/context/persistence.js";
+import type { TestContextRegistry } from "../src/testing/context.js";
+import { deliveriesOf } from "../src/reactions/state.js";
 import type { RecoveryReply } from "@aster/api-contracts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -8,20 +11,20 @@ import {
   GoalSettings,
   contextView,
   defineContext,
-  makeContextRegistry,
   type ContextRecord,
 } from "../src/index.js";
-import { SystemOneActor } from "../src/context/reaction-actor.js";
-import { ReactionPolicy, ReactionFailure } from "../src/context/reaction-policy.js";
+import { makeContextRegistry } from "../src/testing/context.js";
+import { SystemOneActor } from "../src/reactions/actor.js";
+import { ReactionPolicy, ReactionFailure } from "../src/reactions/policy.js";
 import {
   ReactionState,
   type ReactionWork,
+  type ReactionPlanning,
   type ReactionDeliveryInput,
-} from "../src/context/reaction-state.js";
+} from "../src/reactions/state.js";
 
 const sourceDefinition = defineContext({
-  identity: "Source",
-  signalSource: true,
+  changes: "durable-state",
   state: Schema.Struct({ summary: Schema.String }),
   message: Schema.String,
   view: contextView({ state: Schema.Struct({ summary: Schema.String }), message: Schema.String }),
@@ -35,8 +38,8 @@ const source = {
 const proposed = (work: ReactionWork): Extract<ReactionDeliveryInput, { _tag: "Signal" }> => ({
   _tag: "Signal",
   input: {
-    requestId: `deliver-${work.event.requestId}`,
-    causationId: work.event.requestId,
+    requestId: `deliver-${work.event.id}`,
+    causationId: work.event.id,
     source: "/system-one",
     target: "/signals/review",
     expectedRevision: 1,
@@ -55,12 +58,10 @@ const storeFor = (records: Map<string, ContextRecord>) => ({
     records.set(record.path, structuredClone(record));
   },
 });
-const layerFor = (
-  registry: ContextRegistry["Service"],
-  policy: Omit<ReactionPolicy["Service"], "bind">,
-) =>
+const layerFor = (registry: TestContextRegistry, policy: Omit<ReactionPolicy["Service"], "bind">) =>
   Layer.mergeAll(
     Layer.succeed(ContextRegistry, registry),
+    Layer.succeed(DurableContext, registry.backend),
     Layer.succeed(GoalSettings, { definitions: [] }),
     Layer.succeed(ReactionPolicy, { ...policy, bind: () => Effect.void }),
   );
@@ -90,7 +91,7 @@ test("System One recovers every retained source version without source Actors or
               layerFor(registry, {
                 plan: (work) =>
                   Effect.sync(() => {
-                    assert.equal(work.snapshot[source.path]?.revision, work.event.revision);
+                    assert.equal(work.event.record.revision, work.event.record.revision);
                     seen.push((work.event.record.state as { summary: string }).summary);
                     return { screenings: [], commands: [] };
                   }),
@@ -113,8 +114,8 @@ test("System One recovers every retained source version without source Actors or
             Schema.decodeUnknownSync(ReactionState)(registry.get("/system-one")!.state).work.length,
             2,
           );
-          assert.equal(registry.get("/system-one")!.reactionEvents, undefined);
-          const view = JSON.stringify(registry.project(registry.get("/system-one")!));
+          assert.equal("reactionEvents" in registry.get("/system-one")!, false);
+          const view = JSON.stringify(registry.views.project(registry.get("/system-one")!));
           assert.equal(
             view.includes("First evidence"),
             false,
@@ -165,9 +166,9 @@ test("a persisted decision survives lost commit acknowledgement without re-scree
                   const durable = Schema.decodeUnknownSync(ReactionState)(
                     records.get("/system-one")!.state,
                   ).work[0]!;
-                  assert.equal(durable.deliveries?.[0]?.status, "sending");
-                  assert.equal(durable.deliveries?.[0]?.attempts, 1);
-                  assert.deepEqual(durable.deliveries?.[0]?.command, command);
+                  assert.equal(deliveriesOf(durable)[0]?.status, "sending");
+                  assert.equal(deliveriesOf(durable)[0]?.attempts, 1);
+                  assert.deepEqual(deliveriesOf(durable)[0]?.command, command);
                   return {
                     _tag: "Accepted",
                     receipt: { requestId: command.input.requestId, revision: 2 },
@@ -235,11 +236,12 @@ test("lost receiver acknowledgement replays the frozen decision after restart wi
           yield* changes.pipe(
             Stream.filter(
               (change) =>
-                change.path === "/system-one" &&
+                change.record.path === "/system-one" &&
                 (restart
                   ? completed(change.record)
-                  : Schema.decodeUnknownSync(ReactionState)(change.record.state).work[0]
-                      ?.deliveries?.[0]?.status === "unknown"),
+                  : Schema.decodeUnknownSync(ReactionState)(change.record.state).work.some(
+                      (work) => deliveriesOf(work)[0]?.status === "unknown",
+                    )),
             ),
             Stream.take(1),
             Stream.runDrain,
@@ -255,7 +257,7 @@ test("lost receiver acknowledgement replays the frozen decision after restart wi
 
 test("interrupted planning reuses its admitted source and catalogue despite later source updates", async () => {
   const records = new Map<string, ContextRecord>();
-  let original: ReactionWork | undefined;
+  let original: ReactionPlanning | undefined;
   for (const restart of [false, true]) {
     await Effect.runPromise(
       Effect.scoped(
@@ -275,9 +277,9 @@ test("interrupted planning reuses its admitted source and catalogue despite late
                       yield* Deferred.succeed(entered, undefined);
                       return yield* Effect.never;
                     }
-                    if (work.event.revision === 1) {
-                      assert.deepEqual(work.snapshot, original!.snapshot);
-                      assert.deepEqual(work.goals, original!.goals);
+                    if (work.event.record.revision === 1) {
+                      assert.deepEqual(work.input.evidence, original!.input.evidence);
+                      assert.deepEqual(work.input.goals, original!.input.goals);
                       assert.deepEqual(work.event, original!.event);
                       assert.equal(work.attempts, 2);
                     }
@@ -321,7 +323,6 @@ test("queued sources freeze target revisions when screening starts after the pre
         yield* registry.register(
           "/signals/review",
           defineContext({
-            identity: "Target",
             state: Schema.Struct({ count: Schema.Number }),
             message: Schema.Never,
           }),
@@ -350,7 +351,7 @@ test("queued sources freeze target revisions when screening starts after the pre
                         ...command,
                         input: {
                           ...command.input,
-                          expectedRevision: work.snapshot["/signals/review"]!.revision!,
+                          expectedRevision: work.input.evidence["/signals/review"]!.revision!,
                         },
                       },
                     ],
@@ -392,13 +393,10 @@ test("System One rejects corrupted recovered work before any planning or deliver
     Effect.gen(function* () {
       const registry = yield* makeContextRegistry();
       yield* registry.register(source.path, sourceDefinition);
-      const committed = yield* registry.commit(source, { expectedRevision: 0 });
-      const event = committed.reactionEvents![0]!;
+      yield* registry.commit(source, { expectedRevision: 0 });
+      const event = registry.backend.journal()[0]!;
       const work: ReactionWork = {
         event,
-        snapshot: { [source.path]: event.record },
-        goals: [],
-        admittedAt: event.createdAt,
         status: "completed",
         attempts: 1,
         screenings: [],
@@ -406,9 +404,25 @@ test("System One rejects corrupted recovered work before any planning or deliver
       };
       for (const invalid of [
         [work, work],
-        [{ ...work, event: { ...event, requestId: "forged" } }],
-        [{ ...work, snapshot: { [source.path]: { ...event.record, revision: 100 } } }],
-        [{ ...work, admittedAt: "invalid" }],
+        [{ ...work, event: { ...event, id: "forged" } }],
+        [
+          {
+            ...work,
+            status: "planning",
+            input: {
+              evidence: { [source.path]: event.record },
+              goals: [],
+              screeningAt: event.createdAt,
+            },
+          },
+        ],
+        [
+          {
+            ...work,
+            status: "planning",
+            input: { evidence: {}, goals: [], screeningAt: "invalid" },
+          },
+        ],
         [
           {
             ...work,
@@ -482,23 +496,23 @@ test("interrupted delivery attempts stay bounded across restarts and explicit re
           yield* actor.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
           if (restart < 3) {
             yield* Deferred.await(entered);
-            const delivery = Schema.decodeUnknownSync(ReactionState)(
-              registry.get("/system-one")!.state,
-            ).work[0]!.deliveries![0]!;
+            const delivery = deliveriesOf(
+              Schema.decodeUnknownSync(ReactionState)(registry.get("/system-one")!.state).work[0]!,
+            )[0]!;
             assert.equal(delivery.status, "sending");
             assert.equal(delivery.attempts, restart + 1);
           } else {
             const work = Schema.decodeUnknownSync(ReactionState)(registry.get("/system-one")!.state)
               .work[0]!;
             assert.equal(delivered, 3);
-            assert.equal(work.deliveries![0]!.status, "unknown");
-            assert.equal(work.deliveries![0]!.attempts, 3);
+            assert.equal(deliveriesOf(work)[0]!.status, "unknown");
+            assert.equal(deliveriesOf(work)[0]!.attempts, 3);
             const input = {
               _tag: "RetryReactionDelivery" as const,
               requestId: "operator-retry",
               expectedRevision: registry.get("/system-one")!.revision!,
-              workId: work.event.requestId,
-              deliveryId: work.deliveries![0].command.input.requestId,
+              workId: work.event.id,
+              deliveryId: deliveriesOf(work)[0].command.input.requestId,
             };
             const reply = yield* actor.ask<RecoveryReply>((replyTo) => ({
               _tag: "Recover",
@@ -536,7 +550,7 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
         const registry = yield* makeContextRegistry();
         yield* registry.register(source.path, sourceDefinition);
         yield* registry.commit(source, { expectedRevision: 0 });
-        const admitted: ReactionWork[] = [];
+        const admitted: ReactionPlanning[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             layerFor(registry, {
@@ -569,7 +583,7 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
         const input = {
           _tag: "RetryScreening" as const,
           requestId: "retry-screening",
-          workId: state().work[0].event.requestId,
+          workId: state().work[0].event.id,
           expectedRevision: registry.get("/system-one")!.revision!,
         };
         const receipt = yield* actor.ask<RecoveryReply>((replyTo) => ({
@@ -584,10 +598,10 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
             Stream.take(1),
             Stream.runDrain,
           );
-        assert.deepEqual(admitted[1].snapshot, admitted[0].snapshot);
-        assert.deepEqual(admitted[1].goals, admitted[0].goals);
+        assert.deepEqual(admitted[1].input.evidence, admitted[0].input.evidence);
+        assert.deepEqual(admitted[1].input.goals, admitted[0].input.goals);
         assert.equal(admitted[1].attempts, 2);
-        assert.equal(state().work[0].error, undefined);
+        assert.equal("error" in state().work[0], false);
         assert.deepEqual(
           yield* actor.ask<RecoveryReply>((replyTo) => ({ _tag: "Recover", input, replyTo })),
           receipt,

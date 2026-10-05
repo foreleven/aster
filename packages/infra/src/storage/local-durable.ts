@@ -1,12 +1,12 @@
 import { Effect, Layer } from "effect";
-import { DurableContext } from "./durable.js";
-import { makeDurableContext, type ContextPersistence } from "./durable-kernel.js";
+import { DurableContext } from "@aster/core";
+import { makeDurableContext, type ContextPersistence } from "@aster/core";
 import { ContextStore } from "./storage.js";
-import { ContextCommitError, ContextRecoveryError } from "./errors.js";
+import { ContextCommitError, ContextRecoveryError } from "@aster/core";
 
 export type LocalContextPersistence = ContextPersistence;
 
-const make = (persistence: LocalContextPersistence) => makeDurableContext("local", persistence);
+const make = (persistence: LocalContextPersistence) => makeDurableContext(persistence);
 
 /** Native synchronous file I/O remains isolated behind the existing storage driver.
  * Effects stay lazy; both opening/recovery and writes report typed storage failures. */

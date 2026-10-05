@@ -19,7 +19,7 @@ Goal, Signal and Run owners publish filtered business progress through atomic so
 | Module                                      | Owns                                                                                   |
 | ------------------------------------------- | -------------------------------------------------------------------------------------- |
 | `runtime/`                                  | Shared Layer composition, integration activation/readiness/shutdown, application API   |
-| `context/model.ts`                          | Public record schemas and private Context definitions                                  |
+| `context/model.ts`, `context/definition.ts` | Owner snapshots, change events and schema-backed Context definitions                   |
 | `context/registry.ts`                       | Snapshot validation, persistence handoff and change notification                       |
 | `context/actor.ts`                          | Actor lifecycle registration and public-path mapping                                   |
 | `goals/actors.ts`                           | Serialized Goal state commits, input delivery and invocation generations               |
@@ -43,7 +43,7 @@ Goal screening policy `goal-relevance-v3` uses ten zero-indexed rubric levels (`
 
 `ExternalAgent.submit/status/resume/wait/respond` return Effects with `ExternalAgentError`. Delegation composes these directly; infrastructure adapters forward Fiber cancellation to RPC/CLI calls and own process release through `ExternalAgentsLive.layer`. The domain port has no `close` method. Local interruption does not prove external cancellation, so ambiguous submissions are never automatically retried. Recovery and parent reattachment replay saved completed/failed/cancelled/unknown outcomes before looking up an executor; terminal failure is persisted before notifying its parent.
 
-`MemoryRecall.search/expand`, `SignalExtractor` and `DescriptionInitializer` return Effects too. The memory port and `MemoryRecallError` belong to `context/memory.ts`, shared by Goals and Task reasoning; the former Goal-specific `GoalMemory` interface is removed. Model output is decoded before accessing it, so malformed or null output becomes a tagged description/detection error. Descriptions retain their fixed-identity policy; extraction filters unknown IDs and deduplicates candidate matches.
+`MemoryRecall.search/expand`, `SignalExtractor` and `DescriptionInitializer` return Effects too. The memory port and `MemoryRecallError` belong to `memory/contracts.ts`, shared by Goals and Task reasoning; the former Goal-specific `GoalMemory` interface is removed. Model output is decoded before accessing it, so malformed or null output becomes a tagged description/detection error. Descriptions retain their fixed-identity policy; extraction filters unknown IDs and deduplicates candidate matches.
 
 The agentmemory adapter in infra adapts its Promise backend to the domain port, forwarding fiber cancellation to the actual fetch and consolidated-memory fallback. The backend's 15-second request timeout remains in force. Memory capture/drain retains its explicit Promise boundary for durable handoff semantics. IM admission and summary workflows now compose Effects directly.
 
@@ -62,7 +62,7 @@ Context Actors declare their public definition alongside their Command Schema:
 ```ts
 class ChatActor extends ContextActor.Service<ChatActor, ChatServices>()("app/Chat", {
   command: ChatCommand,
-  context: defineContext({ identity: "Work conversation", state: ChatState, message: ChatMessage }),
+  context: defineContext({ state: ChatState, message: ChatMessage }),
 }) {
   static readonly layer = Layer.effect(
     ChatActor,
@@ -102,7 +102,7 @@ class ChatActor extends ContextActor.Service<ChatActor, ChatServices>()("app/Cha
 
 Registration selects Schemas directly, without a Context type string or central catalog. Repeated registration of the same implementation supports restart and passivation; replacing a path with a different implementation is rejected. Stopping an Actor retains its public record and persistent data.
 
-Optional private `capture` and `signalSource` behavior informs the core Context processor. Changes notify automatically after actual public content updates; registration alone does not notify. Public records and notifications are detached snapshots, Schemas strip undeclared state/message fields, and a fixed description cannot be replaced after initialization.
+Definitions contain validation, an optional public view and `changes: "durable-state" | "none"`. Memory capture and description identities belong to the consumer registries `ContextCaptures` and `ContextDescriptions`. Changes notify after committed content updates; registration alone does not notify. Snapshots are detached, Schemas strip undeclared state/message fields, and initialized descriptions remain fixed.
 
 Storage reads and writes also cross a detached-copy boundary: adapters cannot mutate the registry by retaining a loaded record or save argument. Memory capture deduplication starts only after the sink accepts the handoff; a failed handoff remains eligible on a later change.
 
@@ -110,7 +110,7 @@ Each integration reads its own typed configuration from ConfigProvider. `AsterRu
 
 Public paths default to the Actor hierarchy without `/user`, decoding virtual segments created by `spawnContextChild`. Use `contextPath(actor)` to obtain the public path. `contextSpawnOptions("/delegations/id")` supplies an independent public path when spawning. This is carried by the generic runtime's spawn metadata; the Actor runtime does not interpret Context paths. Children spawned through a Context Actor inherit the parent's public path, including an explicitly overridden parent path. `spawnContextChild(actor, "me/id", ChildActor)` appends multiple public path segments while creating one direct runtime child.
 
-Change notifications include `stateChanged`, computed from the validated previous and next public state (creation counts as a change). Message-only and description-only writes still notify subscribers but set this flag to false. The source processor requires this flag before System One screening; memory capture and UI updates retain their own policies.
+Change notifications contain only the committed `record`. For definitions with `changes: "durable-state"`, state changes atomically append public evidence to the durable journal. Message-only, description-only and explicit bootstrap writes do not create reaction work. Memory capture and UI updates use their own policies. System One consumes the journal; live notifications only wake it.
 
 Source is grouped by capability: `config/, context/, signals/, goals/, delegation/, decisions/`. Consumers use the package root exports rather than internal paths.
 
@@ -118,7 +118,7 @@ Task preparation, readiness and human confirmation are coordinated by SignalRunA
 
 `reasoning/structured.ts` builds structured reasoning operations using AgentRunner and scoped Context/memory tools. Every call creates an independent Agent invocation. `tasks/build-execution-input.ts` constructs the exact instructions and cited evidence for an external executor: it validates memory candidates, expands up to eight before invoking the model, and validates the result with the same Schema used for the result tool. Prior-work lookup respects Context path segments and uses the admitted source revision. Task construction uses the built-in, executor-independent `DEFAULT_EXECUTOR_PROMPT` unless the selected `ExternalAgent.executorPrompt` supplies an override. Adapters own executor-specific configuration; the model prompt and the frozen Task use the same resolved instructions. `makeTaskExecution()` locally combines this builder with the execution readiness gate; Run retains ownership of persistence, confirmation and delegation.
 
-ApprovalQueueActor owns the persistent `/approvals` Context, with `signalSource: false`. Decisions are stored before delivery, addressed by normalized runtime Actor path and request ID, and retained until the receiving Actor acknowledges durable receipt. This acknowledgement is distinct from external approval delivery and task completion. The owning Actor records external delivery errors; ambiguous responses are not automatically repeated.
+ApprovalQueueActor owns the persistent `/approvals` Context, with `changes: "none"`. Decisions are stored before delivery, addressed by normalized runtime Actor path and request ID, and retained until the receiving Actor acknowledges durable receipt. This acknowledgement is distinct from external approval delivery and task completion. The owning Actor records external delivery errors; ambiguous responses are not automatically repeated.
 
 Goal API mutations wait for the owning Goal's durable acknowledgement. User messages persist their input and receipt before acceptance; End persists completion before acceptance. An unavailable router or acknowledgement timeout returns an application error, and a timeout does not prove that the mutation was rejected.
 
@@ -134,11 +134,11 @@ See [Reactive application API](../../docs/reactive-api-design.md) for the shared
 
 ## Durable Context boundary
 
-`ContextRegistry` owns domain definitions, validation, and the public index interface. It delegates canonical snapshots, compare-and-swap commits, uncertain-write fencing, recovery, and ordered commit notifications to the injected `DurableContext`. `LocalDurableContext` is the model-free implementation. `LocalDurableContext.make` accepts Effect persistence capabilities; `fromStore` adapts the existing synchronous `ContextStore` driver at the native I/O boundary. The standalone `makeContextRegistry(store?)` helper selects Local for tests and compatibility. Production provides a backend Layer explicitly.
+`ContextRegistry` owns definitions, validation and public reads. It delegates canonical snapshots, compare-and-swap commits, uncertain-write fencing, recovery and ordered commit notifications to `DurableContext`. The backend-independent kernel stays in core; Local, Pi, routing and synchronous storage adapters belong to infra. Tests can use `makeContextRegistry` from `@aster/core/testing`; production supplies a backend Layer. Owner snapshots exclude storage metadata; journal consumers and adapters explicitly use `journal()` and `exportRecords()`. See [Context design](../../docs/context-design.md) for the model and file boundaries.
 
-A complete Context record is the transaction unit: owner state, ordered messages, and receipts/outbox records inside that state commit together. Accepted commits drain through persistence and publication on cancellation; a writer cancelled while waiting for the semaphore does not start. Typed storage failures and driver defects both fence the affected path, while original defects remain defects. Recovery validates the owner schema and refuses missing or regressed snapshots before releasing the fence. Notifications from uncertain-write reconciliation suppress automatic source evaluation; durable reaction delivery remains separate work.
+A complete Context record is the transaction unit: owner state, ordered messages, and receipts/outbox records inside that state commit together. Accepted commits drain through persistence and publication on cancellation; a writer cancelled while waiting for the semaphore does not start. Typed storage failures and driver defects both fence the affected path, while original defects remain defects. Recovery validates the owner schema and refuses missing or regressed snapshots before releasing the fence. Uncertain-write reconciliation publishes the restored snapshot and retains its original journal; it creates no new reaction identity.
 
-`makeDurableContext(kind, persistence)` is the shared canonical kernel used by Local and concrete Pi storage adapters. Drivers provide lazy typed load/save Effects; the kernel owns revisions, detached snapshots, serialized commits, no-op suppression and recovery fencing. SDK transactions and resource ownership remain in infra.
+`makeDurableContext(persistence)` is the shared canonical kernel used by Local and concrete Pi storage adapters. Drivers provide lazy typed load/save Effects; the kernel owns revisions, detached snapshots, serialized commits, no-op suppression and recovery fencing. SDK transactions and resource ownership remain in infra.
 
 `ExternalAgent.lookupSubmission` is an optional read-only admission capability. Delegation uses it after a lost submission handle or restart without a handle, passing its original Task and stable path request ID. Found handles persist before notifying Run; missing/failed/unsupported lookup retains uncertainty and never resubmits. Personal exposes `inspectDelegation` through its mailbox, typed RPC and a replay-safe model tool. The projection includes business status/results/requests and source references while excluding provider metadata and native messages.
 
@@ -150,13 +150,13 @@ A complete Context record is the transaction unit: owner state, ordered messages
 
 ### Public Context views
 
-Canonical Context state belongs to its owner and remains available for recovery. External reads use `ContextRegistry.project` / `publicSnapshot`: explicit schema allowlists strip private fields and unsupported messages. `contextView` declares a read policy on a ContextDefinition; integration family policies register through `registerViews` so retained children remain readable without a live Actor. Core includes policies for its own domain paths. Missing policies or invalid view data return only path, description and revision with a restricted projection marker. Policies must expose explicit nested schemas rather than opaque objects; description and selected text fields must already contain business content.
+Canonical Context state belongs to its owner and remains available for recovery. External reads use `ContextRegistry.reader`: explicit schema allowlists strip private fields and unsupported messages. `contextView` declares a read policy on a ContextDefinition; integration family policies register through `views.register` so retained children remain readable without a live Actor. Domain owners define their own view policies, assembled by runtime; the generic registry imports no business schemas. Missing policies or invalid view data return only path, description and revision with a restricted projection marker. Policies must expose explicit nested schemas rather than opaque objects; description and selected text fields must already contain business content.
 
 Application queries, Personal mailbox reads and model read tools share these views. Goal reasoning, Signal tool results, Task preparation/readiness and Context reactions also receive projected evidence. Memory capture projects both its initial handoff and recovered backend delivery. A queued reaction retains its original source revision. Internal owners continue reading complete canonical snapshots; projection never changes stored data. Public Goal history retains only business text and preserves the original sequence cursor when private tool/provider entries are omitted.
 
 ### Durable Context reactions
 
-Source commits atomically retain private public-evidence envelopes. `/system-one` consumes that journal through its mailbox, including after restart without live source Actors. It freezes the target catalogue when screening starts, retains that input across interrupted planning, commits decisions before sending, and records attempts/receipts. Live changes are wakeups, while description and Memory follow-up remain separate. Public diagnostics omit frozen evidence and catalogues.
+Source commits atomically retain private public-evidence envelopes. `/system-one` consumes `DurableContext.journal()` through its mailbox, including after restart without live source Actors. It freezes the target catalogue when screening starts, retains that input across interrupted planning, commits decisions before sending, and records attempts/receipts. Live changes are wakeups, while description and Memory follow-up remain separate. Public diagnostics omit frozen evidence and catalogues.
 
 Goal Intent admission saves the exact input and receipt before idempotently projecting timeline evidence. Signal reaction admission saves its exact input, receipt and occurrence in one versioned commit. Both reject stale target versions and conflicting identities; exact retries replay receipts. Unknown delivery acknowledgements allow bounded retries of the same input, followed by explicit reconciliation. Rejected decisions remain visible and require a new screening decision rather than silently changing the frozen command. Public processing inspection and versioned recovery commands allow explicit retry of failed screening or uncertain delivery with the original frozen input. Source journal compaction is not implemented.
 

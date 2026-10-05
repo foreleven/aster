@@ -1,4 +1,4 @@
-import type { ContextRecord } from "../context/model.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import type { SignalDefinition } from "../config/schema.js";
 import type { CausalChain } from "@aster/api-contracts";
 import { Match } from "effect";

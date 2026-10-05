@@ -6,7 +6,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ActorSystem } from "@aster/actor";
-import { ContextRegistry, contextSpawnOptions, makeContextRegistry } from "@aster/core";
+import { ContextRegistry, contextSpawnOptions } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import {
   ImAgentQueue,
   ImSummaryGate,

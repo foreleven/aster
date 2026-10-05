@@ -1,6 +1,6 @@
 import { Effect, Schema } from "effect";
 import { ContextRegistry } from "./registry.js";
-import type { ContextDefinition } from "./model.js";
+import type { ContextDefinition } from "./definition.js";
 import {
   Actor,
   type ActorBehavior,

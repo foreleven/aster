@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { ContextRegistry, contextSpawnOptions, makeContextRegistry } from "@aster/core";
+import { ContextRegistry, contextSpawnOptions } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import {
   LarkConfig,
   LarkEmailChannelActor,

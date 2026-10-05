@@ -5,11 +5,11 @@ import {
   ContextCommitError,
   ContextConflict,
   ContextRecoveryError,
-  LocalDurableContext,
   makeContextRegistryWithBackend,
   defineContext,
   type ContextRecord,
-} from "../src/index.js";
+} from "@aster/core";
+import { LocalDurableContext } from "../src/storage/local-durable.js";
 
 const initial: ContextRecord = {
   path: "/local",
@@ -107,7 +107,7 @@ test("LocalDurableContext preserves storage defects and fences later commits unt
         .commit({ ...initial, messages: ["other"] }, { expectedRevision: 0 })
         .pipe(Effect.result);
       assert.ok(fenced._tag === "Failure" && fenced.failure instanceof ContextCommitError);
-      assert.deepEqual(backend.get(initial.path), initial);
+      assert.deepEqual(backend.get(initial.path), { ...initial, revision: 0 });
       yield* backend.recover(initial.path, validate);
       assert.deepEqual(backend.get(initial.path), persisted);
       const stale = yield* backend.commit(initial, { expectedRevision: 0 }).pipe(Effect.result);
@@ -168,7 +168,6 @@ test("the registry validates domain state while a supplied DurableContext owns c
       yield* registry.register(
         initial.path,
         defineContext({
-          identity: "Local only",
           state: Schema.Struct({ value: Schema.Number }),
           message: Schema.String,
         }),
@@ -179,7 +178,6 @@ test("the registry validates domain state while a supplied DurableContext owns c
       );
       assert.deepEqual(writes[0]?.state, { value: 2 });
       assert.deepEqual(registry.snapshot(), backend.snapshot());
-      assert.equal(backend.kind, "local");
     }),
   );
 });

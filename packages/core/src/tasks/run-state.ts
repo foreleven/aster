@@ -6,7 +6,7 @@ import {
   WritebackOperation,
 } from "@aster/api-contracts";
 import { Match, Option, Schema } from "effect";
-import { ContextRecord } from "../context/model.js";
+import { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { SignalDefinition } from "../config/schema.js";
 import { Task } from "./model.js";
 

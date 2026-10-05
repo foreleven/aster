@@ -1,30 +1,41 @@
-import { coreContextViews } from "./business-view.js";
+import { ContextInput, ContextSnapshot, ContextPath } from "./model.js";
+import type { PublicContext } from "@aster/api-contracts";
 import { restrictedContext } from "./view.js";
-import type { ContextViewPolicy } from "./model.js";
-import { Context, Effect, Layer, Schema, type Stream, type Scope } from "effect";
-import type { ContextStore } from "./storage.js";
-import { ContextRecord, type ContextDefinition, type ContextChange } from "./model.js";
+import type { ContextViewPolicy } from "./definition.js";
+import { Context, Effect, Layer, Schema, Stream, type Scope } from "effect";
+import { type ContextDefinition } from "./definition.js";
+import { type ContextChange } from "./model.js";
 import { ContextCommitError, ContextConflict, ContextValidationError } from "./errors.js";
 
-import { DurableContext, DurableContextSnapshot, type ContextCommitOptions } from "./durable.js";
-import { LocalDurableContext } from "./local-durable.js";
-export type { ContextCommitOptions } from "./durable.js";
+import { DurableContext, type ContextCommitOptions } from "./persistence.js";
+export type { ContextCommitOptions } from "./persistence.js";
+
+export interface ContextReader {
+  readonly get: (path: string) => PublicContext | undefined;
+  readonly snapshot: () => Readonly<Record<string, PublicContext>>;
+  readonly subscribe: Effect.Effect<
+    Stream.Stream<{ readonly record: PublicContext }>,
+    never,
+    Scope.Scope
+  >;
+}
 
 // Domain owners enter through this schema and identity boundary. The selected
 // DurableContext owns canonical storage and ordered commit notifications.
 export class ContextRegistry extends Context.Service<
   ContextRegistry,
   {
-    readonly project: (record: ContextRecord) => ContextRecord;
-    readonly publicSnapshot: () => Readonly<Record<string, ContextRecord>>;
-    readonly registerViews: (views: readonly ContextViewPolicy[]) => Effect.Effect<void>;
+    readonly reader: ContextReader;
+    readonly views: {
+      readonly project: (record: PublicContext) => PublicContext;
+      readonly register: (views: readonly ContextViewPolicy[]) => Effect.Effect<void>;
+    };
     readonly register: (path: string, definition: ContextDefinition) => Effect.Effect<void>;
-    readonly definition: (path: string) => ContextDefinition | undefined;
     readonly commit: (
-      record: ContextRecord,
+      record: ContextInput,
       options: ContextCommitOptions,
     ) => Effect.Effect<
-      ContextRecord,
+      ContextSnapshot,
       ContextConflict | ContextValidationError | ContextCommitError
     >;
     /** Initialize a dynamic description once, without replacing newer content. */
@@ -33,12 +44,12 @@ export class ContextRegistry extends Context.Service<
       description: string,
       expectedRevision: number,
     ) => Effect.Effect<void, ContextConflict | ContextValidationError | ContextCommitError>;
-    readonly get: (path: string) => ContextRecord | undefined;
-    readonly snapshot: () => Readonly<Record<string, ContextRecord>>;
+    readonly get: (path: string) => ContextSnapshot | undefined;
+    readonly snapshot: () => Readonly<Record<string, ContextSnapshot>>;
     readonly changes: Stream.Stream<ContextChange>;
     readonly subscribe: Effect.Effect<Stream.Stream<ContextChange>, never, Scope.Scope>;
   }
->()("signals/ContextRegistry") {
+>()("context/Registry") {
   static readonly layer = Layer.effect(
     ContextRegistry,
     Effect.gen(function* () {
@@ -47,16 +58,12 @@ export class ContextRegistry extends Context.Service<
   );
 }
 
-/** Standalone/test compatibility factory; production selects DurableContext through a Layer. */
-export const makeContextRegistry = (store?: ContextStore) =>
-  LocalDurableContext.fromStore(store).pipe(Effect.map(makeContextRegistryWithBackend));
-
 export const makeContextRegistryWithBackend = (
   backend: DurableContext["Service"],
 ): ContextRegistry["Service"] => {
   const definitions = new Map<string, ContextDefinition>();
-  const views = new Set<ContextViewPolicy>(coreContextViews);
-  const project = (record: ContextRecord): ContextRecord => {
+  const views = new Set<ContextViewPolicy>();
+  const project = (record: PublicContext): PublicContext => {
     if (record.projection?.visibility === "restricted")
       return restrictedContext(record, record.projection.reason ?? "missing-policy");
     const view =
@@ -67,7 +74,7 @@ export const makeContextRegistryWithBackend = (
     );
   };
   const commit = Effect.fn("ContextRegistry.commit")(function* (
-    input: ContextRecord,
+    input: ContextInput,
     options: ContextCommitOptions,
   ) {
     const definition = definitions.get(input.path);
@@ -87,29 +94,43 @@ export const makeContextRegistryWithBackend = (
         Schema.isSchemaError(error.cause) ? Effect.fail(error) : Effect.die(error.cause),
       ),
     );
-    const reaction =
-      definition.signalSource && options.evaluate !== false
-        ? project({ ...validated, description: validated.description || definition.identity })
+    const event =
+      definition.changes === "durable-state" && options.mode !== "bootstrap"
+        ? project(validated)
         : undefined;
     return yield* backend.commit(validated, {
       expectedRevision: options.expectedRevision,
-      evaluate: options.evaluate,
-      ...(reaction ? { reaction } : {}),
+      mode: options.mode,
+      ...(event ? { event } : {}),
     });
   });
+  const publicSnapshot = () =>
+    Object.fromEntries(
+      Object.entries(backend.snapshot()).map(([path, record]) => [path, project(record)]),
+    );
   return {
-    project,
-    publicSnapshot: () =>
-      Object.fromEntries(
-        Object.entries(backend.snapshot()).map(([path, record]) => [path, project(record)]),
+    reader: {
+      get: (path) => {
+        const record = backend.get(path);
+        return record ? project(record) : undefined;
+      },
+      snapshot: publicSnapshot,
+      subscribe: backend.subscribe.pipe(
+        Effect.map((stream) =>
+          stream.pipe(Stream.map(({ record }) => ({ record: project(record) }))),
+        ),
       ),
-    registerViews: (policies) =>
-      Effect.sync(() => {
-        for (const view of policies) views.add(view);
-      }),
+    },
+    views: {
+      project,
+      register: (policies) =>
+        Effect.sync(() => {
+          for (const view of policies) views.add(view);
+        }),
+    },
     register: (path, definition) =>
       Effect.gen(function* () {
-        if (!Schema.is(DurableContextSnapshot.fields.path)(path))
+        if (!Schema.is(ContextPath)(path))
           return yield* Effect.die(new Error(`Invalid Context path: ${path}`));
         const previous = definitions.get(path);
         if (previous && previous !== definition)
@@ -117,7 +138,6 @@ export const makeContextRegistryWithBackend = (
         yield* backend.recover(path, definition.validate).pipe(Effect.orDie);
         definitions.set(path, definition);
       }),
-    definition: (path) => definitions.get(path),
     commit,
     describe: (path, description, expectedRevision) =>
       Effect.gen(function* () {

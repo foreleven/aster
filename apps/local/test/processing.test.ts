@@ -1,3 +1,6 @@
+import { ContextCaptures, ContextDescriptions, makeContextMaintenance } from "@aster/core";
+import { runCapture } from "@aster/core/testing";
+import { larkCaptures, larkDescriptions, larkContextViews } from "@aster/integrations";
 import { taskExecutionLayer } from "./workflow-fixtures.js";
 import { ContextDescriptionError } from "@aster/core";
 import { ApprovalQueueActor, ExternalAgents } from "@aster/core";
@@ -6,11 +9,11 @@ import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import { MemoryActor } from "@aster/core";
 import { MemoryBackend, type ContextCapture as MemoryCapture } from "@aster/core";
-import { ContextRegistry, makeContextRegistry, type ContextRecord } from "@aster/core";
+import { ContextRegistry, type ContextRecord } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import { LarkRootActor, LarkEmailChannelActor, LarkMailMessageActor } from "@aster/integrations";
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect";
 import { detectSignals } from "@aster/core";
-import { makeContextProcessor } from "@aster/core";
 import { SignalDefinitions, SignalRootActor } from "@aster/core";
 
 const source = (subject: string): ContextRecord => ({
@@ -27,13 +30,13 @@ const source = (subject: string): ContextRecord => ({
   messages: [],
 });
 
-const waitFor = (predicate: () => boolean) =>
+const waitFor = (predicate: () => boolean, label = "processing") =>
   Effect.gen(function* () {
     for (let i = 0; i < 200; i++) {
       if (predicate()) return;
       yield* Effect.sleep(5);
     }
-    return yield* Effect.die(new Error("Expected processing did not finish"));
+    return yield* Effect.die(new Error(`Expected ${label} did not finish`));
   });
 
 test("only confirmed Signal Runs capture activity, using the evaluated source snapshot", async () => {
@@ -41,6 +44,12 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
+        yield* registry.views.register(larkContextViews);
+        const capturesPolicy = yield* ContextCaptures;
+        yield* capturesPolicy.register([...larkCaptures, runCapture]);
+        const descriptions = yield* ContextDescriptions;
+        yield* descriptions.register(larkDescriptions);
+
         yield* registry.register("/lark", LarkRootActor.context);
         yield* registry.register("/lark/mail", LarkEmailChannelActor.context);
         yield* registry.register("/lark/mail/me/test", LarkMailMessageActor.context);
@@ -57,6 +66,7 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(ContextCaptures, capturesPolicy),
             Layer.succeed(ExternalAgents, {}),
             taskExecutionLayer,
             Layer.succeed(SignalDefinitions, definitions),
@@ -78,9 +88,9 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
         const newerSourceWritten = yield* Deferred.make<void>();
         let evaluated = 0;
         const descriptionInputs: unknown[] = [];
-        const processor = makeContextProcessor(
+        const processor = makeContextMaintenance({
           registry,
-          (input) =>
+          capture: (input) =>
             Deferred.await(newerSourceWritten).pipe(
               Effect.andThen(
                 memory
@@ -88,28 +98,33 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
                   .pipe(Effect.orDie),
               ),
             ),
-          (record, snapshot) =>
-            detectSignals(
-              record.path,
-              snapshot,
-              definitions,
-              () => Effect.succeed(definitions),
-              signals,
-              (path, _candidates, snapshot) =>
-                Effect.sync(() => {
-                  evaluated++;
-                  return (snapshot[path]!.state as { subject: string }).subject ===
-                    "Confirmed request"
-                    ? ["review"]
-                    : [];
-                }),
-            ),
-          (identity) =>
+          captures: capturesPolicy,
+          descriptions,
+          describe: (identity) =>
             Effect.sync(() => {
               descriptionInputs.push(identity);
               return `Fixed ${identity.identity}`;
             }),
-        );
+        });
+        const evaluate = (
+          record: ContextRecord,
+          snapshot: Readonly<Record<string, ContextRecord>>,
+        ) =>
+          detectSignals(
+            record.path,
+            snapshot,
+            definitions,
+            () => Effect.succeed(definitions),
+            signals,
+            (path, _candidates, snapshot) =>
+              Effect.sync(() => {
+                evaluated++;
+                return (snapshot[path]!.state as { subject: string }).subject ===
+                  "Confirmed request"
+                  ? ["review"]
+                  : [];
+              }),
+          );
         const listener = yield* Stream.runForEach(registry.changes, processor).pipe(
           Effect.forkScoped,
         );
@@ -126,12 +141,23 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
         yield* registry.commit(source("Unconfirmed candidate"), {
           expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0,
         });
-        yield* waitFor(() => evaluated === 1);
+        yield* waitFor(
+          () => !!registry.get("/lark/mail/me/test")?.description,
+          "description initialization",
+        );
+        const first = registry.reader.get("/lark/mail/me/test")!;
+        yield* evaluate(first, { ...registry.reader.snapshot(), [first.path]: first });
+        yield* waitFor(() => evaluated === 1, "first evaluation");
         assert.equal(captures.length, 0, "Jev candidate must not write memory");
         yield* registry.commit(source("Confirmed request"), {
           expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0,
         });
-        yield* waitFor(() => Object.keys(registry.snapshot()).some((p) => p.includes("/runs/")));
+        const confirmed = registry.reader.get("/lark/mail/me/test")!;
+        yield* evaluate(confirmed, { ...registry.reader.snapshot(), [confirmed.path]: confirmed });
+        yield* waitFor(
+          () => Object.keys(registry.snapshot()).some((p) => p.includes("/runs/")),
+          "Run creation",
+        );
         // A newer source value exists before memory finishes processing the Run notification.
         yield* registry.commit(
           {
@@ -141,11 +167,11 @@ test("only confirmed Signal Runs capture activity, using the evaluated source sn
           { expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0 },
         );
         yield* Deferred.succeed(newerSourceWritten, undefined);
-        yield* waitFor(() => captures.length >= 1);
+        yield* waitFor(() => captures.length >= 1, "Memory capture");
         yield* Fiber.interrupt(listener);
         return { captures, descriptionInputs, snapshot: registry.snapshot() };
       }),
-    ),
+    ).pipe(Effect.provide(Layer.mergeAll(ContextCaptures.layer, ContextDescriptions.layer))),
   );
   assert.equal(result.captures.length, 1);
   const capture = result.captures[0]!;
@@ -168,6 +194,12 @@ test("discovered account and mailbox identities use separate sessions; no captur
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
+        yield* registry.views.register(larkContextViews);
+        const capturesPolicy = yield* ContextCaptures;
+        yield* capturesPolicy.register([...larkCaptures, runCapture]);
+        const descriptions = yield* ContextDescriptions;
+        yield* descriptions.register(larkDescriptions);
+
         yield* registry.register("/lark", LarkRootActor.context);
         yield* registry.register("/lark/mail", LarkEmailChannelActor.context);
         yield* registry.register("/lark/mail/me/test", LarkMailMessageActor.context);
@@ -175,6 +207,7 @@ test("discovered account and mailbox identities use separate sessions; no captur
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(ContextCaptures, capturesPolicy),
             Layer.succeed(MemoryBackend, {
               description: "Memory",
               retrieval: "bm25",
@@ -188,13 +221,14 @@ test("discovered account and mailbox identities use separate sessions; no captur
           ),
         );
         const memory = yield* system.spawn("memory", MemoryActor);
-        const processChange = makeContextProcessor(
+        const processChange = makeContextMaintenance({
           registry,
-          (input) =>
+          capture: (input) =>
             memory.ask<void>((replyTo) => ({ _tag: "Capture", input, replyTo })).pipe(Effect.orDie),
-          () => Effect.void,
-          () => Effect.die(new Error("Descriptions are provided by this fixture")),
-        );
+          captures: capturesPolicy,
+          descriptions,
+          describe: () => Effect.die(new Error("Descriptions are provided by this fixture")),
+        });
         const listener = yield* Stream.runForEach(registry.changes, processChange).pipe(
           Effect.forkScoped,
         );
@@ -252,7 +286,7 @@ test("discovered account and mailbox identities use separate sessions; no captur
         yield* Fiber.interrupt(listener);
         return captures;
       }),
-    ),
+    ).pipe(Effect.provide(Layer.mergeAll(ContextCaptures.layer, ContextDescriptions.layer))),
   );
   assert.deepEqual(
     result.map((input) => input.records.map((r) => r.path)),
@@ -271,26 +305,26 @@ test("a failed Context item does not terminate processing of later changes", asy
           path: "/failed",
           created: true,
           stateChanged: true,
-          record: { path: "/failed", description: "", state: {}, messages: [] },
+          record: { revision: 0, path: "/failed", description: "", state: {}, messages: [] },
         },
         {
           path: "/next",
           created: true,
           stateChanged: true,
-          record: { path: "/next", description: "", state: {}, messages: [] },
+          record: { revision: 0, path: "/next", description: "", state: {}, messages: [] },
         },
       ),
       isolateContextChange((change) =>
-        change.path === "/failed"
+        change.record.path === "/failed"
           ? Effect.fail(
               new ContextDescriptionError({
-                path: change.path,
+                path: change.record.path,
                 message: "Internal Agent returned no structured result",
                 cause: undefined,
               }),
             )
           : Effect.sync(() => {
-              handled.push(change.path);
+              handled.push(change.record.path);
             }),
       ),
     ),

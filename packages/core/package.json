@@ -8,6 +8,11 @@
       "aster-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./testing": {
+      "aster-source": "./src/testing/context.ts",
+      "types": "./dist/testing/context.d.ts",
+      "default": "./dist/testing/context.js"
     }
   },
   "scripts": {

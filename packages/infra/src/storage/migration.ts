@@ -4,12 +4,8 @@ import { Effect, Schema } from "effect";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import { createSession } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
-import {
-  contextBackendFor,
-  normalizeContextRevision,
-  DurableContextSnapshot,
-  type ContextRecord,
-} from "@aster/core";
+import { contextBackendFor, normalizeContextRevision } from "./routed-durable.js";
+import { DurableContextSnapshot, type ContextRecord } from "@aster/core";
 import { makeFileContextStore } from "./file-context-store.js";
 import { acquireActorStoreLock } from "./actor-store-lock.js";
 import { readPiContextSnapshots, writePiContextSnapshot } from "./pi-durable-context.js";

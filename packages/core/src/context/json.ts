@@ -18,18 +18,3 @@ const omitUndefinedProperties = (value: unknown): unknown => {
 
 export const publicJson = (value: unknown): Schema.Json =>
   Schema.decodeUnknownSync(Schema.Json)(omitUndefinedProperties(value));
-
-export const undefinedPaths = (value: unknown, prefix = ""): readonly string[] => {
-  if (Array.isArray(value))
-    return value.flatMap((item, index) => undefinedPaths(item, `${prefix}[${index}]`));
-  if (
-    Predicate.isObject(value) &&
-    (Object.getPrototypeOf(value) === Object.prototype || Object.getPrototypeOf(value) === null)
-  ) {
-    return Object.entries(value).flatMap(([key, item]) => {
-      const path = prefix ? `${prefix}.${key}` : key;
-      return item === undefined ? [path] : undefinedPaths(item, path);
-    });
-  }
-  return [];
-};

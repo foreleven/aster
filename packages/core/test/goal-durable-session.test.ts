@@ -6,7 +6,8 @@ import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
 import { Effect, Layer } from "effect";
-import { runGoalConversation, makeContextRegistry, conversationText } from "../src/index.js";
+import { runGoalConversation, conversationText } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 test("reopened Goal sessions keep their policy and history while tools read the new turn", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "aster-goal-current-"));

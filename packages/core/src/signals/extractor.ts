@@ -1,10 +1,10 @@
 import { internalAgentSettings } from "../config/settings.js";
-import { MemoryRecall } from "../context/memory.js";
+import { MemoryRecall } from "../memory/contracts.js";
 import { makeStructuredReasoning } from "../reasoning/structured.js";
 import { Effect, Schema } from "effect";
 import { SignalDetectionError } from "./errors.js";
 import type { SignalExtractor } from "./detect.js";
-import type { ContextRecord } from "../context/model.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import type { SignalDefinition } from "../config/schema.js";
 
 const outputSchema = {

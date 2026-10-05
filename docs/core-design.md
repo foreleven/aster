@@ -1,5 +1,7 @@
 # Local Signal Delegation — Core Design
 
+For the current Context models, module boundaries and compatibility contract, see [Context design](context-design.md). Historical design discussion below does not supersede that contract.
+
 The accepted runtime and configuration boundaries are specified in [runtime design](runtime-design.md) and [ADR 0040](adr/0040-compose-aster-runtime-with-effect-layers.md). They supersede application-owned service assembly and direct environment loading described in historical sections below.
 
 Status: working design. The local YAML and memory slice is implemented; wider persistence and delegation sections describe the intended system. The canonical terms are in [CONTEXT.md](../CONTEXT.md); the reasons behind durable decisions are in [ADRs](./adr/).
@@ -264,7 +266,7 @@ The former `context` package is now `@aster/core`. Core owns configuration schem
 
 `@aster/infra` implements configuration-source loading, file storage and process locking, System One transport, Pi/Codex/Doubao execution, and the agentmemory backend. `@aster/integrations` owns Lark and generic mail. Neither package imports or re-exports the other; the local host selects their Layers separately. Core owns Memory contracts, the Actor and capture workflow, while infra provides its `MemoryBackend`. See [ADR 0046](adr/0046-separate-business-integrations-from-infrastructure.md).
 
-The local application now contains only CLI/startup assembly, HTTP/SSE/static-file delivery, and process shutdown. App-specific `.env` and CLI executable paths are explicitly supplied to Codex adapters; package-relative paths are not used. Core's Signal screening accepts ContextRecord for any source rather than importing Lark's EmailData.
+The local application now contains only CLI/startup assembly, HTTP/SSE/static-file delivery, and process shutdown. App-specific `.env` and CLI executable paths are explicitly supplied to Codex adapters; package-relative paths are not used. Core's Signal screening accepts PublicContext for any source rather than importing Lark's EmailData.
 
 Domain tests live with core, infrastructure adapter tests with infra, business transport tests with integrations, and cross-integration and HTTP tests with the local app. All imports, package names and build ordering use core; no compatibility context package is retained.
 

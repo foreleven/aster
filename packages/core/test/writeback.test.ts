@@ -11,12 +11,12 @@ import {
   SignalDefinitions,
   SignalRootActor,
   approvalEntries,
-  makeContextRegistry,
   writebackApprovalId,
   WritebackOperation,
   type ContextRecord,
   SignalDefinition,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { RunState } from "../src/tasks/run-state.js";
 import { runActorPath } from "../src/tasks/address.js";
 import { preparationLayer, fakeAgent } from "./fixtures.js";
@@ -179,7 +179,7 @@ test("Run persists the result and exact writeback before a separate approval; fo
         yield* actor.tell({ _tag: "Finished", outcome: { _tag: "Completed", text: "done" } });
         yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
         assert.equal(calls, 1);
-        const view = env.registry.project(env.record()!);
+        const view = env.registry.views.project(env.record()!);
         assert.equal(
           Schema.decodeUnknownSync(Schema.Struct({ writeback: WritebackOperation }))(view.state)
             .writeback.status,

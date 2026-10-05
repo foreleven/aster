@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
-import {
-  contextView,
-  defineContext,
-  makeContextRegistry,
-  type ContextRecord,
-} from "../src/index.js";
+import { contextView, defineContext, type ContextRecord } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 const definition = defineContext({
-  identity: "Source",
   state: Schema.Struct({ summary: Schema.String, token: Schema.String }),
   message: Schema.String,
-  signalSource: true,
+  changes: "durable-state",
   view: contextView({ state: Schema.Struct({ summary: Schema.String }), message: Schema.String }),
 });
 const initial = {
@@ -48,16 +43,30 @@ test("source state and public reaction handoff commit together and survive uncer
       fail = false;
       // Same-process storage reconciliation preserves metadata even though domain validation omits it.
       yield* registry.register(initial.path, definition);
-      assert.deepEqual(registry.get(initial.path)?.reactionEvents, [event]);
+      assert.deepEqual(
+        registry.backend.exportRecords().find((record) => record.path === initial.path)
+          ?.reactionEvents,
+        [event],
+      );
       const restarted = yield* makeContextRegistry(store);
       yield* restarted.register(initial.path, definition);
       const current = restarted.get(initial.path)!;
-      yield* restarted.commit({ ...current, reactionEvents: [] }, { expectedRevision: 1 });
-      assert.deepEqual(restarted.get(initial.path)?.reactionEvents, [event]);
-      const next = yield* restarted.commit(
-        { ...initial, state: { ...initial.state, summary: "second" }, reactionEvents: [] },
-        { expectedRevision: 1 },
+      const forged = { ...current, reactionEvents: [] };
+      yield* restarted.commit(forged, { expectedRevision: 1 });
+      assert.deepEqual(
+        restarted.backend.exportRecords().find((record) => record.path === initial.path)
+          ?.reactionEvents,
+        [event],
       );
+      const forgedNext = {
+        ...initial,
+        state: { ...initial.state, summary: "second" },
+        reactionEvents: [],
+      };
+      yield* restarted.commit(forgedNext, { expectedRevision: 1 });
+      const next = restarted.backend
+        .exportRecords()
+        .find((record) => record.path === initial.path)!;
       assert.equal(next.reactionEvents?.length, 2);
       assert.deepEqual(
         next.reactionEvents?.map((item) => item.record.revision),
@@ -71,7 +80,7 @@ test("source state and public reaction handoff commit together and survive uncer
         (next.reactionEvents?.[1]?.record.state as { summary: string }).summary,
         "second",
       );
-      assert.equal("reactionEvents" in restarted.project(next), false);
+      assert.equal("reactionEvents" in restarted.views.project(next), false);
     }),
   );
 });
@@ -83,23 +92,29 @@ test("bootstrap, message-only and description-only changes never create reaction
       yield* registry.register(initial.path, definition);
       const first = yield* registry.commit(
         { ...initial, description: "" },
-        { expectedRevision: 0, evaluate: false },
+        { expectedRevision: 0, mode: "bootstrap" },
       );
-      assert.equal(first.reactionEvents, undefined);
+      assert.equal("reactionEvents" in first, false);
+      assert.equal(registry.backend.journal().length, 0);
       yield* registry.describe(initial.path, "Source", 1);
       const message = yield* registry.commit(
         { ...registry.get(initial.path)!, messages: ["evidence"] },
         { expectedRevision: 2 },
       );
-      assert.equal(message.reactionEvents, undefined);
+      assert.equal("reactionEvents" in message, false);
       const changed = yield* registry.commit(
         { ...message, state: { ...initial.state, summary: "changed" } },
         { expectedRevision: 3 },
       );
-      assert.equal(changed.reactionEvents?.length, 1);
+      assert.equal(changed.revision, 4);
+      assert.equal(registry.backend.journal().length, 1);
       const stale = yield* registry.commit(initial, { expectedRevision: 3 }).pipe(Effect.result);
       assert.equal(stale._tag, "Failure");
-      assert.equal(registry.get(initial.path)?.reactionEvents?.length, 1);
+      assert.equal(
+        registry.backend.exportRecords().find((record) => record.path === initial.path)
+          ?.reactionEvents?.length,
+        1,
+      );
     }),
   );
 });
@@ -110,7 +125,7 @@ test("recovery rejects corrupted reaction envelopes instead of replaying another
       const registry = yield* makeContextRegistry();
       yield* registry.register(initial.path, definition);
       const committed = yield* registry.commit(initial, { expectedRevision: 0 });
-      const event = committed.reactionEvents![0]!;
+      const event = registry.backend.exportRecords()[0]!.reactionEvents![0]!;
       for (const corrupt of [
         { ...event, source: "/another-source" },
         { ...event, revision: 2 },

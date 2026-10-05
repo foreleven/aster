@@ -14,9 +14,9 @@ import {
   ExternalAgents,
   ExternalAgentError,
   contextSpawnOptions,
-  makeContextRegistry,
   type DelegationUpdate,
 } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import { makePiAgent } from "../src/pi/agent.js";
 import { makeFileContextStore } from "../src/storage/file-context-store.js";
 

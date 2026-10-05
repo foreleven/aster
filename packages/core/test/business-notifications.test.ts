@@ -21,12 +21,12 @@ import {
   PersonalAgentActor,
   RunRootActor,
   defineContext,
-  makeContextRegistry,
   makeApplicationApi,
   makeMemoryGoalHistory,
   type ContextRecord,
   type PersonalReply,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { NotificationsActor, NotificationState } from "../src/notifications/actor.js";
 import { BusinessOutbox } from "../src/notifications/inbox.js";
 import { fakeAgent } from "./fixtures.js";
@@ -35,7 +35,6 @@ import { GoalState } from "../src/goals/state.js";
 
 const sourcePath = "/signals/review/runs/one";
 const publication = defineContext({
-  identity: "Test result publisher",
   state: BusinessOutbox,
   message: Schema.Never,
 });
@@ -198,7 +197,7 @@ test("Goal progress publishes atomically, omits bookkeeping, and reaches Persona
             yield* changes.pipe(
               Stream.filter(
                 (change) =>
-                  change.path === "/notifications" &&
+                  change.record.path === "/notifications" &&
                   Schema.decodeUnknownSync(NotificationState)(
                     change.record.state,
                   ).deliveries.filter((d) => d.status === "delivered").length === 3,
@@ -272,8 +271,8 @@ for (const loss of [false, true]) {
               yield* changes.pipe(
                 Stream.filter((change) =>
                   !restart && loss
-                    ? change.path === "/personal" && change.record.messages.length === 1
-                    : change.path === "/notifications" &&
+                    ? change.record.path === "/personal" && change.record.messages.length === 1
+                    : change.record.path === "/notifications" &&
                       Schema.decodeUnknownSync(NotificationState)(change.record.state).deliveries[0]
                         ?.status === "delivered",
                 ),
@@ -471,7 +470,7 @@ test("Run outcomes and Personal task proposals form a bounded durable feedback c
             assert.equal(result._tag, "Queued");
             yield* changes.pipe(
               Stream.filter((change) => {
-                if (change.path !== "/notifications") return false;
+                if (change.record.path !== "/notifications") return false;
                 const deliveries = Schema.decodeUnknownSync(NotificationState)(
                   change.record.state,
                 ).deliveries;

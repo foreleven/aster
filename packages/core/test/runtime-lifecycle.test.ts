@@ -9,7 +9,6 @@ import {
   AsterRuntime,
   MemoryBackend,
   DurableContext,
-  LocalDurableContext,
   ExternalAgents,
   GoalHistoryStore,
   RuntimeIntegrations,
@@ -17,6 +16,7 @@ import {
   defineIntegration,
   makeMemoryGoalHistory,
 } from "../src/index.js";
+import { makeDurableContext } from "../src/context/kernel.js";
 
 const integration = (
   name: string,
@@ -40,7 +40,10 @@ const integration = (
 
 const infrastructure = (drain = Effect.void) =>
   Layer.mergeAll(
-    Layer.effect(DurableContext, LocalDurableContext.fromStore()),
+    Layer.effect(
+      DurableContext,
+      makeDurableContext({ load: Effect.succeed([]), save: () => Effect.void }),
+    ),
     Layer.sync(GoalHistoryStore, makeMemoryGoalHistory),
     Models.layer([
       {

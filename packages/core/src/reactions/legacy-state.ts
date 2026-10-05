@@ -6,8 +6,8 @@ import {
 } from "@aster/api-contracts";
 import { Schema } from "effect";
 import { isDeepStrictEqual } from "node:util";
-import { reactionEventId } from "./reaction-event.js";
-import { ContextReactionEvent } from "./model.js";
+import { contextEventId } from "../context/model.js";
+import { ContextReactionEvent } from "../context/storage-format.js";
 import { GoalTitle } from "../config/schema.js";
 import { GoalIntentInput } from "../goals/intent.js";
 import { GoalScreeningRecord } from "../goals/screening.js";
@@ -49,7 +49,7 @@ export const ReactionWork = Schema.Struct({
   deliveries: Schema.optional(Schema.Array(ReactionDelivery)),
 });
 export type ReactionWork = typeof ReactionWork.Type;
-export const ReactionState = Schema.Struct({
+export const LegacyReactionState = Schema.Struct({
   work: Schema.Array(ReactionWork),
   recoveryReceipts: Schema.optional(Schema.Array(RecoveryReceipt)),
 }).check(
@@ -76,7 +76,7 @@ export const ReactionState = Schema.Struct({
           return false;
         if (sources.has(event.requestId)) return false;
         sources.add(event.requestId);
-        if (event.requestId !== reactionEventId(event.source, event.revision)) return false;
+        if (event.requestId !== contextEventId(event.source, event.revision)) return false;
         if (
           event.causationId !== event.requestId ||
           event.record.path !== event.source ||
@@ -109,7 +109,7 @@ export const ReactionState = Schema.Struct({
     { expected: "Unique reaction work with frozen source evidence and matching delivery receipts" },
   ),
 );
-export type ReactionState = typeof ReactionState.Type;
+
 export const ReactionReply = Schema.Union([
   Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
   Schema.TaggedStruct("Rejected", { error: ApplicationError }),

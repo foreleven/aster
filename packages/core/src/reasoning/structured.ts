@@ -1,8 +1,8 @@
-import { contextCatalogue, contextTools } from "../context/discovery.js";
+import { contextCatalogue, contextTools } from "./context-tools.js";
 import { AgentRunner, AgentError, Type, type TSchema, type AgentTool } from "@aster/agent";
 import { Clock, Effect } from "effect";
-import type { MemoryRecall } from "../context/memory.js";
-import type { ContextRecord } from "../context/model.js";
+import type { MemoryRecall } from "../memory/contracts.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 
 export const makeStructuredReasoning = Effect.fn("makeStructuredReasoning")(function* (
   name: string,

@@ -7,8 +7,8 @@ import {
   ConfigLocation,
   ContextActor,
   ContextRegistry,
+  ContextCaptures,
   DurableContext,
-  LocalDurableContext,
   GoalHistoryStore,
   SystemOneClient,
   ExternalAgents,
@@ -19,6 +19,7 @@ import {
   contextPath,
   makeMemoryGoalHistory,
 } from "@aster/core";
+import { LocalDurableContext } from "@aster/infra";
 import { Models } from "@aster/agent";
 import { MailFetcher, MailIntegration, MailSettings } from "@aster/integrations";
 import { MemoryBackend } from "@aster/core";
@@ -26,11 +27,9 @@ import { MemoryBackend } from "@aster/core";
 class Source extends ContextActor.Service<Source>()("test/Source", {
   command: Schema.TaggedStruct("Ping", {}),
   context: defineContext({
-    identity: "source",
     view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
     state: Schema.Struct({ value: Schema.Number }),
     message: Schema.Never,
-    capture: (record) => ({ sessionId: record.path, records: [record] }),
   }),
 }) {
   static readonly layer = Layer.effect(
@@ -63,6 +62,13 @@ const sourceLayer = (
   Layer.effectDiscard(
     Effect.gen(function* () {
       const modules = yield* RuntimeIntegrations;
+      const captures = yield* ContextCaptures;
+      yield* captures.register([
+        {
+          matches: (path) => path === `/${name}`,
+          capture: (record) => ({ sessionId: record.path, records: [record] }),
+        },
+      ]);
       const registry = yield* ContextRegistry;
       yield* modules.register(
         defineIntegration({

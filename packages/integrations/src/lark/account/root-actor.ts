@@ -13,7 +13,6 @@ import { ImAgentQueue } from "../im/agent-queue.js";
 import { ImSummaryGate } from "../im/summary-gate.js";
 import { ImStorage } from "../im/storage.js";
 import { ChatSummarizer } from "../im/summarizer.js";
-import { profileCapture } from "../shared/profile.js";
 const LarkRootCommand = Schema.TaggedStruct("AccountLoaded", {
   result: Schema.Union([
     Schema.TaggedStruct("Success", { value: AccountProfile }),
@@ -38,16 +37,8 @@ export class LarkRootActor extends ContextActor.Service<
   command: LarkRootCommand,
   context: defineContext({
     view: accountView,
-    identity: "Lark account",
     state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
     message: Schema.Never,
-    capture: (record) =>
-      record.state.account === undefined
-        ? undefined
-        : {
-            sessionId: profileCapture(record, record.state.account),
-            records: [record],
-          },
   }),
 }) {
   static readonly layer = Layer.effect(

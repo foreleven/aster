@@ -1,7 +1,6 @@
 export * from "./context/actor.js";
 export * from "./context/model.js";
 export * from "./context/registry.js";
-export * from "./context/storage.js";
 export * from "./config/schema.js";
 export {
   GoalActor,
@@ -16,10 +15,9 @@ export * from "./signals/actors.js";
 export * from "./tasks/run.js";
 export * from "./signals/goal-owner.js";
 export * from "./decisions/system-one.js";
-export * from "./context/processing.js";
 export * from "./delegation/actor.js";
 export * from "./signals/detect.js";
-export * from "./context/description.js";
+export * from "./reasoning/context-description.js";
 export * from "./signals/execution-gate.js";
 export * from "./signals/extractor.js";
 export * from "./tasks/model.js";
@@ -38,12 +36,12 @@ export * from "./goals/history.js";
 export * from "./goals/intent.js";
 export * from "./goals/screening.js";
 export * from "./config/settings.js";
-export * from "./context/memory.js";
+export * from "./memory/contracts.js";
 export * from "./runtime/integration.js";
 export * from "./tasks/execution.js";
 export * from "./signals/policy.js";
 export { secretConfig } from "@aster/agent";
-export * from "./context/reactions.js";
+export * from "./runtime/context-consumers.js";
 export * from "./signals/commands.js";
 export * from "./goals/relevance.js";
 export * from "./runtime/api.js";
@@ -63,15 +61,13 @@ export * from "./personal/actor.js";
 export * from "./personal/reasoner.js";
 export * from "./personal/actions.js";
 
-export * from "./context/durable.js";
-export * from "./context/durable-kernel.js";
-export * from "./context/routed-durable.js";
-export * from "./context/local-durable.js";
+export * from "./context/persistence.js";
+export * from "./context/kernel.js";
 
 export * from "./tasks/root.js";
 
 export { contextView } from "./context/view.js";
-export type { ContextViewPolicy } from "./context/model.js";
+export type { ContextViewPolicy } from "./context/definition.js";
 
 export * from "./goals/intent.js";
 
@@ -79,3 +75,9 @@ export * from "./memory/actor.js";
 
 export * from "./context/queries.js";
 export * from "./goals/conversation.js";
+
+export * from "./context/definition.js";
+
+export * from "./memory/capture.js";
+
+export * from "./context/storage-format.js";

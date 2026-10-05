@@ -7,7 +7,7 @@ import { DelegationError } from "./errors.js";
 import { Clock, Effect, Match, Layer, Schema, Option } from "effect";
 import { ReplyTo, type ActorRef, type ActorContext } from "@aster/actor";
 import { ContextActor, contextPath } from "../context/actor.js";
-import { defineContext } from "../context/model.js";
+import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
 import type { ExternalAgentError } from "../tasks/errors.js";
 import { ExecutionSession, ExecutionStatus, ExternalAgents } from "../tasks/model.js";
@@ -79,7 +79,6 @@ export class DelegationActor extends ContextActor.Service<DelegationActor, Exter
   {
     command: Command,
     context: defineContext({
-      identity: "Task delegated to an external agent",
       state: DelegationState,
       message: Schema.Unknown,
     }),

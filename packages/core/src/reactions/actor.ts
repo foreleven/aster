@@ -1,20 +1,28 @@
+import { DurableContext } from "../context/persistence.js";
 import {
   ApplicationError,
   RecoveryInput,
   RecoveryReply,
   type RecoveryReceipt,
 } from "@aster/api-contracts";
-import { recoveryReplay } from "./recovery.js";
+import { recoveryReplay } from "../commands/recovery.js";
 import { randomUUID } from "node:crypto";
 import { ReplyTo, type ActorContext } from "@aster/actor";
 import { Clock, Effect, Layer, Match, Option, Schema } from "effect";
-import { ContextActor } from "./actor.js";
-import { ContextRegistry } from "./registry.js";
-import { defineContext } from "./model.js";
-import { contextView } from "./view.js";
+import { ContextActor } from "../context/actor.js";
+import { ContextRegistry } from "../context/registry.js";
+import { defineContext } from "../context/definition.js";
+import { contextView } from "../context/view.js";
 import { GoalSettings } from "../config/settings.js";
-import { ReactionPolicy, ReactionFailure } from "./reaction-policy.js";
-import { ReactionState, ReactionWork, ReactionPlan, ReactionReply } from "./reaction-state.js";
+import { ReactionPolicy, ReactionFailure } from "./policy.js";
+import {
+  ReactionState,
+  ReactionWork,
+  ReactionPlan,
+  ReactionReply,
+  deliveriesOf,
+  type ReactionPlanning,
+} from "./state.js";
 
 export const ReactionCommand = Schema.Union([
   Schema.TaggedStruct("Wake", {}),
@@ -43,12 +51,11 @@ export type ReactionCommand = typeof ReactionCommand.Type;
 const path = "/system-one";
 const publicWork = Schema.Struct({
   event: Schema.Struct({
-    requestId: Schema.String,
-    source: Schema.String,
-    revision: Schema.Number,
+    id: Schema.String,
+    record: Schema.Struct({ path: Schema.String, revision: Schema.Number }),
     createdAt: Schema.String,
   }),
-  status: ReactionWork.fields.status,
+  status: Schema.String,
   attempts: Schema.Int,
   error: Schema.optional(Schema.String),
   deliveries: Schema.optional(
@@ -70,11 +77,10 @@ const publicWork = Schema.Struct({
 /** The sole writer of the reaction inbox, frozen decisions and delivery outcomes. */
 export class SystemOneActor extends ContextActor.Service<
   SystemOneActor,
-  ReactionPolicy | GoalSettings
+  ReactionPolicy | GoalSettings | DurableContext
 >()("context/SystemOneActor", {
   command: ReactionCommand,
   context: defineContext({
-    identity: "Context reaction processing",
     state: ReactionState,
     message: Schema.Never,
     view: contextView({ state: Schema.Struct({ work: Schema.Array(publicWork) }) }),
@@ -84,6 +90,7 @@ export class SystemOneActor extends ContextActor.Service<
     SystemOneActor,
     Effect.gen(function* () {
       const registry = yield* ContextRegistry;
+      const durable = yield* DurableContext;
       const policy = yield* ReactionPolicy;
       const settings = yield* GoalSettings;
       let generation: string | undefined;
@@ -101,25 +108,19 @@ export class SystemOneActor extends ContextActor.Service<
           .pipe(Effect.orDie);
       });
       const update = (id: string, f: (work: ReactionWork) => ReactionWork) =>
-        save(state().work.map((work) => (work.event.requestId === id ? f(work) : work)));
+        save(state().work.map((work) => (work.event.id === id ? f(work) : work)));
       const ingest = Effect.fn("SystemOne.ingest")(function* () {
         const existing = state().work;
-        const known = new Set(existing.map((work) => work.event.requestId));
-        const admittedAt = new Date(yield* Clock.currentTimeMillis).toISOString();
+        const known = new Set(existing.map((work) => work.event.id));
         const incoming: ReactionWork[] = [];
-        for (const record of Object.values(registry.snapshot())) {
-          for (const event of record.reactionEvents ?? []) {
-            if (known.has(event.requestId)) continue;
-            known.add(event.requestId);
-            incoming.push({
-              event,
-              snapshot: {},
-              goals: [],
-              admittedAt,
-              status: "pending",
-              attempts: 0,
-            });
-          }
+        for (const event of durable.journal()) {
+          if (known.has(event.id)) continue;
+          known.add(event.id);
+          incoming.push({
+            event,
+            status: "pending",
+            attempts: 0,
+          });
         }
         if (incoming.length) yield* save([...existing, ...incoming]);
       });
@@ -131,50 +132,56 @@ export class SystemOneActor extends ContextActor.Service<
           if (work.status === "pending" || work.status === "planning") {
             // Freeze targets when this source reaches screening. Earlier queued work may
             // have legitimately advanced Goal/Signal revisions since source ingestion.
-            const { [path]: _ownState, ...evidence } = registry.publicSnapshot();
-            const next = {
-              ...work,
-              ...(work.status === "pending"
-                ? {
-                    snapshot: { ...evidence, [work.event.source]: work.event.record },
-                    goals: settings.definitions,
-                    admittedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
-                  }
-                : {}),
-              status: "planning" as const,
+            const { [path]: _ownState, ...evidence } = registry.reader.snapshot();
+            const { [work.event.record.path]: _source, ...otherEvidence } = evidence;
+            const next: ReactionPlanning = {
+              event: work.event,
+              input:
+                work.status === "pending"
+                  ? {
+                      evidence: otherEvidence,
+                      goals: settings.definitions,
+                      screeningAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
+                    }
+                  : work.input,
+              status: "planning",
               attempts: work.attempts + 1,
             };
-            yield* update(work.event.requestId, () => next);
+            yield* update(work.event.id, () => next);
             generation = randomUUID();
             const token = generation;
             yield* context.pipeToSelf(policy.plan(next), (result) => ({
               _tag: "Planned",
               generation: token,
-              requestId: work.event.requestId,
+              requestId: work.event.id,
               result,
             }));
             return;
           }
           if (work.status !== "ready") continue;
-          const delivery = work.deliveries?.find(
+          const delivery = deliveriesOf(work).find(
             (item) => item.status === "pending" || (item.status === "unknown" && item.attempts < 3),
           );
           if (!delivery) continue;
           const id = delivery.command.input.requestId;
-          yield* update(work.event.requestId, (item) => ({
-            ...item,
-            deliveries: item.deliveries!.map((d) =>
-              d.command.input.requestId === id
-                ? { ...d, status: "sending", attempts: d.attempts + 1 }
-                : d,
-            ),
-          }));
+          yield* update(work.event.id, (item) =>
+            item.status !== "ready"
+              ? item
+              : {
+                  ...item,
+                  deliveries: deliveriesOf(item).map((d) =>
+                    d.command.input.requestId === id
+                      ? { ...d, status: "sending", attempts: d.attempts + 1 }
+                      : d,
+                  ),
+                },
+          );
           generation = randomUUID();
           const token = generation;
           yield* context.pipeToSelf(policy.deliver(delivery.command), (result) => ({
             _tag: "Delivered",
             generation: token,
-            requestId: work.event.requestId,
+            requestId: work.event.id,
             deliveryId: id,
             result,
           }));
@@ -199,20 +206,24 @@ export class SystemOneActor extends ContextActor.Service<
             // Interrupted asks have no durable acknowledgement. Keep their original
             // identity and attempt count when applying the bounded retry policy.
             const recovered = state().work;
-            if (recovered.some((work) => work.deliveries?.some((d) => d.status === "sending")))
+            if (recovered.some((work) => deliveriesOf(work).some((d) => d.status === "sending")))
               yield* save(
-                recovered.map((work) => ({
-                  ...work,
-                  deliveries: work.deliveries?.map((d) =>
-                    d.status === "sending"
-                      ? {
-                          ...d,
-                          status: "unknown",
-                          error: "Delivery interrupted before acknowledgement",
-                        }
-                      : d,
-                  ),
-                })),
+                recovered.map((work) =>
+                  work.status !== "ready"
+                    ? work
+                    : {
+                        ...work,
+                        deliveries: deliveriesOf(work).map((d) =>
+                          d.status === "sending"
+                            ? {
+                                ...d,
+                                status: "unknown",
+                                error: "Delivery interrupted before acknowledgement",
+                              }
+                            : d,
+                        ),
+                      },
+                ),
               );
             yield* ingest();
             yield* drive(context);
@@ -248,7 +259,7 @@ export class SystemOneActor extends ContextActor.Service<
                     state().recoveryReceipts ?? [],
                   );
                   if (Option.isSome(replay)) return replay.value;
-                  const work = state().work.find((item) => item.event.requestId === input.workId);
+                  const work = state().work.find((item) => item.event.id === input.workId);
                   if (!work)
                     return yield* new ApplicationError({
                       kind: "not-found",
@@ -263,17 +274,17 @@ export class SystemOneActor extends ContextActor.Service<
                       });
                     next = { ...work, status: "planning" };
                   } else {
-                    const delivery = work.deliveries?.find(
+                    const delivery = deliveriesOf(work).find(
                       (item) => item.command.input.requestId === input.deliveryId,
                     );
-                    if (!delivery || delivery.status !== "unknown")
+                    if (work.status !== "ready" || !delivery || delivery.status !== "unknown")
                       return yield* new ApplicationError({
                         kind: "conflict",
                         message: "Only unknown delivery can be retried",
                       });
                     next = {
                       ...work,
-                      deliveries: work.deliveries!.map((item) =>
+                      deliveries: deliveriesOf(work).map((item) =>
                         item === delivery ? { ...item, status: "pending" } : item,
                       ),
                     };
@@ -283,9 +294,7 @@ export class SystemOneActor extends ContextActor.Service<
                     revision: input.expectedRevision + 1,
                   };
                   yield* save(
-                    state().work.map((item) =>
-                      item.event.requestId === work.event.requestId ? next : item,
-                    ),
+                    state().work.map((item) => (item.event.id === work.event.id ? next : item)),
                     [...(state().recoveryReceipts ?? []), { input, receipt }],
                   );
                   return receipt;
@@ -303,25 +312,29 @@ export class SystemOneActor extends ContextActor.Service<
               Effect.gen(function* () {
                 if (command.generation !== generation) return;
                 yield* update(command.requestId, (work) =>
-                  Match.value(command.result).pipe(
-                    Match.tag("Failure", ({ error }) => ({
-                      ...work,
-                      status: "failed" as const,
-                      error: error.message,
-                    })),
-                    Match.tag("Success", ({ value }) => ({
-                      ...work,
-                      error: undefined,
-                      status: value.commands.length ? ("ready" as const) : ("completed" as const),
-                      screenings: value.screenings,
-                      deliveries: value.commands.map((command) => ({
-                        command,
-                        status: "pending" as const,
-                        attempts: 0,
-                      })),
-                    })),
-                    Match.exhaustive,
-                  ),
+                  work.status !== "planning"
+                    ? work
+                    : Match.value(command.result).pipe(
+                        Match.tag("Failure", ({ error }) => ({
+                          ...work,
+                          status: "failed" as const,
+                          error: error.message,
+                        })),
+                        Match.tag("Success", ({ value }) => ({
+                          event: work.event,
+                          attempts: work.attempts,
+                          status: value.commands.length
+                            ? ("ready" as const)
+                            : ("completed" as const),
+                          screenings: value.screenings,
+                          deliveries: value.commands.map((command) => ({
+                            command,
+                            status: "pending" as const,
+                            attempts: 0,
+                          })),
+                        })),
+                        Match.exhaustive,
+                      ),
                 );
                 generation = undefined;
                 yield* drive(context);
@@ -331,7 +344,8 @@ export class SystemOneActor extends ContextActor.Service<
               Effect.gen(function* () {
                 if (command.generation !== generation) return;
                 yield* update(command.requestId, (work) => {
-                  const deliveries = work.deliveries!.map((item) => {
+                  if (work.status !== "ready") return work;
+                  const deliveries = deliveriesOf(work).map((item) => {
                     if (item.command.input.requestId !== command.deliveryId) return item;
                     return Match.value(command.result).pipe(
                       Match.tag("Failure", ({ error }) => ({

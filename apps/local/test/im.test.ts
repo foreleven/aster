@@ -3,7 +3,8 @@ import { LarkConfig, parseLarkConfig } from "@aster/integrations";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { ContextRegistry, contextSpawnOptions, makeContextRegistry } from "@aster/core";
+import { ContextRegistry, contextSpawnOptions } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -25,7 +26,7 @@ import {
   type ChatSummaryInput,
 } from "@aster/integrations";
 import { TestClock } from "effect/testing";
-import { Effect, Layer, Stream, Clock } from "effect";
+import { Effect, Layer, Clock } from "effect";
 
 test("IM searches recent messages before filtering muted chats and paginates the fixed window", async () => {
   const calls: string[][] = [];
@@ -348,13 +349,6 @@ test("startup resumes today's quiet chat backlog but leaves prior-day messages u
           save: () => {},
         });
         const calls: ChatSummaryInput[] = [];
-        const changes: boolean[] = [];
-        yield* Stream.runForEach(registry.changes, (change) =>
-          Effect.sync(() => {
-            if (change.stateChanged && change.evaluate !== false) changes.push(true);
-          }),
-        ).pipe(Effect.forkScoped);
-        yield* Effect.yieldNow;
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
@@ -371,7 +365,7 @@ test("startup resumes today's quiet chat backlog but leaves prior-day messages u
         );
         yield* system.spawn("chat", LarkChatActor, contextSpawnOptions(path));
         yield* until(() => storage.get(today, chat.id)?.pending.length === 0);
-        yield* until(() => changes.length === 1);
+        yield* until(() => registry.backend.journal().length === 1);
         assert.deepEqual(
           calls.map((call) => call.messages),
           [[message], [message]],
@@ -545,13 +539,6 @@ test("automatic retry runs without another incoming message and unchanged summar
         const clock = yield* TestClock.make();
         yield* clock.adjust(Date.now());
         let calls = 0;
-        let evaluations = 0;
-        yield* Stream.runForEach(registry.changes, (change) =>
-          Effect.sync(() => {
-            if (change.stateChanged && change.evaluate !== false) evaluations++;
-          }),
-        ).pipe(Effect.forkScoped);
-        yield* Effect.yieldNow;
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
@@ -573,7 +560,7 @@ test("automatic retry runs without another incoming message and unchanged summar
         yield* clock.adjust("31 seconds");
         yield* until(() => storage.get(today, chat.id)?.pending.length === 0);
         assert.equal(calls, 3);
-        assert.equal(evaluations, 0);
+        assert.equal(registry.backend.journal().length, 0);
       }),
     ),
   );

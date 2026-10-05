@@ -11,7 +11,7 @@ import {
 import { isDeepStrictEqual } from "node:util";
 export { ApprovalEntry } from "@aster/api-contracts";
 import { ContextActor } from "../context/actor.js";
-import { defineContext } from "../context/model.js";
+import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
 import { ApprovalResponse, InputRequest } from "../tasks/model.js";
 import { ReplyTo, type ActorContext } from "@aster/actor";
@@ -149,8 +149,7 @@ export class ApprovalQueueActor extends ContextActor.Service<ApprovalQueueActor>
   {
     command: ApprovalCommand,
     context: defineContext({
-      identity: "Unified task approval queue",
-      signalSource: false,
+      changes: "none",
       state: ApprovalState,
       message: Schema.Unknown,
     }),

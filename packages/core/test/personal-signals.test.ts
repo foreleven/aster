@@ -21,12 +21,12 @@ import {
   SignalDefinitions,
   SignalRootActor,
   makeApplicationApi,
-  makeContextRegistry,
   type ContextRecord,
   type GoalCommand,
   type PersonalReply,
   type SignalDefinition,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import type { SignalCommandReply, SignalConfigureReply } from "../src/signals/actors.js";
 import { fakeAgent, preparationLayer } from "./fixtures.js";
 import { BusinessOutbox } from "../src/notifications/inbox.js";

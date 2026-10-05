@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { Effect } from "effect";
-import type { ContextRecord } from "../context/model.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import type { CoreConfig } from "../config/schema.js";
 import type { SystemOneClient } from "../decisions/system-one.js";
 import {

@@ -19,10 +19,10 @@ import {
   PersonalAgentActor,
   approvalEntries,
   makeApplicationApi,
-  makeContextRegistry,
   type ApprovalCommandReply,
   type ContextRecord,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 const entry: ApprovalEntry = {
   id: "confirm-1",

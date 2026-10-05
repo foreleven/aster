@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Fiber, Stream } from "effect";
-import {
-  LocalDurableContext,
-  RoutedDurableContext,
-  contextBackendFor,
-  type ContextRecord,
-} from "../src/index.js";
+import { LocalDurableContext } from "../src/storage/local-durable.js";
+import { RoutedDurableContext, contextBackendFor } from "../src/storage/routed-durable.js";
+import { type ContextRecord } from "@aster/core";
 
 const record: ContextRecord = {
   path: "/personal",
@@ -43,7 +40,10 @@ test("router delegates CAS and publishes only selected backend changes", async (
         assert.equal(conflict._tag, "ContextConflict");
         yield* router.commit({ ...record, path: "/goals/demo" }, { expectedRevision: 0 });
         const changes = yield* Fiber.join(observed);
-        assert.deepEqual(changes.map((change) => change.path).sort(), ["/goals/demo", "/personal"]);
+        assert.deepEqual(changes.map((change) => change.record.path).sort(), [
+          "/goals/demo",
+          "/personal",
+        ]);
         assert.equal(local.get("/personal")?.revision, 1);
         assert.equal(pi.get("/goals/demo"), undefined);
         assert.deepEqual(Object.keys(router.snapshot()).sort(), ["/goals/demo", "/personal"]);

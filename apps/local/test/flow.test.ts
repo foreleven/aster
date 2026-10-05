@@ -5,7 +5,8 @@ import { Models } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { ContextRegistry, makeContextRegistry, contextSpawnOptions } from "@aster/core";
+import { ContextRegistry, contextSpawnOptions } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import {
   ChatSummarizer,
   ImAgentQueue,
@@ -80,7 +81,7 @@ test("a code-registered Lark root starts without YAML entries and creates its ow
         const ready = yield* Stream.runHead(
           Stream.filter(
             registry.changes,
-            (change) => change.path === "/lark/mail" && "profile" in change.record.state,
+            (change) => change.record.path === "/lark/mail" && "profile" in change.record.state,
           ),
         ).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
@@ -139,7 +140,7 @@ test("Lark channel publishes today’s startup mail as an email Context", async 
           ),
         );
         const change = yield* Stream.runHead(
-          Stream.filter(registry.changes, (item) => item.path === "/lark/mail/me/new-id"),
+          Stream.filter(registry.changes, (item) => item.record.path === "/lark/mail/me/new-id"),
         ).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
         yield* system.spawn("lark", LarkRootActor);
@@ -151,7 +152,7 @@ test("Lark channel publishes today’s startup mail as an email Context", async 
   );
   assert.equal(Option.isSome(result.event), true);
   if (Option.isSome(result.event)) {
-    assert.equal(result.event.value.path, "/lark/mail/me/new-id");
+    assert.equal(result.event.value.record.path, "/lark/mail/me/new-id");
   }
   assert.equal(result.paths.includes("/lark/mail/me/old-id"), false);
   assert.equal(result.paths.includes("/lark/mail/me/new-id"), true);

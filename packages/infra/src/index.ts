@@ -17,3 +17,7 @@ export * from "./storage/configured.js";
 export * from "./storage/routing.js";
 export * from "./storage/migration.js";
 export * from "./agentmemory/index.js";
+
+export * from "./storage/local-durable.js";
+export * from "./storage/routed-durable.js";
+export * from "./storage/storage.js";

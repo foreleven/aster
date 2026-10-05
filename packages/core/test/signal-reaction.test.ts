@@ -8,10 +8,10 @@ import {
   ExternalAgents,
   SignalDefinitions,
   SignalRootActor,
-  makeContextRegistry,
   type ContextRecord,
   type SignalCommandReply,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { SignalReactionInput, SignalReactionReceipt } from "../src/signals/reaction.js";
 import { BusinessOutbox } from "../src/notifications/inbox.js";
 
@@ -83,7 +83,7 @@ test("Signal commits a reaction receipt and occurrence together; restart and lat
             const changes = yield* registry.subscribe;
             const sending = yield* send(input).pipe(Effect.forkScoped);
             yield* changes.pipe(
-              Stream.filter((change) => change.path.startsWith("/signals/review/runs/")),
+              Stream.filter((change) => change.record.path.startsWith("/signals/review/runs/")),
               Stream.take(1),
               Stream.runDrain,
             );

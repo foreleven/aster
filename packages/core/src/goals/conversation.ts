@@ -11,10 +11,10 @@ import { createHash } from "node:crypto";
 import type { ApplicationError } from "@aster/api-contracts";
 import type { GoalDefinition } from "../config/schema.js";
 import type { ContextRegistry } from "../context/registry.js";
-import type { MemoryRecall } from "../context/memory.js";
+import type { MemoryRecall } from "../memory/contracts.js";
 import type { ContextQueries } from "../context/queries.js";
-import { contextTools } from "../context/discovery.js";
-import { contextQueryTools } from "../context/query-tools.js";
+import { contextTools } from "../reasoning/context-tools.js";
+import { contextQueryTools } from "../reasoning/context-query-tools.js";
 import { taskPath } from "../tasks/admission.js";
 import type { TaskDeliveryInput } from "@aster/api-contracts";
 import type { GoalSignalInput } from "../signals/goal-command.js";
@@ -93,17 +93,17 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           ]),
         ),
       });
-      const reads = contextTools(registry.publicSnapshot(), 4000);
+      const reads = contextTools(registry.reader.snapshot(), 4000);
       const tools = [
         tool({
           ...reads[0],
           execute: (...args: Parameters<(typeof reads)[0]["execute"]>) =>
-            contextTools(registry.publicSnapshot(), 4000)[0].execute(...args),
+            contextTools(registry.reader.snapshot(), 4000)[0].execute(...args),
         }),
         tool({
           ...reads[1],
           execute: (...args: Parameters<(typeof reads)[1]["execute"]>) =>
-            contextTools(registry.publicSnapshot(), 4000)[1].execute(...args),
+            contextTools(registry.reader.snapshot(), 4000)[1].execute(...args),
         }),
         ...contextQueryTools(options.queries, invoke),
         tool({
@@ -115,7 +115,7 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           execute: async () =>
             output({
               goal,
-              state: registry.project(registry.get(source)!).state,
+              state: registry.views.project(registry.get(source)!).state,
               executors: options.executors,
             }),
         }),
@@ -127,7 +127,7 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           parameters: Type.Object({}),
           execute: async () =>
             output(
-              Object.values(registry.publicSnapshot()).filter(
+              Object.values(registry.reader.snapshot()).filter(
                 (record) =>
                   record.path.startsWith("/runs/") &&
                   (record.state as { sourcePath?: string }).sourcePath === source,
@@ -142,7 +142,7 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           parameters: Type.Object({}),
           execute: async () =>
             output(
-              Object.values(registry.publicSnapshot()).filter(
+              Object.values(registry.reader.snapshot()).filter(
                 (record) =>
                   record.path.startsWith("/signals/") &&
                   (record.state as { goal?: string }).goal === goal.slug,

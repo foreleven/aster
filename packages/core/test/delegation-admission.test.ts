@@ -13,10 +13,10 @@ import {
   PersonalAgentActor,
   contextSpawnOptions,
   makeApplicationApi,
-  makeContextRegistry,
   type ContextRecord,
   type DelegationUpdate,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { fakeAgent } from "./fixtures.js";
 
 const request = {

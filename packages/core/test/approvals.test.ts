@@ -11,8 +11,6 @@ import {
   approvalEntries,
   sendApproval,
   ContextRegistry,
-  makeContextRegistry,
-  makeContextProcessor,
   ExternalAgents,
   SignalDefinitions,
   SignalRootActor,
@@ -20,8 +18,8 @@ import {
   type ApprovalResponse,
   type InputRequest,
   type ContextRecord,
-  type ContextStore,
 } from "../src/index.js";
+import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
 import { fakeAgent, preparationLayer } from "./fixtures.js";
 const until = (condition: () => boolean) =>
   Effect.gen(function* () {
@@ -164,7 +162,11 @@ test("approval validation rejects invalid answers without saving and accepts com
           if (scenario.error) {
             assert.deepEqual(reply, { error: scenario.error }, scenario.name);
             assert.equal(saves, 0, scenario.name);
-            assert.deepEqual(registry.get("/approvals"), initial, scenario.name);
+            assert.deepEqual(
+              registry.get("/approvals"),
+              { ...initial, revision: 0 },
+              scenario.name,
+            );
           } else {
             assert.deepEqual(reply, {}, scenario.name);
             assert.equal(saves, 1, scenario.name);
@@ -257,23 +259,10 @@ test("persisted approval answers reach a recreated Actor only after it exists, w
         yield* until(() => approvalEntries(registry)[0]?.status === "acknowledged");
         yield* Effect.sleep(1100);
         assert.equal(received, 1);
-        let evaluated = false;
-        const process = makeContextProcessor(
-          registry,
-          () => Effect.void,
-          () =>
-            Effect.sync(() => {
-              evaluated = true;
-            }),
-          () => Effect.sync(() => "unused"),
+        assert.equal(
+          registry.backend.journal().some((event) => event.record.path === "/approvals"),
+          false,
         );
-        yield* process({
-          path: "/approvals",
-          record: registry.get("/approvals")!,
-          stateChanged: true,
-          created: false,
-        });
-        assert.equal(evaluated, false);
       }),
     ),
   );

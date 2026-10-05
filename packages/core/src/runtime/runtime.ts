@@ -1,9 +1,14 @@
+import { ContextCaptures } from "../memory/capture.js";
+import { ContextDescriptions } from "../reasoning/context-description.js";
+import { coreDescriptions } from "./context-descriptions.js";
+import { DurableContext } from "../context/persistence.js";
+import { coreContextViews } from "./context-views.js";
 import { ContextQueries } from "../context/queries.js";
 import { memoryLayer } from "../memory/services.js";
 import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster/api-contracts";
-import type { ReactionCommand } from "../context/reaction-actor.js";
+import type { ReactionCommand } from "../reactions/actor.js";
 import type { NotificationCommand } from "../notifications/actor.js";
-import { ReactionPolicy, makeReactionPolicy } from "../context/reaction-policy.js";
+import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
 import { GoalScreeningStore } from "../goals/screening.js";
 import { RunRootActor } from "../tasks/root.js";
 import type { RuntimeEvent, RuntimePhase } from "@aster/api-contracts";
@@ -26,7 +31,7 @@ import {
   Stream,
 } from "effect";
 import { ContextRegistry } from "../context/registry.js";
-import { ContextCaptureSink } from "../context/memory.js";
+import { ContextCaptureSink } from "../memory/contracts.js";
 import { GoalSettings, signalSettings } from "../config/settings.js";
 import { SignalCommands } from "../signals/commands.js";
 import { SignalDefinitions, SignalRootActor } from "../signals/actors.js";
@@ -36,11 +41,11 @@ import { GoalsRootActor } from "../goals/actors.js";
 import { GoalSignals } from "../signals/goal-owner.js";
 import { ExternalAgents } from "../tasks/model.js";
 import { makeConfiguredSignalExtractor } from "../signals/extractor.js";
-import { MemoryRecall } from "../context/memory.js";
+import { MemoryRecall } from "../memory/contracts.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
 import { PersonalAgentActor, type PersonalReply } from "../personal/actor.js";
 import { PersonalActions } from "../personal/actions.js";
-import { startContextReactions } from "../context/reactions.js";
+import { startContextReactions } from "./context-consumers.js";
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
 import { makeApplicationApi, type ApplicationApi } from "./api.js";
 
@@ -64,6 +69,8 @@ type ActorServices =
 
 const acquireRuntime = Effect.gen(function* () {
   const registry = yield* ContextRegistry;
+  yield* registry.views.register(coreContextViews);
+  yield* (yield* ContextDescriptions).register(coreDescriptions);
   const settings = yield* GoalSettings;
   const definitions = yield* SignalDefinitions;
   const decisions = yield* SystemOneClient;
@@ -81,6 +88,7 @@ const acquireRuntime = Effect.gen(function* () {
     screening: Option.getOrUndefined(yield* Effect.serviceOption(GoalScreeningStore)),
   });
   const shared = Context.pick(
+    DurableContext,
     AgentRunner,
     MemoryRecall,
     ContextQueries,
@@ -92,7 +100,7 @@ const acquireRuntime = Effect.gen(function* () {
     ExternalAgents,
     PersonalActions,
     GoalSignals,
-  )(yield* Effect.context<ActorServices>());
+  )(yield* Effect.context<ActorServices | DurableContext>());
   // Integration environments are captured by their own Layers. Never inject an ambient Scope.
   const actorServices = modules
     .reduce(
@@ -277,6 +285,8 @@ export class AsterRuntime extends Context.Service<
   }) {
     const contextAndCommandServices = Layer.mergeAll(
       ContextRegistry.layer,
+      ContextCaptures.layer,
+      ContextDescriptions.layer,
       ContextQueries.layer,
       GoalSettings.layer,
       SignalCommands.layer,

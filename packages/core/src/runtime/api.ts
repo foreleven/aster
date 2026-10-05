@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ContextQueries, ContextQueryError, type ContextQueryInput } from "../context/queries.js";
-import { inspectProcessing } from "../context/processing-inspection.js";
+import { inspectProcessing } from "./processing.js";
 import { RecoveryInput, type ProcessingOwner, type CommandReceipt } from "@aster/api-contracts";
 import { goalTimeline } from "../goals/timeline.js";
 import { Effect, Schema, Stream } from "effect";
@@ -12,10 +12,11 @@ import {
 } from "@aster/api-contracts";
 export { ApplicationError } from "@aster/api-contracts";
 import type { ActorRef } from "@aster/actor";
-import { ContextRecord } from "../context/model.js";
+import { PublicContext as ContextRecord } from "@aster/api-contracts";
 import type { ContextRegistry } from "../context/registry.js";
 import { publicJson } from "../context/json.js";
-import { PublicApprovalEntry, publicBusinessMessage } from "../context/business-view.js";
+import { PublicApprovalEntry } from "../approvals/view.js";
+import { publicBusinessMessage } from "../reasoning/public-messages.js";
 import type { GoalHistory } from "../goals/history.js";
 import type { GoalCommand, GoalCommandReply, GoalsRootCommand } from "../goals/actors.js";
 import { approvalEntries, type ApprovalCommand } from "../approvals/actor.js";
@@ -38,8 +39,10 @@ export const makeApplicationApi = (options: {
 }) => {
   const { registry } = options;
   const wireContext = (record: ContextRecord): ContextRecord =>
-    Schema.decodeUnknownSync(ContextRecord)(publicJson(registry.project(record)));
-  const wireContexts = Effect.sync(() => Object.values(registry.snapshot()).map(wireContext));
+    Schema.decodeUnknownSync(ContextRecord)(publicJson(record));
+  const wireContexts = Effect.sync(() =>
+    Object.values(registry.reader.snapshot()).map(wireContext),
+  );
   const requireGoal = (slug: string) =>
     Effect.suspend(() =>
       registry.get(`/goals/${slug}`)
@@ -99,13 +102,19 @@ export const makeApplicationApi = (options: {
     }),
     personal: makePersonalApi(options.personal),
     changes: registry.changes.pipe(
-      Stream.map((change) => ({ ...change, record: wireContext(change.record) })),
+      Stream.map((change) => ({
+        ...change,
+        record: wireContext(registry.views.project(change.record)),
+      })),
     ),
     // Acquisition subscribes before transports acknowledge readiness to a client.
     subscribeInvalidations: registry.subscribe.pipe(
       Effect.map((changes) =>
         changes.pipe(
-          Stream.map(({ path }) => ({ _tag: "Invalidate" as const, keys: contextQueryKeys(path) })),
+          Stream.map(({ record }) => ({
+            _tag: "Invalidate" as const,
+            keys: contextQueryKeys(record.path),
+          })),
         ),
       ),
     ),
@@ -119,7 +128,7 @@ export const makeApplicationApi = (options: {
     ),
     context: (path: string) =>
       Effect.suspend(() => {
-        const record = registry.get(path);
+        const record = registry.reader.get(path);
         return record
           ? Effect.succeed(wireContext(record))
           : Effect.fail(new ApplicationError({ kind: "not-found", message: "Context not found" }));

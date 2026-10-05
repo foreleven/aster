@@ -10,11 +10,11 @@ import {
   GoalState,
   GoalsRootActor,
   makeApplicationApi,
-  makeContextRegistry,
   makeMemoryGoalHistory,
   parseConfig,
   type ContextRecord,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { preparationLayer } from "./fixtures.js";
 
 const configFor = (goal: object) => ({

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { contextCatalogue, contextTools } from "../src/context/discovery.js";
-import type { ContextRecord } from "../src/context/model.js";
+import { contextCatalogue, contextTools } from "../src/reasoning/context-tools.js";
+import type { ContextRecord } from "../src/context/storage-format.js";
 test("large Context registries stay out of initial prompts and are discoverable in bounded pages", async () => {
   const records: Record<string, ContextRecord> = Object.fromEntries(
     Array.from({ length: 6000 }, (_, i) => {

@@ -14,7 +14,7 @@ const installation = Layer.effectDiscard(
   Effect.gen(function* () {
     const settings = yield* AppsSettings;
     const registry = yield* ContextRegistry;
-    yield* registry.registerViews([appsView, appView]);
+    yield* registry.views.register([appsView, appView]);
     if (settings.apps.length === 0) return;
     const modules = yield* RuntimeIntegrations;
     const services = Context.pick(

@@ -116,3 +116,9 @@ Apps readiness means that the configured query Contexts are durably registered a
 ## Goal readiness and activation
 
 Goal receivers restore before source integrations activate. Root `AwaitReady` with `stage: "restored"` waits for restoration only; the default activated stage also waits for `Initialize`. Readiness aggregation is scoped and does not block root routing. After integrations are ready, runtime activates Goals and awaits admission readiness, without waiting for model results. Recovery failures fail readiness. Supervised child restarts inherit the root activation gate.
+
+## Context consumer composition
+
+See [Context design](context-design.md) for Context ownership and persistence compatibility. Runtime installs core view and description policies before starting consumers, and constructs the runtime-local `ContextCaptures` and `ContextDescriptions` registries. Integrations register their own policies during activation, before source writes. Memory installs the Run capture policy and owns durable capture deduplication.
+
+`runtime/context-consumers.ts` subscribes before source activation, wakes durable System One and notification Actors, and coordinates description initialization followed by Memory handoff. It contains no inline Signal/Goal evaluation callback. `reactions/` owns screening, frozen evidence, delivery and recovery. `runtime/processing.ts` composes reaction and notification diagnostics. Storage selection and Local/Pi routing remain in infra; the host supplies the resulting `DurableContext` Layer.

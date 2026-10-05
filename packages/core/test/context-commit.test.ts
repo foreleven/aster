@@ -6,12 +6,11 @@ import {
   ContextConflict,
   ContextValidationError,
   defineContext,
-  makeContextRegistry,
   type ContextRecord,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 const definition = defineContext({
-  identity: "Versioned Context",
   state: Schema.Struct({ value: Schema.Number }),
   message: Schema.String,
 });
@@ -110,7 +109,7 @@ test("legacy revision zero is upgraded on change and recovered revision guards t
     Effect.gen(function* () {
       const registry = yield* makeContextRegistry(store);
       yield* registry.register(initial.path, definition);
-      assert.equal((yield* registry.commit(initial, { expectedRevision: 0 })).revision, undefined);
+      assert.equal((yield* registry.commit(initial, { expectedRevision: 0 })).revision, 0);
       const first = yield* registry.commit(
         { ...initial, messages: ["first"] },
         { expectedRevision: 0 },
@@ -150,7 +149,7 @@ test("owner restart reconciles a commit persisted before its acknowledgement fai
         .commit({ ...initial, messages: ["accepted"] }, { expectedRevision: 0 })
         .pipe(Effect.result);
       assert.ok(failed._tag === "Failure" && failed.failure instanceof ContextCommitError);
-      assert.deepEqual(registry.get(initial.path), initial);
+      assert.deepEqual(registry.get(initial.path), { ...initial, revision: 0 });
       yield* registry.register(initial.path, definition);
       assert.deepEqual(registry.get(initial.path), persisted);
       const stale = yield* registry.commit(initial, { expectedRevision: 0 }).pipe(Effect.result);

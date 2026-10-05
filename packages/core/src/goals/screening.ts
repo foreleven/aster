@@ -1,5 +1,5 @@
 import { Context, Effect, Match, Schema } from "effect";
-import type { ContextRecord } from "../context/model.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import type { GoalDefinition } from "../config/schema.js";
 import type { DecisionError, SystemOneClient } from "../decisions/system-one.js";
 import { score } from "../decisions/system-one.js";

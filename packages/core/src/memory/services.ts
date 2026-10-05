@@ -1,6 +1,8 @@
+import { ContextCaptures } from "./capture.js";
+import { runCapture } from "../tasks/capture.js";
 import type { ActorRef } from "@aster/actor";
 import { Context, Deferred, Effect, Layer } from "effect";
-import { MemoryBackend, MemoryRecall, ContextCaptureSink } from "../context/memory.js";
+import { MemoryBackend, MemoryRecall, ContextCaptureSink } from "./contracts.js";
 import { ContextRegistry } from "../context/registry.js";
 import { RuntimeIntegrations, defineIntegration } from "../runtime/integration.js";
 import { MemoryActor, memoryView, type MemoryCommand } from "./actor.js";
@@ -10,14 +12,19 @@ export const memoryLayer = Layer.effectContext(
   Effect.gen(function* () {
     const backend = yield* MemoryBackend;
     const registry = yield* ContextRegistry;
-    yield* registry.registerViews([memoryView]);
+    const captures = yield* ContextCaptures;
+    yield* captures.register([runCapture]);
+    yield* registry.views.register([memoryView]);
     const modules = yield* RuntimeIntegrations;
     const ready = yield* Deferred.make<ActorRef<MemoryCommand>>();
     yield* modules.register(
       defineIntegration({
         name: "memory",
         phase: "consumer",
-        services: Context.make(MemoryBackend, backend).pipe(Context.add(ContextRegistry, registry)),
+        services: Context.make(MemoryBackend, backend).pipe(
+          Context.add(ContextRegistry, registry),
+          Context.add(ContextCaptures, captures),
+        ),
         activate: (system) =>
           Effect.gen(function* () {
             const root = yield* system.spawn("memory", MemoryActor);

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Schema, Scope, Exit } from "effect";
 import { ContextQueries } from "../src/context/queries.js";
-import { contextQueryTools } from "../src/context/query-tools.js";
+import { contextQueryTools } from "../src/reasoning/context-query-tools.js";
 import type { AgentTool } from "@aster/agent";
 
 const input = { path: "/apps/ctrip", command: "search", args: { query: "Sanya" } };

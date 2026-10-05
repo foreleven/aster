@@ -6,13 +6,8 @@ import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
 import { Effect, Layer, Schema } from "effect";
-import {
-  runGoalConversation,
-  makeContextRegistry,
-  conversationText,
-  defineContext,
-  contextView,
-} from "../src/index.js";
+import { runGoalConversation, conversationText, defineContext, contextView } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 test("durable Goal compacts its native transcript and finishes the same request", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "aster-goal-compaction-"));
@@ -106,7 +101,6 @@ test("durable Goal compacts its native transcript and finishes the same request"
     yield* registry.register(
       "/source",
       defineContext({
-        identity: "Evidence",
         state: Schema.Struct({ evidence: Schema.String }),
         message: Schema.Never,
         view: contextView({

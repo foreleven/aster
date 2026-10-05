@@ -11,8 +11,8 @@ import {
   RunState,
   SignalRunActor,
   contextSpawnOptions,
-  makeContextRegistry,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { fakeAgent, preparationLayer } from "./fixtures.js";
 
 const definition = {
@@ -118,7 +118,7 @@ test("malformed restored Run and Delegation state stop before external execution
             assert.ok(event.value.cause);
           assert.equal(calls, 0);
           assert.equal(saves, 0);
-          assert.deepEqual(registry.get(record.path), record);
+          assert.deepEqual(registry.get(record.path), { ...record, revision: 0 });
         }),
       ),
     );
@@ -183,7 +183,7 @@ test("restored terminal Delegations replay results without a configured executor
             }
           }
           assert.equal(saves, 0);
-          assert.deepEqual(registry.get(saved.path), saved);
+          assert.deepEqual(registry.get(saved.path), { ...saved, revision: 0 });
         }),
       ),
     );

@@ -1,5 +1,5 @@
 import { Type, type AgentTool, type TSchema } from "@aster/agent";
-import type { ContextRecord } from "./model.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 const tool = <T extends TSchema>(value: AgentTool<T>) => value;
 const output = (value: unknown) => ({
   content: [{ type: "text" as const, text: JSON.stringify(value) }],

@@ -1,10 +1,13 @@
+import { ContextCaptures } from "./capture.js";
 import { ReplyTo, type ActorContext } from "@aster/actor";
 import { Effect, HashSet, Layer, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ContextRegistry } from "../context/registry.js";
-import { ContextRecord, defineContext, type ContextCapture } from "../context/model.js";
+import { PublicContext as ContextRecord } from "@aster/api-contracts";
+import { defineContext } from "../context/definition.js";
+import { type ContextCapture } from "./contracts.js";
 import { contextView } from "../context/view.js";
-import { MemoryBackend, MemoryCaptureError } from "../context/memory.js";
+import { MemoryBackend, MemoryCaptureError } from "./contracts.js";
 
 const Capture = Schema.Struct({ sessionId: Schema.String, records: Schema.Array(ContextRecord) });
 const MemoryState = Schema.Struct({
@@ -38,22 +41,22 @@ export const memoryView = contextView({
   }),
 });
 
-export class MemoryActor extends ContextActor.Service<MemoryActor, MemoryBackend>()(
-  "memory/Actor",
-  {
-    command: MemoryCommand,
-    context: defineContext({
-      view: memoryView,
-      identity: "My long-term memory",
-      state: MemoryState,
-      message: Schema.Never,
-    }),
-  },
-) {
+export class MemoryActor extends ContextActor.Service<
+  MemoryActor,
+  MemoryBackend | ContextCaptures
+>()("memory/Actor", {
+  command: MemoryCommand,
+  context: defineContext({
+    view: memoryView,
+    state: MemoryState,
+    message: Schema.Never,
+  }),
+}) {
   static readonly layer = Layer.effect(
     MemoryActor,
     Effect.gen(function* () {
       const backend = yield* MemoryBackend;
+      const captures = yield* ContextCaptures;
       const registry = yield* ContextRegistry;
       // Only the mailbox changes this set. Each Behavior gets a fresh set on recovery.
       let inFlight = HashSet.empty<string>();
@@ -79,7 +82,7 @@ export class MemoryActor extends ContextActor.Service<MemoryActor, MemoryBackend
         yield* save({
           pending: [
             ...(current.pending ?? []),
-            { ...input, records: input.records.map(registry.project) },
+            { ...input, records: input.records.map(registry.views.project) },
           ],
         });
       });
@@ -93,7 +96,7 @@ export class MemoryActor extends ContextActor.Service<MemoryActor, MemoryBackend
           // Re-project recovered payloads as well as new captures. Backend results return
           // through the Behavior-owned mailbox; defects retain Actor supervision semantics.
           yield* context.pipeToSelf(
-            backend.capture({ ...input, records: input.records.map(registry.project) }),
+            backend.capture({ ...input, records: input.records.map(registry.views.project) }),
             (result) => ({ _tag: "Captured", sessionId: input.sessionId, result }),
           );
         }
@@ -158,7 +161,7 @@ export class MemoryActor extends ContextActor.Service<MemoryActor, MemoryBackend
               Effect.gen(function* () {
                 // Recover the gap between source commit and durable capture admission.
                 for (const record of Object.values(registry.snapshot())) {
-                  const input = registry.definition(record.path)?.capture?.(record);
+                  const input = captures.select(record);
                   if (input) yield* admit(input);
                 }
                 yield* context.pipeToSelf(Effect.sleep("30 seconds"), () => ({ _tag: "Retry" }));

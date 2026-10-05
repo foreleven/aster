@@ -1,6 +1,6 @@
 import { ApplicationError, DelegationInspection, DelegationPath } from "@aster/api-contracts";
 import { Effect, Schema } from "effect";
-import type { ContextRecord } from "../context/model.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { DelegationState } from "./state.js";
 
 export const inspectDelegation = Effect.fn("Delegation.inspect")(function* (

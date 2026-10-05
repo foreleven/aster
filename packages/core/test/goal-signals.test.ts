@@ -9,10 +9,10 @@ import {
   ExternalAgents,
   SignalDefinitions,
   SignalRootActor,
-  makeContextRegistry,
   type ContextRecord,
   type GoalCommand,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import type { SignalCommandReply } from "../src/signals/actors.js";
 import type { GoalSignalInput } from "../src/signals/goal-command.js";
 import { preparationLayer } from "./fixtures.js";
@@ -43,7 +43,6 @@ const setup = Effect.fnUntraced(function* (
   yield* registry.register(
     input.source,
     defineContext({
-      identity: "Goal",
       state: Schema.Record(Schema.String, Schema.Unknown),
       message: Schema.Unknown,
     }),

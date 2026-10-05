@@ -4,7 +4,7 @@ import { ApplicationError, TaskDeliveryInput, ResumeRunDeliveryInput } from "@as
 import { Effect, Layer, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ContextRegistry } from "../context/registry.js";
-import { defineContext } from "../context/model.js";
+import { defineContext } from "../context/definition.js";
 import { RunState } from "./run-state.js";
 import { taskPath } from "./admission.js";
 import { SignalRunActor, StartTask, ResumePersonalRun } from "./run.js";
@@ -19,7 +19,6 @@ export class RunRootActor extends ContextActor.Service<RunRootActor, TaskExecuti
   {
     command: Command,
     context: defineContext({
-      identity: "One-time tasks",
       state: Schema.Struct({}),
       message: Schema.Never,
     }),

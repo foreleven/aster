@@ -20,10 +20,10 @@ import {
   PersonalAgentActor,
   approvalEntries,
   makeApplicationApi,
-  makeContextRegistry,
   type ApprovalCommandReply,
   type ContextRecord,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 const sourcePath = "/signals/watch/runs/one";
 const source = (): ContextRecord => ({

@@ -1,7 +1,7 @@
 import { TaskPreparationError } from "./errors.js";
 import { Effect } from "effect";
 import { AgentRunner } from "@aster/agent";
-import { MemoryRecall } from "../context/memory.js";
+import { MemoryRecall } from "../memory/contracts.js";
 import { internalAgentSettings } from "../config/settings.js";
 import { makeStructuredReasoning } from "../reasoning/structured.js";
 import { makeExecutionInputBuilder } from "./build-execution-input.js";

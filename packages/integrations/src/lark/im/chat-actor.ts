@@ -89,10 +89,9 @@ export class LarkChatActor extends ContextActor.Service<
   command: ChatCommand,
   context: defineContext({
     view: chatView,
-    identity: "Work Lark conversation",
     state: ChatState,
     message: ImMessage,
-    signalSource: true,
+    changes: "durable-state",
   }),
 }) {
   static readonly layer = Layer.effect(
@@ -155,7 +154,7 @@ export class LarkChatActor extends ContextActor.Service<
               },
               messages: [...messages.values()].sort((a, b) => Date.parse(a.at) - Date.parse(b.at)),
             },
-            { evaluate: false, expectedRevision: previous?.revision ?? 0 },
+            { mode: "bootstrap", expectedRevision: previous?.revision ?? 0 },
           )
           .pipe(Effect.asVoid, Effect.orDie);
       });
@@ -185,7 +184,10 @@ export class LarkChatActor extends ContextActor.Service<
                 (message) => covered.get(message.id) !== messageFingerprint(message),
               ),
             },
-            { evaluate: commit.evaluate, expectedRevision: current.revision ?? 0 },
+            {
+              mode: commit.evaluate === false ? "bootstrap" : "update",
+              expectedRevision: current.revision ?? 0,
+            },
           )
           .pipe(Effect.asVoid, Effect.orDie);
         storage.finish(date, chatId(path), commit);

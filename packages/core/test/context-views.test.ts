@@ -8,13 +8,13 @@ import {
   contextView,
   defineContext,
   makeApplicationApi,
-  makeContextRegistry,
-  makeContextProcessor,
+  makeContextMaintenance,
   makeMemoryGoalHistory,
   PersonalActions,
   PersonalAgentActor,
   type ContextRecord,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 const secret = "PRIVATE_PROVIDER_SENTINEL";
 const record = (path: string, state: object, messages: readonly unknown[] = []): ContextRecord => ({
@@ -220,12 +220,10 @@ test("owner policies fail closed and project the original change for reactions a
         message: Schema.Struct({ text: Schema.String }),
       });
       const definition = defineContext({
-        identity: "source",
         state: Schema.ObjectKeyword,
         message: Schema.Unknown,
         view,
-        signalSource: true,
-        capture: (source) => ({ sessionId: "capture", records: [source] }),
+        changes: "durable-state",
       });
       yield* registry.register("/source", definition);
       const source = yield* registry.commit(
@@ -238,40 +236,38 @@ test("owner policies fail closed and project the original change for reactions a
         { ...source, state: { summary: "newer", metadata: secret } },
         { expectedRevision: source.revision! },
       );
-      let captured = false,
-        evaluated = false;
-      yield* makeContextProcessor(
+      let captured = false;
+      yield* makeContextMaintenance({
         registry,
-        (capture) =>
+        capture: (capture) =>
           Effect.sync(() => {
             assertPublic(capture);
+            assert.equal((capture.records[0]!.state as { summary: string }).summary, "first");
             captured = true;
           }),
-        (current, snapshot) =>
-          Effect.sync(() => {
-            assertPublic(snapshot);
-            assert.equal((current.state as { summary: string }).summary, "first");
-            assert.deepEqual(snapshot[current.path], current);
-            assert.equal(current.revision, source.revision);
-            evaluated = true;
-          }),
-        () => Effect.succeed("source"),
-      )({ path: source.path, record: source, created: true, stateChanged: true });
-      assert.ok(captured && evaluated);
-      const invalid = registry.project(record("/source", { summary: 42, token: secret }));
+        captures: { select: (source) => ({ sessionId: "capture", records: [source] }) },
+        descriptions: { identity: () => undefined },
+        describe: () => Effect.succeed("source"),
+      })({ record: source });
+      const evidence = registry.backend.journal()[0]!.record;
+      assertPublic(evidence);
+      assert.equal((evidence.state as { summary: string }).summary, "first");
+      assert.equal(evidence.revision, source.revision);
+      assert.ok(captured);
+      const invalid = registry.views.project(record("/source", { summary: 42, token: secret }));
       assert.deepEqual(invalid.projection, {
         version: 1,
         visibility: "restricted",
         reason: "invalid-data",
       });
       assertPublic(invalid);
-      yield* registry.registerViews([
+      yield* registry.views.register([
         contextView({
           matches: (path) => path.startsWith("/archive/"),
           state: Schema.Struct({ summary: Schema.String }),
         }),
       ]);
-      const archived = registry.project(
+      const archived = registry.views.project(
         record("/archive/one", { summary: "Saved", token: secret }),
       );
       assert.equal(archived.projection?.visibility, "public");
@@ -329,7 +325,7 @@ test("Run preparation and readiness receive projected frozen evidence", async ()
           JSON.stringify(registry.get(path)!.state).includes(secret),
           "owner retains exact recovery evidence",
         );
-        assertPublic(registry.project(registry.get(path)!));
+        assertPublic(registry.views.project(registry.get(path)!));
       }),
     ).pipe(Effect.timeout("5 seconds")),
   );

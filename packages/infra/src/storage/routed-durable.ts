@@ -1,8 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { Effect, Schema, Stream } from "effect";
-import { DurableContext, DurableContextSnapshot } from "./durable.js";
-import { ContextRecoveryError } from "./errors.js";
-import type { ContextRecord } from "./model.js";
+import { DurableContext, DurableContextSnapshot } from "@aster/core";
+import { ContextRecoveryError } from "@aster/core";
+import type { ContextRecord } from "@aster/core";
 
 export const ContextRoute = Schema.Struct({
   prefix: DurableContextSnapshot.fields.path,
@@ -47,10 +47,15 @@ const make = Effect.fn("RoutedDurableContext.make")(function* (
   const owner = (path: string) => contextBackendFor(path, routes);
   const selected = (path: string) => backends[owner(path)]!;
   const entries = Object.entries(backends).filter((entry) => entry[1] !== undefined);
-  const snapshots = entries.map(([name, backend]) => ({ name, snapshot: backend!.snapshot() }));
+  const snapshots = entries.map(([name, backend]) => ({
+    name,
+    snapshot: Object.fromEntries(backend!.exportRecords().map((record) => [record.path, record])),
+  }));
   const paths = new Set(snapshots.flatMap(({ snapshot }) => Object.keys(snapshot)));
   for (const path of paths) {
-    const authoritative = selected(path).get(path);
+    const authoritative = selected(path)
+      .exportRecords()
+      .find((record) => record.path === path);
     if (!authoritative)
       return yield* new ContextRecoveryError({
         path,
@@ -74,7 +79,14 @@ const make = Effect.fn("RoutedDurableContext.make")(function* (
     }
   }
   return DurableContext.of({
-    kind: "routed",
+    journal: () =>
+      entries.flatMap(([name, backend]) =>
+        backend!.journal().filter((event) => owner(event.record.path) === name),
+      ),
+    exportRecords: () =>
+      entries.flatMap(([name, backend]) =>
+        backend!.exportRecords().filter((record) => owner(record.path) === name),
+      ),
     commit: (record, options) => selected(record.path).commit(record, options),
     recover: (path, validate) => selected(path).recover(path, validate),
     get: (path) => selected(path).get(path),
@@ -86,13 +98,15 @@ const make = Effect.fn("RoutedDurableContext.make")(function* (
       ),
     changes: Stream.mergeAll(
       entries.map(([name, backend]) =>
-        backend!.changes.pipe(Stream.filter((change) => owner(change.path) === name)),
+        backend!.changes.pipe(Stream.filter((change) => owner(change.record.path) === name)),
       ),
       { concurrency: "unbounded" },
     ),
     subscribe: Effect.forEach(entries, ([name, backend]) =>
       backend!.subscribe.pipe(
-        Effect.map((stream) => stream.pipe(Stream.filter((change) => owner(change.path) === name))),
+        Effect.map((stream) =>
+          stream.pipe(Stream.filter((change) => owner(change.record.path) === name)),
+        ),
       ),
     ).pipe(Effect.map((streams) => Stream.mergeAll(streams, { concurrency: "unbounded" }))),
   });

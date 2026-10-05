@@ -16,10 +16,9 @@ export class LarkMailMessageActor extends ContextActor.Service<LarkMailMessageAc
     command: MailMessageCommand,
     context: defineContext({
       view: emailView,
-      identity: "An email in a Lark mailbox",
       state: EmailData,
       message: Schema.Never,
-      signalSource: true,
+      changes: "durable-state",
     }),
   },
 ) {

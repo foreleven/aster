@@ -13,9 +13,9 @@ import {
   PersonalAgentActor,
   RunRootActor,
   makeApplicationApi,
-  makeContextRegistry,
   type ContextRecord,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { personalTaskIntent } from "../src/tasks/admission.js";
 import { RunState } from "../src/tasks/run-state.js";
 import { DelegationState } from "../src/delegation/state.js";
@@ -140,7 +140,7 @@ const fixture = (
       return registry.changes.pipe(
         Stream.filter(
           (change) =>
-            change.path === runPath &&
+            change.record.path === runPath &&
             Schema.decodeUnknownSync(RunState)(change.record.state).status === status,
         ),
         Stream.take(1),
@@ -242,7 +242,7 @@ for (const interrupted of [false, true]) {
             yield* env.registry.changes.pipe(
               Stream.filter(
                 (change) =>
-                  change.path === runPath &&
+                  change.record.path === runPath &&
                   Schema.decodeUnknownSync(RunState)(change.record.state).outcomeText?.includes(
                     "unknown",
                   ) === true,
@@ -261,7 +261,7 @@ for (const interrupted of [false, true]) {
           yield* env.registry.changes.pipe(
             Stream.filter(
               (change) =>
-                change.path === delegationPath &&
+                change.record.path === delegationPath &&
                 Schema.decodeUnknownSync(DelegationState)(change.record.state).resumptions?.at(-1)
                   ?.status === "unknown",
             ),
@@ -297,7 +297,7 @@ test("Run resumption rejects stale revisions and completed/confirmation states w
             "rejected";
           if (!done(env.registry.get("/personal")!))
             yield* env.registry.changes.pipe(
-              Stream.filter((change) => change.path === "/personal" && done(change.record)),
+              Stream.filter((change) => change.record.path === "/personal" && done(change.record)),
               Stream.take(1),
               Stream.runDrain,
             );

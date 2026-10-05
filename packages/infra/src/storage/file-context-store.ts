@@ -15,7 +15,8 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { ContextRecord, type ContextStore } from "@aster/core";
+import { ContextRecord } from "@aster/core";
+import { type ContextStore } from "./storage.js";
 
 import { Schema } from "effect";
 

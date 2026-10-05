@@ -1,7 +1,7 @@
 import { Effect, Option, Schema } from "effect";
 import type { SignalDefinition } from "../config/schema.js";
-import type { MemoryRecall } from "../context/memory.js";
-import type { ContextRecord } from "../context/model.js";
+import type { MemoryRecall } from "../memory/contracts.js";
+import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { TaskPreparationError } from "./errors.js";
 import { DEFAULT_EXECUTOR_PROMPT, Task, type TaskExecution } from "./model.js";
 

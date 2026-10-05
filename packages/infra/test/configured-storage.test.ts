@@ -37,7 +37,6 @@ test("configured routing opens model-free Pi, persists authority, and keeps jour
   await Effect.runPromise(
     Effect.gen(function* () {
       const contexts = yield* DurableContext;
-      assert.equal(contexts.kind, "routed");
       yield* contexts.commit(record, { expectedRevision: 0 });
     }).pipe(Effect.provide(ConfiguredDurableInfrastructure.layer.pipe(Layer.provide(sources)))),
   );

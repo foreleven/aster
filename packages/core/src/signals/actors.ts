@@ -14,7 +14,8 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ReplyTo, type ActorContext, type ActorRef } from "@aster/actor";
 import { ContextActor, childActorName, spawnContextChild } from "../context/actor.js";
-import { defineContext, ContextRecord } from "../context/model.js";
+import { defineContext } from "../context/definition.js";
+import { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { ContextRegistry } from "../context/registry.js";
 import { Clock, Cron, Context, Effect, Layer, Schedule, Schema } from "effect";
 import { SignalDefinition, validateSignalTime } from "../config/schema.js";
@@ -100,7 +101,6 @@ export class SignalActor extends ContextActor.Service<
 >()("signals/SignalActor", {
   command: SignalCommand,
   context: defineContext({
-    identity: "Condition and schedule monitoring",
     state: Schema.Record(Schema.String, Schema.Unknown),
     message: Schema.Never,
   }),
@@ -587,7 +587,7 @@ export class SignalRootActor extends ContextActor.Service<
   SignalDefinitions | TaskExecutionServices
 >()("signals/RootActor", {
   command: SignalRootCommand,
-  context: defineContext({ identity: "Signals", state: Schema.Struct({}), message: Schema.Never }),
+  context: defineContext({ state: Schema.Struct({}), message: Schema.Never }),
 }) {
   static readonly layer = Layer.effect(
     SignalRootActor,

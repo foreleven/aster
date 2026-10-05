@@ -1,6 +1,6 @@
 import { proactiveResearchPolicy } from "../reasoning/research-policy.js";
 import { ContextQueries } from "../context/queries.js";
-import { contextQueryTools } from "../context/query-tools.js";
+import { contextQueryTools } from "../reasoning/context-query-tools.js";
 import { AgentRunner, Type, type AgentTool, type TSchema } from "@aster/agent";
 import {
   ApplicationError,

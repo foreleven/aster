@@ -2,7 +2,8 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { Config, Data, Effect, Schema } from "effect";
-import { ContextRoute, ConfigLocation } from "@aster/core";
+import { ContextRoute } from "./routed-durable.js";
+import { ConfigLocation } from "@aster/core";
 import { makeFileContextStore } from "./file-context-store.js";
 
 export class StorageRoutingError extends Data.TaggedError("StorageRoutingError")<{

@@ -17,7 +17,8 @@ import { makeRunWriteback, planWriteback, WritebackFinished } from "./writeback.
 import { Clock, Effect, Match, Layer, Schema, Struct } from "effect";
 import { ReplyTo, type ActorContext, type ActorRef } from "@aster/actor";
 import { ContextActor, contextSpawnOptions, contextPath } from "../context/actor.js";
-import { defineContext, ContextRecord } from "../context/model.js";
+import { defineContext } from "../context/definition.js";
+import { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { ContextRegistry } from "../context/registry.js";
 import { SignalDefinition } from "../config/schema.js";
 import {
@@ -28,18 +29,6 @@ import {
 import { Task, ExternalAgents, taskPrompt } from "./model.js";
 import { ApprovalResolved, sendApproval } from "../approvals/actor.js";
 import type { GoalCommand } from "../goals/actors.js";
-
-// Runs own preparation, confirmation and external execution; a Signal only owns
-// when to create an occurrence. Goals can create Runs without creating a monitor.
-interface Triggered {
-  readonly type: "Triggered";
-  readonly at: string;
-  readonly sourcePath: string;
-  readonly task: string;
-  readonly agent: string;
-  readonly mode: "auto" | "confirm";
-  readonly sourceContext: ContextRecord;
-}
 
 export const RunAdmissionReply = Schema.Union([
   Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
@@ -94,33 +83,8 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
   {
     command: RunCommand,
     context: defineContext({
-      identity: "An occurrence of a Signal",
       state: RunState,
       message: Schema.Unknown,
-      capture: (record) => {
-        const trigger = record.messages.find(
-          (message) =>
-            typeof message === "object" &&
-            message !== null &&
-            "type" in message &&
-            message.type === "Triggered",
-        ) as Triggered | undefined;
-        const terminal = [
-          "completed",
-          "uncertain",
-          "failed",
-          "cancelled",
-          "rejected",
-          "preparation-failed",
-          "blocked",
-        ].includes(String(record.state.status));
-        return trigger
-          ? {
-              sessionId: `${record.path}:${terminal ? `outcome:${record.state.status}` : "trigger"}`,
-              records: [record, trigger.sourceContext],
-            }
-          : undefined;
-      },
     }),
   },
 ) {
@@ -271,7 +235,7 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
         context.pipeToSelf(
           execution.checkReadiness(
             state().definition,
-            registry.project(state().source),
+            registry.views.project(state().source),
             state().task!,
           ),
           (result) =>
@@ -630,8 +594,8 @@ export class SignalRunActor extends ContextActor.Service<SignalRunActor, TaskExe
                 yield* context.pipeToSelf(
                   execution.buildExecutionInput(
                     command.definition,
-                    registry.project(command.sourceContext),
-                    registry.publicSnapshot(),
+                    registry.views.project(command.sourceContext),
+                    registry.reader.snapshot(),
                   ),
                   (result) =>
                     result._tag === "Success"

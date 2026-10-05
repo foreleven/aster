@@ -1,5 +1,9 @@
 import { Context, Data, Effect } from "effect";
-import type { ContextCapture } from "./model.js";
+import type { PublicContext } from "@aster/api-contracts";
+export interface ContextCapture {
+  readonly sessionId: string;
+  readonly records: readonly PublicContext[];
+}
 
 export class MemoryRecallError extends Data.TaggedError("MemoryRecallError")<{
   readonly message: string;

@@ -9,7 +9,6 @@ import {
   spawnContextChild,
 } from "@aster/core";
 import { LarkConfig } from "../config.js";
-import { profileCapture } from "../shared/profile.js";
 import { EmailData, MailboxProfile } from "./model.js";
 import { LarkMailCli, LarkResponseError } from "./client.js";
 import { LarkMailMessageActor, type MailMessageCommand } from "./message-actor.js";
@@ -53,16 +52,8 @@ export class LarkEmailChannelActor extends ContextActor.Service<
   command: EmailChannelCommand,
   context: defineContext({
     view: mailChannelView,
-    identity: "Lark mailbox",
     state: MailboxState,
     message: Schema.Never,
-    capture: (record) =>
-      record.state.profile === undefined
-        ? undefined
-        : {
-            sessionId: profileCapture(record, record.state.profile),
-            records: [record],
-          },
   }),
 }) {
   static readonly layer = Layer.effect(

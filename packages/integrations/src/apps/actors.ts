@@ -39,7 +39,6 @@ class AppActor extends ContextActor.Service<AppActor, AppsSettings | OpenCli | C
   {
     command: Command,
     context: defineContext({
-      identity: "An on-demand application query adapter",
       view: appView,
       state: AppState,
       message: Schema.Never,
@@ -88,7 +87,7 @@ class AppActor extends ContextActor.Service<AppActor, AppsSettings | OpenCli | C
                     ...(restored?.lastResult ? { lastResult: restored.lastResult } : {}),
                   },
                 },
-                { expectedRevision: previous?.revision ?? 0, evaluate: false },
+                { expectedRevision: previous?.revision ?? 0, mode: "bootstrap" },
               )
               .pipe(Effect.orDie);
             yield* queries
@@ -189,7 +188,7 @@ class AppActor extends ContextActor.Service<AppActor, AppsSettings | OpenCli | C
                   yield* registry
                     .commit(
                       { ...previous, state: { ...state, lastResult: result.value } },
-                      { expectedRevision: previous.revision ?? 0, evaluate: false },
+                      { expectedRevision: previous.revision ?? 0, mode: "bootstrap" },
                     )
                     .pipe(Effect.orDie);
                   yield* Effect.logInfo({
@@ -223,7 +222,6 @@ export class AppsRootActor extends ContextActor.Service<
 >()("apps/RootActor", {
   command: Ready,
   context: defineContext({
-    identity: "On-demand application queries",
     view: appsView,
     state: AppsState,
     message: Schema.Never,
@@ -246,7 +244,7 @@ export class AppsRootActor extends ContextActor.Service<
                   state: { apps: settings.apps.map((app) => `/apps/${app.name}`) },
                   messages: [],
                 },
-                { expectedRevision: registry.get("/apps")?.revision ?? 0, evaluate: false },
+                { expectedRevision: registry.get("/apps")?.revision ?? 0, mode: "bootstrap" },
               )
               .pipe(Effect.orDie);
             for (const app of settings.apps) {

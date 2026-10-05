@@ -1,12 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber } from "effect";
-import {
-  GoalActor,
-  makeContextRegistry,
-  makeMemoryGoalHistory,
-  type ContextRecord,
-} from "../src/index.js";
+import { GoalActor, makeMemoryGoalHistory, type ContextRecord } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { goalWorkingState } from "../src/goals/working-state.js";
 
 for (const phase of ["count", "read"] as const)

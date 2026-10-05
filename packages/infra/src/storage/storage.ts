@@ -1,4 +1,4 @@
-import type { ContextRecord } from "./model.js";
+import type { ContextRecord } from "@aster/core";
 import { Context } from "effect";
 
 export interface ContextStore {

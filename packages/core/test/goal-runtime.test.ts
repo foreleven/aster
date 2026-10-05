@@ -3,12 +3,8 @@ import { test } from "node:test";
 import { ActorTestKit } from "@aster/actor";
 import { Clock, Deferred, Effect, Fiber } from "effect";
 import { TestClock } from "effect/testing";
-import {
-  SignalActor,
-  makeContextRegistry,
-  makeGoalSignalCommands,
-  type GoalCommand,
-} from "../src/index.js";
+import { SignalActor, makeGoalSignalCommands, type GoalCommand } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 test("Goal coordination retains the caller's Clock and cancellation instead of starting a detached runtime", async () => {
   await Effect.runPromise(

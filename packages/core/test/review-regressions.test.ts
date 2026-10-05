@@ -16,11 +16,11 @@ import {
   SignalDefinitions,
   contextSpawnOptions,
   makeApplicationApi,
-  makeContextRegistry,
   makeMemoryGoalHistory,
   type GoalCommand,
   type RunState,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { fakeAgent, preparationLayer } from "./fixtures.js";
 
 const definition = {
@@ -324,7 +324,7 @@ test("malformed Signal delivery state stops before recovery writes or execution"
         if (event._tag === "Some" && event.value._tag === "ActorStopped")
           assert.ok(event.value.cause);
         assert.equal(saves, 0);
-        assert.deepEqual(registry.get(malformed.path), malformed);
+        assert.deepEqual(registry.get(malformed.path), { ...malformed, revision: 0 });
       }),
     ),
   );

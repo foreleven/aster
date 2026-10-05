@@ -6,7 +6,8 @@ import { tmpdir } from "node:os";
 import { Clock, Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { ActorSystem } from "@aster/actor";
-import { ContextRegistry, contextSpawnOptions, makeContextRegistry } from "@aster/core";
+import { ContextRegistry, contextSpawnOptions } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import {
   ChatSummarizer,
   ImAgentQueue,
@@ -365,7 +366,7 @@ for (const status of ["published", "unknown", "sending"] as const) {
           assert.equal(gated.length, 0, "Echo-only batches do not ask System One");
           yield* actor.tell({ _tag: "Flush", date });
           yield* Deferred.await(flushed);
-          assert.equal(registry.get(path)!.reactionEvents?.length ?? 0, 0);
+          assert.equal(registry.backend.journal().length, 0);
           assert.equal(storage.get(date, chat.id)!.pending.length, 0);
           assert.equal(storage.get(date, chat.id)!.summary!.text, echo.content);
           yield* actor.tell({
@@ -377,7 +378,7 @@ for (const status of ["published", "unknown", "sending"] as const) {
           yield* Deferred.await(reacted);
           // Flush remains active for late arrivals; the human update still produces one reaction.
           assert.deepEqual(gated, []);
-          assert.equal(registry.get(path)!.reactionEvents!.length, 1);
+          assert.equal(registry.backend.journal().length, 1);
         }),
       ).pipe(Effect.timeout("5 seconds")),
     );

@@ -1,7 +1,9 @@
+import { ContextDescriptions } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ConfigProvider, Effect, Layer } from "effect";
-import { ContextRegistry, makeContextRegistry, RuntimeIntegrations } from "@aster/core";
+import { ContextRegistry, RuntimeIntegrations } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import { MailIntegration } from "../src/mail/integration.js";
 
 const configuration = ConfigProvider.fromUnknown({
@@ -24,7 +26,9 @@ test("configured mail installs a runtime source without opening connections", as
         const registry = yield* makeContextRegistry();
         yield* Effect.gen(function* () {
           const modules = yield* RuntimeIntegrations;
-          yield* Effect.void.pipe(Effect.provide(MailIntegration.layer));
+          yield* Effect.void.pipe(
+            Effect.provide(MailIntegration.layer.pipe(Layer.provide(ContextDescriptions.layer))),
+          );
           assert.deepEqual(
             modules.installed().map((module) => module.name),
             ["mail"],
@@ -73,7 +77,9 @@ const install = Effect.fnUntraced(function* (
 ) {
   return yield* Effect.gen(function* () {
     const modules = yield* RuntimeIntegrations;
-    yield* Effect.void.pipe(Effect.provide(MailIntegration.installation));
+    yield* Effect.void.pipe(
+      Effect.provide(MailIntegration.installation.pipe(Layer.provide(ContextDescriptions.layer))),
+    );
     const module = modules.installed()[0]!;
     const logs: unknown[] = [];
     const system = yield* ActorSystem.make().pipe(
@@ -143,7 +149,7 @@ test("mail publishes its tree before retrieval and acknowledges persistence befo
             Effect.forkScoped,
           );
           yield* Deferred.await(fetching);
-          const publicRecords = registry.publicSnapshot();
+          const publicRecords = registry.reader.snapshot();
           assert.equal(publicRecords["/mail"]?.projection?.visibility, "public");
           assert.equal(publicRecords[mailboxPath("work")]?.projection?.visibility, "public");
           assert.ok(!JSON.stringify(publicRecords).includes("secret"));
@@ -162,7 +168,7 @@ test("mail publishes its tree before retrieval and acknowledges persistence befo
           const saved = registry.get(mailMessagePath(email))!;
           assert.equal(saved.revision, 1);
           assert.deepEqual(saved.state, email);
-          assert.equal(registry.project(saved).projection?.visibility, "public");
+          assert.equal(registry.views.project(saved).projection?.visibility, "public");
           yield* clock.adjust(1_000);
           yield* Queue.take(completed);
           assert.equal(registry.get(mailMessagePath(email))?.revision, 1);
@@ -186,7 +192,7 @@ test("mail retries retrieval errors, isolates mailboxes, and interrupts active p
           let attempts = 0;
           const changes = yield* registry.subscribe;
           yield* Stream.runForEach(changes, (change) =>
-            change.path === mailboxPath("work") &&
+            change.record.path === mailboxPath("work") &&
             Schema.is(MailboxState)(change.record.state) &&
             change.record.state.status === "error"
               ? Deferred.succeed(failed, undefined)
@@ -225,7 +231,7 @@ test("mail retries retrieval errors, isolates mailboxes, and interrupts active p
               .status,
             "ready",
           );
-          assert.ok(!JSON.stringify(registry.publicSnapshot()).includes("secret"));
+          assert.ok(!JSON.stringify(registry.reader.snapshot()).includes("secret"));
           assert.match(JSON.stringify(logs), /mail.poll.failed/);
           assert.match(JSON.stringify(logs), /ECONNRESET/);
           assert.ok(!JSON.stringify(logs).includes("secret"));
@@ -287,7 +293,7 @@ test("mail restart preserves email revisions and waits for a fresh initial poll"
           );
           if (run === 1)
             assert.equal(
-              registry.project(registry.get(mailMessagePath(email))!).projection?.visibility,
+              registry.views.project(registry.get(mailMessagePath(email))!).projection?.visibility,
               "public",
             );
           yield* Deferred.succeed(release, undefined);
@@ -307,7 +313,9 @@ test("missing generic mail config installs no source and requires no credentials
         const registry = yield* makeContextRegistry();
         yield* Effect.gen(function* () {
           const modules = yield* RuntimeIntegrations;
-          yield* Effect.void.pipe(Effect.provide(MailIntegration.layer));
+          yield* Effect.void.pipe(
+            Effect.provide(MailIntegration.layer.pipe(Layer.provide(ContextDescriptions.layer))),
+          );
           assert.deepEqual(modules.installed(), []);
         }).pipe(
           Effect.provide(RuntimeIntegrations.layer),

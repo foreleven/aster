@@ -15,8 +15,8 @@ import type {
   ReactionDeliveryInput,
   ReactionPlan,
   ReactionReply,
-  ReactionWork,
-} from "./reaction-state.js";
+  ReactionPlanning,
+} from "./state.js";
 
 export class ReactionFailure extends Schema.TaggedError<ReactionFailure>()("ReactionFailure", {
   message: Schema.String,
@@ -29,7 +29,7 @@ export class ReactionPolicy extends Context.Service<
       signals: ActorRef<SignalRootCommand>,
       goals?: ActorRef<GoalsRootCommand>,
     ) => Effect.Effect<void>;
-    readonly plan: (work: ReactionWork) => Effect.Effect<ReactionPlan, ReactionFailure>;
+    readonly plan: (work: ReactionPlanning) => Effect.Effect<ReactionPlan, ReactionFailure>;
     readonly deliver: (
       command: ReactionDeliveryInput,
     ) => Effect.Effect<ReactionReply, ReactionFailure>;
@@ -52,8 +52,8 @@ export const makeReactionPolicy = (options: {
       plan: Effect.fn("SystemOne.plan")(
         function* (work) {
           const record = work.event.record;
-          const snapshot = work.snapshot;
-          const definitions = sourceSignals(snapshot, Date.parse(work.admittedAt));
+          const snapshot = { ...work.input.evidence, [record.path]: record };
+          const definitions = sourceSignals(snapshot, Date.parse(work.input.screeningAt));
           const candidates = yield* makeSystemOneGate(options.client)(record, definitions);
           const extracted = yield* options.extract(record.path, candidates, snapshot);
           // An extractor cannot invent targets that were not screened as candidates.
@@ -62,7 +62,7 @@ export const makeReactionPolicy = (options: {
           const matchedGoals = new Set<string>();
           const deliveryId = (kind: string, target: string) =>
             createHash("sha256")
-              .update(JSON.stringify(["reaction-delivery-v1", work.event.requestId, kind, target]))
+              .update(JSON.stringify(["reaction-delivery-v1", work.event.id, kind, target]))
               .digest("hex");
           for (const signal of selected) {
             const target = `/signals/${signal.slug}`;
@@ -72,7 +72,7 @@ export const makeReactionPolicy = (options: {
               _tag: "Signal",
               input: {
                 requestId: deliveryId("signal", target),
-                causationId: work.event.causationId,
+                causationId: work.event.id,
                 source: "/system-one",
                 target,
                 expectedRevision: snapshot[target]?.revision ?? 0,
@@ -85,7 +85,7 @@ export const makeReactionPolicy = (options: {
           const relevant = yield* relevantGoals(
             options.client,
             record,
-            work.goals.filter(
+            work.input.goals.filter(
               (goal) =>
                 !matchedGoals.has(goal.slug) &&
                 snapshot[`/goals/${goal.slug}`]?.projection?.visibility !== "restricted" &&
@@ -110,7 +110,7 @@ export const makeReactionPolicy = (options: {
               _tag: "Goal",
               input: {
                 requestId: deliveryId("goal", target),
-                causationId: work.event.causationId,
+                causationId: work.event.id,
                 source: "/system-one",
                 target,
                 expectedRevision: snapshot[target]?.revision ?? 0,

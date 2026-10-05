@@ -6,11 +6,11 @@ import {
   ContextQueries,
   ContextRegistry,
   ContextQueryError,
-  makeContextRegistry,
   makeApplicationApi,
   ProcessEnvironment,
   RuntimeIntegrations,
 } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
 import {
   Clock,
   ConfigProvider,
@@ -122,7 +122,7 @@ test("apps register discoverable query-only Contexts without running OpenCLI; qu
         assert.deepEqual(mutableCalls, [
           ["ctrip", "search", "春节 三亚", "--limit", "10", "-f", "json"],
         ]);
-        assert.equal(registry.get(input.path)!.reactionEvents, undefined);
+        assert.equal(registry.backend.journal().length, 0);
         yield* runtime.handle.stop;
         const gone = yield* Effect.flip(runtime.queries.query(input));
         assert.equal(gone.kind, "unavailable");

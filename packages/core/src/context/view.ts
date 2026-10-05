@@ -1,5 +1,6 @@
 import { Option, Schema } from "effect";
-import type { ContextRecord, ContextViewPolicy } from "./model.js";
+import type { PublicContext } from "@aster/api-contracts";
+import type { ContextViewPolicy } from "./definition.js";
 
 /** Views are explicit read contracts. Unknown fields are never copied from canonical storage. */
 export const contextView = <State extends object, Message>(options: {
@@ -23,7 +24,7 @@ export const contextView = <State extends object, Message>(options: {
     });
     return {
       path: record.path,
-      revision: record.revision,
+      revision: record.revision ?? 0,
       description: record.description,
       state: state.value,
       messages,
@@ -33,11 +34,11 @@ export const contextView = <State extends object, Message>(options: {
 });
 
 export const restrictedContext = (
-  record: ContextRecord,
+  record: PublicContext,
   reason: "missing-policy" | "invalid-data",
-): ContextRecord => ({
+): PublicContext => ({
   path: record.path,
-  revision: record.revision,
+  revision: record.revision ?? 0,
   description: record.description,
   state: {},
   messages: [],

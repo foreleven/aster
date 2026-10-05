@@ -7,10 +7,10 @@ import { DateTime, Deferred, Effect, Layer, Match, Option, Schema } from "effect
 import { GoalSettings } from "../config/settings.js";
 import type { GoalDefinition } from "../config/schema.js";
 import { ContextActor } from "../context/actor.js";
-import { defineContext } from "../context/model.js";
+import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
 import { ContextQueries } from "../context/queries.js";
-import { MemoryRecall } from "../context/memory.js";
+import { MemoryRecall } from "../memory/contracts.js";
 import { GoalSignals } from "../signals/goal-owner.js";
 import { ExternalAgents } from "../tasks/model.js";
 import { attachGoalTasks, cancelGoalTasks, startTask } from "../tasks/commands.js";
@@ -76,7 +76,6 @@ type Owner = ActorContext<GoalMailbox, Services | ContextRegistry>;
 export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goals/Actor", {
   command: GoalMailbox,
   context: defineContext({
-    identity: "Ongoing work goal",
     state: GoalState,
     message: Schema.Unknown,
   }),

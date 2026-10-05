@@ -12,20 +12,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
-import {
-  ContextCommitError,
-  LocalDurableContext,
-  defineContext,
-  makeContextRegistry,
-  makeContextRegistryWithBackend,
-} from "@aster/core";
+import { ContextCommitError, defineContext, makeContextRegistryWithBackend } from "@aster/core";
+import { LocalDurableContext } from "../src/storage/local-durable.js";
+import { makeContextRegistry } from "@aster/core/testing";
 import { makeFileContextStore } from "../src/index.js";
 
 test("JSON state and JSONL messages survive restart, append, and history compaction", async () => {
   const dir = mkdtempSync(join(tmpdir(), "signals-store-"));
   try {
     const definition = defineContext({
-      identity: "Goal",
       state: Schema.Struct({ status: Schema.String }),
       message: Schema.Unknown,
     });
@@ -119,7 +114,6 @@ test("LocalDurableContext recovers state, message, receipt and outbox together a
         const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
         const registry = makeContextRegistryWithBackend(backend);
         const definition = defineContext({
-          identity: "Personal test",
           state: Schema.Struct({
             receipts: Schema.Array(Schema.Unknown),
             outbox: Schema.Array(Schema.Unknown),

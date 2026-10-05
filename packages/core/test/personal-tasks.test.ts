@@ -24,10 +24,10 @@ import {
   RunRootActor,
   approvalEntries,
   makeApplicationApi,
-  makeContextRegistry,
   type ContextRecord,
   type RunAdmissionReply,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 import { RunState } from "../src/tasks/run-state.js";
 import { personalTaskIntent, personalTaskPath } from "../src/tasks/admission.js";
 import { fakeAgent } from "./fixtures.js";

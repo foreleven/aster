@@ -198,7 +198,7 @@ const make = Effect.fn("PiDurableContext.make")(function* (options: PiContextSto
     poisoned = false;
     return restored.records;
   }).pipe(Effect.uninterruptible);
-  return yield* makeDurableContext("pi", {
+  return yield* makeDurableContext({
     load,
     save: (record) =>
       Effect.gen(function* () {
@@ -247,7 +247,7 @@ const fromRuntime = Effect.fn("PiDurableContext.fromRuntime")(function* (
     uncertain = false;
     return restored.records;
   }).pipe(Effect.mapError((cause) => new ContextRecoveryError({ path: "/", cause })));
-  return yield* makeDurableContext("pi", {
+  return yield* makeDurableContext({
     load,
     save: (record) =>
       Effect.gen(function* () {

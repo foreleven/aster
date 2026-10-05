@@ -17,18 +17,6 @@ export class ContextCommitError extends Data.TaggedError("ContextCommitError")<{
   readonly cause: unknown;
 }> {}
 
-export class ContextDescriptionError extends Data.TaggedError("ContextDescriptionError")<{
-  readonly path: string;
-  readonly message: string;
-  readonly cause: unknown;
-}> {}
-
-export class GoalScreeningError extends Data.TaggedError("GoalScreeningError")<{
-  readonly path: string;
-  readonly message: string;
-  readonly cause: unknown;
-}> {}
-
 /** Loading or reconciling storage failed; the uncertain owner remains fenced. */
 export class ContextRecoveryError extends Data.TaggedError("ContextRecoveryError")<{
   readonly path: string;

@@ -1,8 +1,38 @@
 import { internalAgentSettings } from "../config/settings.js";
-import { MemoryRecall } from "../context/memory.js";
-import { makeStructuredReasoning } from "../reasoning/structured.js";
-import { Effect, Schema } from "effect";
-import { ContextDescriptionError } from "./errors.js";
+import { MemoryRecall } from "../memory/contracts.js";
+import { makeStructuredReasoning } from "./structured.js";
+import { Context, Data, Effect, Layer, Schema } from "effect";
+import type { ContextRegistry } from "../context/registry.js";
+import type { ContextSnapshot } from "../context/model.js";
+
+export class ContextDescriptionError extends Data.TaggedError("ContextDescriptionError")<{
+  readonly path: string;
+  readonly message: string;
+  readonly cause: unknown;
+}> {}
+export interface DescriptionPolicy {
+  readonly matches: (path: string) => boolean;
+  readonly identity: string;
+}
+export class ContextDescriptions extends Context.Service<
+  ContextDescriptions,
+  {
+    readonly register: (policies: readonly DescriptionPolicy[]) => Effect.Effect<void>;
+    readonly identity: (path: string) => string | undefined;
+  }
+>()("reasoning/ContextDescriptions") {
+  static readonly layer = Layer.sync(ContextDescriptions, () => {
+    const policies = new Set<DescriptionPolicy>();
+    return {
+      register: (values) =>
+        Effect.sync(() => {
+          for (const policy of values) policies.add(policy);
+        }),
+      identity: (path) => [...policies].find((policy) => policy.matches(path))?.identity,
+    };
+  });
+}
+
 export interface ContextIdentity {
   readonly path: string;
   readonly identity: string;
@@ -58,4 +88,27 @@ export const makeConfiguredDescriptionInitializer = Effect.fn(
   const settings = yield* internalAgentSettings;
   const run = yield* makeStructuredReasoning(settings.model, yield* MemoryRecall);
   return makeDescriptionInitializer((prompt, schema) => run(prompt, schema, {}));
+});
+
+/** Description initialization never replaces content committed while the model was running. */
+export const initializeContextDescription = Effect.fn("ContextDescription.initialize")(function* (
+  registry: ContextRegistry["Service"],
+  record: ContextSnapshot,
+  identity: string | undefined,
+  describe: DescriptionInitializer,
+) {
+  if (record.description || !identity) return record;
+  const existing = registry.get(record.path)?.description;
+  if (existing) return { ...record, description: existing };
+  let ancestor = record.path.slice(0, record.path.lastIndexOf("/"));
+  while (ancestor && !registry.get(ancestor))
+    ancestor = ancestor.slice(0, ancestor.lastIndexOf("/"));
+  const description = yield* describe({
+    path: record.path,
+    identity,
+    parentDescription: registry.get(ancestor)?.description ?? "",
+  });
+  const latest = registry.get(record.path);
+  if (latest) yield* registry.describe(record.path, description, latest.revision);
+  return { ...record, description };
 });

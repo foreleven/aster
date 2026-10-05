@@ -1,3 +1,5 @@
+import { ContextCaptures, ContextDescriptions } from "@aster/core";
+import { larkCaptures, larkDescriptions } from "./context-policies.js";
 import { larkContextViews } from "./public-views.js";
 import { RuntimeConfigurationError } from "@aster/core";
 import { Layer, Effect, Context, Deferred, Stream, Fiber } from "effect";
@@ -49,7 +51,9 @@ export const LarkIntegration = {
     Effect.gen(function* () {
       const modules = yield* RuntimeIntegrations;
       const registry = yield* ContextRegistry;
-      yield* registry.registerViews(larkContextViews);
+      yield* registry.views.register(larkContextViews);
+      yield* (yield* ContextCaptures).register(larkCaptures);
+      yield* (yield* ContextDescriptions).register(larkDescriptions);
       const im = (yield* LarkConfig).im;
       if (im !== undefined) {
         yield* Effect.try(() => parseImPolicy(im));
@@ -95,7 +99,8 @@ export const LarkIntegration = {
               // Subscribe before spawning; do not trust a previous process's persisted ready flag.
               const changes = yield* registry.subscribe;
               const observer = yield* Stream.runForEach(changes, (change) =>
-                change.path === "/lark/im" && (change.record.state as { ready?: boolean }).ready
+                change.record.path === "/lark/im" &&
+                (change.record.state as { ready?: boolean }).ready
                   ? Deferred.succeed(ready, undefined).pipe(Effect.asVoid)
                   : Effect.void,
               ).pipe(Effect.forkScoped);

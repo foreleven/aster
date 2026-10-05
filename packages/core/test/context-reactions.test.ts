@@ -1,5 +1,8 @@
+import { DurableContext } from "../src/context/persistence.js";
+import { ContextCaptures } from "../src/memory/capture.js";
+import { ContextDescriptions } from "../src/reasoning/context-description.js";
 import { reasoningConfig, emptyRecall, modelReplyLayer, agentResult } from "./workflow-fixtures.js";
-import { ReactionPolicy, makeReactionPolicy } from "../src/context/reaction-policy.js";
+import { ReactionPolicy, makeReactionPolicy } from "../src/reactions/policy.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit } from "@aster/actor";
@@ -9,7 +12,6 @@ import {
   ContextCaptureSink,
   GoalSettings,
   SystemOneClient,
-  makeContextRegistry,
   defineContext,
   contextView,
   startContextReactions,
@@ -18,6 +20,7 @@ import {
   type GoalsRootCommand,
   type ContextRecord,
 } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
 
 const record = (path: string, state: object): ContextRecord => ({
   path,
@@ -63,7 +66,6 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
   const screened: string[] = [];
   const registry = await Effect.runPromise(makeContextRegistry());
   const generic = defineContext({
-    identity: "test",
     state: Schema.Record(Schema.String, Schema.Unknown),
     message: Schema.Unknown,
   });
@@ -82,12 +84,13 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
   await Effect.runPromise(
     registry.register("/source", {
       ...generic,
-      signalSource: true,
+      changes: "durable-state",
       view: contextView({ state: Schema.Struct({ summary: Schema.String }) }),
     }),
   );
   const layers = Layer.mergeAll(
     Layer.succeed(ContextRegistry, registry),
+    Layer.succeed(DurableContext, registry.backend),
     Layer.succeed(ContextCaptureSink, { capture: () => Effect.void, drain: Effect.void }),
     Layer.succeed(GoalSettings, {
       definitions: ["owned", "other", "done"].map((slug) => ({ slug, description: slug })),
@@ -127,6 +130,7 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(DurableContext, registry.backend),
             Layer.succeed(ReactionPolicy, policy),
             Layer.succeed(GoalSettings, yield* GoalSettings),
           ),
@@ -135,7 +139,10 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
           system,
           signals: signalProbe.ref,
           goals: goalProbe.ref,
-        }).pipe(Effect.forkScoped);
+        }).pipe(
+          Effect.provide(Layer.mergeAll(ContextCaptures.layer, ContextDescriptions.layer)),
+          Effect.forkScoped,
+        );
         const signalReady = yield* signalProbe.take();
         assert.equal(signalReady._tag, "Ready");
         if (signalReady._tag === "Ready") yield* signalReady.replyTo.tell(undefined);
