@@ -34,10 +34,10 @@ export const newGoalInput = (
   key: string,
   at: string,
 ): StoredGoalInput => ({
-  inputId: goalInputId(state.slug, payload._tag, key),
+  inputId: goalInputId(state.definition.slug, payload._tag, key),
   status: "pending",
-  goalSlug: state.slug,
-  ordinal: (state.inputs?.at(-1)?.ordinal ?? 0) + 1,
+  goalSlug: state.definition.slug,
+  ordinal: (state.inputs.at(-1)?.ordinal ?? 0) + 1,
   receivedAt: at,
   payload,
 });
@@ -65,15 +65,15 @@ export const inputMessage = (input: StoredGoalInput): AgentMessage =>
 /** Accepted business inputs are authoritative. History is an idempotent model-view projection. */
 export const goalInputs = (working: ReturnType<typeof goalWorkingState>, history: GoalHistory) => {
   const project = Effect.fn("GoalInputs.project")(function* () {
-    for (const input of working.state().inputs ?? []) {
+    for (const input of working.state().inputs) {
       if (input.historySequence !== undefined) continue;
       const entry = yield* history
-        .append(working.state().slug, inputMessage(input), input.inputId)
+        .append(working.state().definition.slug, inputMessage(input), input.inputId)
         .pipe(Effect.orDie);
       const state = working.state();
       yield* working
         .save({
-          inputs: state.inputs!.map((item) =>
+          inputs: state.inputs.map((item) =>
             item.inputId === input.inputId ? { ...item, historySequence: entry.seq } : item,
           ),
         })
@@ -83,12 +83,13 @@ export const goalInputs = (working: ReturnType<typeof goalWorkingState>, history
   const accept = Effect.fn("GoalInputs.accept")(function* (
     payload: GoalInputPayload,
     key: string,
+    causal: CausalChain,
     patch: Partial<GoalState> = {},
     expectedRevision?: number,
   ) {
     const state = working.state();
     const input = newGoalInput(state, payload, key, DateTime.formatIso(yield* DateTime.now));
-    const prior = state.inputs?.find((item) => item.inputId === input.inputId);
+    const prior = state.inputs.find((item) => item.inputId === input.inputId);
     if (prior && !isDeepStrictEqual(prior.payload, payload))
       return yield* new ApplicationError({
         kind: "conflict",
@@ -100,10 +101,10 @@ export const goalInputs = (working: ReturnType<typeof goalWorkingState>, history
           {
             ...patch,
             inputs: [
-              ...(state.inputs ?? []),
+              ...state.inputs,
               {
                 ...input,
-                causal: patch.causal,
+                causal,
                 ...(state.status === "active"
                   ? {}
                   : { status: "ignored" as const, response: "Feedback recorded after Goal ended" }),

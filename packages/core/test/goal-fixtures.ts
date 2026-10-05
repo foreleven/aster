@@ -10,35 +10,10 @@ export const goalTestReply: ReplyTo<GoalCommandReply> = {
   ask: () => Effect.die("The reply sink cannot receive requests"),
 };
 
-/** Inspect receipts and their input projection without a producer-specific persisted inbox. */
+/** Observe durable input projection independently of compact command receipts. */
 export const goalIntentRecords = (state: import("../src/goals/state.js").GoalState) =>
-  (state.requests ?? []).flatMap(({ request, receipt }) => {
-    if (request._tag !== "SubmitInput" || request.input._tag !== "GoalIntent") return [];
-    const input = request.input.delivery;
-    return [
-      {
-        input,
-        receipt,
-        historySequence: state.inputs?.find(
-          (item) =>
-            item.payload._tag === "GoalIntent" &&
-            item.payload.intent.intentId === input.intent.intentId,
-        )?.historySequence,
-      },
-    ];
-  });
-export const goalDeliveryRecords = (state: import("../src/goals/state.js").GoalState) =>
-  (state.requests ?? []).flatMap(({ request, receipt }) => {
-    if (request._tag !== "SubmitInput" || request.input._tag !== "TaskMessage") return [];
-    const input = request.input.delivery;
-    return [
-      {
-        input,
-        receipt,
-        historySequence: state.inputs?.find(
-          (item) =>
-            item.payload._tag === "TaskMessage" && item.payload.requestId === input.requestId,
-        )?.historySequence,
-      },
-    ];
-  });
+  state.inputs.flatMap((input) =>
+    input.payload._tag === "GoalIntent"
+      ? [{ intent: input.payload.intent, historySequence: input.historySequence }]
+      : [],
+  );

@@ -77,6 +77,9 @@ const fixtures = [
   record(
     "/goals/project",
     {
+      definition: { slug: "project", description: "Project" },
+      inputs: [],
+      receipts: [],
       status: "active",
       tasks: [],
       summary: "Public summary",

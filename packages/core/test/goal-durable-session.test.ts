@@ -91,7 +91,13 @@ test("reopened Goal sessions keep their policy and history while tools read the 
             {
               path: "/goals/test",
               description: "Goal",
-              state: { summary: `PRIVATE_summary_${turn}` },
+              state: {
+                definition: { slug: "test", description: `PRIVATE_goal_${turn}` },
+                status: "active",
+                inputs: [],
+                receipts: [],
+                summary: `PRIVATE_summary_${turn}`,
+              },
               messages: [],
             },
           ],

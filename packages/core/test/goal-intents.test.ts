@@ -202,8 +202,14 @@ for (const fault of ["accept-ack", "history-ack", "projection-ack"] as const) {
               registry.get("/goals/project")!.state,
             );
             assert.equal(goalIntentRecords(stored).length, 1);
-            assert.deepEqual(goalIntentRecords(stored)[0]?.input, firstInput);
+            assert.deepEqual(goalIntentRecords(stored)[0]?.intent, firstInput.intent);
             assert.equal(fail, false);
+            const savedReceipt = stored.receipts.find(
+              (item) => item.requestId === firstInput.requestId,
+            )!;
+            assert.deepEqual(savedReceipt.receipt, accepted.receipt);
+            assert.match(savedReceipt.payloadFingerprint, /^[a-f0-9]{64}$/);
+            assert.equal("request" in savedReceipt, false);
             const conflict = yield* send({
               ...firstInput,
               intent: {

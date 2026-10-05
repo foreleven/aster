@@ -25,7 +25,15 @@ import { makeContextRegistry } from "../src/testing/context.js";
 const record = (path: string, state: object): ContextRecord => ({
   path,
   description: path,
-  state,
+  state: path.startsWith("/goals/")
+    ? {
+        definition: { slug: path.split("/").at(-1), description: path },
+        summary: "",
+        inputs: [],
+        receipts: [],
+        ...state,
+      }
+    : state,
   messages: [],
 });
 const definition = {

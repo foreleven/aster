@@ -60,11 +60,26 @@ test("Goal config readers retain optional titles and reject blank or non-string 
   );
 });
 
-test("Goal startup persists titles and refreshes restored titles without losing work", async () => {
+test("Goal startup refreshes the entire definition without losing work", async () => {
   const history = makeMemoryGoalHistory();
   let saved: ContextRecord | undefined;
-  const description = "Detailed responsibility";
-  for (const title of [undefined, "Project watch", "Renamed project", undefined]) {
+  for (const definition of [
+    { slug: "project", description: "Detailed responsibility" },
+    {
+      slug: "project",
+      title: "Project watch",
+      description: "Updated responsibility",
+      completionCriteria: "Release ships",
+    },
+    {
+      slug: "project",
+      title: "Renamed project",
+      description: "Another responsibility",
+      completionCriteria: "Review done",
+    },
+    { slug: "project", description: "Final responsibility" },
+  ]) {
+    const { title, description } = definition;
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -81,9 +96,7 @@ test("Goal startup persists titles and refreshes restored titles without losing 
 
               Layer.succeed(ExternalAgents, {}),
               goalWorkflowLayer({
-                definitions: [
-                  { slug: "project", description, ...(title === undefined ? {} : { title }) },
-                ],
+                definitions: [definition],
                 history,
                 reasoner: { plan: () => Effect.die("No evaluation expected") },
 
@@ -97,7 +110,11 @@ test("Goal startup persists titles and refreshes restored titles without losing 
           const record = yield* api.context("/goals/project");
           const canonical = registry.get(record.path)!;
           const state = Schema.decodeUnknownSync(GoalState)(canonical.state);
-          assert.equal(state.title, title ?? description);
+          assert.deepEqual(state.definition, definition);
+          assert.equal(
+            Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }))(record.state).title,
+            title ?? description,
+          );
           assert.equal(record.description, description);
           assert.deepEqual(saved, canonical);
           assert.deepEqual(yield* api.goals.list, [record]);
@@ -105,22 +122,19 @@ test("Goal startup persists titles and refreshes restored titles without losing 
             assert.deepEqual(canonical, {
               ...previous,
               revision: (previous.revision ?? 0) + 1,
-              state: { ...previous.state, title: title ?? description },
+              state: { ...previous.state, definition },
             });
           } else {
             // Retain completed business progress while refreshing display metadata.
             const message = { role: "user" as const, content: "Keep existing work", timestamp: 1 };
             yield* history.append("project", message);
-            const { title: _title, ...legacyState } = state;
             yield* registry.commit(
               {
                 ...canonical,
                 state: {
-                  ...legacyState,
+                  ...state,
                   status: "completed",
                   summary: "Existing conclusions",
-                  progress: "Finished",
-                  historyCount: yield* history.count("project"),
                 },
                 messages: (yield* history.read("project")).map((entry) => entry.message),
               },

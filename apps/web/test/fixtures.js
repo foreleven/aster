@@ -101,7 +101,7 @@ export function fixture() {
       context(
         "/goals/engine",
         "Monitor Knowledge Engine project progress",
-        { slug: "engine", status: "active", progress: "Awaiting test feedback" },
+        { slug: "engine", status: "active", summary: "Awaiting test feedback" },
         [
           {
             type: "assistant",
@@ -322,7 +322,6 @@ export function designFixture() {
       },
     ],
   };
-  goal.state.historyCount = goal.messages.length;
   const signal = data.contexts.find((context) => context.path === "/signals/progress");
   signal.description = "Flight price drops below ¥4,000";
   signal.state = {

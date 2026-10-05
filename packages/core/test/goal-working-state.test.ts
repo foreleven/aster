@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber } from "effect";
-import { GoalActor, makeMemoryGoalHistory, type ContextRecord } from "../src/index.js";
+import {
+  GoalActor,
+  makeApplicationApi,
+  makeMemoryGoalHistory,
+  type ContextRecord,
+} from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { goalWorkingState } from "../src/goals/working-state.js";
 
@@ -24,14 +29,11 @@ for (const phase of ["count", "read"] as const)
               path,
               description: "Goal",
               state: {
-                slug: "demo",
-                description: "Goal",
+                definition: { slug: "demo", description: "Goal" },
                 status: "active",
                 summary: "Original",
-                progress: "Original",
                 inputs: [],
-                historyThrough: 0,
-                historyCount: 0,
+                receipts: [],
               },
               messages: [],
             },
@@ -56,7 +58,6 @@ for (const phase of ["count", "read"] as const)
                   ? gate.pipe(Effect.andThen(history.read(goal, options)))
                   : history.read(goal, options),
             },
-            () => ({ slug: "demo", description: "Goal" }),
             () => path,
           );
           const pending = yield* working
@@ -66,7 +67,7 @@ for (const phase of ["count", "read"] as const)
           const newer = yield* registry.commit(
             {
               ...initial,
-              state: { ...initial.state, status: "completed", progress: "Newer progress" },
+              state: { ...initial.state, status: "completed", summary: "Newer progress" },
             },
             { expectedRevision: 1 },
           );
@@ -99,13 +100,11 @@ test("Goal public messages show the latest business inputs without a compaction 
           description: "Goal",
           messages: [],
           state: {
-            slug: "demo",
-            description: "Goal",
+            definition: { slug: "demo", description: "Goal" },
             status: "active",
             summary: "",
-            progress: "",
             inputs: [],
-            historyCount: 0,
+            receipts: [],
           },
         },
         { expectedRevision: 0 },
@@ -118,12 +117,7 @@ test("Goal public messages show the latest business inputs without a compaction 
           `input-${index}`,
         );
       }
-      const working = goalWorkingState(
-        registry,
-        history,
-        () => ({ slug: "demo", description: "Goal" }),
-        () => path,
-      );
+      const working = goalWorkingState(registry, history, () => path);
       yield* working.save();
       const record = registry.get(path)!;
       assert.equal(record.messages.length, 100);
@@ -133,8 +127,66 @@ test("Goal public messages show the latest business inputs without a compaction 
         content: "Input 105",
         timestamp: 105,
       });
-      assert.equal(working.state().historyCount, 105);
+      assert.equal(yield* history.count("demo"), 105);
+      assert.equal("historyCount" in record.state, false);
       assert.equal("historyThrough" in record.state, false);
+    }),
+  );
+});
+
+test("Goal public error reflects the latest settled input without storing an error cache", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* makeContextRegistry();
+      const path = "/goals/errors";
+      yield* registry.register(path, GoalActor.context);
+      const api = makeApplicationApi({ registry, inspect: Effect.succeed(null) });
+      const definition = { slug: "errors", description: "Observe errors" };
+      const first = {
+        inputId: "first",
+        goalSlug: "errors",
+        ordinal: 1,
+        receivedAt: "2026-10-05T00:00:00Z",
+        payload: { _tag: "UserInput", text: "First" },
+        status: "failed",
+        error: "Model failed",
+      };
+      for (const status of ["failed", "running", "completed"]) {
+        const current = registry.get(path);
+        yield* registry.commit(
+          {
+            path,
+            description: definition.description,
+            messages: [],
+            state: {
+              definition,
+              status: "active",
+              summary: "",
+              receipts: [],
+              inputs:
+                status === "failed"
+                  ? [first]
+                  : [
+                      first,
+                      {
+                        ...first,
+                        inputId: "second",
+                        ordinal: 2,
+                        status,
+                        error: "Old uncertain outcome",
+                      },
+                    ],
+            },
+          },
+          { expectedRevision: current?.revision ?? 0 },
+        );
+        const view = yield* api.context(path);
+        const projected = view.state as { lastError?: string };
+        assert.equal(projected.lastError, status === "completed" ? undefined : "Model failed");
+        assert.equal("lastError" in registry.get(path)!.state, false);
+        assert.equal("historyCount" in view.state, false);
+        assert.equal("receipts" in view.state, false);
+      }
     }),
   );
 });

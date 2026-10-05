@@ -158,6 +158,12 @@ test("Goal persists input before acknowledgement, serializes delivery, and start
       yield* env.wait(() => env.state().inputs.every((input) => input.status === "completed"));
       assert.equal(calls, 2);
       for (const field of [
+        "progress",
+        "lastError",
+        "historyCount",
+        "completionOrigin",
+        "causal",
+        "requests",
         "evaluations",
         "pendingEvaluation",
         "activeTurnId",
@@ -298,7 +304,7 @@ test("End interrupts Pi without waiting, rejects late writes and leaves accepted
         evidence: [],
       }).pipe(Effect.result);
       assert.ok(result._tag === "Failure" || result.success.isError);
-      assert.notEqual(env.state().progress, "Late result");
+      assert.notEqual(env.state().summary, "Late result");
     }),
   );
 });
@@ -426,6 +432,8 @@ test("Tasks execute independently through shared Run approval and return feedbac
         ),
       );
       assert.equal(submissions, 1);
+      yield* env.submit("unrelated-user-turn", { _tag: "UserInput", text: "A different request" });
+      yield* env.wait(() => env.state().inputs.at(-1)!.status === "completed");
       yield* Deferred.succeed(finished, undefined);
       yield* env.wait(() =>
         env
@@ -440,6 +448,11 @@ test("Tasks execute independently through shared Run approval and return feedbac
       assert.equal(submissions, 1);
       assert.equal("tasks" in env.state(), false);
       assert.equal(gates, 0);
+      const feedback = env
+        .state()
+        .inputs.findLast((input) => input.payload._tag === "ExecutionFeedback")!;
+      assert.equal(feedback.causal?.rootRequestId, "goal:project:initial");
+      assert.notEqual(feedback.causal?.rootRequestId, "unrelated-user-turn");
     }),
   );
 });
@@ -616,6 +629,54 @@ test("an ended Goal retains uncertain delivery on restart without restarting Pi"
       assert.equal(env.state().status, "completed");
       assert.equal(env.state().inputs[0]!.status, "unknown");
       assert.equal(calls, 0);
+    }),
+  );
+});
+
+test("Goal receipts normalize nested object keys, retain array order and omit duplicate payloads", async () => {
+  await run(
+    Effect.gen(function* () {
+      const env = yield* setup(() => Effect.succeed({ messages: [] }));
+      const delivery = {
+        requestId: "canonical-task",
+        source: "/goals/project",
+        createdAt: "2026-10-05T00:00:00Z",
+        task: { _tag: "Goal" as const, target: "/goals/project", text: "Review" },
+        causal: { rootRequestId: "canonical-task", remainingAgentTurns: 2 },
+        evidence: {
+          path: "/source",
+          description: "Evidence",
+          state: { first: 1, nested: { a: 2, b: 3 }, items: [1, 2] },
+          messages: [],
+        },
+      };
+      const accepted = yield* env.submit(delivery.requestId, { _tag: "TaskMessage", delivery });
+      assert.equal(accepted._tag, "Accepted");
+      const reordered = {
+        ...delivery,
+        evidence: {
+          ...delivery.evidence,
+          state: { items: [1, 2], nested: { b: 3, a: 2 }, first: 1 },
+        },
+      };
+      assert.deepEqual(
+        yield* env.submit(delivery.requestId, { _tag: "TaskMessage", delivery: reordered }),
+        accepted,
+      );
+      const changed = {
+        ...reordered,
+        evidence: { ...reordered.evidence, state: { ...reordered.evidence.state, items: [2, 1] } },
+      };
+      assert.equal(
+        (yield* env.submit(delivery.requestId, { _tag: "TaskMessage", delivery: changed }))._tag,
+        "Rejected",
+      );
+      const receipt = env.state().receipts.find((item) => item.requestId === delivery.requestId)!;
+      assert.deepEqual(Object.keys(receipt).sort(), ["payloadFingerprint", "receipt", "requestId"]);
+      assert.equal(
+        env.state().inputs.filter((item) => item.payload._tag === "TaskMessage").length,
+        1,
+      );
     }),
   );
 });

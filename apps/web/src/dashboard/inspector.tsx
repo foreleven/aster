@@ -165,7 +165,7 @@ export function Inspector({
             <Tabs defaultValue="messages">
               <TabsList>
                 <TabsTrigger value="messages">
-                  Messages · {goal ? s.historyCount || 0 : c?.messages.length || 0}
+                  Messages{!goal && ` · ${c?.messages.length || 0}`}
                 </TabsTrigger>
                 {goal && <TabsTrigger value="tasks">Tasks · {tasks.length}</TabsTrigger>}
                 {!restricted && <TabsTrigger value="state">State</TabsTrigger>}

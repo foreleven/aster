@@ -1,7 +1,6 @@
 import { goalAgentGate } from "./gate.js";
 import { deliverTask } from "../tasks/message.js";
 import { randomUUID } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { ReplyTo, type ActorContext } from "@aster/actor";
 import { AgentError, AgentRunner } from "@aster/agent";
 import { ApplicationError } from "@aster/api-contracts";
@@ -25,6 +24,7 @@ import {
   GoalCommand,
   GoalControl,
   GoalRequestData,
+  goalRequestFingerprint,
   GoalReadyReply,
   GoalCommandReply,
 } from "./protocol.js";
@@ -94,12 +94,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
       const queries = Option.getOrUndefined(yield* Effect.serviceOption(ContextQueries));
       let definition: GoalDefinition;
       let path = "";
-      const working = goalWorkingState(
-        registry,
-        history,
-        () => definition,
-        () => path,
-      );
+      const working = goalWorkingState(registry, history, () => path);
       const { state, current, save } = working;
       const inputs = goalInputs(working, history);
       const accept = goalAdmission(registry, working, history);
@@ -198,12 +193,11 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
             path = `/goals/${slug}`;
             if (!registry.get(path)) {
               const initial: GoalState = {
-                ...definition,
+                definition,
                 status: "active",
                 summary: "Ready to begin",
-                progress: "Ready to begin",
                 inputs: [],
-                historyCount: 0,
+                receipts: [],
               };
               const causal = { rootRequestId: `goal:${slug}:initial`, remainingAgentTurns: 4 };
               yield* registry
@@ -214,7 +208,6 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                     messages: [],
                     state: {
                       ...initial,
-                      causal,
                       inputs:
                         slug === "personal"
                           ? []
@@ -236,7 +229,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                 .pipe(Effect.orDie);
             }
             yield* save({
-              title: definition.title ?? definition.description,
+              definition,
               inputs: state().inputs.map((input) =>
                 state().status === "active" && input.status === "unknown"
                   ? { ...input, status: "running" }
@@ -274,12 +267,13 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
             Match.tag("SubmitInput", "End", "RetryTurn", (command) =>
               Effect.gen(function* () {
                 const request = Schema.decodeUnknownSync(GoalRequestData)(command);
-                const previous = state().requests?.find(
-                  (item) => item.request.requestId === request.requestId,
+                const payloadFingerprint = goalRequestFingerprint(request);
+                const previous = state().receipts.find(
+                  (item) => item.requestId === request.requestId,
                 );
                 if (previous)
                   return yield* command.replyTo.tell(
-                    isDeepStrictEqual(previous.request, request)
+                    previous.payloadFingerprint === payloadFingerprint
                       ? { _tag: "Accepted", receipt: previous.receipt }
                       : {
                           _tag: "Rejected",
@@ -293,14 +287,14 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                   requestId: request.requestId,
                   revision: (current().revision ?? 0) + 1,
                 };
-                const requests = [...(state().requests ?? []), { request, receipt }];
+                const record = { requestId: request.requestId, payloadFingerprint, receipt };
+                const receipts = [...state().receipts, record];
                 const result = yield* Match.value(request).pipe(
-                  Match.tag("SubmitInput", () => accept({ request, receipt })),
+                  Match.tag("SubmitInput", () => accept(request, record)),
                   Match.tag("End", () =>
                     save({
                       status: "completed",
-                      completionOrigin: "user",
-                      requests,
+                      receipts,
                       inputs: state().inputs.map((input) =>
                         Match.value(input).pipe(
                           Match.when({ status: "running" }, (input) => ({
@@ -345,7 +339,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                         causal: input.causal,
                         retryOf: input.inputId,
                       };
-                      yield* save({ requests, inputs: [...state().inputs, retry] }).pipe(
+                      yield* save({ receipts, inputs: [...state().inputs, retry] }).pipe(
                         Effect.orDie,
                       );
                       yield* inputs.project();
@@ -387,11 +381,9 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                   });
                 yield* save({
                   summary: command.progress,
-                  progress: command.progress,
                   ...(command.completed
                     ? {
                         status: "completed",
-                        completionOrigin: "criteria",
                         inputs: state().inputs.map((input) =>
                           input.status === "pending"
                             ? {
@@ -457,7 +449,6 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                     status: "failed",
                     error: command.result.error.message,
                   });
-                  yield* save({ lastError: command.result.error.message });
                   yield* wake(context);
                   return;
                 }
@@ -488,13 +479,11 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                     status: error.outcome === "failed" ? "failed" : "unknown",
                     error: error.message,
                   });
-                  yield* save({ lastError: error.message });
                 } else {
                   yield* patchInput(command.inputId, {
                     status: "completed",
                     response: command.result.value,
                   });
-                  yield* save({ lastError: undefined });
                 }
                 yield* wake(context);
               }),

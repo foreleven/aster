@@ -81,12 +81,13 @@ export interface CoreConfig {
   readonly goals: ReadonlyArray<GoalDefinition>;
 }
 
-export interface GoalDefinition {
-  readonly slug: string;
-  readonly title?: string;
-  readonly description: string;
-  readonly completionCriteria?: string;
-}
+export const GoalDefinition = Schema.Struct({
+  slug: Schema.String,
+  title: Schema.optional(GoalTitle),
+  description: Schema.NonEmptyString,
+  completionCriteria: Schema.optional(Schema.String),
+});
+export type GoalDefinition = typeof GoalDefinition.Type;
 
 export const parseConfig = (input: unknown, baseDir: string): CoreConfig => {
   const parsed = Schema.decodeUnknownSync(ConfigFile)(input);

@@ -1,10 +1,10 @@
 import { validateTaskMessage } from "../tasks/admission.js";
-import { Effect, Match } from "effect";
-import { ApplicationError } from "@aster/api-contracts";
+import { Effect, Match, Schema } from "effect";
+import { ApplicationError, TaskAdmission } from "@aster/api-contracts";
 import type { goalWorkingState } from "./working-state.js";
 import type { GoalHistory } from "./history.js";
 import type { ContextRegistry } from "../context/registry.js";
-import type { GoalRequestRecord } from "./protocol.js";
+import type { GoalRequestData, GoalReceipt } from "./protocol.js";
 import { goalInputs } from "./inputs.js";
 
 /** Variant-specific authority checks and input/receipt commits share the Goal mailbox. */
@@ -14,8 +14,8 @@ export const goalAdmission = (
   history: GoalHistory,
 ) => {
   const inputs = goalInputs(working, history);
-  return Effect.fn("Goal.submitInput")(function* (admission: GoalRequestRecord) {
-    const { request, receipt } = admission;
+  return Effect.fn("Goal.submitInput")(function* (request: GoalRequestData, record: GoalReceipt) {
+    const { receipt } = record;
     if (request._tag !== "SubmitInput")
       return yield* new ApplicationError({
         kind: "invalid-input",
@@ -26,7 +26,7 @@ export const goalAdmission = (
     const active = state().status === "active";
     if (!active && input._tag !== "ExecutionFeedback")
       return yield* new ApplicationError({ kind: "conflict", message: "Goal has ended" });
-    const patch = { requests: [...(state().requests ?? []), admission] };
+    const patch = { receipts: [...state().receipts, record] };
     const causal = { rootRequestId: request.requestId, remainingAgentTurns: 4 };
     return yield* Match.value(input).pipe(
       Match.tag("GoalIntent", ({ delivery }) =>
@@ -37,7 +37,7 @@ export const goalAdmission = (
               message: "Intent identity mismatch",
             });
           const intent = delivery.intent;
-          if (delivery.target !== current().path || intent.goalSlug !== state().slug)
+          if (delivery.target !== current().path || intent.goalSlug !== state().definition.slug)
             return yield* new ApplicationError({
               kind: "invalid-input",
               message: "Goal intent target mismatch",
@@ -57,7 +57,7 @@ export const goalAdmission = (
               message: "Goal intent does not meet its screening threshold",
             });
           if (
-            state().inputs?.some(
+            state().inputs.some(
               (item) =>
                 item.payload._tag === "GoalIntent" &&
                 item.payload.intent.intentId === intent.intentId,
@@ -70,7 +70,8 @@ export const goalAdmission = (
           yield* inputs.accept(
             { _tag: "GoalIntent", intent },
             intent.intentId,
-            { ...patch, causal: { rootRequestId: delivery.causationId, remainingAgentTurns: 4 } },
+            { rootRequestId: delivery.causationId, remainingAgentTurns: 4 },
+            patch,
             delivery.expectedRevision,
           );
           return receipt;
@@ -78,10 +79,7 @@ export const goalAdmission = (
       ),
       Match.tag("UserInput", ({ text }) =>
         Effect.gen(function* () {
-          yield* inputs.accept({ _tag: "UserInput", text }, request.requestId, {
-            ...patch,
-            causal,
-          });
+          yield* inputs.accept({ _tag: "UserInput", text }, request.requestId, causal, patch);
           return receipt;
         }),
       ),
@@ -108,19 +106,26 @@ export const goalAdmission = (
                 (delivery.evidence ? `\n\nEvidence: ${JSON.stringify(delivery.evidence)}` : ""),
             },
             delivery.requestId,
-            { ...patch, causal: delivery.causal },
+            delivery.causal,
+            patch,
           );
           return receipt;
         }),
       ),
       Match.tag("ExecutionFeedback", (input) =>
         Effect.gen(function* () {
-          const run = registry.get(input.runPath)?.state as
-            | {
-                admission?: { input: { replyTo: string } };
-              }
-            | undefined;
-          if (!run || run.admission?.input.replyTo !== current().path)
+          const run = yield* Schema.decodeUnknownEffect(
+            Schema.Struct({ admission: TaskAdmission }),
+          )(registry.get(input.runPath)?.state).pipe(
+            Effect.mapError(
+              () =>
+                new ApplicationError({
+                  kind: "invalid-input",
+                  message: "Execution feedback Run is missing or invalid",
+                }),
+            ),
+          );
+          if (run.admission.input.replyTo !== current().path)
             return yield* new ApplicationError({
               kind: "invalid-input",
               message: "Execution feedback does not belong to this Goal",
@@ -135,10 +140,8 @@ export const goalAdmission = (
               text: input.text,
             },
             request.requestId,
-            {
-              ...patch,
-              causal: input.causal ?? state().causal,
-            },
+            run.admission.input.causal,
+            patch,
           );
           return receipt;
         }),

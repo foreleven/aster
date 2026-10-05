@@ -1,5 +1,7 @@
+import { createHash } from "node:crypto";
+import { publicJson } from "../context/json.js";
 import { ReplyTo } from "@aster/actor";
-import { Schema } from "effect";
+import { Predicate, Schema } from "effect";
 import { ApplicationError, CausalChain, TaskMessage, CommandReceipt } from "@aster/api-contracts";
 import { GoalIntentInput } from "./intent.js";
 
@@ -40,11 +42,30 @@ export const GoalCommand = Schema.Union([
   Schema.TaggedStruct("RetryTurn", { ...retry, replyTo }),
 ]);
 export type GoalCommand = typeof GoalCommand.Type;
-export const GoalRequestRecord = Schema.Struct({
-  request: GoalRequestData,
+/** Receipts retain identity and content equality without duplicating the accepted input. */
+export const GoalReceipt = Schema.Struct({
+  requestId: Schema.String,
+  payloadFingerprint: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
   receipt: CommandReceipt,
 });
-export type GoalRequestRecord = typeof GoalRequestRecord.Type;
+export type GoalReceipt = typeof GoalReceipt.Type;
+/** Decode before hashing. Sort JSON object keys, preserve array order and omit absent fields. */
+export const goalRequestFingerprint = (request: GoalRequestData): string =>
+  createHash("sha256")
+    .update(
+      JSON.stringify(
+        publicJson(Schema.decodeUnknownSync(GoalRequestData)(request)),
+        (_key, value: unknown) =>
+          Predicate.isObject(value)
+            ? Object.fromEntries(
+                Object.keys(value)
+                  .sort()
+                  .map((key) => [key, value[key]]),
+              )
+            : value,
+      ),
+    )
+    .digest("hex");
 export const GoalReadyReply = Schema.Union([
   Schema.TaggedStruct("Ready", {}),
   Schema.TaggedStruct("Failed", { error: ApplicationError }),

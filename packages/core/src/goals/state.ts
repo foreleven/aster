@@ -1,24 +1,15 @@
-import { CausalChain } from "@aster/api-contracts";
 import { Schema } from "effect";
-import { GoalTitle } from "../config/schema.js";
-import { GoalRequestRecord } from "./protocol.js";
+import { GoalDefinition } from "../config/schema.js";
+import { GoalReceipt } from "./protocol.js";
 import { StoredGoalInput } from "./inputs.js";
 
 /** Goal owns business state and delivery to Pi. Pi owns conversation execution and recovery. */
 export const GoalState = Schema.Struct({
-  slug: Schema.String,
-  title: Schema.optional(GoalTitle),
-  description: Schema.String,
-  completionCriteria: Schema.optional(Schema.String),
+  definition: GoalDefinition,
   status: Schema.Literals(["active", "completed"]),
-  completionOrigin: Schema.optional(Schema.Literals(["user", "criteria"])),
   summary: Schema.String,
-  progress: Schema.String,
-  lastError: Schema.optional(Schema.String),
   inputs: Schema.Array(StoredGoalInput),
-  requests: Schema.optional(Schema.Array(GoalRequestRecord)),
-  causal: Schema.optional(CausalChain),
-  historyCount: Schema.Number,
+  receipts: Schema.Array(GoalReceipt),
 }).check(
   Schema.makeFilter(
     (state) =>
@@ -27,11 +18,11 @@ export const GoalState = Schema.Struct({
         .length <= 1 &&
       state.inputs.every(
         (input, index) =>
-          input.goalSlug === state.slug &&
+          input.goalSlug === state.definition.slug &&
           (index === 0 || state.inputs[index - 1]!.ordinal < input.ordinal),
       ) &&
-      new Set(state.requests?.map((item) => item.request.requestId)).size ===
-        (state.requests?.length ?? 0),
+      new Set(state.receipts.map((item) => item.requestId)).size === state.receipts.length &&
+      state.receipts.every((item) => item.requestId === item.receipt.requestId),
     { expected: "Unique Goal inputs and at most one unfinished Pi delivery" },
   ),
 );

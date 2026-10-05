@@ -113,7 +113,6 @@ async function setup(page, data = fixture()) {
           writes.push({ tag: rpc.tag, body });
           const goal = data.contexts.find((c) => c.path === `/goals/${body.slug}`);
           goal.messages.push({ role: "user", content: body.text, timestamp: Date.parse(at) });
-          goal.state.historyCount = goal.messages.length;
           data.timelines ??= {};
           const timeline = (data.timelines[body.slug] ??= { groups: [] });
           if (!timeline.groups.some((group) => group.requestId === body.requestId))
@@ -271,7 +270,6 @@ test("Goal summaries and responses render Markdown", async ({ page }) => {
   ].join("\n");
   const goal = data.contexts.find((context) => context.path === "/goals/engine");
   goal.state.summary = markdown;
-  goal.state.progress = markdown;
   data.timelines.engine.groups[0].response = markdown;
   const { errors } = await setup(page, data);
   await page.goto("/?context=%2Fgoals%2Fengine");
@@ -405,14 +403,11 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
     path: "/goals/real-http",
     description: "Live HTTP validation Goal",
     state: {
-      slug: "real-http",
-      description: "Live HTTP validation Goal",
+      definition: { slug: "real-http", description: "Live HTTP validation Goal" },
       status: "active",
-      progress: "",
       summary: "",
       inputs: [],
-      historyThrough: 0,
-      historyCount: 0,
+      receipts: [],
     },
     messages: [],
   };
@@ -474,7 +469,6 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
     );
     const updated = {
       ...record,
-      state: { ...record.state, historyCount: 1 },
       messages: [
         {
           type: "assistant",
@@ -525,7 +519,6 @@ test("Goal input history loads older messages and displays independent Tasks", a
   const data = fixture();
   const goal = data.contexts.find((c) => c.path === "/goals/engine");
   goal.state.summary = "Key conclusions saved";
-  goal.state.historyCount = 65;
   data.contexts.push({
     path: "/runs/goal--analysis",
     description: "Analyze compatibility",
@@ -625,8 +618,7 @@ test("SSE keys isolate queries, reconnect refreshes all, and invalidation cancel
     window.testEvents.emit("invalidate", { _tag: "Invalidate", keys: ["contexts"] }),
   );
   await expect.poll(() => Boolean(delayed)).toBe(true);
-  data.contexts.find((c) => c.path === "/goals/engine").state.progress =
-    "Latest committed progress";
+  data.contexts.find((c) => c.path === "/goals/engine").state.summary = "Latest committed progress";
   await page.getByRole("tab", { name: "Details", exact: true }).click();
   await page.evaluate(() =>
     window.testEvents.emit("invalidate", { _tag: "Invalidate", keys: ["contexts"] }),
@@ -827,7 +819,7 @@ test("invalid dashboard fields report a projection error while preserving raw Co
   const data = fixture();
   data.contexts.find((c) => c.path === "/goals/engine").state = {
     status: "active",
-    progress: { invalid: "invalid-progress" },
+    summary: 42,
     customEvidence: { source: "kept verbatim" },
   };
   const { errors } = await setup(page, data);
@@ -837,7 +829,7 @@ test("invalid dashboard fields report a projection error while preserving raw Co
   await page.getByRole("button", { name: "Goal actions" }).click();
   await page.getByRole("menuitem", { name: "Inspect goal" }).click();
   await page.getByRole("dialog").getByRole("tab", { name: "State", exact: true }).click();
-  await expect(page.getByRole("dialog").locator("pre")).toContainText("invalid-progress");
+  await expect(page.getByRole("dialog").locator("pre")).toContainText("42");
   await expect(page.getByRole("dialog").locator("pre")).toContainText("kept verbatim");
   expect(errors).toEqual([]);
 });
@@ -987,8 +979,6 @@ function personalFixture() {
       title: "Personal assistant",
       status: "active",
       summary: "Ready to help",
-      progress: "Ready to help",
-      historyCount: 0,
     },
     messages: [],
   });

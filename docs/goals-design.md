@@ -31,12 +31,15 @@ Configured Goal creation commits a deterministic initial input. The built-in `/g
 
 The Goal mailbox is the only writer of Goal state. Asynchronous work returns through `pipeToSelf`, guarded by a generation. On restart, unfinished delivery reuses the same Pi identity and reconciles the existing exchange. Known failures can receive an explicit `RetryTurn`, which creates one successor input. Unknown outcomes block later delivery until reconciled; they never authorize a replacement external submission.
 
-The retained business state is:
+The persisted Goal state has five fields:
 
-- Goal identity, description, optional completion criteria, status and progress.
-- Accepted inputs with their delivery status, response and producer causality.
-- Exact request receipts for idempotent producer retries.
-- The public-history count.
+- `definition`: identity, title, description and optional completion criteria. Startup replaces the complete definition with current configuration, including removed optional fields, while preserving work.
+- `status`: active or completed.
+- `summary`: the single current business progress summary.
+- `inputs`: accepted inputs, Context gate decisions, delivery status, responses, errors, per-input causal budgets and history projection markers.
+- `receipts`: request ID, normalized command SHA-256 fingerprint and original commit receipt. Decoding removes fields outside the command contract; canonical JSON sorts object keys and preserves array order, so retries tolerate object key order without accepting changed content.
+
+There is no top-level causal chain, error cache, duplicate progress field, completion-origin flag or history count. Execution feedback inherits causality from its admitted Run. The public view derives the latest settled error from inputs; history queries provide totals. Receipts and input admission remain atomic, and recovery retains each input's gate decision and history projection marker.
 
 Task execution state lives in `/runs/...`; Signal state lives in `/signals/...`; conversation execution state lives in Pi. Goal stores none of their duplicated lifecycle state. Business history is a public input feed, not Pi's transcript. The Timeline reads accepted inputs and conversation responses directly.
 

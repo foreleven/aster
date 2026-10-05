@@ -61,7 +61,7 @@ export function GoalWorkspace({
     ...new Set([...references(goal), ...related.map((context) => context.path)]),
   ];
   const activity = lastActivity(goal);
-  const summary = summaryText(goal.state.summary) || goal.state.progress;
+  const summary = summaryText(goal.state.summary);
 
   // React is the imperative boundary; typed AtomRpc mutations own transport and invalidation.
   async function submit(kind: "message" | "end") {
@@ -231,7 +231,7 @@ export function GoalWorkspace({
                 <dd>{goal.description}</dd>
                 <dt>Progress</dt>
                 <dd>
-                  <Markdown>{goal.state.progress || "No progress recorded yet."}</Markdown>
+                  <Markdown>{summary || "No progress recorded yet."}</Markdown>
                 </dd>
                 <dt>Completion criteria</dt>
                 <dd>

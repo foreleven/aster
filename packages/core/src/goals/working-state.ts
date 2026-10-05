@@ -1,5 +1,4 @@
 import { Effect, Schema } from "effect";
-import type { GoalDefinition } from "../config/schema.js";
 import type { ContextRegistry } from "../context/registry.js";
 import { GoalState } from "./state.js";
 import type { GoalHistory } from "./history.js";
@@ -8,7 +7,6 @@ import type { GoalHistory } from "./history.js";
 export const goalWorkingState = (
   registry: ContextRegistry["Service"],
   history: GoalHistory,
-  goal: () => GoalDefinition,
   path: () => string,
 ) => {
   const current = () => registry.get(path())!;
@@ -19,16 +17,11 @@ export const goalWorkingState = (
   ) {
     const snapshot = current();
     const previous = Schema.decodeUnknownSync(GoalState)(snapshot.state);
-    const s = {
-      ...previous,
-      ...patch,
-      historyCount: yield* history.count(goal().slug).pipe(Effect.orDie),
-    };
-    if (Object.hasOwn(patch, "lastError") && patch.lastError === undefined)
-      delete (s as { lastError?: string }).lastError;
+    const s = { ...previous, ...patch };
+    const historyCount = yield* history.count(s.definition.slug).pipe(Effect.orDie);
     // This is a recent business-input view. Pi independently owns its model context budget.
     const entries = yield* history
-      .read(goal().slug, { after: Math.max(0, s.historyCount - 100), limit: 100 })
+      .read(s.definition.slug, { after: Math.max(0, historyCount - 100), limit: 100 })
       .pipe(Effect.orDie);
     const messages = entries.map((entry) => entry.message);
     return yield* registry
