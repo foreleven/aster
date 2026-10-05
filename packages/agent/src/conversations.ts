@@ -16,10 +16,23 @@ import {
   type HarnessSettings,
 } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
-import { Config, Context, Data, Effect, Exit, Layer, Schema, Scope, Semaphore, Ref } from "effect";
+import {
+  Clock,
+  Config,
+  Context,
+  Data,
+  Effect,
+  Exit,
+  Layer,
+  Schema,
+  Scope,
+  Semaphore,
+  Ref,
+} from "effect";
 import { PiStorageLease } from "./pi-storage-lease.js";
 
 export class ConversationError extends Data.TaggedError("ConversationError")<{
+  readonly kind: "conflict" | "unavailable" | "invalid-input" | "not-found";
   readonly message: string;
   readonly cause?: unknown;
 }> {}
@@ -104,7 +117,10 @@ export class AgentConversations extends Context.Service<
     const root = options.root ?? join(homedir(), ".aster", "conversations");
     const driver = Effect.fn("AgentConversations.owner")(function* (owner: string) {
       if (!owner)
-        return yield* new ConversationError({ message: "Conversation owner is required" });
+        return yield* new ConversationError({
+          kind: "unavailable",
+          message: "Conversation owner is required",
+        });
       const previous = owners.get(owner);
       if (previous) {
         yield* previous.assertAvailable;
@@ -118,7 +134,11 @@ export class AgentConversations extends Context.Service<
           : yield* PiStorageLease.acquire(directory, owner).pipe(
               Effect.mapError(
                 (cause) =>
-                  new ConversationError({ message: "Cannot acquire conversation writer", cause }),
+                  new ConversationError({
+                    kind: "unavailable",
+                    message: "Cannot acquire conversation writer",
+                    cause,
+                  }),
               ),
             );
         const turnLock = yield* Semaphore.make(1);
@@ -126,13 +146,18 @@ export class AgentConversations extends Context.Service<
         const assertAvailable = Effect.gen(function* () {
           if (yield* Ref.get(quarantined))
             return yield* new ConversationError({
+              kind: "unavailable",
               message: "Conversation writer requires reconciliation",
             });
           if (lease)
             yield* lease.assertHeld.pipe(
               Effect.mapError(
                 (cause) =>
-                  new ConversationError({ message: "Conversation writer is closed", cause }),
+                  new ConversationError({
+                    kind: "unavailable",
+                    message: "Conversation writer is closed",
+                    cause,
+                  }),
               ),
             );
         });
@@ -153,13 +178,22 @@ export class AgentConversations extends Context.Service<
                 throw cause;
               }
             },
-            catch: (cause) => new ConversationError({ message: "Cannot open conversation", cause }),
+            catch: (cause) =>
+              new ConversationError({
+                kind: "unavailable",
+                message: "Cannot open conversation",
+                cause,
+              }),
           }),
           (harness) =>
             Effect.tryPromise({
               try: () => harness.close(BACKGROUND_CONTEXT),
               catch: (cause) =>
-                new ConversationError({ message: "Cannot drain conversation writer", cause }),
+                new ConversationError({
+                  kind: "unavailable",
+                  message: "Cannot drain conversation writer",
+                  cause,
+                }),
             }).pipe(
               Effect.tapError(() => lease?.quarantine ?? Effect.void),
               Effect.orDie,
@@ -195,7 +229,13 @@ export class AgentConversations extends Context.Service<
           Effect.tryPromise({
             try: (signal) => use(resource, withAbortSignal(signal, BACKGROUND_CONTEXT)),
             catch: (cause) =>
-              new ConversationError({ message: "Conversation operation failed", cause }),
+              cause instanceof ConversationError
+                ? cause
+                : new ConversationError({
+                    kind: "unavailable",
+                    message: "Conversation operation failed",
+                    cause,
+                  }),
           }),
         ),
       );
@@ -274,46 +314,69 @@ export class AgentConversations extends Context.Service<
             const entry = entries.find((entry) => entry.id === id);
             return entry
               ? Effect.succeed(entry)
-              : Effect.fail(new ConversationError({ message: "Conversation entry not found" }));
+              : Effect.fail(
+                  new ConversationError({
+                    kind: "not-found",
+                    message: "Conversation entry not found",
+                  }),
+                );
           }),
         ),
       append: (owner, requestId, kind, data) =>
-        access(owner, async ({ harness }, context) => {
-          if (!isJsonValue(data)) throw new Error("Conversation data must be JSON");
-          const conversation = await harness.root(context);
-          return harness.commit(async (tx) => {
-            const index = await tx.doc(Index, conversation.id);
-            const key = createHash("sha256").update(requestId).digest("hex");
-            const id = index.requests[key];
-            if (id !== undefined) {
-              let cursor: Cursor | undefined;
-              let saved;
-              do {
-                const page = await tx.scanEntries({ conversationId: conversation.id }, 100, cursor);
-                saved = page.items.find((entry) => entry.id === id);
-                cursor = page.next;
-              } while (!saved && cursor);
-              if (!saved) throw new Error("Message reference is missing");
-              const previous = Schema.decodeUnknownSync(ConversationEntry)({
-                ...Schema.decodeUnknownSync(StoredEntry)(saved.data),
-                id: saved.id,
+        Effect.gen(function* () {
+          const at = new Date(yield* Clock.currentTimeMillis).toISOString();
+          return yield* access(owner, async ({ harness }, context) => {
+            if (!isJsonValue(data))
+              throw new ConversationError({
+                kind: "invalid-input",
+                message: "Conversation data must be JSON",
               });
-              if (
-                previous.requestId !== requestId ||
-                previous.kind !== kind ||
-                !isDeepStrictEqual(previous.data, data)
-              )
-                throw new Error("Message identity belongs to another payload");
-              return previous;
-            }
-            const value = { requestId, kind, data, at: new Date().toISOString() };
-            const entry = await tx.appendEntry(conversation.id, {
-              kind: "app.aster.message",
-              data: value,
-            });
-            index.requests[key] = entry.id;
-            return { ...value, id: entry.id };
-          }, context);
+            const conversation = await harness.root(context);
+            return harness.commit(async (tx) => {
+              const index = await tx.doc(Index, conversation.id);
+              const key = createHash("sha256").update(requestId).digest("hex");
+              const id = index.requests[key];
+              if (id !== undefined) {
+                let cursor: Cursor | undefined;
+                let saved;
+                do {
+                  const page = await tx.scanEntries(
+                    { conversationId: conversation.id },
+                    100,
+                    cursor,
+                  );
+                  saved = page.items.find((entry) => entry.id === id);
+                  cursor = page.next;
+                } while (!saved && cursor);
+                if (!saved)
+                  throw new ConversationError({
+                    kind: "unavailable",
+                    message: "Message reference is missing",
+                  });
+                const previous = Schema.decodeUnknownSync(ConversationEntry)({
+                  ...Schema.decodeUnknownSync(StoredEntry)(saved.data),
+                  id: saved.id,
+                });
+                if (
+                  previous.requestId !== requestId ||
+                  previous.kind !== kind ||
+                  !isDeepStrictEqual(previous.data, data)
+                )
+                  throw new ConversationError({
+                    kind: "conflict",
+                    message: "Message identity belongs to another payload",
+                  });
+                return previous;
+              }
+              const value = { requestId, kind, data, at };
+              const entry = await tx.appendEntry(conversation.id, {
+                kind: "app.aster.message",
+                data: value,
+              });
+              index.requests[key] = entry.id;
+              return { ...value, id: entry.id };
+            }, context);
+          });
         }).pipe(Effect.uninterruptible),
     });
   });

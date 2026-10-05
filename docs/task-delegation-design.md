@@ -6,7 +6,7 @@ Task describes work delivered to an Actor. `Goal` sends a message to a Goal; `Ag
 
 `TaskMessage` carries stable request identity, source, creation time, causal budget and optional frozen public Context evidence. Signals retain an exact occurrence before delivery; Goal tool identities derive from input and tool-call identity. Receivers validate source authority and reject changed identity reuse.
 
-TaskActor commits instructions/evidence as `task.admission` in Pi, then saves business metadata, Pi references and the receipt before acknowledging. `task.input` retains follow-up instructions and their original receipts. Startup recovers Pi admissions whose Actor handoff was interrupted. Actor state does not duplicate message bodies.
+TaskActor commits instructions/evidence as `task.admission` in Pi, then saves business metadata, Pi references and the receipt before acknowledging. `task.input` retains follow-up instructions and their original receipts. Startup recovers Pi admissions whose Actor handoff was interrupted, using the same input-admission transition as live delivery so completed or failed work reactivates consistently. Actor state does not duplicate message bodies or confirmation IDs already owned by ApprovalQueue.
 
 A Task retains its identity across follow-ups and completed-work reactivation. Each instruction has its own request identity and delivery status. Exact retries return their original receipts even after completion. Rejected, cancelled and uncertain Tasks do not accept new work that would bypass reconciliation.
 
@@ -16,7 +16,7 @@ Internal execution uses a dedicated Pi conversation and AgentRunner. Execution i
 
 External execution freezes executor policy and requires confirmation through ApprovalQueue. Only a matching persisted decision permits submission. The adapter owns busy follow-up behavior: Codex steers an active turn and starts a new turn in the same thread after completion; Pi retains context through its execution conversation. The current Doubao adapter explicitly rejects follow-up delivery because it has no implemented continuation API.
 
-Task tracks pending, sending, accepted, completed, rejected and unknown inputs independently of provider rounds. Generation checks discard superseded observations. External acceptance saves the returned handle and input status together. A provider round ending does not complete inputs still awaiting delivery.
+Task tracks pending, sending, accepted, completed, rejected and unknown inputs independently of provider rounds. Generation checks discard superseded observations. All external input paths share one submission operation; acceptance saves the returned handle and input status together. A provider round ending does not complete inputs still awaiting delivery.
 
 `task.result` stores outcome text and its covered input references in Pi before the Actor commits terminal state, result reference and optional publication. Recovery can finish this handoff without executing again. Feedback goes to the reply Goal with a deterministic identity and retries missing acknowledgement within the owning Scope. Terminal replay requires no configured executor.
 
@@ -24,7 +24,7 @@ Task tracks pending, sending, accepted, completed, rejected and unknown inputs i
 
 Sending markers precede external I/O. An interrupted submission or answer is uncertain and is never automatically sent again. Explicit `ResumeTask` carries request identity and expected revision. It observes the original execution, optionally uses read-only `lookupSubmission`, and resumes only an authoritative resumable failure. Resumption markers prevent another request ID from bypassing an unknown external outcome.
 
-ApprovalQueue owns confirmation, permission and information requests. Resolve persists validated answers before acknowledgement; owners acknowledge delivery. Task persists answer sending/sent/unknown markers. Queue revocation tombstones prevent stale requests reopening. Progress and results appear in Goal conversations rather than a second notification store.
+ApprovalQueue owns confirmation, permission and information requests. Resolve persists validated answers before acknowledgement; owners acknowledge delivery. Task persists answer sending/sent/unknown markers by request identity. Follow-up execution cannot discard an answer acknowledgement; execution generation only determines whether that response may advance the current round. Queue revocation tombstones prevent stale requests reopening. Progress and results appear in Goal conversations rather than a second notification store.
 
 `InspectTask` returns instructions, follow-ups, outcomes, available native tool records, source references and decision requests. Provider handles and metadata remain private. External providers own their private transcripts; Aster retains its messages and returned results in Pi.
 

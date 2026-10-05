@@ -5,6 +5,7 @@ import { createAssistantMessageEventStream, type AssistantMessage } from "@earen
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber, Layer } from "effect";
+import { TestClock } from "effect/testing";
 import { AgentConversations, AgentRunner, Models, Type } from "../src/index.js";
 
 test("Pi messages deduplicate exact inputs, reject changed identities and isolate owners", async () => {
@@ -19,6 +20,7 @@ test("Pi messages deduplicate exact inputs, reject changed identities and isolat
           .append("/goals/a", "one", "goal.input", { text: "Different" })
           .pipe(Effect.result);
         assert.equal(conflict._tag, "Failure");
+        if (conflict._tag === "Failure") assert.equal(conflict.failure.kind, "conflict");
         yield* messages.append("/tasks/b", "one", "task.input", { text: "Other owner" });
         assert.deepEqual(
           (yield* messages.read("/goals/a")).map((entry) => entry.data),
@@ -275,5 +277,35 @@ test("interrupting a shared conversation drains tool callbacks before another tu
         assert.equal((yield* conversations.read("/tasks/cancel")).length, 1);
       }),
     ).pipe(Effect.timeout("10 seconds")),
+  );
+});
+
+test("message timestamps use the caller Clock and storage failures remain unavailable", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const messages = yield* AgentConversations.makeMemory();
+        const at = Date.parse("2026-10-05T01:00:00Z");
+        yield* TestClock.setTime(at);
+        const first = yield* messages.append("/goals/clock", "one", "goal.input", {
+          text: "Hello",
+        });
+        assert.equal(first.at, new Date(at).toISOString());
+        yield* TestClock.setTime(at + 10000);
+        assert.deepEqual(
+          yield* messages.append("/goals/clock", "one", "goal.input", { text: "Hello" }),
+          first,
+        );
+        const broken = yield* AgentConversations.make({
+          openStorage: async () => {
+            throw new Error("Disk offline");
+          },
+        });
+        const failure = yield* broken
+          .append("/tasks/offline", "one", "task.input", { text: "Hello" })
+          .pipe(Effect.flip);
+        assert.equal(failure.kind, "unavailable");
+      }).pipe(Effect.provide(TestClock.layer())),
+    ),
   );
 });

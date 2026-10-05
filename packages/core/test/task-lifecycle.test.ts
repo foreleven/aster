@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { Deferred, Effect, Schema } from "effect";
 import { approvalEntries, DEFAULT_EXECUTOR_PROMPT } from "../src/index.js";
 import { TaskState } from "../src/tasks/state.js";
-import type { TaskAdmissionReply } from "../src/tasks/actor.js";
+import type { TaskAdmissionReply } from "../src/tasks/protocol.js";
 import { taskFixture, taskInput } from "./task-fixtures.js";
 import { fakeAgent } from "./fixtures.js";
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>

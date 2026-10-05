@@ -147,7 +147,6 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
                   status: "pending",
                 },
               ],
-              approvals: [],
               executorPrompt: DEFAULT_EXECUTOR_PROMPT,
               admission: {
                 entryId: entry.id,

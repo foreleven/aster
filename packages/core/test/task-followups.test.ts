@@ -232,3 +232,123 @@ test("restoring an interrupted external follow-up cannot complete it from the pr
     }),
   );
 });
+
+for (const status of ["completed", "failed"] as const) {
+  test(`Pi-only follow-up reactivates a ${status} Task after interrupted Actor admission`, async () => {
+    const conversations = testConversations();
+    await run(
+      Effect.gen(function* () {
+        const original = yield* retainedTask(conversations, status);
+        const record = {
+          ...original,
+          state: { ...original.state, session: { sessionId: "original" } },
+        };
+        const input = {
+          requestId: "orphan",
+          target: record.path,
+          source: "/goals/personal",
+          text: "Continue the analysis",
+        };
+        const receipt = { requestId: input.requestId, revision: 3 };
+        yield* conversations.append(record.path, input.requestId, "task.input", {
+          ...input,
+          receipt,
+        });
+        let deliveries = 0;
+        const env = yield* taskFixture({
+          conversations,
+          records: new Map([[record.path, record]]),
+          agent: fakeAgent({
+            submit: () => Effect.die("Follow-up must retain its original session"),
+            followUp: (session, followup) =>
+              Effect.sync(() => {
+                deliveries++;
+                assert.equal(session.sessionId, "original");
+                assert.equal(followup.text, input.text);
+                return { sessionId: "continued" };
+              }),
+            wait: () =>
+              Effect.succeed({ state: "completed", result: { text: "Continued result" } }),
+          }),
+        });
+        const state = () =>
+          Schema.decodeUnknownSync(TaskState)(env.registry.get(record.path)!.state);
+        yield* env.wait(() => state().status === "completed" && state().inputs.length === 2);
+        assert.equal(deliveries, 1);
+        assert.equal(state().inputs.at(-1)?.status, "completed");
+        const retry = yield* env.tasks.ask<TaskAdmissionReply>((replyTo) => ({
+          _tag: "FollowupTask",
+          input,
+          replyTo,
+        }));
+        assert.deepEqual(retry, { _tag: "Accepted", receipt });
+      }),
+    );
+  });
+}
+
+test("follow-up does not discard a successful answer to an earlier approval request", async () => {
+  await run(
+    Effect.gen(function* () {
+      const answering = yield* Deferred.make<void>();
+      const releaseAnswer = yield* Deferred.make<void>();
+      const releaseResult = yield* Deferred.make<void>();
+      const env = yield* taskFixture({
+        agent: fakeAgent({
+          submit: () => Effect.succeed({ sessionId: "original" }),
+          wait: (session) =>
+            session.sessionId === "original"
+              ? Effect.succeed({
+                  state: "waiting_input",
+                  requests: [{ id: "question", kind: "input", prompt: "Choose a region" }],
+                })
+              : Deferred.await(releaseResult).pipe(
+                  Effect.as({ state: "completed", result: { text: "Updated report" } }),
+                ),
+          respond: () =>
+            Deferred.succeed(answering, undefined).pipe(
+              Effect.andThen(Deferred.await(releaseAnswer)),
+            ),
+          followUp: () => Effect.succeed({ sessionId: "next" }),
+        }),
+      });
+      const input = taskInput();
+      const state = () =>
+        Schema.decodeUnknownSync(TaskState)(env.registry.get(input.target)!.state);
+      const resolve = (id: string, response: { decision: "approve" } | { text: string }) =>
+        env.approvals.ask((replyTo) => ({ _tag: "Resolve", id, response, replyTo }));
+      yield* env.tasks.ask((replyTo) => ({ _tag: "StartTask", input, replyTo }));
+      yield* env.wait(() =>
+        approvalEntries(env.registry).some((entry) => entry.id === `${input.target}:confirm`),
+      );
+      yield* resolve(`${input.target}:confirm`, { decision: "approve" });
+      yield* env.approvals.tell({ _tag: "Deliver" });
+      const question = `${input.target}:input:question`;
+      yield* env.wait(() => approvalEntries(env.registry).some((entry) => entry.id === question));
+      yield* resolve(question, { text: "Europe" });
+      yield* env.approvals.tell({ _tag: "Deliver" });
+      yield* Deferred.await(answering);
+      yield* env.tasks.ask((replyTo) => ({
+        _tag: "FollowupTask",
+        input: {
+          requestId: "more",
+          target: input.target,
+          source: input.replyTo,
+          text: "Include Asia",
+        },
+        replyTo,
+      }));
+      yield* env.wait(() => state().session?.sessionId === "next");
+      yield* Deferred.succeed(releaseAnswer, undefined);
+      yield* env.wait(
+        () =>
+          approvalEntries(env.registry).find((entry) => entry.id === question)?.status ===
+          "acknowledged",
+      );
+      assert.equal(state().responses?.[0]?.status, "sent");
+      assert.equal(state().session?.sessionId, "next");
+      yield* Deferred.succeed(releaseResult, undefined);
+      yield* env.wait(() => state().status === "completed");
+    }),
+  );
+});

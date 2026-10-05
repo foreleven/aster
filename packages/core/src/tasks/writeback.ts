@@ -13,7 +13,7 @@ import { approvalEntries, sendApproval } from "../approvals/actor.js";
 import { ContextRegistry } from "../context/registry.js";
 import type { TaskState } from "./state.js";
 import type { ActorContext } from "@aster/actor";
-import type { TaskCommand } from "./actor.js";
+import type { TaskCommand } from "./protocol.js";
 
 export class ChannelWriteError extends Schema.TaggedError<ChannelWriteError>()(
   "ChannelWriteError",

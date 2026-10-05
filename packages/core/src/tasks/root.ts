@@ -12,9 +12,10 @@ import { ContextRegistry } from "../context/registry.js";
 import { defineContext } from "../context/definition.js";
 import { TaskState } from "./state.js";
 import { taskPathFor } from "./admission.js";
-import { TaskActor, StartTask, ResumeTask, FollowupTask, TaskReady } from "./actor.js";
+import { TaskActor } from "./actor.js";
+import { StartTask, ResumeTask, FollowupTask, TaskReady } from "./protocol.js";
 import type { ActorRef } from "@aster/actor";
-import type { TaskCommand } from "./actor.js";
+import type { TaskCommand } from "./protocol.js";
 
 const Command = Schema.Union([StartTask, ResumeTask, FollowupTask, TaskReady]);
 export type TasksRootCommand = typeof Command.Type;

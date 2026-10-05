@@ -2,7 +2,7 @@ import type { ActorContext, ActorRef } from "@aster/actor";
 import { ApplicationError, type TaskDeliveryInput } from "@aster/api-contracts";
 import { Effect } from "effect";
 import type { TasksRootCommand } from "./root.js";
-import type { TaskAdmissionReply, TaskCommand } from "./actor.js";
+import type { TaskAdmissionReply, TaskCommand } from "./protocol.js";
 import type { ContextRegistry } from "../context/registry.js";
 import { taskActorPath } from "./address.js";
 
@@ -73,7 +73,6 @@ export const attachGoalTasks = Effect.fn("Tasks.attachGoal")(function* <R>(
     if (ref._tag === "Some")
       yield* (ref.value as ActorRef<TaskCommand>).tell({
         _tag: "Resume",
-        path: record.path,
       });
   }
 });

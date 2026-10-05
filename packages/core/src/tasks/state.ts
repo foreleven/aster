@@ -46,7 +46,6 @@ export const TaskState = Schema.Struct({
     "uncertain",
   ]),
   inputs: Schema.Array(TaskInputRef),
-  approvals: Schema.Array(Schema.String),
   responses: Schema.optional(
     Schema.Array(
       Schema.Struct({

@@ -1,6 +1,6 @@
 import { inspectTask } from "../tasks/inspection.js";
 import type { TasksRootCommand } from "../tasks/root.js";
-import type { TaskAdmissionReply } from "../tasks/actor.js";
+import type { TaskAdmissionReply } from "../tasks/protocol.js";
 import { ResumeTaskDeliveryInput } from "@aster/api-contracts";
 import { randomUUID } from "node:crypto";
 import { ContextQueries, ContextQueryError, type ContextQueryInput } from "../context/queries.js";

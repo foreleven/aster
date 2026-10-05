@@ -13,6 +13,7 @@ export {
 } from "./goals/actors.js";
 export * from "./signals/actors.js";
 export * from "./tasks/actor.js";
+export * from "./tasks/protocol.js";
 export * from "./signals/goal-owner.js";
 export * from "./decisions/system-one.js";
 export * from "./signals/detect.js";
@@ -47,7 +48,6 @@ export * from "./tasks/errors.js";
 export * from "./runtime/errors.js";
 export * from "./tasks/state.js";
 
-export * from "./tasks/outcome.js";
 export * from "./signals/state.js";
 export * from "./goals/state.js";
 

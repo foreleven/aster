@@ -4,13 +4,12 @@ import {
   ApplicationError,
   CommandReceipt,
   TaskDeliveryInput,
-  ResumeTaskDeliveryInput,
   FollowupTaskInput,
   PreparedTask,
 } from "@aster/api-contracts";
 import { AgentConversations, AgentRunner, AgentError } from "@aster/agent";
 import { Clock, Effect, Match, Layer, Schema, Schedule, Option } from "effect";
-import { ReplyTo, type ActorContext, type ActorRef } from "@aster/actor";
+import { type ActorContext, type ActorRef } from "@aster/actor";
 import { ContextActor, contextPath } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
@@ -18,87 +17,15 @@ import { ContextQueries } from "../context/queries.js";
 import { MemoryRecall } from "../memory/contracts.js";
 import { GoalSettings } from "../config/settings.js";
 import { taskPathFor, sourceTask, delegateInput } from "./admission.js";
-import {
-  ExternalAgents,
-  ExecutionSession,
-  ExecutionStatus,
-  taskPrompt,
-  DEFAULT_EXECUTOR_PROMPT,
-} from "./model.js";
+import { ExternalAgents, taskPrompt, DEFAULT_EXECUTOR_PROMPT } from "./model.js";
 import { TaskState, TaskInputRef } from "./state.js";
 import { ExternalAgentError } from "./errors.js";
 import { executeTask } from "./execution.js";
-import { makeTaskWriteback, planWriteback, WritebackFinished } from "./writeback.js";
-import { ApprovalResolved, sendApproval, approvalEntries } from "../approvals/actor.js";
+import { makeTaskWriteback, planWriteback } from "./writeback.js";
+import { sendApproval, approvalEntries } from "../approvals/actor.js";
 import type { GoalCommand, GoalCommandReply } from "../goals/actors.js";
 
-export const TaskAdmissionReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-]);
-export type TaskAdmissionReply = typeof TaskAdmissionReply.Type;
-export const StartTask = Schema.TaggedStruct("StartTask", {
-  input: TaskDeliveryInput,
-  replyTo: ReplyTo<TaskAdmissionReply>(),
-});
-export const FollowupTask = Schema.TaggedStruct("FollowupTask", {
-  input: FollowupTaskInput,
-  replyTo: ReplyTo<TaskAdmissionReply>(),
-});
-export const ResumeTask = Schema.TaggedStruct("ResumeTask", {
-  input: ResumeTaskDeliveryInput,
-  replyTo: ReplyTo<TaskAdmissionReply>(),
-});
-export const TaskReady = Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() });
-const result = <A extends Schema.Constraint>(value: A) =>
-  Schema.Union([
-    Schema.TaggedStruct("Success", { value }),
-    Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
-  ]);
-export const TaskCommand = Schema.Union([
-  StartTask,
-  FollowupTask,
-  ResumeTask,
-  TaskReady,
-  ApprovalResolved,
-  WritebackFinished,
-  Schema.TaggedStruct("Resume", { path: Schema.String }),
-  Schema.TaggedStruct("Advance", {}),
-  Schema.TaggedStruct("ResumeObserved", {
-    requestId: Schema.String,
-    result: result(ExecutionStatus),
-  }),
-  Schema.TaggedStruct("Resumed", { requestId: Schema.String, result: result(ExecutionSession) }),
-  Schema.TaggedStruct("SubmissionLocated", {
-    requestId: Schema.String,
-    result: result(Schema.Option(ExecutionSession)),
-  }),
-  Schema.TaggedStruct("InternalSettled", {
-    generation: Schema.String,
-    inputId: Schema.String,
-    result: result(Schema.String),
-  }),
-  Schema.TaggedStruct("ExternalSubmitted", {
-    generation: Schema.String,
-    inputId: Schema.String,
-    result: result(ExecutionSession),
-  }),
-  Schema.TaggedStruct("ExternalStatus", {
-    generation: Schema.String,
-    result: result(ExecutionStatus),
-  }),
-  Schema.TaggedStruct("Responded", {
-    generation: Schema.String,
-    requestId: Schema.String,
-    result: result(Schema.Void),
-  }),
-  Schema.TaggedStruct("FeedbackDelivered", { result: result(Schema.Void) }),
-  Schema.TaggedStruct("Cancel", {
-    reason: Schema.String,
-    replyTo: Schema.optional(ReplyTo<void>()),
-  }),
-]);
-export type TaskCommand = typeof TaskCommand.Type;
+import { TaskCommand } from "./protocol.js";
 export type TaskServices =
   ExternalAgents | AgentConversations | AgentRunner | GoalSettings | ContextQueries | MemoryRecall;
 const TaskOutcome = Schema.Struct({
@@ -141,6 +68,20 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
           Effect.flatMap((entry) => Schema.decodeUnknownEffect(TaskDeliveryInput)(entry.data)),
           Effect.orDie,
         );
+      const preparedTask = Effect.fn("Task.prepared")(function* () {
+        const admitted = yield* initial();
+        const policy =
+          state().admission.input.agent === "internal" ? "" : `${state().executorPrompt}\n\n`;
+        return {
+          instructions: policy + admitted.task.instructions,
+          input: [
+            ...admitted.task.input,
+            ...(admitted.evidence
+              ? [{ content: JSON.stringify(admitted.evidence), sources: [admitted.evidence.path] }]
+              : []),
+          ],
+        } satisfies PreparedTask;
+      });
       const followup = (input: TaskInputRef) =>
         messages.get(path, input.entryId).pipe(
           Effect.flatMap((entry) => Schema.decodeUnknownEffect(FollowupTaskInput)(entry.data)),
@@ -151,6 +92,14 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
           inputs: state().inputs.map((input) =>
             input.requestId === requestId ? { ...input, status } : input,
           ),
+        });
+      const admitInputs = (inputs: readonly TaskInputRef[]) =>
+        save({
+          inputs,
+          ...(["completed", "failed"].includes(state().status) &&
+          inputs.some((input) => input.status === "pending")
+            ? { status: "ready" as const }
+            : {}),
         });
       const notify = Effect.fn("Task.notify")(function* (
         owner: Owner,
@@ -266,7 +215,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
         );
       });
       const confirm = Effect.fn("Task.confirm")(function* (owner: Owner) {
-        const admitted = yield* initial();
+        const prepared = yield* preparedTask();
         yield* sendApproval(owner, {
           _tag: "Enqueue",
           entry: {
@@ -278,13 +227,35 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
             request: {
               id: `${path}:confirm`,
               kind: "approval",
-              prompt: taskPrompt({
-                ...admitted.task,
-                instructions: `${state().executorPrompt}\n\n${admitted.task.instructions}`,
-              }),
+              prompt: taskPrompt(prepared),
             },
           },
         });
+      });
+      const submitExternal = Effect.fn("Task.submitExternal")(function* (
+        owner: Owner,
+        inputId: string,
+        prepared: PreparedTask,
+      ) {
+        const saved = state();
+        generation = randomUUID();
+        const token = generation;
+        yield* save({
+          status: "submitting",
+          inputs: state().inputs.map((input) =>
+            input.requestId === inputId ? { ...input, status: "sending" } : input,
+          ),
+        });
+        const agent = agents[saved.admission.input.agent]!;
+        const execution = saved.session
+          ? agent.followUp(saved.session, { requestId: inputId, text: prepared.instructions })
+          : agent.submit(prepared, { requestId: path });
+        yield* owner.pipeToSelf(execution, (result) => ({
+          _tag: "ExternalSubmitted",
+          generation: token,
+          inputId,
+          result,
+        }));
       });
       const advance = Effect.fn("Task.advance")(function* (owner: Owner) {
         if (
@@ -303,30 +274,20 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
         ) {
           return yield* finish(owner, "cancelled", "The owning Goal has ended");
         }
-        const admitted = yield* initial();
-        const isInitial = input.requestId === saved.admission.input.requestId;
-        const prepared: PreparedTask = isInitial
-          ? {
-              ...admitted.task,
-              input: [
-                ...admitted.task.input,
-                ...(admitted.evidence
-                  ? [
-                      {
-                        content: JSON.stringify(admitted.evidence),
-                        sources: [admitted.evidence.path],
-                      },
-                    ]
-                  : []),
-              ],
-            }
-          : { instructions: (yield* followup(input)).text, input: [] };
+        const prepared =
+          input.requestId === saved.admission.input.requestId
+            ? yield* preparedTask()
+            : { instructions: (yield* followup(input)).text, input: [] };
         busy = true;
-        generation = randomUUID();
-        const token = generation;
-        yield* mark(input.requestId, "sending");
-        yield* save({ status: "submitting" });
         if (saved.admission.input.agent === "internal") {
+          generation = randomUUID();
+          const token = generation;
+          yield* save({
+            status: "running",
+            inputs: state().inputs.map((item) =>
+              item.requestId === input.requestId ? { ...item, status: "sending" } : item,
+            ),
+          });
           yield* owner.pipeToSelf(
             executeTask({
               path,
@@ -347,9 +308,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
               result,
             }),
           );
-          yield* save({ status: "running" });
         } else {
-          const agent = agents[saved.admission.input.agent]!;
           // Never repeat an external submission whose outcome was not committed.
           if (input.status === "sending") {
             busy = false;
@@ -360,24 +319,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
             );
             return;
           }
-          const execution = saved.session
-            ? agent.followUp(saved.session, {
-                requestId: input.requestId,
-                text: prepared.instructions,
-              })
-            : agent.submit(
-                {
-                  ...prepared,
-                  instructions: `${saved.executorPrompt}\n\n${prepared.instructions}`,
-                },
-                { requestId: path },
-              );
-          yield* owner.pipeToSelf(execution, (result) => ({
-            _tag: "ExternalSubmitted",
-            generation: token,
-            inputId: input.requestId,
-            result,
-          }));
+          yield* submitExternal(owner, input.requestId, prepared);
         }
       });
       const settleResumption = (
@@ -431,17 +373,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
           yield* settleResumption(requestId, "unknown");
           return;
         }
-        const admitted = yield* initial();
-        const prepared = {
-          ...admitted.task,
-          instructions: `${saved.executorPrompt}\n\n${admitted.task.instructions}`,
-          input: [
-            ...admitted.task.input,
-            ...(admitted.evidence
-              ? [{ content: JSON.stringify(admitted.evidence), sources: [admitted.evidence.path] }]
-              : []),
-          ],
-        };
+        const prepared = yield* preparedTask();
         yield* owner.pipeToSelf(
           agent.lookupSubmission(prepared, { requestId: path }),
           (result) => ({ _tag: "SubmissionLocated", requestId, result }),
@@ -476,7 +408,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
           );
           if (index >= 0) inputs[index] = { ...inputs[index]!, status: "accepted" };
         }
-        if (!isDeepStrictEqual(inputs, state().inputs)) yield* save({ inputs });
+        if (!isDeepStrictEqual(inputs, state().inputs)) yield* admitInputs(inputs);
         if (state().responses?.some((response) => response.status === "sending")) {
           yield* save({
             responses: state().responses?.map((response) =>
@@ -570,7 +502,6 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
         receive: (command, owner) =>
           Match.value(command).pipe(
             Match.tag("Ready", ({ replyTo }) => replyTo.tell(undefined)),
-            Match.tag("Advance", () => advance(owner)),
             Match.tag("Resume", () => recover(owner)),
             Match.tag("FeedbackDelivered", ({ result }) =>
               result._tag === "Failure" ? Effect.logWarning(result.error) : Effect.void,
@@ -594,15 +525,14 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                       message: "Task identity mismatch",
                     });
                   if (registry.get(path)) {
-                    yield* messages.append(path, input.requestId, "task.admission", decoded).pipe(
-                      Effect.mapError(
-                        () =>
-                          new ApplicationError({
-                            kind: "conflict",
-                            message: "Task request belongs to another payload",
-                          }),
-                      ),
-                    );
+                    yield* messages
+                      .append(path, input.requestId, "task.admission", decoded)
+                      .pipe(
+                        Effect.mapError(
+                          (error) =>
+                            new ApplicationError({ kind: error.kind, message: error.message }),
+                        ),
+                      );
                     return state().admission.receipt;
                   }
                   const source = yield* sourceTask(registry, input.source, input.requestId);
@@ -652,7 +582,6 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                               status: "pending",
                             },
                           ],
-                          approvals: [],
                         },
                       },
                       { expectedRevision: 0 },
@@ -717,28 +646,20 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                   return yield* replyTo.tell({
                     _tag: "Rejected",
                     error: new ApplicationError({
-                      kind: "conflict",
+                      kind: entry.failure.kind,
                       message: entry.failure.message,
                     }),
                   });
-                if (!state().inputs.some((item) => item.requestId === input.requestId))
-                  yield* save({
-                    inputs: [
-                      ...state().inputs,
-                      {
-                        requestId: input.requestId,
-                        entryId: entry.success.id,
-                        receipt,
-                        status: "pending",
-                      },
-                    ],
-                    ...(["completed", "failed"].includes(state().status)
-                      ? { status: "ready" as const }
-                      : {}),
-                  });
+                yield* admitInputs([
+                  ...state().inputs,
+                  {
+                    requestId: input.requestId,
+                    entryId: entry.success.id,
+                    receipt,
+                    status: "pending",
+                  },
+                ]);
                 yield* replyTo.tell({ _tag: "Accepted", receipt });
-                const pending = state().inputs.find((item) => item.requestId === input.requestId)!;
-                if (pending.status !== "pending") return;
                 if (busy && state().admission.input.agent === "internal") {
                   const steered = yield* messages
                     .steer(path, input.requestId, input.text)
@@ -749,18 +670,10 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                   state().session &&
                   !state().inputs.some((item) => item.status === "sending")
                 ) {
-                  generation = randomUUID();
-                  const token = generation;
-                  yield* mark(input.requestId, "sending");
-                  yield* owner.pipeToSelf(
-                    agents[state().admission.input.agent]!.followUp(state().session!, input),
-                    (result) => ({
-                      _tag: "ExternalSubmitted",
-                      generation: token,
-                      inputId: input.requestId,
-                      result,
-                    }),
-                  );
+                  yield* submitExternal(owner, input.requestId, {
+                    instructions: input.text,
+                    input: [],
+                  });
                 } else yield* advance(owner);
               }),
             ),
@@ -847,18 +760,10 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                 const pending = state().inputs.find((input) => input.status === "pending");
                 if (pending) {
                   const input = yield* followup(pending);
-                  generation = randomUUID();
-                  const next = generation;
-                  yield* mark(input.requestId, "sending");
-                  yield* owner.pipeToSelf(
-                    agents[state().admission.input.agent]!.followUp(result.value, input),
-                    (result) => ({
-                      _tag: "ExternalSubmitted",
-                      generation: next,
-                      inputId: input.requestId,
-                      result,
-                    }),
-                  );
+                  yield* submitExternal(owner, input.requestId, {
+                    instructions: input.text,
+                    input: [],
+                  });
                 } else yield* poll(owner);
               }),
             ),
@@ -925,7 +830,6 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                   if (state().status === "awaiting-confirmation") {
                     yield* save({
                       status: response.decision === "approve" ? "ready" : "rejected",
-                      approvals: [...state().approvals, requestId],
                     });
                     if (response.decision === "approve") yield* advance(owner);
                     else yield* finish(owner, "rejected", "The user rejected this execution");
@@ -958,7 +862,13 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
             ),
             Match.tag("Responded", ({ generation: token, requestId, result }) =>
               Effect.gen(function* () {
-                if (token !== generation) return;
+                // Answer delivery belongs to its request, even when a follow-up starts another round.
+                if (
+                  !state().responses?.some(
+                    (item) => item.requestId === requestId && item.status === "sending",
+                  )
+                )
+                  return;
                 yield* save({
                   responses: state().responses?.map((item) =>
                     item.requestId === requestId
@@ -966,13 +876,22 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                       : item,
                   ),
                 });
-                if (result._tag === "Failure")
+                if (result._tag === "Failure") {
+                  if (token !== generation)
+                    return yield* notify(
+                      owner,
+                      `Answer delivery is uncertain: ${result.error.message}`,
+                      false,
+                    );
+                  busy = false;
                   return yield* finish(owner, "uncertain", result.error.message);
+                }
                 yield* sendApproval(owner, {
                   _tag: "Acknowledge",
                   id: requestId,
                   target: owner.path,
                 });
+                if (token !== generation) return;
                 yield* save({ status: "running" });
                 yield* poll(owner);
               }),

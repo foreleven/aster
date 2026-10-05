@@ -156,7 +156,6 @@ export const retainedTask = Effect.fnUntraced(function* (
     executorPrompt: "Test policy",
     status,
     inputs,
-    approvals: [],
     ...(outcome ? { outcomeEntryId: outcome.id } : {}),
     ...(status === "running" ? { session: { sessionId: "original" } } : {}),
   };

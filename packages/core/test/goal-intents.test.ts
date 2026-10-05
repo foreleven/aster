@@ -102,6 +102,7 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
                           fail = false;
                           yield* Deferred.succeed(cut, undefined);
                           return yield* new ConversationError({
+                            kind: "unavailable",
                             message: "Pi acknowledgement lost after commit",
                           });
                         }

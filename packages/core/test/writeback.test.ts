@@ -156,7 +156,7 @@ for (const outcome of ["published", "unknown", "rejected"] as const) {
             yield* env.until(() => env.state()?.writeback?.status === outcome);
 
             const actor = yield* env.system.select(taskActorPath(env.record()!.path)).resolve();
-            yield* actor.tell({ _tag: "Resume", path: env.record()!.path });
+            yield* actor.tell({ _tag: "Resume" });
             yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
             assert.equal(calls, 1);
           }),
@@ -301,7 +301,7 @@ for (const phase of ["sending", "published"] as const) {
           yield* env.until(() => env.state()?.writeback?.status === status);
 
           const actor = yield* env.system.select(taskActorPath(env.record()!.path)).resolve();
-          yield* actor.tell({ _tag: "Resume", path: env.record()!.path });
+          yield* actor.tell({ _tag: "Resume" });
           yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
           assert.equal(calls, phase === "sending" ? 0 : 1);
         }),
