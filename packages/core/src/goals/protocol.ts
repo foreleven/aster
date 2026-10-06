@@ -2,7 +2,12 @@ import { createHash } from "node:crypto";
 import { publicJson } from "../context/json.js";
 import { ReplyTo } from "@aster/actor";
 import { Predicate, Schema } from "effect";
-import { ApplicationError, CausalChain, TaskMessage, CommandReceipt } from "@aster/api-contracts";
+import {
+  ApplicationError,
+  GoalExecutionFeedback,
+  TaskMessage,
+  CommandReceipt,
+} from "@aster/api-contracts";
 import { GoalIntentInput } from "./intent.js";
 
 /** Producer-specific envelopes preserve provenance; only UserInput crosses public ingress. */
@@ -10,13 +15,7 @@ export const GoalSubmission = Schema.Union([
   Schema.TaggedStruct("TaskMessage", { delivery: TaskMessage }),
   Schema.TaggedStruct("UserInput", { text: Schema.NonEmptyString }),
   Schema.TaggedStruct("GoalIntent", { delivery: GoalIntentInput }),
-  Schema.TaggedStruct("ExecutionFeedback", {
-    taskPath: Schema.String,
-    text: Schema.String,
-    terminal: Schema.Boolean,
-    status: Schema.optional(Schema.String),
-    causal: Schema.optional(CausalChain),
-  }),
+  GoalExecutionFeedback,
 ]);
 export type GoalSubmission = typeof GoalSubmission.Type;
 const submit = { requestId: Schema.NonEmptyString, input: GoalSubmission };
@@ -33,8 +32,6 @@ export const GoalCommandReply = Schema.Union([
   Schema.TaggedStruct("Rejected", { error: ApplicationError }),
 ]);
 export type GoalCommandReply = typeof GoalCommandReply.Type;
-export const GoalDeliveryReply = GoalCommandReply;
-export type GoalDeliveryReply = GoalCommandReply;
 const replyTo = ReplyTo<GoalCommandReply>();
 export const GoalCommand = Schema.Union([
   Schema.TaggedStruct("SubmitInput", { ...submit, replyTo }),

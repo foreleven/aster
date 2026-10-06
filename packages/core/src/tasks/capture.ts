@@ -12,7 +12,7 @@ export const taskCapture = (messages: AgentConversations["Service"]): CapturePol
     const decoded = Schema.decodeUnknownOption(TaskState)(record.state);
     if (Option.isNone(decoded)) return undefined;
     const state = decoded.value;
-    const entry = yield* messages.get(record.path, state.admission.entryId).pipe(Effect.orDie);
+    const entry = yield* messages.get(record.path, state.inputs[0]!.entryId).pipe(Effect.orDie);
     const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(entry.data);
     if (!admission.evidence) return undefined;
     return {

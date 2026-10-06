@@ -41,7 +41,7 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
         Schema.decodeUnknownSync(TaskDeliveryInput)(
           (yield* env.conversations.get(
             input.target,
-            Schema.decodeUnknownSync(TaskState)(env.records.get(input.target)!.state).admission
+            Schema.decodeUnknownSync(TaskState)(env.records.get(input.target)!.state).inputs[0]!
               .entryId,
           )).data,
         ),
@@ -154,7 +154,7 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
       assert.equal(records.length, 1);
       const state = Schema.decodeUnknownSync(TaskState)(records[0]!.state);
       const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(
-        (yield* env.conversations.get(records[0]!.path, state.admission.entryId)).data,
+        (yield* env.conversations.get(records[0]!.path, state.inputs[0]!.entryId)).data,
       );
       assert.deepEqual(admission.evidence, reaction.sourceContext);
       assert.deepEqual(admission.task, { instructions: "Read the update", input: [] });

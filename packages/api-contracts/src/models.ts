@@ -54,14 +54,6 @@ export const PublicContext = Schema.Struct({
   messages: Schema.Array(Schema.Unknown),
 });
 export type PublicContext = typeof PublicContext.Type;
-export const HistoryPage = Schema.Struct({
-  entries: Schema.Array(
-    Schema.Struct({ seq: Schema.Int, at: Schema.String, message: Schema.Unknown }),
-  ),
-  total: Schema.Int,
-  nextBefore: Schema.NullOr(Schema.Int),
-});
-export type HistoryPage = typeof HistoryPage.Type;
 const FailureSummary = Schema.Struct({
   message: Schema.String,
   stack: Schema.optional(Schema.String),

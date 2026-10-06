@@ -7,7 +7,6 @@ export {
   GoalsRootActor,
   GoalCommand,
   GoalCommandReply,
-  GoalDeliveryReply,
   GoalReadyReply,
   GoalsRootCommand,
 } from "./goals/actors.js";

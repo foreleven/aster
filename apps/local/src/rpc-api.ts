@@ -36,8 +36,6 @@ export const applicationRpcHandlers = (api: ApplicationApi) =>
       traced("RetryGoalTurn", options.requestId, api.goals.retryTurn(input)),
     GetGoalTimeline: ({ slug, before, limit }, options) =>
       traced("GetGoalTimeline", options.requestId, api.goals.timeline(slug, { before, limit })),
-    GetGoalHistory: ({ slug, before, limit }, options) =>
-      traced("GetGoalHistory", options.requestId, api.goals.history(slug, { before, limit })),
     ListApprovals: (_, options) => traced("ListApprovals", options.requestId, api.approvals.list),
     InspectRuntime: (_, options) => traced("InspectRuntime", options.requestId, api.inspect),
     SendGoalMessage: ({ slug, text, requestId }, options) =>

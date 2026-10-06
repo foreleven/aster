@@ -12,12 +12,11 @@ import {
   GoalState,
   GoalsRootActor,
   type ContextRecord,
-  type GoalDeliveryReply,
+  type GoalCommandReply,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { ConversationError } from "@aster/agent";
 import { type GoalIntentInput } from "../src/goals/intent.js";
-import type { GoalCommandReply } from "../src/goals/actors.js";
 
 const input: GoalIntentInput = {
   requestId: "source-revision-one-to-project",
@@ -117,7 +116,7 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
             const root = yield* system.spawn("goals", GoalsRootActor);
             yield* root.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
             const send = (value: GoalIntentInput) =>
-              root.ask<GoalDeliveryReply>((replyTo) => ({
+              root.ask<GoalCommandReply>((replyTo) => ({
                 _tag: "Route",
                 slug: "project",
                 command: {

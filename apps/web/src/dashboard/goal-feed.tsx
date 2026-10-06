@@ -1,7 +1,7 @@
 import React, { useMemo } from "react";
 import { useAtomSet, useAtomValue, useAtomRefresh } from "@effect/atom-react";
 import { resultError, resultValue } from "../api/client";
-import { goalHistory } from "../api/history";
+import { goalTimeline } from "../api/timeline";
 import { Button } from "@/components/ui/button";
 import { Messages } from "./shared";
 
@@ -9,7 +9,7 @@ import { projectMessage } from "./model";
 
 export function GoalFeed({ slug, inspect }: { slug: string; inspect: (path: string) => void }) {
   // Retain the family bundle: Atom.family uses weak references, while hooks only retain its individual atoms.
-  const atoms = useMemo(() => goalHistory(slug), [slug]);
+  const atoms = useMemo(() => goalTimeline(slug), [slug]);
   const result = useAtomValue(atoms.feed);
   const setBefore = useAtomSet(atoms.before);
   const retryFeed = useAtomRefresh(atoms.feed);
@@ -41,8 +41,8 @@ export function GoalFeed({ slug, inspect }: { slug: string; inspect: (path: stri
         </Button>
       )}
       <Messages
-        messages={(page?.entries ?? []).map((entry) => ({
-          ...projectMessage(entry.message),
+        messages={(page?.messages ?? []).map((entry) => ({
+          ...projectMessage({ role: entry.role, content: entry.text }),
           at: entry.at,
         }))}
         inspect={inspect}

@@ -156,8 +156,8 @@ test("application reads project business fields and history without altering can
         visibility: "restricted",
         reason: "missing-policy",
       });
-      const last = yield* api.goals.history("project", { limit: 1 });
-      assert.equal(last.entries.length, 1);
+      const last = yield* api.goals.timeline("project", { limit: 1 });
+      assert.equal(last.messages.length, 1);
       assert.equal(last.total, 1);
       assert.equal(last.nextBefore, null);
       assert.match(JSON.stringify(last), /Public input/);

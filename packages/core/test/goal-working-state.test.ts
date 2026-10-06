@@ -72,9 +72,7 @@ test("Goal public error reflects the latest settled input without storing an err
       const definition = { slug: "errors", description: "Observe errors" };
       const first = {
         inputId: "first",
-        goalSlug: "errors",
-        ordinal: 1,
-        receivedAt: "2026-10-05T00:00:00Z",
+        causal: { rootRequestId: "first", remainingAgentTurns: 4 },
         kind: "UserInput",
         entryId: 1,
         status: "failed",
@@ -100,7 +98,6 @@ test("Goal public error reflects the latest settled input without storing an err
                       {
                         ...first,
                         inputId: "second",
-                        ordinal: 2,
                         status,
                         error: "Old uncertain outcome",
                       },

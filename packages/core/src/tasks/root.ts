@@ -3,6 +3,7 @@ import { taskActorPath } from "./address.js";
 import {
   ApplicationError,
   TaskDeliveryInput,
+  TaskPath,
   ResumeTaskDeliveryInput,
   FollowupTaskInput,
 } from "@aster/api-contracts";
@@ -45,9 +46,10 @@ export class TasksRootActor extends ContextActor.Service<TasksRootActor, TaskSer
                 )
                 .pipe(Effect.orDie);
             for (const record of Object.values(registry.snapshot())) {
-              if (!/^\/tasks\/[a-f0-9]{64}$/.test(record.path)) continue;
+              if (!Schema.is(TaskPath)(record.path)) continue;
               const state = Schema.decodeUnknownSync(TaskState)(record.state);
-              if (!state.admission || state.admission.input.target !== record.path) continue;
+              if (taskPathFor(state.admission.source, state.inputs[0]!.requestId) !== record.path)
+                continue;
               yield* actor.spawn(record.path.slice("/tasks/".length), TaskActor).pipe(Effect.orDie);
             }
           }),

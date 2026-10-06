@@ -78,6 +78,7 @@ async function setup(page, data = fixture()) {
           break;
         }
         case "GetGoalTimeline": {
+          historyRequests.push(body);
           const timeline = data.timelines?.[body.slug] ?? { groups: [] };
           const all =
             timeline.messages ??
@@ -112,22 +113,6 @@ async function setup(page, data = fixture()) {
             messages,
             total: all.length,
             nextBefore: all.some((message) => message.id < messages[0]?.id) ? messages[0].id : null,
-          };
-          break;
-        }
-        case "GetGoalHistory": {
-          historyRequests.push(body);
-          const messages =
-            data.contexts.find((c) => c.path === `/goals/${body.slug}`)?.messages ?? [];
-          const before = body.before ?? messages.length + 1;
-          const entries = messages
-            .map((message, i) => ({ seq: i + 1, at: message.at ?? at, message }))
-            .filter((e) => e.seq < before)
-            .slice(-30);
-          value = {
-            entries,
-            total: messages.length,
-            nextBefore: entries[0]?.seq > 1 ? entries[0].seq : null,
           };
           break;
         }
@@ -562,6 +547,17 @@ test("Goal input history loads older messages and displays independent Tasks", a
   // Both persisted legacy events and new English events keep their progress presentation.
   goal.messages[63].content = "[运行时事件，仅作为证据]\nHistorical observation 64";
   goal.messages[64].content = "[Runtime event, evidence only]\nHistorical observation 65";
+  data.timelines.engine = {
+    get messages() {
+      return goal.messages.map((message, index) => ({
+        id: index + 1,
+        inputId: `input-${index}`,
+        role: message.role,
+        text: message.content,
+        at,
+      }));
+    },
+  };
   const { errors, historyRequests } = await setup(page, data);
   await page.getByRole("button", { name: "Goal actions" }).click();
   await page.getByRole("menuitem", { name: "Inspect goal" }).click();
@@ -794,6 +790,17 @@ test("history invalidation during an older-page request retains both ends withou
     content: `Entry ${i + 1}`,
     timestamp: Date.parse(at),
   }));
+  data.timelines.engine = {
+    get messages() {
+      return goal.messages.map((message, index) => ({
+        id: index + 1,
+        inputId: `input-${index}`,
+        role: message.role,
+        text: message.content,
+        at,
+      }));
+    },
+  };
   const { errors } = await setup(page, data);
   await page.getByRole("button", { name: "Goal actions" }).click();
   await page.getByRole("menuitem", { name: "Inspect goal" }).click();
@@ -802,7 +809,7 @@ test("history invalidation during an older-page request retains both ends withou
   let delayed;
   await page.route("**/api/rpc{,/}", async (route) => {
     const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "GetGoalHistory" || rpc.payload.before !== 36 || delayed)
+    if (rpc.tag !== "GetGoalTimeline" || rpc.payload.before !== 36 || delayed)
       return route.fallback();
     delayed = { route, rpc };
   });

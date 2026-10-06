@@ -59,22 +59,21 @@ export const planWriteback = (
   at: string,
 ): WritebackOperation | undefined => {
   if (state.writeback) return state.writeback;
-  if (state.status !== "completed" || !state.admission.input.action || !text.trim())
-    return undefined;
+  if (state.status !== "completed" || !state.admission.action || !text.trim()) return undefined;
   const requestId = publicationId(source);
   return {
     status: "waiting-approval",
     request: {
       requestId,
       source,
-      taskSource: state.admission.input.source,
-      causationId: state.admission.input.requestId,
+      taskSource: state.admission.source,
+      causationId: state.inputs[0]!.requestId,
       createdAt: at,
-      action: state.admission.input.action,
+      action: state.admission.action,
       content: text,
       // Publication is the end of this automatic chain. Channel echo must not
       // manufacture fresh authorization or replenish the causal budget.
-      causal: { rootRequestId: state.admission.input.causal.rootRequestId, remainingAgentTurns: 0 },
+      causal: { rootRequestId: state.admission.causal.rootRequestId, remainingAgentTurns: 0 },
     },
   };
 };
@@ -153,9 +152,9 @@ export const makeTaskWriteback = Effect.fn("Task.writeback")(function* (options:
     if (!operation) return;
     if (
       operation.request.requestId !== publicationId(options.path()) ||
-      operation.request.taskSource !== state.admission.input.source ||
+      operation.request.taskSource !== state.admission.source ||
       operation.request.source !== options.path() ||
-      !isDeepStrictEqual(operation.request.action, state.admission.input.action)
+      !isDeepStrictEqual(operation.request.action, state.admission.action)
     )
       return yield* Effect.die(
         new Error("Writeback intent disagrees with its committed Task result"),

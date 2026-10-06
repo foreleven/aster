@@ -11,6 +11,8 @@ import {
   Harness,
   MemoryStorage,
   type Cursor,
+  type EntryId,
+  type EntryRecord,
   type Storage,
   type Submission,
   type HarnessSettings,
@@ -50,6 +52,10 @@ const StoredEntry = Schema.Struct({
   kind: Schema.String,
   data: Schema.Unknown,
   at: Schema.String,
+});
+const decodeEntry = (entry: EntryRecord): ConversationEntry => ({
+  ...Schema.decodeUnknownSync(StoredEntry)(entry.data),
+  id: entry.id,
 });
 const Index = defineDoc<{ requests: Record<string, number> }>({
   kind: "app.aster.messages",
@@ -247,13 +253,7 @@ export class AgentConversations extends Context.Service<
         do {
           const page = await conversation.entries({}, 100, cursor, context);
           for (const entry of page.items) {
-            if (entry.kind === "app.aster.message")
-              entries.push(
-                Schema.decodeUnknownSync(ConversationEntry)({
-                  ...Schema.decodeUnknownSync(StoredEntry)(entry.data),
-                  id: entry.id,
-                }),
-              );
+            if (entry.kind === "app.aster.message") entries.push(decodeEntry(entry));
           }
           cursor = page.next;
         } while (cursor);
@@ -309,19 +309,19 @@ export class AgentConversations extends Context.Service<
           return true;
         }),
       get: (owner, id) =>
-        read(owner).pipe(
-          Effect.flatMap((entries) => {
-            const entry = entries.find((entry) => entry.id === id);
-            return entry
-              ? Effect.succeed(entry)
-              : Effect.fail(
-                  new ConversationError({
-                    kind: "not-found",
-                    message: "Conversation entry not found",
-                  }),
-                );
-          }),
-        ),
+        access(owner, async ({ harness }, context) => {
+          const conversation = await harness.root(context);
+          return harness.commit(async (tx) => {
+            // Entry IDs are numeric in Aster; restore the SDK brand only at this boundary.
+            const entry = await tx.entry(id as EntryId);
+            if (entry?.conversationId !== conversation.id || entry.kind !== "app.aster.message")
+              throw new ConversationError({
+                kind: "not-found",
+                message: "Conversation entry not found",
+              });
+            return decodeEntry(entry);
+          }, context);
+        }),
       append: (owner, requestId, kind, data) =>
         Effect.gen(function* () {
           const at = new Date(yield* Clock.currentTimeMillis).toISOString();
@@ -337,26 +337,13 @@ export class AgentConversations extends Context.Service<
               const key = createHash("sha256").update(requestId).digest("hex");
               const id = index.requests[key];
               if (id !== undefined) {
-                let cursor: Cursor | undefined;
-                let saved;
-                do {
-                  const page = await tx.scanEntries(
-                    { conversationId: conversation.id },
-                    100,
-                    cursor,
-                  );
-                  saved = page.items.find((entry) => entry.id === id);
-                  cursor = page.next;
-                } while (!saved && cursor);
-                if (!saved)
+                const saved = await tx.entry(id as EntryId);
+                if (saved?.conversationId !== conversation.id || saved.kind !== "app.aster.message")
                   throw new ConversationError({
                     kind: "unavailable",
                     message: "Message reference is missing",
                   });
-                const previous = Schema.decodeUnknownSync(ConversationEntry)({
-                  ...Schema.decodeUnknownSync(StoredEntry)(saved.data),
-                  id: saved.id,
-                });
+                const previous = decodeEntry(saved);
                 if (
                   previous.requestId !== requestId ||
                   previous.kind !== kind ||

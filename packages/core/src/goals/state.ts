@@ -16,11 +16,6 @@ export const GoalState = Schema.Struct({
       new Set(state.inputs.map((input) => input.inputId)).size === state.inputs.length &&
       state.inputs.filter((input) => input.status === "running" || input.status === "unknown")
         .length <= 1 &&
-      state.inputs.every(
-        (input, index) =>
-          input.goalSlug === state.definition.slug &&
-          (index === 0 || state.inputs[index - 1]!.ordinal < input.ordinal),
-      ) &&
       new Set(state.receipts.map((item) => item.requestId)).size === state.receipts.length &&
       state.receipts.every((item) => item.requestId === item.receipt.requestId),
     { expected: "Unique Goal inputs and at most one unfinished Pi delivery" },

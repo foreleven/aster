@@ -21,7 +21,6 @@ import {
   ApplicationError,
   ApprovalEntry,
   ApprovalResponse,
-  HistoryPage,
   PublicContext,
   RuntimeSnapshot,
 } from "./models.js";
@@ -94,15 +93,6 @@ export const ApplicationRpcs = RpcGroup.make(
       limit: Schema.optional(Schema.Int),
     },
     success: GoalTimelinePage,
-    error: ApplicationError,
-  }),
-  Rpc.make("GetGoalHistory", {
-    payload: {
-      slug: Schema.String,
-      before: Schema.optional(Schema.Int),
-      limit: Schema.optional(Schema.Int),
-    },
-    success: HistoryPage,
     error: ApplicationError,
   }),
   Rpc.make("ListApprovals", { success: Schema.Array(ApprovalEntry), error: ApplicationError }),

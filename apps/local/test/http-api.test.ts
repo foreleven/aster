@@ -339,14 +339,14 @@ test("Goal feed paginates full history independently of its working messages", a
     port: 0,
   });
   try {
-    const page = (await (await fetch(`${api.url}/api/goals/feed/history`)).json()) as any;
-    assert.equal(page.entries.length, 30);
-    assert.equal(page.entries[0].message.content, "Record 35");
+    const page = (await (await fetch(`${api.url}/api/goals/feed/timeline`)).json()) as any;
+    assert.equal(page.messages.length, 30);
+    assert.equal(page.messages[0].text, "Record 35");
     const older = (await (
-      await fetch(`${api.url}/api/goals/feed/history?before=${page.nextBefore}`)
+      await fetch(`${api.url}/api/goals/feed/timeline?before=${page.nextBefore}`)
     ).json()) as any;
-    assert.equal(older.entries.at(-1).message.content, "Record 34");
-    assert.equal((await fetch(`${api.url}/api/goals/feed/history?limit=200`)).status, 400);
+    assert.equal(older.messages.at(-1).text, "Record 34");
+    assert.equal((await fetch(`${api.url}/api/goals/feed/timeline?limit=200`)).status, 400);
   } finally {
     await api.close();
   }

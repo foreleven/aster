@@ -18,9 +18,9 @@ export const taskView: import("../context/definition.js").ContextViewPolicy = {
     if (Option.isSome(canonical))
       publicState = Option.some({
         status: canonical.value.status,
-        sourcePath: canonical.value.admission.input.source,
-        replyTo: canonical.value.admission.input.replyTo,
-        agent: canonical.value.admission.input.agent,
+        sourcePath: canonical.value.admission.source,
+        replyTo: canonical.value.admission.replyTo,
+        agent: canonical.value.admission.agent,
         inputs: canonical.value.inputs.length,
         writeback: canonical.value.writeback,
       });

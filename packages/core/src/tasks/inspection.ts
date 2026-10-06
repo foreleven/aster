@@ -6,7 +6,7 @@ import {
   FollowupTaskInput,
 } from "@aster/api-contracts";
 import { AgentConversations } from "@aster/agent";
-import { Effect, Schema } from "effect";
+import { Effect, Match, Schema } from "effect";
 import type { ContextRegistry } from "../context/registry.js";
 import { approvalEntries } from "../approvals/actor.js";
 import { TaskState } from "./state.js";
@@ -34,7 +34,7 @@ export const inspectTask: (
         ),
       );
     const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(
-      entries.find((entry) => entry.id === state.admission.entryId)?.data,
+      entries.find((entry) => entry.id === state.inputs[0]!.entryId)?.data,
     );
     const messages = entries.flatMap((entry) => {
       if (entry.kind === "task.admission")
@@ -79,13 +79,12 @@ export const inspectTask: (
       : undefined;
     return {
       path,
-      taskPath: path,
       revision: record.revision ?? 0,
-      agent: state.admission.input.agent,
+      agent: state.admission.agent,
       status: state.status,
       instructions: admission.task.instructions,
       sources: [...new Set(admission.task.input.flatMap((item) => item.sources))],
-      hasExecution: !!state.session || state.admission.input.agent === "internal",
+      hasExecution: !!state.session || state.admission.agent === "internal",
       messages,
       ...(state.status === "completed" ? { result: text } : { error: text }),
       resumptions: state.resumptions?.map((item) => ({
@@ -98,12 +97,14 @@ export const inspectTask: (
           id: entry.id,
           kind: entry.request.kind,
           prompt: entry.request.prompt,
-          responseStatus:
-            state.responses?.find((item) => item.requestId === entry.id)?.status === "unknown"
-              ? ("uncertain" as const)
-              : entry.status === "acknowledged"
-                ? ("sent" as const)
-                : ("pending" as const),
+          responseStatus: Match.value({
+            marker: state.responses?.find((item) => item.requestId === entry.id)?.status,
+            status: entry.status,
+          }).pipe(
+            Match.when({ marker: "unknown" }, () => "uncertain" as const),
+            Match.when({ status: "acknowledged" }, () => "sent" as const),
+            Match.orElse(() => "pending" as const),
+          ),
         })),
     };
   },

@@ -1,6 +1,6 @@
 # Reactive application API
 
-Status: implemented with Effect `4.0.0`. AtomRpc supplies typed queries and mutations over HTTP; SSE carries query invalidation keys. Existing REST endpoints remain available. The SSE event is now `invalidate`, replacing the old `context` event.
+Status: implemented with Effect `4.0.0`. AtomRpc supplies typed queries and mutations over HTTP; SSE carries query invalidation keys. REST routes and RPC share application operations. Goal conversation reads use `GetGoalTimeline` or `/api/goals/:slug/timeline`; there is no separate history endpoint. The SSE event is now `invalidate`, replacing the old `context` event.
 
 ```text
 Actor mailbox -> durable Context commit -> ContextChange
@@ -40,7 +40,7 @@ Runtime phase is a closed Schema union. AsterRuntime owns a private `Ref` contai
 
 ## Contracts and invalidation
 
-`ApplicationRpcs` exposes `ListContexts`, `GetContext`, `ListGoals`, `GetGoalHistory`, `ListApprovals`, `InspectRuntime`, `SendGoalMessage`, `EndGoal` and `RespondToApproval`. Schemas validate the public DTOs and ApplicationError values. Clients never import ActorRefs or service implementations. Core retains re-exports of the shared domain records.
+`ApplicationRpcs` exposes `ListContexts`, `GetContext`, `ListGoals`, `GetGoalTimeline`, `ListApprovals`, `InspectRuntime`, `SendGoalMessage`, `EndGoal` and `RespondToApproval`. Schemas validate the public DTOs and ApplicationError values. Clients never import ActorRefs or service implementations. Core retains re-exports of the shared domain records.
 
 | Committed change                      | Keys                                |
 | ------------------------------------- | ----------------------------------- |
@@ -56,7 +56,7 @@ Query atoms declare `reactivityKeys`. Successful mutation setters receive `{ pay
 
 The EventSource callback only enqueues notifications into a scoped Effect Stream. `ready` invalidates all queries, `invalidate` decodes `QueryInvalidation` then calls Reactivity.invalidate in the same runtime, and transport errors update connection status while native EventSource reconnects. Invalid protocol data terminates the stream, releases the connection and presents a refresh action. Telemetry has a separate scoped three-second tick; it does not reload Contexts or history.
 
-`api/history.ts` retains loaded immutable history pages. Its reactive AtomRpc tail query is independent of the backward pagination cursor: loading an older page does not refetch the tail or previously loaded pages. On invalidation it fetches the latest page, reads backward only until the cached newest sequence, and merges the new entries by sequence. A tail update during an older-page request interrupts and restarts that merge with both dependencies intact. Cache updates become visible only after the complete read succeeds; a smaller server count discards a truncated store's stale cache. The component retains its Atom.family bundle with useMemo because the family cache uses weak references; its hooks alone retain only individual atoms.
+`api/timeline.ts` retains loaded immutable history pages. Its reactive AtomRpc tail query is independent of the backward pagination cursor: loading an older page does not refetch the tail or previously loaded pages. On invalidation it fetches the latest page, reads backward only until the cached newest entry ID, and merges the new entries by entry ID. A tail update during an older-page request interrupts and restarts that merge with both dependencies intact. Cache updates become visible only after the complete read succeeds; a smaller server count discards a truncated store's stale cache. The component retains its Atom.family bundle with useMemo because the family cache uses weak references; its hooks alone retain only individual atoms.
 
 ## Transport lifecycle
 

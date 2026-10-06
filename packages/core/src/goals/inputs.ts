@@ -9,33 +9,23 @@ import type { GoalState } from "./state.js";
 
 export const StoredGoalInput = Schema.Struct({
   inputId: Schema.String,
-  goalSlug: Schema.String,
-  ordinal: Schema.Int,
-  receivedAt: Schema.String,
   entryId: Schema.Int,
-  kind: Schema.String,
+  kind: Schema.Union(GoalInputPayload.members.map((member) => member.fields._tag)),
   status: Schema.Literals(["pending", "running", "completed", "failed", "unknown", "ignored"]),
   relevant: Schema.optional(Schema.Boolean),
   error: Schema.optional(Schema.String),
   retryOf: Schema.optional(Schema.String),
-  causal: Schema.optional(CausalChain),
+  causal: CausalChain,
 });
 export type StoredGoalInput = typeof StoredGoalInput.Type;
 export type ResolvedGoalInput = StoredGoalInput & {
   readonly payload: typeof GoalInputPayload.Type;
+  readonly receivedAt: string;
 };
 export const goalInputId = (goal: string, kind: string, key: string) =>
   createHash("sha256")
     .update(JSON.stringify([goal, kind, key]))
     .digest("hex");
-export const resolveGoalInput = (messages: AgentConversations["Service"], input: StoredGoalInput) =>
-  messages.get(`/goals/${input.goalSlug}`, input.entryId).pipe(
-    Effect.flatMap((entry) =>
-      Schema.decodeUnknownEffect(Schema.Struct({ payload: GoalInputPayload }))(entry.data),
-    ),
-    Effect.map(({ payload }): ResolvedGoalInput => ({ ...input, payload })),
-    Effect.orDie,
-  );
 export const inputMessage = (input: ResolvedGoalInput): AgentMessage =>
   Match.value(input.payload).pipe(
     Match.tag("GoalIntent", ({ intent }) => goalIntentMessage(intent)),
@@ -55,6 +45,26 @@ export const inputMessage = (input: ResolvedGoalInput): AgentMessage =>
       timestamp: Date.parse(input.receivedAt),
     })),
   );
+
+const GoalInputEntry = Schema.Struct({
+  payload: GoalInputPayload,
+  causal: CausalChain,
+  retryOf: Schema.optional(Schema.String),
+  receipt: Schema.optional(GoalReceipt),
+});
+const decodeInput = Schema.decodeUnknownEffect(GoalInputEntry);
+const inputReference = (
+  entry: { readonly id: number; readonly requestId: string },
+  data: typeof GoalInputEntry.Type,
+  active: boolean,
+): StoredGoalInput => ({
+  inputId: entry.requestId,
+  entryId: entry.id,
+  kind: data.payload._tag,
+  causal: data.causal,
+  status: active ? "pending" : "ignored",
+  ...(data.retryOf ? { retryOf: data.retryOf } : {}),
+});
 
 /** Pi owns bodies; the mailbox commits only input references and delivery state. */
 export const goalInputs = (
@@ -86,17 +96,8 @@ export const goalInputs = (
       })
       .pipe(Effect.orDie);
     if (!prior) {
-      const input: StoredGoalInput = {
-        inputId,
-        goalSlug: state.definition.slug,
-        ordinal: (state.inputs.at(-1)?.ordinal ?? 0) + 1,
-        receivedAt: entry.at,
-        entryId: entry.id,
-        kind: payload._tag,
-        causal,
-        status: state.status === "active" ? "pending" : "ignored",
-        ...(retryOf ? { retryOf } : {}),
-      };
+      const data = yield* decodeInput(entry.data).pipe(Effect.orDie);
+      const input = inputReference(entry, data, state.status === "active");
       yield* working
         .save({ ...patch, inputs: [...state.inputs, input] }, expectedRevision)
         .pipe(Effect.orDie);
@@ -110,31 +111,19 @@ export const goalInputs = (
     const receipts = [...state.receipts];
     for (const entry of entries) {
       if (entry.kind !== "goal.input") continue;
-      const data = Schema.decodeUnknownSync(
-        Schema.Struct({
-          payload: GoalInputPayload,
-          causal: CausalChain,
-          retryOf: Schema.optional(Schema.String),
-          receipt: Schema.optional(GoalReceipt),
-        }),
-      )(entry.data);
+      const data = yield* decodeInput(entry.data).pipe(Effect.orDie);
       if (data.receipt && !receipts.some((item) => item.requestId === data.receipt!.requestId))
         receipts.push(data.receipt);
       if (inputs.some((input) => input.inputId === entry.requestId)) continue;
-      inputs.push({
-        inputId: entry.requestId,
-        goalSlug: state.definition.slug,
-        ordinal: (inputs.at(-1)?.ordinal ?? 0) + 1,
-        receivedAt: entry.at,
-        entryId: entry.id,
-        kind: data.payload._tag,
-        causal: data.causal,
-        status: state.status === "active" ? "pending" : "ignored",
-        ...(data.retryOf ? { retryOf: data.retryOf } : {}),
-      });
+      inputs.push(inputReference(entry, data, state.status === "active"));
     }
     if (inputs.length !== state.inputs.length || receipts.length !== state.receipts.length)
       yield* working.save({ inputs, receipts }).pipe(Effect.orDie);
   });
-  return { accept, recover };
+  const resolve = Effect.fn("GoalInputs.resolve")(function* (input: StoredGoalInput) {
+    const entry = yield* messages.get(working.current().path, input.entryId).pipe(Effect.orDie);
+    const { payload } = yield* decodeInput(entry.data).pipe(Effect.orDie);
+    return { ...input, payload, receivedAt: entry.at } satisfies ResolvedGoalInput;
+  });
+  return { accept, recover, resolve };
 };

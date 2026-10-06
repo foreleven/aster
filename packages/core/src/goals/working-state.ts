@@ -2,7 +2,7 @@ import { Effect, Schema } from "effect";
 import type { ContextRegistry } from "../context/registry.js";
 import { GoalState } from "./state.js";
 
-/** Mailbox-only writes; full history and the bounded public working window share one commit path. */
+/** Mailbox-only business-state writes. Pi owns all conversation messages. */
 export const goalWorkingState = (registry: ContextRegistry["Service"], path: () => string) => {
   const current = () => registry.get(path())!;
   const state = () => Schema.decodeUnknownSync(GoalState)(current().state);

@@ -26,6 +26,12 @@ export const GoalIntent = Schema.Struct({
 });
 export type GoalIntent = typeof GoalIntent.Type;
 
+export const GoalExecutionFeedback = Schema.TaggedStruct("ExecutionFeedback", {
+  taskPath: Schema.String,
+  status: Schema.String,
+  text: Schema.String,
+});
+
 export const GoalInputPayload = Schema.Union([
   Schema.TaggedStruct("GoalIntent", { intent: GoalIntent }),
   Schema.TaggedStruct("UserInput", { text: Schema.NonEmptyString }),
@@ -34,12 +40,7 @@ export const GoalInputPayload = Schema.Union([
     source: Schema.String,
     text: Schema.String,
   }),
-  Schema.TaggedStruct("ExecutionFeedback", {
-    taskPath: Schema.String,
-    status: Schema.String,
-    terminal: Schema.Boolean,
-    text: Schema.String,
-  }),
+  GoalExecutionFeedback,
   Schema.TaggedStruct("GoalStarted", { pursuit: Schema.NonEmptyString }),
 ]);
 export type GoalInputPayload = typeof GoalInputPayload.Type;

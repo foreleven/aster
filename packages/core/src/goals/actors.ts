@@ -19,7 +19,7 @@ import { AgentConversations } from "@aster/agent";
 import { GoalState } from "./state.js";
 import { goalWorkingState } from "./working-state.js";
 import { goalAdmission } from "./admission.js";
-import { goalInputs, resolveGoalInput, type StoredGoalInput } from "./inputs.js";
+import { goalInputs, type StoredGoalInput } from "./inputs.js";
 import {
   GoalCommand,
   GoalControl,
@@ -29,7 +29,7 @@ import {
   GoalCommandReply,
 } from "./protocol.js";
 import { conversationText, runGoalConversation } from "./conversation.js";
-export { GoalCommand, GoalCommandReply, GoalDeliveryReply, GoalReadyReply } from "./protocol.js";
+export { GoalCommand, GoalCommandReply, GoalReadyReply } from "./protocol.js";
 export { GoalsRootActor, GoalsRootCommand } from "./root.js";
 
 const GoalMailbox = Schema.Union([
@@ -133,7 +133,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
         yield* context.pipeToSelf(
           runGoalConversation({
             goal: definition,
-            input: yield* resolveGoalInput(history, input),
+            input: yield* inputs.resolve(input),
             model: settings.reasoning!.model,
             registry,
             memory,
@@ -322,14 +322,11 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                           message:
                             "Only a failed, unretried input on an idle active Goal can be retried",
                         });
-                      const original = yield* resolveGoalInput(history, input);
+                      const original = yield* inputs.resolve(input);
                       yield* inputs.accept(
                         original.payload,
                         request.requestId,
-                        input.causal ?? {
-                          rootRequestId: request.requestId,
-                          remainingAgentTurns: 4,
-                        },
+                        input.causal,
                         { receipts },
                         undefined,
                         input.inputId,
@@ -401,7 +398,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                   state().inputs.find((input) => input.status === "running") ??
                   state().inputs.find((input) => input.status === "pending");
                 if (!input || state().inputs.some((item) => item.status === "unknown")) return;
-                if ((input.causal?.remainingAgentTurns ?? 1) <= 0) {
+                if (input.causal.remainingAgentTurns <= 0) {
                   if (input.kind === "ExecutionFeedback")
                     yield* history
                       .append(path, `${input.inputId}:budget`, "goal.reply", {
@@ -418,7 +415,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
                 }
                 running = { generation: randomUUID(), cancellation: yield* Deferred.make<void>() };
                 yield* patchInput(input.inputId, { status: "running" });
-                const resolved = yield* resolveGoalInput(history, input);
+                const resolved = yield* inputs.resolve(input);
                 if (resolved.payload._tag === "GoalIntent" && input.relevant === undefined) {
                   const attempt = running;
                   yield* context.pipeToSelf(

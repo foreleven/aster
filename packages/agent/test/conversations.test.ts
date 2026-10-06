@@ -1,3 +1,4 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -28,6 +29,40 @@ test("Pi messages deduplicate exact inputs, reject changed identities and isolat
         );
         assert.deepEqual((yield* messages.get("/tasks/b", 0).pipe(Effect.result))._tag, "Failure");
       }).pipe(Effect.provide(AgentConversations.memory)),
+    ),
+  );
+});
+
+test("Pi entry lookup stays within its owner and does not decode unrelated history", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const messages = yield* AgentConversations.makeMemory();
+        const first = yield* messages.append("/goals/a", "one", "goal.input", { text: "Hello" });
+        const { harness } = yield* messages.driver("/goals/a");
+        const hidden = yield* Effect.promise(async () => {
+          const root = await harness.root(BACKGROUND_CONTEXT);
+          return harness.commit(async (tx) => {
+            const other = await tx.createConversation({ ownership: { kind: "ownerless" } });
+            const foreign = await tx.appendEntry(other.id, {
+              kind: "app.aster.message",
+              data: { requestId: "foreign", kind: "goal.input", data: {}, at: first.at },
+            });
+            const native = await tx.appendEntry(root.id, { kind: "pi.test", data: {} });
+            await tx.appendEntry(root.id, { kind: "app.aster.message", data: { malformed: true } });
+            return [foreign.id, native.id];
+          }, BACKGROUND_CONTEXT);
+        });
+        assert.deepEqual(yield* messages.get("/goals/a", first.id), first);
+        assert.deepEqual(
+          yield* messages.append("/goals/a", "one", "goal.input", { text: "Hello" }),
+          first,
+        );
+        for (const id of hidden) {
+          const error = yield* messages.get("/goals/a", id).pipe(Effect.flip);
+          assert.equal(error.kind, "not-found");
+        }
+      }),
     ),
   );
 });

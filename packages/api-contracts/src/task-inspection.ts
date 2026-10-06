@@ -6,7 +6,6 @@ const InspectionTaskPath = Schema.String.check(Schema.isPattern(/^\/tasks\/[^/]+
 export const TaskInspection = Schema.Struct({
   path: InspectionTaskPath,
   revision: ContextRevision,
-  taskPath: Schema.String,
   agent: Schema.String,
   status: Schema.Literals([
     "ready",

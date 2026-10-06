@@ -130,7 +130,7 @@ export const retainedTask = Effect.fnUntraced(function* (
 ) {
   const input = taskInput();
   const entry = yield* messages.append(input.target, input.requestId, "task.admission", input);
-  const { task: _task, ...identity } = input;
+  const { source, replyTo, agent, causal, action } = input;
   const terminal = ["completed", "failed", "cancelled", "uncertain"].includes(status);
   const inputs: TaskState["inputs"] = [
     {
@@ -148,11 +148,7 @@ export const retainedTask = Effect.fnUntraced(function* (
       })
     : undefined;
   const state: TaskState = {
-    admission: {
-      input: identity,
-      entryId: entry.id,
-      receipt: { requestId: input.requestId, revision: 1 },
-    },
+    admission: { source, replyTo, agent, causal, action },
     executorPrompt: "Test policy",
     status,
     inputs,

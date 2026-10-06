@@ -1,10 +1,11 @@
 import type { ActorContext, ActorRef } from "@aster/actor";
-import { ApplicationError, type TaskDeliveryInput } from "@aster/api-contracts";
-import { Effect } from "effect";
+import { ApplicationError, TaskPath, type TaskDeliveryInput } from "@aster/api-contracts";
+import { Effect, Schema } from "effect";
 import type { TasksRootCommand } from "./root.js";
 import type { TaskAdmissionReply, TaskCommand } from "./protocol.js";
 import type { ContextRegistry } from "../context/registry.js";
 import { taskActorPath } from "./address.js";
+import { TaskState } from "./state.js";
 
 /** Submission creates a durable Task. Its lifetime is independent of the calling conversation. */
 export const startTask = Effect.fn("Tasks.start")(function* <C, R>(
@@ -45,10 +46,11 @@ export const cancelGoalTasks = Effect.fn("Tasks.cancelGoal")(function* <C, R>(
   source: string,
 ) {
   for (const record of Object.values(registry.snapshot())) {
-    const state = record.state as { admission?: { input: { replyTo: string } }; status?: string };
+    if (!Schema.is(TaskPath)(record.path)) continue;
+    const state = Schema.decodeUnknownSync(TaskState)(record.state);
     if (
-      state.admission?.input.replyTo !== source ||
-      !["ready", "awaiting-confirmation"].includes(state.status ?? "")
+      state.admission.replyTo !== source ||
+      !["ready", "awaiting-confirmation"].includes(state.status)
     )
       continue;
     const ref = yield* actor.select(taskActorPath(record.path)).resolve().pipe(Effect.option);
@@ -67,8 +69,9 @@ export const attachGoalTasks = Effect.fn("Tasks.attachGoal")(function* <R>(
   source: string,
 ) {
   for (const record of Object.values(registry.snapshot())) {
-    const state = record.state as { admission?: { input: { replyTo: string } } };
-    if (state.admission?.input.replyTo !== source) continue;
+    if (!Schema.is(TaskPath)(record.path)) continue;
+    const state = Schema.decodeUnknownSync(TaskState)(record.state);
+    if (state.admission.replyTo !== source) continue;
     const ref = yield* actor.select(taskActorPath(record.path)).resolve().pipe(Effect.option);
     if (ref._tag === "Some")
       yield* (ref.value as ActorRef<TaskCommand>).tell({

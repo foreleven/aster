@@ -117,7 +117,8 @@ export const goalAdmission = (
           const run = yield* Schema.decodeUnknownEffect(
             Schema.Struct({
               admission: Schema.Struct({
-                input: Schema.Struct({ replyTo: Schema.String, causal: CausalChain }),
+                replyTo: Schema.String,
+                causal: CausalChain,
               }),
             }),
           )(registry.get(input.taskPath)?.state).pipe(
@@ -129,24 +130,12 @@ export const goalAdmission = (
                 }),
             ),
           );
-          if (run.admission.input.replyTo !== current().path)
+          if (run.admission.replyTo !== current().path)
             return yield* new ApplicationError({
               kind: "invalid-input",
               message: "Execution feedback does not belong to this Goal",
             });
-          const status = input.status ?? (input.terminal ? "completed" : "running");
-          yield* inputs.accept(
-            {
-              _tag: "ExecutionFeedback",
-              taskPath: input.taskPath,
-              status,
-              terminal: input.terminal,
-              text: input.text,
-            },
-            request.requestId,
-            run.admission.input.causal,
-            patch,
-          );
+          yield* inputs.accept(input, request.requestId, run.admission.causal, patch);
           return receipt;
         }),
       ),

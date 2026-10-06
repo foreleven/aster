@@ -64,14 +64,14 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
           .pipe(Effect.orDie);
       });
       const initial = () =>
-        messages.get(path, state().admission.entryId).pipe(
+        messages.get(path, state().inputs[0]!.entryId).pipe(
           Effect.flatMap((entry) => Schema.decodeUnknownEffect(TaskDeliveryInput)(entry.data)),
           Effect.orDie,
         );
       const preparedTask = Effect.fn("Task.prepared")(function* () {
         const admitted = yield* initial();
         const policy =
-          state().admission.input.agent === "internal" ? "" : `${state().executorPrompt}\n\n`;
+          state().admission.agent === "internal" ? "" : `${state().executorPrompt}\n\n`;
         return {
           instructions: policy + admitted.task.instructions,
           input: [
@@ -101,11 +101,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
             ? { status: "ready" as const }
             : {}),
         });
-      const notify = Effect.fn("Task.notify")(function* (
-        owner: Owner,
-        text: string,
-        terminal: boolean,
-      ) {
+      const notify = Effect.fn("Task.notify")(function* (owner: Owner, text: string) {
         const saved = state();
         const requestId = createHash("sha256")
           .update(
@@ -120,7 +116,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
         yield* owner.pipeToSelf(
           Effect.gen(function* () {
             const target = yield* owner
-              .select(`/user${saved.admission.input.replyTo}`)
+              .select(`/user${saved.admission.replyTo}`)
               .resolve()
               .pipe(
                 Effect.mapError(
@@ -140,9 +136,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                   _tag: "ExecutionFeedback",
                   taskPath: path,
                   text,
-                  terminal,
                   status: saved.status,
-                  causal: saved.admission.input.causal,
                 },
               }))
               .pipe(
@@ -200,7 +194,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
           outcomeEntryId: entry.id,
           ...(publication ? { writeback: publication } : {}),
         });
-        yield* notify(owner, text, true);
+        yield* notify(owner, text);
         yield* writeback.recover(owner);
       });
       const poll = Effect.fn("Task.observe")(function* (owner: Owner, delayed = false) {
@@ -208,7 +202,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
         if (!saved.session) return;
         const token = generation;
         yield* owner.pipeToSelf(
-          agents[saved.admission.input.agent]!.wait(saved.session).pipe(
+          agents[saved.admission.agent]!.wait(saved.session).pipe(
             Effect.delay(delayed ? "1 second" : "0 seconds"),
           ),
           (result) => ({ _tag: "ExternalStatus", generation: token, result }),
@@ -246,7 +240,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
             input.requestId === inputId ? { ...input, status: "sending" } : input,
           ),
         });
-        const agent = agents[saved.admission.input.agent]!;
+        const agent = agents[saved.admission.agent]!;
         const execution = saved.session
           ? agent.followUp(saved.session, { requestId: inputId, text: prepared.instructions })
           : agent.submit(prepared, { requestId: path });
@@ -269,17 +263,17 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
         if (!input) return;
         const saved = state();
         if (
-          (registry.get(saved.admission.input.replyTo)?.state as { status?: string } | undefined)
+          (registry.get(saved.admission.replyTo)?.state as { status?: string } | undefined)
             ?.status !== "active"
         ) {
           return yield* finish(owner, "cancelled", "The owning Goal has ended");
         }
         const prepared =
-          input.requestId === saved.admission.input.requestId
+          input.requestId === saved.inputs[0]!.requestId
             ? yield* preparedTask()
             : { instructions: (yield* followup(input)).text, input: [] };
         busy = true;
-        if (saved.admission.input.agent === "internal") {
+        if (saved.admission.agent === "internal") {
           generation = randomUUID();
           const token = generation;
           yield* save({
@@ -333,7 +327,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
         });
       const reconcile = Effect.fn("Task.reconcile")(function* (owner: Owner, requestId: string) {
         const saved = state();
-        if (saved.admission.input.agent === "internal") {
+        if (saved.admission.agent === "internal") {
           const input = saved.inputs.find((input) => ["unknown", "sending"].includes(input.status));
           if (!input) {
             yield* settleResumption(requestId, "done");
@@ -347,7 +341,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
         if (
           saved.inputs.some(
             (input) =>
-              input.requestId !== saved.admission.input.requestId &&
+              input.requestId !== saved.inputs[0]!.requestId &&
               ["sending", "unknown"].includes(input.status),
           )
         ) {
@@ -358,7 +352,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
             "Follow-up delivery cannot be verified from the preceding execution. Reconcile it with the external executor before continuing.",
           );
         }
-        const agent = agents[saved.admission.input.agent];
+        const agent = agents[saved.admission.agent];
         if (!agent) {
           yield* settleResumption(requestId, "unknown");
           return;
@@ -458,7 +452,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
           return yield* finish(owner, "uncertain", "External resumption outcome is unknown");
         }
         if (
-          state().admission.input.agent !== "internal" &&
+          state().admission.agent !== "internal" &&
           state().inputs.some((input) => input.status === "sending")
         ) {
           return yield* finish(
@@ -472,7 +466,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
         }
         if (state().status === "awaiting-confirmation") return yield* confirm(owner);
         if (
-          state().admission.input.agent !== "internal" &&
+          state().admission.agent !== "internal" &&
           state().session &&
           ["running", "waiting_input"].includes(state().status)
         ) {
@@ -490,7 +484,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
           const { text } = Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(
             entry.data,
           );
-          yield* notify(owner, text, true);
+          yield* notify(owner, text);
         }
       });
       return TaskActor.of({
@@ -533,7 +527,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                             new ApplicationError({ kind: error.kind, message: error.message }),
                         ),
                       );
-                    return state().admission.receipt;
+                    return state().inputs[0]!.receipt;
                   }
                   const source = yield* sourceTask(registry, input.source, input.requestId);
                   if (
@@ -561,7 +555,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                   const entry = yield* messages
                     .append(path, input.requestId, "task.admission", decoded)
                     .pipe(Effect.orDie);
-                  const { task: _task, evidence: _evidence, ...identity } = decoded;
+                  const { source: sourcePath, replyTo: replyGoal, agent, causal, action } = decoded;
                   const receipt = { requestId: input.requestId, revision: 1 };
                   yield* registry
                     .commit(
@@ -570,7 +564,13 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                         description: "Task",
                         messages: [],
                         state: {
-                          admission: { input: identity, entryId: entry.id, receipt },
+                          admission: {
+                            source: sourcePath,
+                            replyTo: replyGoal,
+                            agent,
+                            causal,
+                            action,
+                          },
                           executorPrompt:
                             agents[input.agent]?.executorPrompt ?? DEFAULT_EXECUTOR_PROMPT,
                           status: input.agent === "internal" ? "ready" : "awaiting-confirmation",
@@ -600,7 +600,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
               Effect.gen(function* () {
                 const previous = state().inputs.find((item) => item.requestId === input.requestId);
                 if (previous) {
-                  if (previous.requestId === state().admission.input.requestId)
+                  if (previous.requestId === state().inputs[0]!.requestId)
                     return yield* replyTo.tell({
                       _tag: "Rejected",
                       error: new ApplicationError({
@@ -623,7 +623,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                 }
                 if (
                   input.target !== path ||
-                  input.source !== state().admission.input.replyTo ||
+                  input.source !== state().admission.replyTo ||
                   (registry.get(input.source)?.state as { status?: string } | undefined)?.status !==
                     "active" ||
                   ["rejected", "cancelled", "uncertain"].includes(state().status)
@@ -660,7 +660,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                   },
                 ]);
                 yield* replyTo.tell({ _tag: "Accepted", receipt });
-                if (busy && state().admission.input.agent === "internal") {
+                if (busy && state().admission.agent === "internal") {
                   const steered = yield* messages
                     .steer(path, input.requestId, input.text)
                     .pipe(Effect.orDie);
@@ -738,7 +738,6 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                     yield* notify(
                       owner,
                       `The follow-up could not be delivered: ${result.error.message}`,
-                      false,
                     );
                     return yield* poll(owner);
                   }
@@ -796,7 +795,6 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                     owner,
                     observed.requests?.map((request) => request.prompt).join("\n") ??
                       "More information is needed",
-                    false,
                   );
                   return;
                 }
@@ -851,7 +849,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                 });
                 const token = generation;
                 yield* owner.pipeToSelf(
-                  agents[state().admission.input.agent]!.respond(
+                  agents[state().admission.agent]!.respond(
                     state().session!,
                     entry.request,
                     response,
@@ -881,7 +879,6 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                     return yield* notify(
                       owner,
                       `Answer delivery is uncertain: ${result.error.message}`,
-                      false,
                     );
                   busy = false;
                   return yield* finish(owner, "uncertain", result.error.message);
@@ -974,7 +971,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
                 if (status.state === "failed" && status.resumable) {
                   yield* settleResumption(requestId, "resuming");
                   yield* owner.pipeToSelf(
-                    agents[state().admission.input.agent]!.resume(state().session!),
+                    agents[state().admission.agent]!.resume(state().session!),
                     (result) => ({ _tag: "Resumed", requestId, result }),
                   );
                 } else if (["running", "waiting_input", "completed"].includes(status.state)) {

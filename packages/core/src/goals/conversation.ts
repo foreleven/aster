@@ -63,8 +63,8 @@ export const runGoalConversation = Effect.fn("Goal.conversation")(function* (
           .update(JSON.stringify([source, input.inputId, callId]))
           .digest("hex");
       const causal = {
-        rootRequestId: input.causal?.rootRequestId ?? input.inputId,
-        remainingAgentTurns: Math.max(0, (input.causal?.remainingAgentTurns ?? 1) - 1),
+        rootRequestId: input.causal.rootRequestId,
+        remainingAgentTurns: Math.max(0, input.causal.remainingAgentTurns - 1),
       };
       const mutation = (effect: Effect.Effect<unknown, ApplicationError>, signal?: AbortSignal) =>
         invoke(

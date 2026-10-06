@@ -20,7 +20,7 @@ The public Timeline projects actual user inputs and selected assistant replies, 
 
 ## State and recovery
 
-GoalState contains `definition`, `status`, `summary`, `inputs` and `receipts`. Input records hold Pi references, input kind, ordering, delivery status, Context gate decision, causality, retry reference and error. Message bodies and response text are not duplicated in Actor state. Receipts retain normalized command fingerprints and the original acceptance revision.
+GoalState contains `definition`, `status`, `summary`, `inputs` and `receipts`. Input records hold Pi references, input kind, delivery status, Context gate decision, causality, retry reference and error. Array order records admission order; timestamps come from Pi entries. Message bodies and response text are not duplicated in Actor state. Receipts retain normalized command fingerprints and the original acceptance revision.
 
 Admission commits the message and receipt identity to Pi before the Actor saves its references and acknowledges. Startup recovers admitted entries before creating the configured initial pursuit. Exact retries return their existing receipts; changed reuse fails. One input enters the main conversation at a time. Later inputs are durably accepted while execution is in progress.
 
@@ -32,7 +32,7 @@ The Actor mailbox remains the single business-state writer. Agent work returns t
 
 System One independently matches every eligible Goal and Context Signal. A Goal then applies a separate read-only Agent gate only to Context evidence. Ignored evidence does not enter the persistent model conversation or public chat. User input, direct Task messages and execution feedback bypass this second gate.
 
-Automatic feedback retains its original causal budget. A new conversation turn does not replenish it. Exhausted feedback can produce a visible notice without invoking another model.
+Execution feedback carries Task path, status at emission and text; Goal resolves the original causal budget from the Task. Automatic feedback retains its original causal budget. A new conversation turn does not replenish it. Exhausted feedback can produce a visible notice without invoking another model.
 
 ## Related work
 

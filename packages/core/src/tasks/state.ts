@@ -18,18 +18,11 @@ export type TaskInputRef = typeof TaskInputRef.Type;
 /** Business state only. Instructions, inputs and results are Pi entries. */
 export const TaskState = Schema.Struct({
   admission: Schema.Struct({
-    input: Schema.Struct({
-      requestId: Schema.String,
-      source: Schema.String,
-      target: Schema.String,
-      replyTo: Schema.String,
-      agent: Schema.String,
-      causal: CausalChain,
-      createdAt: Schema.String,
-      action: Schema.optional(TaskAction),
-    }),
-    entryId: Schema.Int,
-    receipt: CommandReceipt,
+    source: Schema.String,
+    replyTo: Schema.String,
+    agent: Schema.String,
+    causal: CausalChain,
+    action: Schema.optional(TaskAction),
   }),
   executorPrompt: Schema.String,
   resumptions: Schema.optional(Schema.Array(ExecutionResumption)),
@@ -62,9 +55,7 @@ export const TaskState = Schema.Struct({
     (state) =>
       state.inputs.length > 0 &&
       new Set(state.inputs.map((input) => input.requestId)).size === state.inputs.length &&
-      state.inputs[0]!.requestId === state.admission.input.requestId &&
-      state.inputs[0]!.entryId === state.admission.entryId &&
-      (state.admission.input.agent === "internal" ||
+      (state.admission.agent === "internal" ||
         !["running", "waiting_input"].includes(state.status) ||
         state.session !== undefined) &&
       (state.status !== "completed" || state.outcomeEntryId !== undefined),

@@ -215,19 +215,6 @@ export const makeApplicationApi = (options: {
             ),
       end: (slug: string, requestId: string = randomUUID()) =>
         route(slug, { _tag: "End", requestId }),
-      history: (slug: string, page: { before?: number; limit?: number } = {}) =>
-        goalTimeline(registry, options.conversations, slug, page).pipe(
-          Effect.map((page) => ({
-            entries: page.messages.map((entry) => ({
-              seq: entry.id,
-              at: entry.at,
-              requestId: entry.inputId,
-              message: { role: entry.role, content: entry.text, timestamp: Date.parse(entry.at) },
-            })),
-            total: page.total,
-            nextBefore: page.nextBefore,
-          })),
-        ),
     },
     approvals: {
       list: Effect.sync(() =>

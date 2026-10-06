@@ -61,13 +61,13 @@ export const legacyRest = (application: ApplicationApi, url: string) =>
     ),
     HttpRouter.route(
       "GET",
-      "/api/goals/:slug/history",
+      "/api/goals/:slug/timeline",
       rest(
         Effect.gen(function* () {
           const { slug } = yield* HttpRouter.params;
           const request = yield* HttpServerRequest.HttpServerRequest;
           const params = new URL(request.url, url).searchParams;
-          return yield* application.goals.history(slug!, {
+          return yield* application.goals.timeline(slug!, {
             ...(params.has("before") ? { before: Number(params.get("before")) } : {}),
             ...(params.has("limit") ? { limit: Number(params.get("limit")) } : {}),
           });
