@@ -4,12 +4,18 @@ import { test } from "node:test";
 import { AgentRunner } from "@aster/agent";
 import { Deferred, Effect, Schema } from "effect";
 import {
-  TaskState,
+  TaskSnapshot,
   approvalEntries,
   type ContextRecord,
   type TaskAdmissionReply,
 } from "../src/index.js";
-import { taskFixture, taskInput, retainedTask } from "./task-fixtures.js";
+import {
+  taskFixture,
+  taskInput,
+  retainedTask,
+  checkpoint,
+  seedCheckpoint,
+} from "./task-fixtures.js";
 import { fakeAgent } from "./fixtures.js";
 
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>
@@ -38,10 +44,10 @@ test("internal Tasks admit follow-ups while working, retain exact receipts, and 
       yield* env.tasks.ask((replyTo) => ({ _tag: "StartTask", input, replyTo }));
       yield* Deferred.await(entered);
       const state = () =>
-        Schema.decodeUnknownSync(TaskState)(env.registry.get(input.target)!.state);
+        Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(input.target)!.state);
       const follow = (requestId: string, text = "Add analysis") =>
         env.tasks.ask<TaskAdmissionReply>((replyTo) => ({
-          _tag: "FollowupTask",
+          _tag: "Input",
           input: { requestId, text, target: input.target, source: input.replyTo },
           replyTo,
         }));
@@ -63,7 +69,7 @@ test("internal Tasks admit follow-ups while working, retain exact receipts, and 
         (yield* env.conversations.read(input.target)).filter(
           (entry) => entry.kind === "task.result",
         ).length,
-        2,
+        3,
       );
     }),
   );
@@ -75,13 +81,15 @@ test("external follow-up supersedes late completion from the earlier execution",
       const waiting = yield* Deferred.make<void>();
       const oldResult = yield* Deferred.make<void>();
       const nextResult = yield* Deferred.make<void>();
+      const followed = yield* Deferred.make<void>();
+      const nextWaiting = yield* Deferred.make<void>();
       const env = yield* taskFixture({
         agent: fakeAgent({
           submit: () => Effect.succeed({ sessionId: "first" }),
           followUp: (session, input) => {
             assert.equal(session.sessionId, "first");
             assert.equal(input.text, "More work");
-            return Effect.succeed({ sessionId: "next" });
+            return Deferred.succeed(followed, undefined).pipe(Effect.as({ sessionId: "next" }));
           },
           wait: (session) =>
             session.sessionId === "first"
@@ -89,14 +97,15 @@ test("external follow-up supersedes late completion from the earlier execution",
                   Effect.andThen(Deferred.await(oldResult)),
                   Effect.as({ state: "completed", result: { text: "Old result" } }),
                 )
-              : Deferred.await(nextResult).pipe(
+              : Deferred.succeed(nextWaiting, undefined).pipe(
+                  Effect.andThen(Deferred.await(nextResult)),
                   Effect.as({ state: "completed", result: { text: "New result" } }),
                 ),
         }),
       });
       const input = taskInput();
       const state = () =>
-        Schema.decodeUnknownSync(TaskState)(env.registry.get(input.target)!.state);
+        Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(input.target)!.state);
       yield* env.tasks.ask((replyTo) => ({ _tag: "StartTask", input, replyTo }));
       yield* env.wait(() =>
         approvalEntries(env.registry).some((entry) => entry.id === `${input.target}:confirm`),
@@ -110,7 +119,7 @@ test("external follow-up supersedes late completion from the earlier execution",
       yield* env.approvals.tell({ _tag: "Deliver" });
       yield* Deferred.await(waiting);
       yield* env.tasks.ask((replyTo) => ({
-        _tag: "FollowupTask",
+        _tag: "Input",
         input: {
           target: input.target,
           source: input.replyTo,
@@ -119,10 +128,9 @@ test("external follow-up supersedes late completion from the earlier execution",
         },
         replyTo,
       }));
-      yield* env.wait(() => state().session?.sessionId === "next");
+      yield* Deferred.await(followed);
       yield* Deferred.succeed(oldResult, undefined);
-      const actor = yield* env.system.select(`/user${input.target}`).resolve();
-      yield* actor.ask((replyTo) => ({ _tag: "Ready", replyTo }));
+      yield* Deferred.await(nextWaiting);
       assert.equal(state().status, "running");
       yield* Deferred.succeed(nextResult, undefined);
       yield* env.wait(() => state().status === "completed");
@@ -158,7 +166,7 @@ test("Pi result admission recovers an interrupted Actor handoff without executin
         ),
         saved: (record) => {
           if (record.path !== input.target) return;
-          const state = Schema.decodeUnknownSync(TaskState)(record.state);
+          const state = Schema.decodeUnknownSync(TaskSnapshot)(record.state);
           if (!injected && state.status === "completed") {
             injected = true;
             records.set(record.path, previous!);
@@ -195,16 +203,26 @@ test("restoring an interrupted external follow-up cannot complete it from the pr
         requestId,
         target: record.path,
         source: "/goals/personal",
-        text: "More work",
+        input: {
+          _tag: "Message",
+          input: { requestId, target: record.path, source: "/goals/personal", text: "More work" },
+        },
         receipt,
       });
-      const pending: TaskState = {
+      const pending: TaskSnapshot = {
         ...record.state,
         inputs: [
           ...record.state.inputs,
-          { requestId, entryId: entry.id, receipt, status: "sending" },
+          { requestId, entryId: entry.id, receipt, status: "pending" },
         ],
       };
+      const saved = (yield* checkpoint(conversations, record.path))!;
+      yield* seedCheckpoint(conversations, record.path, {
+        deliveries: [
+          ...saved.deliveries,
+          { requestId, roundId: "task", kind: "instruction", status: "sending" },
+        ],
+      });
       const env = yield* taskFixture({
         conversations,
         records: new Map([[record.path, { ...record, state: pending }]]),
@@ -214,11 +232,12 @@ test("restoring an interrupted external follow-up cannot complete it from the pr
           wait: () => Effect.die("Must not complete unknown work from an older execution"),
         }),
       });
-      const state = () => Schema.decodeUnknownSync(TaskState)(env.registry.get(record.path)!.state);
-      assert.equal(state().status, "uncertain");
-      assert.equal(state().inputs.at(-1)?.status, "unknown");
+      const state = () =>
+        Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(record.path)!.state);
+      yield* env.wait(() => state().status === "uncertain");
+      assert.equal(state().inputs.at(-1)?.status, "pending");
       yield* env.tasks.ask((replyTo) => ({
-        _tag: "ResumeTask",
+        _tag: "CheckTask",
         input: {
           target: record.path,
           requestId: "reconcile",
@@ -226,9 +245,17 @@ test("restoring an interrupted external follow-up cannot complete it from the pr
         },
         replyTo,
       }));
-      yield* env.wait(() => state().resumptions?.[0]?.status === "unknown");
+      yield* env.wait(
+        () =>
+          state().status === "uncertain" &&
+          state().inputs.at(-1)?.requestId === "reconcile" &&
+          state().inputs.at(-1)?.status === "completed",
+      );
       assert.equal(state().status, "uncertain");
-      assert.equal(state().inputs.at(-1)?.status, "unknown");
+      assert.equal(
+        state().inputs.find((input) => input.requestId === requestId)?.status,
+        "pending",
+      );
     }),
   );
 });
@@ -241,8 +268,9 @@ for (const status of ["completed", "failed"] as const) {
         const original = yield* retainedTask(conversations, status);
         const record = {
           ...original,
-          state: { ...original.state, session: { sessionId: "original" } },
+          state: original.state,
         };
+        yield* seedCheckpoint(conversations, record.path, { session: { sessionId: "original" } });
         const input = {
           requestId: "orphan",
           target: record.path,
@@ -251,7 +279,7 @@ for (const status of ["completed", "failed"] as const) {
         };
         const receipt = { requestId: input.requestId, revision: 3 };
         yield* conversations.append(record.path, input.requestId, "task.input", {
-          ...input,
+          input: { _tag: "Message", input },
           receipt,
         });
         let deliveries = 0;
@@ -272,12 +300,12 @@ for (const status of ["completed", "failed"] as const) {
           }),
         });
         const state = () =>
-          Schema.decodeUnknownSync(TaskState)(env.registry.get(record.path)!.state);
+          Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(record.path)!.state);
         yield* env.wait(() => state().status === "completed" && state().inputs.length === 2);
         assert.equal(deliveries, 1);
         assert.equal(state().inputs.at(-1)?.status, "completed");
         const retry = yield* env.tasks.ask<TaskAdmissionReply>((replyTo) => ({
-          _tag: "FollowupTask",
+          _tag: "Input",
           input,
           replyTo,
         }));
@@ -293,6 +321,7 @@ test("follow-up does not discard a successful answer to an earlier approval requ
       const answering = yield* Deferred.make<void>();
       const releaseAnswer = yield* Deferred.make<void>();
       const releaseResult = yield* Deferred.make<void>();
+      const followed = yield* Deferred.make<void>();
       const env = yield* taskFixture({
         agent: fakeAgent({
           submit: () => Effect.succeed({ sessionId: "original" }),
@@ -309,12 +338,13 @@ test("follow-up does not discard a successful answer to an earlier approval requ
             Deferred.succeed(answering, undefined).pipe(
               Effect.andThen(Deferred.await(releaseAnswer)),
             ),
-          followUp: () => Effect.succeed({ sessionId: "next" }),
+          followUp: () =>
+            Deferred.succeed(followed, undefined).pipe(Effect.as({ sessionId: "next" })),
         }),
       });
       const input = taskInput();
       const state = () =>
-        Schema.decodeUnknownSync(TaskState)(env.registry.get(input.target)!.state);
+        Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(input.target)!.state);
       const resolve = (id: string, response: { decision: "approve" } | { text: string }) =>
         env.approvals.ask((replyTo) => ({ _tag: "Resolve", id, response, replyTo }));
       yield* env.tasks.ask((replyTo) => ({ _tag: "StartTask", input, replyTo }));
@@ -329,7 +359,7 @@ test("follow-up does not discard a successful answer to an earlier approval requ
       yield* env.approvals.tell({ _tag: "Deliver" });
       yield* Deferred.await(answering);
       yield* env.tasks.ask((replyTo) => ({
-        _tag: "FollowupTask",
+        _tag: "Input",
         input: {
           requestId: "more",
           target: input.target,
@@ -338,15 +368,23 @@ test("follow-up does not discard a successful answer to an earlier approval requ
         },
         replyTo,
       }));
-      yield* env.wait(() => state().session?.sessionId === "next");
       yield* Deferred.succeed(releaseAnswer, undefined);
+      yield* Deferred.await(followed);
       yield* env.wait(
         () =>
           approvalEntries(env.registry).find((entry) => entry.id === question)?.status ===
           "acknowledged",
       );
-      assert.equal(state().responses?.[0]?.status, "sent");
-      assert.equal(state().session?.sessionId, "next");
+      assert.equal(
+        (yield* checkpoint(env.conversations, input.target))?.deliveries.find(
+          (item) => item.requestId === question,
+        )?.status,
+        "accepted",
+      );
+      assert.equal(
+        (yield* checkpoint(env.conversations, input.target))?.session?.sessionId,
+        "next",
+      );
       yield* Deferred.succeed(releaseResult, undefined);
       yield* env.wait(() => state().status === "completed");
     }),

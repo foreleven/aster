@@ -8,7 +8,6 @@ export const statusLabels: Readonly<Record<string, string>> = {
   running: "Running",
   starting: "Starting",
   restarting: "Restarting",
-  "awaiting-confirmation": "Awaiting confirmation",
   active: "Monitoring",
   completed: "Completed",
   failed: "Failed",
@@ -24,7 +23,6 @@ export const statusLabels: Readonly<Record<string, string>> = {
   stopped: "Stopped",
   blocked: "Blocked",
   rejected: "Rejected",
-  submitting: "Submitting",
   idle: "Idle",
   archived: "Not running",
 };
@@ -99,23 +97,6 @@ export function references(record?: ContextView) {
   ];
 }
 export const isTaskPath = (path: string) => /^\/tasks\/[a-f0-9]{64}$/.test(path);
-export function taskStages(record: ContextView) {
-  const status = record?.state?.status;
-  return [
-    {
-      title: "Task confirmation",
-      done: !["awaiting-confirmation", "rejected"].includes(status ?? ""),
-      active: status === "awaiting-confirmation",
-    },
-    {
-      title: "Execution",
-      done: status === "completed",
-      active: ["submitting", "running", "waiting_input"].includes(status ?? ""),
-    },
-    { title: "Result delivery", done: status === "completed", active: false },
-  ];
-}
-
 export function taskText(task: ContextView["state"]["task"]): string | undefined {
   if (!task) return undefined;
   if ("instructions" in task) return task.instructions;

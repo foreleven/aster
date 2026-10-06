@@ -4,7 +4,7 @@ export { ApprovalEntry } from "@aster/api-contracts";
 import { ContextActor } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
-import { ApprovalResponse, InputRequest } from "../tasks/model.js";
+import { ApprovalResponse, InputRequest } from "../tasks/execution/contracts.js";
 import { ReplyTo, type ActorContext } from "@aster/actor";
 import { Data, Effect, Layer, Match, Schema } from "effect";
 
@@ -32,7 +32,10 @@ export type ApprovalCommand = typeof ApprovalCommand.Type;
 export const approvalEntries = (registry: ContextRegistry["Service"]): readonly ApprovalEntry[] =>
   (registry.get("/approvals")?.state as { entries?: readonly ApprovalEntry[] } | undefined)
     ?.entries ?? [];
-export const sendApproval = (context: ActorContext<any, any>, command: ApprovalCommand) =>
+export const sendApproval = (
+  context: Pick<ActorContext<any, any>, "select">,
+  command: ApprovalCommand,
+) =>
   context
     .select("/user/approvals")
     .resolve()

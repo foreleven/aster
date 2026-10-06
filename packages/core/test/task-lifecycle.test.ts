@@ -2,9 +2,9 @@ import { TaskDeliveryInput } from "@aster/api-contracts";
 import { SignalRootActor } from "../src/signals/actors.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Schema } from "effect";
+import { Deferred, Effect, Fiber, Stream, Schema } from "effect";
 import { approvalEntries, DEFAULT_EXECUTOR_PROMPT } from "../src/index.js";
-import { TaskState } from "../src/tasks/state.js";
+import { TaskSnapshot } from "../src/tasks/state/snapshot.js";
 import type { TaskAdmissionReply } from "../src/tasks/protocol.js";
 import { taskFixture, taskInput } from "./task-fixtures.js";
 import { fakeAgent } from "./fixtures.js";
@@ -41,7 +41,7 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
         Schema.decodeUnknownSync(TaskDeliveryInput)(
           (yield* env.conversations.get(
             input.target,
-            Schema.decodeUnknownSync(TaskState)(env.records.get(input.target)!.state).inputs[0]!
+            Schema.decodeUnknownSync(TaskSnapshot)(env.records.get(input.target)!.state).inputs[0]!
               .entryId,
           )).data,
         ),
@@ -53,15 +53,25 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
         "Rejected",
       );
       const actor = yield* env.system.select(`/user${input.target}`).resolve();
+      const processed = yield* Stream.runHead(
+        env.system.events.pipe(
+          Stream.filter(
+            (event) =>
+              event._tag === "CommandProcessed" &&
+              event.path === `/user${input.target}` &&
+              event.commandTag === "ApprovalResolved",
+          ),
+        ),
+      ).pipe(Effect.forkScoped({ startImmediately: true }));
       yield* actor.tell({
         _tag: "ApprovalResolved",
         requestId: `${input.target}:confirm`,
         response: { decision: "approve" },
       });
-      yield* actor.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+      yield* Fiber.join(processed);
       assert.equal(submissions, 0);
       const resume = yield* env.tasks.ask<TaskAdmissionReply>((replyTo) => ({
-        _tag: "ResumeTask",
+        _tag: "CheckTask",
         input: {
           requestId: "bypass",
           target: input.target,
@@ -83,7 +93,7 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
       yield* Deferred.await(submitted);
       yield* env.wait(
         () =>
-          Schema.decodeUnknownSync(TaskState)(env.registry.get(input.target)!.state).status ===
+          Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(input.target)!.state).status ===
           "completed",
       );
       assert.equal(submissions, 1);
@@ -152,7 +162,7 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
         /^\/tasks\/[a-f0-9]{64}$/.test(record.path),
       );
       assert.equal(records.length, 1);
-      const state = Schema.decodeUnknownSync(TaskState)(records[0]!.state);
+      const state = Schema.decodeUnknownSync(TaskSnapshot)(records[0]!.state);
       const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(
         (yield* env.conversations.get(records[0]!.path, state.inputs[0]!.entryId)).data,
       );

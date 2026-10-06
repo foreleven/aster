@@ -3,6 +3,7 @@ import {
   type ExternalAgent,
   type PreparedTask,
   type ExecutionSession,
+  type ExecutionSubmission,
   type ExecutionStatus,
   type InputRequest,
   type ApprovalResponse,
@@ -13,7 +14,11 @@ import { Effect } from "effect";
 export interface ExternalAgentDriver {
   readonly capabilities: string;
   readonly executorPrompt?: string;
-  submit(task: PreparedTask, signal: AbortSignal): Promise<ExecutionSession>;
+  submit(
+    task: PreparedTask,
+    signal: AbortSignal,
+    submission?: ExecutionSubmission,
+  ): Promise<ExecutionSession>;
   followUp(
     session: ExecutionSession,
     input: { requestId: string; text: string },
@@ -28,6 +33,7 @@ export interface ExternalAgentDriver {
     response: ApprovalResponse,
     signal: AbortSignal,
   ): Promise<void>;
+  cancel?(session: ExecutionSession, signal: AbortSignal): Promise<boolean>;
   close?(): Promise<void>;
 }
 
@@ -55,7 +61,14 @@ export const adaptExternalAgent = (driver: ExternalAgentDriver): ManagedExternal
   return {
     capabilities: driver.capabilities,
     ...(driver.executorPrompt === undefined ? {} : { executorPrompt: driver.executorPrompt }),
-    submit: (task) => operation("submit", (signal) => driver.submit(task, signal)),
+    submit: (task, submission) =>
+      operation("submit", (signal) => driver.submit(task, signal, submission)),
+    ...(driver.cancel
+      ? {
+          cancel: (session: ExecutionSession) =>
+            operation("cancel", (signal) => driver.cancel!(session, signal)),
+        }
+      : {}),
     followUp: (session, input) =>
       operation("followUp", (signal) => driver.followUp(session, input, signal)),
     status: (session) => operation("status", (signal) => driver.status(session, signal)),

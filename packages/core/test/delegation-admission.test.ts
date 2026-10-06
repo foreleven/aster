@@ -2,12 +2,18 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Option, Schema } from "effect";
 import {
-  TaskState,
+  TaskSnapshot,
   type TaskAdmissionReply,
   ExternalAgentError,
   makeApplicationApi,
 } from "../src/index.js";
-import { taskFixture, taskInput, retainedTask } from "./task-fixtures.js";
+import {
+  taskFixture,
+  taskInput,
+  retainedTask,
+  checkpoint,
+  seedCheckpoint,
+} from "./task-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { fakeAgent } from "./fixtures.js";
 
@@ -48,7 +54,7 @@ for (const result of ["found", "missing", "unsupported", "failed"] as const) {
             }),
           });
           const response = yield* env.tasks.ask<TaskAdmissionReply>((replyTo) => ({
-            _tag: "ResumeTask",
+            _tag: "CheckTask",
             input: {
               requestId: "reconcile",
               target: record.path,
@@ -58,13 +64,20 @@ for (const result of ["found", "missing", "unsupported", "failed"] as const) {
           }));
           assert.equal(response._tag, "Accepted");
           const state = () =>
-            Schema.decodeUnknownSync(TaskState)(env.registry.get(record.path)!.state);
+            Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(record.path)!.state);
           yield* env.wait(
-            () => state().resumptions?.[0]?.status === (result === "found" ? "done" : "unknown"),
+            () =>
+              state().status === (result === "found" ? "completed" : "uncertain") &&
+              state().inputs.some(
+                (input) => input.requestId === "reconcile" && input.status === "completed",
+              ),
           );
           if (result === "found") {
             yield* env.wait(() => state().status === "completed");
-            assert.equal(state().session?.sessionId, "original");
+            assert.equal(
+              (yield* checkpoint(conversations, record.path))?.session?.sessionId,
+              "original",
+            );
           } else assert.equal(state().status, "uncertain");
           assert.equal(lookups, result === "unsupported" ? 0 : 1);
         }),
@@ -79,13 +92,10 @@ test("Task inspection excludes provider metadata and performs no execution", asy
     Effect.scoped(
       Effect.gen(function* () {
         const original = yield* retainedTask(conversations, "completed");
-        const record = {
-          ...original,
-          state: {
-            ...original.state,
-            session: { sessionId: "id", metadata: { credential: "private-token" } },
-          },
-        };
+        const record = original;
+        yield* seedCheckpoint(conversations, record.path, {
+          session: { sessionId: "id", metadata: { credential: "private-token" } },
+        });
         const env = yield* taskFixture({
           conversations,
           records: new Map([[record.path, record]]),

@@ -1,3 +1,4 @@
+import { WritebackOperation } from "./writeback.js";
 import { Schema } from "effect";
 import { ContextRevision } from "./command.js";
 
@@ -9,15 +10,11 @@ export const TaskInspection = Schema.Struct({
   agent: Schema.String,
   status: Schema.Literals([
     "ready",
-    "rejected",
-    "awaiting-confirmation",
-    "submitting",
     "uncertain",
     "running",
     "waiting_input",
     "failed",
     "cancelled",
-    "unknown",
     "completed",
   ]),
   instructions: Schema.String,
@@ -25,14 +22,7 @@ export const TaskInspection = Schema.Struct({
   hasExecution: Schema.Boolean,
   result: Schema.optional(Schema.String),
   error: Schema.optional(Schema.String),
-  resumptions: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        requestId: Schema.String,
-        status: Schema.Literals(["pending", "resuming", "done", "unknown"]),
-      }),
-    ),
-  ),
+  publication: Schema.optional(WritebackOperation),
   messages: Schema.Array(
     Schema.Struct({ id: Schema.Int, kind: Schema.String, text: Schema.String, at: Schema.String }),
   ),
@@ -41,7 +31,7 @@ export const TaskInspection = Schema.Struct({
       id: Schema.String,
       kind: Schema.Literals(["approval", "input"]),
       prompt: Schema.String,
-      responseStatus: Schema.Literals(["pending", "received", "sending", "sent", "uncertain"]),
+      responseStatus: Schema.Literals(["pending", "sending", "sent", "uncertain"]),
     }),
   ),
 });

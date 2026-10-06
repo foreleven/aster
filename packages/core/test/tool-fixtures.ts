@@ -8,7 +8,7 @@ import { MemoryActor } from "../src/memory/actor.js";
 import { MemoryBackend, type MemoryRecall } from "../src/memory/contracts.js";
 import { ContextCaptures } from "../src/memory/capture.js";
 import { GoalSettings } from "../src/config/settings.js";
-import { ExternalAgents } from "../src/tasks/model.js";
+import { ExternalAgents } from "../src/tasks/execution/contracts.js";
 import { GoalSignals } from "../src/signals/goal-owner.js";
 import { GoalsRootActor } from "../src/goals/root.js";
 import { makeContextRegistry } from "../src/testing/context.js";

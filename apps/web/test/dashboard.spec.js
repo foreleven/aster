@@ -63,6 +63,9 @@ async function setup(page, data = fixture()) {
             hasExecution: !!state.session,
             result: state.result ?? state.outcomeText,
             error: state.error,
+            publication: data.publications?.find(
+              (operation) => operation.request.source === record.path,
+            ),
             messages: [],
             requests: Object.entries(state.requests ?? {}).map(([id, request]) => ({
               id,
@@ -143,16 +146,10 @@ async function setup(page, data = fixture()) {
             });
           break;
         }
-        case "ResumeTask": {
+        case "CheckTask":
+        case "RetryTask": {
           writes.push({ tag: rpc.tag, body });
           const run = data.contexts.find((item) => item.path === body.target);
-          run.state.resumptions = [
-            {
-              input: body,
-              receipt: { requestId: body.requestId, revision: run.revision + 1 },
-              status: "done",
-            },
-          ];
           run.revision++;
           value = { requestId: body.requestId, revision: run.revision };
           break;
@@ -205,7 +202,8 @@ test("Goals workspace links executions, accepts notes, and handles approvals", a
     ).toHaveCount(0);
   }
   await page.getByRole("button", { name: /^View execution:/ }).click();
-  await expect(page.getByRole("dialog")).toContainText("Current stage");
+  await expect(page.getByRole("dialog")).toContainText("Awaiting input");
+  await expect(page.getByRole("dialog").getByText("Current stage")).toHaveCount(0);
   await page
     .getByRole("dialog")
     .getByRole("button", { name: "/lark/im/chats/chat-1", exact: true })
@@ -418,6 +416,7 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
       definition: { slug: "real-http", description: "Live HTTP validation Goal" },
       status: "active",
       summary: "",
+      tasks: [],
       inputs: [],
       receipts: [],
     },
@@ -1090,71 +1089,78 @@ test("Delegation workspace uses business inspection and refreshes after committe
   expect(errors).toEqual([]);
 });
 
-test("Run resumption preserves uncertain admission across navigation and reconnect", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  const personal = data.contexts.find((item) => item.path === "/goals/personal");
-  const run = data.contexts.find(
-    (item) =>
-      item.path === "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
-  );
-  run.revision = 7;
-  run.state.status = "failed";
-  run.state.task = { instructions: "Continue original work", input: [] };
-  const { writes, errors } = await setup(page, data);
-  let frozen;
-  await page.route("**/api/rpc{,/}", async (route) => {
-    const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "ResumeTask" || frozen) return route.fallback();
-    frozen = rpc.payload;
-    await route.fulfill({
-      contentType: "application/ndjson",
-      body:
-        JSON.stringify({
-          _tag: "Exit",
-          requestId: rpc.id,
-          exit: {
-            _tag: "Failure",
-            cause: [
-              {
-                _tag: "Fail",
-                error: {
-                  _tag: "ApplicationError",
-                  kind: "unavailable",
-                  message: "Resume acknowledgement missing",
+for (const [action, label] of [
+  ["CheckTask", "Check original execution"],
+  ["RetryTask", "Retry failed execution"],
+]) {
+  test(`${action} preserves uncertain admission across navigation and reconnect`, async ({
+    page,
+  }) => {
+    const data = personalFixture();
+    const personal = data.contexts.find((item) => item.path === "/goals/personal");
+    const run = data.contexts.find(
+      (item) =>
+        item.path === "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
+    );
+    run.revision = 7;
+    run.state.status = "failed";
+    run.state.task = { instructions: "Continue original work", input: [] };
+    const { writes, errors } = await setup(page, data);
+    let frozen;
+    await page.route("**/api/rpc{,/}", async (route) => {
+      const rpc = JSON.parse(route.request().postData().trim());
+      if (rpc.tag !== action || frozen) return route.fallback();
+      frozen = rpc.payload;
+      await route.fulfill({
+        contentType: "application/ndjson",
+        body:
+          JSON.stringify({
+            _tag: "Exit",
+            requestId: rpc.id,
+            exit: {
+              _tag: "Failure",
+              cause: [
+                {
+                  _tag: "Fail",
+                  error: {
+                    _tag: "ApplicationError",
+                    kind: "unavailable",
+                    message: "Check acknowledgement missing",
+                  },
                 },
-              },
-            ],
-          },
-        }) + "\n",
+              ],
+            },
+          }) + "\n",
+      });
     });
+    await page
+      .getByRole("navigation")
+      .getByRole("button", { name: /Summarize Knowledge Engine project progress/ })
+      .first()
+      .click();
+    await page.getByRole("button", { name: label, exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Check acknowledgement missing");
+    await page
+      .getByRole("navigation")
+      .getByRole("button", { name: /Personal assistant/ })
+      .click();
+    personal.revision = 10;
+    run.revision = 9;
+    await page.evaluate(() => window.testEvents.emit("ready"));
+    await page
+      .getByRole("navigation")
+      .getByRole("button", { name: /Summarize Knowledge Engine project progress/ })
+      .first()
+      .click();
+    await page.getByRole("button", { name: "Check request receipt", exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: "Check original execution", exact: true }),
+    ).toBeVisible();
+    expect(writes.at(-1)).toEqual({ tag: action, body: frozen });
+    expect(frozen).toMatchObject({ expectedRevision: 7, target: run.path });
+    expect(errors).toEqual([]);
   });
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Summarize Knowledge Engine project progress/ })
-    .first()
-    .click();
-  await page.getByRole("button", { name: "Resume execution", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Resume acknowledgement missing");
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Personal assistant/ })
-    .click();
-  personal.revision = 10;
-  run.revision = 9;
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Summarize Knowledge Engine project progress/ })
-    .first()
-    .click();
-  await page.getByRole("button", { name: "Reconcile resumption", exact: true }).click();
-  await expect(page.getByText("Resumption done", { exact: true })).toBeVisible();
-  expect(writes.at(-1)).toEqual({ tag: "ResumeTask", body: frozen });
-  expect(frozen).toMatchObject({ expectedRevision: 7, target: run.path });
-  expect(errors).toEqual([]);
-});
+}
 
 test("restricted Contexts retain navigation and revision without exposing a raw state panel", async ({
   page,
@@ -1255,7 +1261,6 @@ test("Run publication shows separate approval and retained unknown outcome after
     state: {
       status: "completed",
       outcomeText: operation.request.content,
-      writeback: operation,
       task: {
         instructions: "Summarize launch readiness for the release channel",
         input: [{ content: "Release blockers are resolved.", sources: ["/goals/engine"] }],
@@ -1268,6 +1273,7 @@ test("Run publication shows separate approval and retained unknown outcome after
     ],
   };
   data.contexts.push(run);
+  data.publications = [operation];
   const { errors } = await setup(page, data);
   await page.getByLabel("Find context").fill("Report publication");
   await page
@@ -1288,7 +1294,7 @@ test("Run publication shows separate approval and retained unknown outcome after
     .getByRole("navigation")
     .getByRole("button", { name: /Report publication/ })
     .click();
-  run.state.writeback = {
+  data.publications[0] = {
     ...operation,
     status: "unknown",
     submittedAt: at,
@@ -1306,10 +1312,14 @@ test("Run publication shows separate approval and retained unknown outcome after
   await expect(page.getByRole("heading", { name: "Result", exact: true })).toBeVisible();
   await expect(page.getByText(operation.request.content, { exact: true })).toHaveCount(2);
   await expect(publication.getByRole("button", { name: /retry|resend/i })).toHaveCount(0);
-  run.state.writeback = { ...run.state.writeback, status: "published", externalId: "om_receipt" };
-  delete run.state.writeback.error;
-  run.revision = 3;
-  await page.evaluate(() => window.testEvents.emit("ready"));
+  data.publications[0] = { ...data.publications[0], status: "published", externalId: "om_receipt" };
+  delete data.publications[0].error;
+  await page.evaluate(() =>
+    window.testEvents.emit("invalidate", {
+      _tag: "Invalidate",
+      keys: ["context:/publications"],
+    }),
+  );
   await expect(publication.getByText("Receipt: om_receipt")).toBeVisible();
   await page.screenshot({ path: "/tmp/aster-publication-desktop.png", fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });

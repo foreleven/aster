@@ -5,7 +5,7 @@ import type { AgentConversations } from "@aster/agent";
 import type { GoalStore } from "./store.js";
 import { ApplicationError, CausalChain, TaskPath } from "@aster/api-contracts";
 import { Effect, Match, Schema } from "effect";
-import { validateTaskMessage } from "../../tasks/admission.js";
+import { validateTaskMessage } from "../../tasks/state/admission.js";
 
 /** Private admission rules run within the owning GoalState mutation. */
 export const goalAdmission = (

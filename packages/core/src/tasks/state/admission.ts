@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ApplicationError, TaskMessage, TaskDeliveryInput, type Task } from "@aster/api-contracts";
 import { Effect, Schema } from "effect";
-import type { ContextRegistry } from "../context/registry.js";
+import { ContextRegistry } from "../../context/registry.js";
 
 export const taskPathFor = (source: string, requestId: string) =>
   `/tasks/${createHash("sha256")

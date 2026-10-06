@@ -55,15 +55,8 @@ export const statusLabel = (status?: string) =>
 export const statusTone = (status?: string) =>
   Match.value(status).pipe(
     Match.whenOr("active", "completed", "acknowledged", "ready", () => "green"),
-    Match.whenOr("running", "submitting", "processing", () => "blue"),
-    Match.whenOr(
-      "uncertain",
-      "waiting_input",
-      "awaiting-confirmation",
-      "blocked",
-      "pending",
-      () => "amber",
-    ),
+    Match.whenOr("running", "processing", () => "blue"),
+    Match.whenOr("uncertain", "waiting_input", "blocked", "pending", () => "amber"),
     Match.whenOr("failed", "rejected", () => "red"),
     Match.orElse(() => "neutral"),
   );
@@ -72,13 +65,13 @@ export function Pill({ status }: { status?: string }) {
 }
 export function WorkIcon({ status }: { status?: string }) {
   const Icon = Match.value(status).pipe(
-    Match.whenOr("running", "submitting", () => CirclePlay),
+    Match.when("running", () => CirclePlay),
     Match.when("completed", () => CircleCheck),
-    Match.whenOr("waiting_input", "awaiting-confirmation", "pending", () => Hourglass),
+    Match.whenOr("waiting_input", "pending", () => Hourglass),
     Match.orElse(() => Settings),
   );
   const tone = Match.value(status).pipe(
-    Match.whenOr("running", "submitting", "completed", () => "green"),
+    Match.whenOr("running", "completed", () => "green"),
     Match.when("uncertain", () => "purple"),
     Match.orElse(statusTone),
   );

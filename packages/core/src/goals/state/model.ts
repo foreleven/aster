@@ -1,4 +1,4 @@
-import { TaskState } from "../../tasks/state.js";
+import { TaskSnapshot } from "../../tasks/state/snapshot.js";
 import { makeGoalStore } from "./store.js";
 import type { GoalSnapshot, StoredGoalInput } from "./snapshot.js";
 import { goalInputs } from "./inputs.js";
@@ -41,10 +41,12 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
       }),
     );
   const inputs = goalInputs(working, messages);
-  const belongsToGoal = (task: TaskState) =>
+  const belongsToGoal = (task: TaskSnapshot) =>
     task.admission.source === path || task.admission.replyTo === path;
   const attachTask = Effect.fn("GoalState.attachTask")(function* (taskPath: string) {
-    const task = yield* Schema.decodeUnknownEffect(TaskState)(registry.get(taskPath)?.state).pipe(
+    const task = yield* Schema.decodeUnknownEffect(TaskSnapshot)(
+      registry.get(taskPath)?.state,
+    ).pipe(
       Effect.mapError(() => new ApplicationError({ kind: "not-found", message: "Task not found" })),
     );
     if (!Schema.is(TaskPath)(taskPath) || !belongsToGoal(task))
@@ -82,7 +84,7 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
       // Task admission is authoritative if its Goal attachment was interrupted.
       tasks: Object.values(registry.snapshot()).flatMap((record) =>
         Schema.is(TaskPath)(record.path) &&
-        belongsToGoal(Schema.decodeUnknownSync(TaskState)(record.state))
+        belongsToGoal(Schema.decodeUnknownSync(TaskSnapshot)(record.state))
           ? [record.path]
           : [],
       ),

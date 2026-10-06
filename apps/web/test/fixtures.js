@@ -118,7 +118,7 @@ export function fixture() {
         "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
         "Summarize Knowledge Engine project progress",
         {
-          status: "awaiting-confirmation",
+          status: "waiting_input",
           sourcePath: "/lark/im/chats/chat-1",
           definition: { goal: "engine" },
         },

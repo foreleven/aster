@@ -1,9 +1,9 @@
-import { ExternalAgents } from "../tasks/model.js";
+import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { GoalMailbox, GoalCommand, GoalRequestData } from "./protocol.js";
 import { GoalSnapshot, type StoredGoalInput } from "./state/snapshot.js";
 import { GoalState } from "./state/model.js";
 import { GoalAgent } from "./agent.js";
-import { attachGoalTasks, cancelGoalTasks } from "../tasks/commands.js";
+import { cancelGoalTasks } from "../tasks/delivery.js";
 import { GoalSignals } from "../signals/goal-owner.js";
 import { ContextRegistry } from "../context/registry.js";
 import { defineContext } from "../context/definition.js";
@@ -212,7 +212,6 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
               scope,
             );
             yield* Deferred.succeed(initialized, Context.get(services, GoalState));
-            yield* attachGoalTasks(context, registry, contextPath(context));
             const activation = context.metadata.goalActivation as
               Deferred.Deferred<void> | undefined;
             if (activation)

@@ -53,7 +53,7 @@ const RuntimeLive = AsterRuntime.layer({
 
 `ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. Every host supplies MemoryBackend; core internally assembles the Memory Actor and ContextCaptureSink. Local never supplies the internal registry, command endpoint, business reasoning workflows separately.
 
-Startup phases: acquire dependencies and subscribe to Context changes; register/activate source integrations; restore Signals and Tasks; register Goals; bind decision delivery and start journal consumption. Buffered changes and the durable journal preserve early source commits. Signal activation waits for Goal routing registration. After integration readiness, runtime opens its shared Goal execution gate without waiting for model completion. The built-in personal assistant is an idle ordinary Goal at `/goals/personal`.
+Startup phases: acquire dependencies and subscribe to Context changes; register/activate source integrations; restore Signals; register publication, Task and Goal owners; bind decision delivery and start journal consumption. Buffered changes and the durable journal preserve early source commits. Signal activation waits for Goal routing registration. After integration readiness, runtime opens its shared Goal execution gate without waiting for model completion. The built-in personal assistant is an idle ordinary Goal at `/goals/personal`.
 
 Shutdown phases: close admission/stop sources; stop startup coordination and reaction producers; finish or durably retain pending work according to existing domain contracts; stop Actors; release adapter resources. Store lock and signal handlers outlive all finalizers. Interrupted startup must release every resource already acquired.
 
@@ -113,7 +113,7 @@ Apps readiness means that the configured query Contexts are durably registered a
 
 ## Goal readiness and activation
 
-Sources register first; Signal and Task roots restore before Goal registration. GoalsRootActor registers and watches every configured child in `started`, without awaiting child recovery. Runtime awaits only root registration before starting System One and activating Signals. Each child mailbox queues its own Commands during initialization. Slow or failed children do not block root routing or sibling Goals. System One reads currently committed Context snapshots; runtime readiness does not promise that every Goal snapshot has finished restoration.
+Sources register first; Signal restoration and Task root registration precede Goal registration. TasksRootActor registers and watches retained Tasks without awaiting their recovery; root restarts reuse live children. GoalsRootActor likewise registers and watches every configured child in `started`, without awaiting child recovery. Runtime awaits only root registration before starting System One and activating Signals. Each child mailbox queues its own Commands during initialization. Slow or failed children do not block root routing or sibling Tasks and Goals. System One reads currently committed Context snapshots; runtime readiness does not promise that every Task or Goal has finished restoration.
 
 Supervision retries child failures independently. If a child finally terminates, `watch` delivers `Terminated` to the root, which logs its path and cause. Later requests to that missing child are rejected. The root does not create an unbounded replacement loop or fail healthy siblings.
 

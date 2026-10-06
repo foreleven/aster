@@ -1,3 +1,7 @@
+import {
+  readExecutionCheckpoint,
+  type ExecutionCheckpoint,
+} from "../src/tasks/execution/checkpoint.js";
 import { AgentConversations, AgentRunner } from "@aster/agent";
 import { testConversations } from "./conversation-fixtures.js";
 import { emptyRecall } from "./workflow-fixtures.js";
@@ -11,7 +15,8 @@ import {
   ContextRegistry,
   ExternalAgents,
   TasksRootActor,
-  TaskState,
+  PublicationsActor,
+  TaskSnapshot,
   defineContext,
   type ContextRecord,
   type ExternalAgent,
@@ -20,7 +25,7 @@ import { GoalCommand } from "../src/goals/protocol.js";
 import { GoalMailbox } from "../src/goals/protocol.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { fakeAgent } from "./fixtures.js";
-import { taskPathFor } from "../src/tasks/admission.js";
+import { taskPathFor } from "../src/tasks/state/admission.js";
 import type { TaskDeliveryInput } from "@aster/api-contracts";
 
 export const taskInput = (requestId = "task", source = "/goals/personal"): TaskDeliveryInput => ({
@@ -122,8 +127,13 @@ export const taskFixture = Effect.fnUntraced(function* (
   );
   yield* system.spawn("goals", GoalRoot);
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
+  yield* (yield* system.spawn("publications", PublicationsActor)).awaitStarted;
   const tasks = yield* system.spawn("tasks", TasksRootActor);
-  yield* tasks.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+  yield* tasks.awaitStarted;
+  // Tests inspecting recovery wait only for their pre-existing subjects.
+  for (const record of records.values())
+    if (record.path.startsWith("/tasks/"))
+      yield* (yield* system.select(`/user${record.path}`).resolve()).awaitStarted;
   const wait = (predicate: () => boolean) =>
     Effect.gen(function* () {
       const changes = yield* registry.subscribe;
@@ -135,35 +145,49 @@ export const taskFixture = Effect.fnUntraced(function* (
 
 export const retainedTask = Effect.fnUntraced(function* (
   messages: ReturnType<typeof testConversations>,
-  status: TaskState["status"] = "uncertain",
+  status: TaskSnapshot["status"] = "uncertain",
+  input = taskInput(),
 ) {
-  const input = taskInput();
   const entry = yield* messages.append(input.target, input.requestId, "task.admission", input);
-  const { source, replyTo, agent, causal, action } = input;
+  const { source, replyTo, agent, causal } = input;
   const terminal = ["completed", "failed", "cancelled", "uncertain"].includes(status);
-  const inputs: TaskState["inputs"] = [
+  const inputs: TaskSnapshot["inputs"] = [
     {
       requestId: input.requestId,
       entryId: entry.id,
       receipt: { requestId: input.requestId, revision: 1 },
-      status: terminal ? "completed" : "accepted",
+      status: terminal && status !== "uncertain" ? "completed" : "pending",
     },
   ];
   const outcome = terminal
     ? yield* messages.append(input.target, "original-result", "task.result", {
         text: "Original result",
         status,
-        inputs,
+        covered: status === "uncertain" ? [] : inputs.map((input) => input.requestId),
+        roundId: input.requestId,
       })
     : undefined;
-  const state: TaskState = {
-    admission: { source, replyTo, agent, causal, action },
-    executorPrompt: "Test policy",
+  const state: TaskSnapshot = {
+    admission: { source, replyTo, agent, causal },
+    roundId: input.requestId,
     status,
     inputs,
     ...(outcome ? { outcomeEntryId: outcome.id } : {}),
-    ...(status === "running" ? { session: { sessionId: "original" } } : {}),
   };
+  yield* messages.append(input.target, "execution:1", "task.execution", {
+    revision: 1,
+    prompt: "Test policy",
+    approved: true,
+    ...(status === "running" ? { session: { sessionId: "original" } } : {}),
+    deliveries: [
+      {
+        requestId: input.requestId,
+        roundId: input.requestId,
+        kind: "instruction",
+        status: status === "uncertain" ? "unknown" : "accepted",
+      },
+    ],
+  });
   return {
     path: input.target,
     description: "Retained Task",
@@ -171,4 +195,20 @@ export const retainedTask = Effect.fnUntraced(function* (
     messages: [],
     state,
   } satisfies ContextRecord;
+});
+
+export const checkpoint = (messages: AgentConversations["Service"], path: string) =>
+  readExecutionCheckpoint(path).pipe(Effect.provideService(AgentConversations, messages));
+export const seedCheckpoint = Effect.fnUntraced(function* (
+  messages: AgentConversations["Service"],
+  path: string,
+  patch: Partial<ExecutionCheckpoint>,
+) {
+  const previous = (yield* checkpoint(messages, path))!;
+  const revision = previous.revision + 1;
+  yield* messages.append(path, `execution:${revision}`, "task.execution", {
+    ...previous,
+    ...patch,
+    revision,
+  });
 });

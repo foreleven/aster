@@ -1,7 +1,7 @@
-import { inspectTask } from "../tasks/inspection.js";
+import { inspectTask } from "../tasks/view.js";
 import type { TasksRootCommand } from "../tasks/root.js";
 import type { TaskAdmissionReply } from "../tasks/protocol.js";
-import { ResumeTaskDeliveryInput } from "@aster/api-contracts";
+import { TaskRecoveryInput } from "@aster/api-contracts";
 import { randomUUID } from "node:crypto";
 import { ContextQueries, ContextQueryError, type ContextQueryInput } from "../context/queries.js";
 import { inspectProcessing } from "./processing.js";
@@ -24,7 +24,7 @@ import type { AgentConversations } from "@aster/agent";
 import type { GoalCommand, GoalCommandReply } from "../goals/protocol.js";
 import type { GoalsRootCommand } from "../goals/root.js";
 import { approvalEntries, type ApprovalCommand } from "../approvals/actor.js";
-import type { ApprovalResponse } from "../tasks/model.js";
+import type { ApprovalResponse } from "../tasks/execution/contracts.js";
 
 /** Transport-independent queries and commands. Actor paths remain inside core. */
 export const makeApplicationApi = (options: {
@@ -80,7 +80,7 @@ export const makeApplicationApi = (options: {
   });
   return {
     inspectTask: (path: string) => inspectTask(registry, options.conversations, path),
-    resumeTask: (input: ResumeTaskDeliveryInput) =>
+    checkTask: (input: TaskRecoveryInput) =>
       Effect.gen(function* () {
         if (!options.tasks)
           return yield* new ApplicationError({
@@ -88,13 +88,34 @@ export const makeApplicationApi = (options: {
             message: "Task owner unavailable",
           });
         const reply = yield* options.tasks
-          .ask<TaskAdmissionReply>((replyTo) => ({ _tag: "ResumeTask", input, replyTo }))
+          .ask<TaskAdmissionReply>((replyTo) => ({ _tag: "CheckTask", input, replyTo }))
           .pipe(
             Effect.mapError(
               () =>
                 new ApplicationError({
                   kind: "unavailable",
-                  message: "Resume acknowledgement missing; retain the original identity",
+                  message: "Check acknowledgement missing; retain the original identity",
+                }),
+            ),
+          );
+        if (reply._tag === "Rejected") return yield* reply.error;
+        return reply.receipt;
+      }),
+    retryTask: (input: TaskRecoveryInput) =>
+      Effect.gen(function* () {
+        if (!options.tasks)
+          return yield* new ApplicationError({
+            kind: "unavailable",
+            message: "Task owner unavailable",
+          });
+        const reply = yield* options.tasks
+          .ask<TaskAdmissionReply>((replyTo) => ({ _tag: "RetryTask", input, replyTo }))
+          .pipe(
+            Effect.mapError(
+              () =>
+                new ApplicationError({
+                  kind: "unavailable",
+                  message: "Retry acknowledgement missing; retain the original identity",
                 }),
             ),
           );

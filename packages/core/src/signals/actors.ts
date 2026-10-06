@@ -7,7 +7,7 @@ import { ContextActor } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
 import { SignalDefinition, validateSignalTime } from "../config/schema.js";
-import { deliverTask } from "../tasks/message.js";
+import { deliverTask } from "../tasks/delivery.js";
 import { SignalState } from "./state.js";
 import { GoalSignalInput, applyGoalSignal } from "./goal-command.js";
 import { SignalReactionInput, acceptSignalReaction } from "./reaction.js";

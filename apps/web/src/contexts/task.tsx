@@ -1,3 +1,4 @@
+import { PublicationDetails } from "./task-controls";
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import { QueryKeys } from "@aster/api-contracts";
@@ -7,7 +8,14 @@ const inspection = Atom.family((path: string) =>
   ApplicationClient.query(
     "InspectTask",
     { path },
-    { reactivityKeys: [QueryKeys.all, QueryKeys.context(path)] },
+    {
+      reactivityKeys: [
+        QueryKeys.all,
+        QueryKeys.context(path),
+        QueryKeys.context("/publications"),
+        QueryKeys.approvals,
+      ],
+    },
   ),
 );
 
@@ -40,9 +48,9 @@ export function TaskDetails({
           <p className="whitespace-pre-wrap">{view.result}</p>
         </section>
       )}
-      {view.resumptions?.map((item) => (
-        <p key={item.requestId}>Resumption: {item.status}</p>
-      ))}
+      {view.publication && (
+        <PublicationDetails publication={view.publication} navigate={navigate} />
+      )}
       {view.requests.map((request) => (
         <article className="context-work-card" key={request.id}>
           <strong>

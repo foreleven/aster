@@ -485,3 +485,10 @@ export class AgentRunner extends Context.Service<
     }),
   );
 }
+
+export const conversationText = (messages: readonly AgentMessage[]) => {
+  const last = messages.findLast((message) => message.role === "assistant");
+  return last?.role === "assistant" && !last.content.some((block) => block.type === "toolCall")
+    ? last.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n\n")
+    : "";
+};

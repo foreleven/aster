@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Fiber, Schema, Stream } from "effect";
-import { TaskState, TaskActor, contextSpawnOptions } from "../src/index.js";
+import { TaskSnapshot, TaskActor, contextSpawnOptions } from "../src/index.js";
 import { taskFixture, taskInput, retainedTask } from "./task-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 
 test("Task state requires durable admission and input references", () => {
-  const decode = Schema.decodeUnknownSync(TaskState);
+  const decode = Schema.decodeUnknownSync(TaskSnapshot);
   assert.throws(() => decode({ status: "completed" }));
   assert.throws(() => decode({ admission: { input: taskInput() }, status: "checking" }));
 });

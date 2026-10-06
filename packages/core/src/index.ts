@@ -12,8 +12,8 @@ export * from "./signals/goal-owner.js";
 export * from "./decisions/system-one.js";
 export * from "./signals/detect.js";
 export * from "./reasoning/context-description.js";
-export * from "./tasks/model.js";
-export * from "./tasks/writeback.js";
+export * from "./tasks/execution/contracts.js";
+export * from "./publications/contracts.js";
 export {
   TaskAction,
   WritebackOperation,
@@ -37,9 +37,10 @@ export * from "./runtime/api.js";
 export * from "./runtime/runtime.js";
 export * from "./context/errors.js";
 export * from "./signals/errors.js";
-export * from "./tasks/errors.js";
 export * from "./runtime/errors.js";
-export * from "./tasks/state.js";
+export * from "./tasks/state/snapshot.js";
+export { TaskState } from "./tasks/state/model.js";
+export { DEFAULT_EXECUTOR_PROMPT, taskPrompt } from "./tasks/execution/external.js";
 
 export * from "./signals/state.js";
 export * from "./goals/state/snapshot.js";
@@ -63,3 +64,5 @@ export * from "./context/definition.js";
 export * from "./memory/capture.js";
 
 export * from "./context/storage-format.js";
+
+export { PublicationsActor, publications } from "./publications/actor.js";

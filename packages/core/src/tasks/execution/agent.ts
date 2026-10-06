@@ -1,9 +1,8 @@
 import { createHash } from "node:crypto";
-import { AgentRunner } from "@aster/agent";
+import { AgentRunner, conversationText } from "@aster/agent";
 import { Effect } from "effect";
 import type { PreparedTask } from "@aster/api-contracts";
-import { taskTools } from "../tools/catalogues.js";
-import { conversationText } from "../goals/agent.js";
+import { taskTools } from "../../tools/catalogues.js";
 
 export const executeTask = Effect.fn("Task.execute")(function* (options: {
   path: string;

@@ -1,6 +1,6 @@
 import { GoalCommand, type GoalMailbox } from "./protocol.js";
 import { GoalActor } from "./actor.js";
-import { ExternalAgents } from "../tasks/model.js";
+import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { AgentRunner, AgentConversations } from "@aster/agent";
 import { GoalSignals } from "../signals/goal-owner.js";
 import { GoalSettings } from "../config/settings.js";

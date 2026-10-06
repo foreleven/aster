@@ -1,5 +1,6 @@
+import { conversationText } from "@aster/agent";
 import { goalTools } from "../tools/catalogues.js";
-import { ExternalAgents } from "../tasks/model.js";
+import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { GoalState } from "./state/model.js";
 import type { GoalIntent } from "./screening/intent.js";
 import type { ResolvedGoalInput } from "./state/inputs.js";
@@ -94,12 +95,6 @@ export class GoalAgent extends Context.Service<
     }),
   );
 }
-export const conversationText = (messages: readonly AgentMessage[]) => {
-  const last = messages.findLast((message) => message.role === "assistant");
-  return last?.role === "assistant" && !last.content.some((block) => block.type === "toolCall")
-    ? last.content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n\n")
-    : "";
-};
 
 const inputMessage = (input: ResolvedGoalInput): AgentMessage =>
   Match.value(input.payload).pipe(

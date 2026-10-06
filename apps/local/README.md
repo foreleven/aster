@@ -55,7 +55,7 @@ The app supplies `Models.configured` from `@aster/agent`. Lark summarization and
 
 ## Tasks and approvals
 
-TaskActor owns `/tasks/<identity>`, execution handles, follow-up delivery and results. Internal Tasks use the Goal reasoning model; external Tasks select a configured executor. `InspectTask` returns typed business details and available tool records without provider metadata. `ResumeTask` explicitly reconciles failed or uncertain execution using its original identity and revision; unknown submissions are never repeated automatically.
+TaskActor owns `/tasks/<identity>`, execution handles, follow-up delivery and results. Internal Tasks use the Goal reasoning model; external Tasks select a configured executor. `InspectTask` returns typed business details and available tool records without provider metadata. `CheckTask` observes the original execution; `RetryTask` explicitly retries known failed work. Both retain request identity and revision; unknown submissions are never repeated automatically. Publication has a separate owner and approval.
 
 The local UI includes ApprovalQueue. Confirmation, permission and information requests use `GET /api/approvals` and `POST /api/approvals/respond`, or their typed RPC counterparts. Responses include `{ decision: "approve" | "reject" }`, `{ text }`, or question answers keyed by question ID. Queue admission and response delivery persist before acknowledgement. An empty queue only means that no human decision is pending.
 

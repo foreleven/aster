@@ -1,19 +1,13 @@
 import { Schema } from "effect";
-import { CommandIdentifier, CommandReceipt, ContextRevision } from "./command.js";
+import { CommandIdentifier, ContextRevision } from "./command.js";
 export const TaskPath = Schema.String.check(Schema.isPattern(/^\/tasks\/[a-f0-9]{64}$/));
 /** Explicit operator authorization, addressed directly to the execution owner. */
-export const ResumeTaskDeliveryInput = Schema.Struct({
+export const TaskRecoveryInput = Schema.Struct({
   requestId: CommandIdentifier,
   target: TaskPath,
   expectedRevision: ContextRevision,
 });
-export type ResumeTaskDeliveryInput = typeof ResumeTaskDeliveryInput.Type;
-export const ExecutionResumption = Schema.Struct({
-  input: ResumeTaskDeliveryInput,
-  receipt: CommandReceipt,
-  status: Schema.Literals(["pending", "resuming", "done", "unknown"]),
-});
-
+export type TaskRecoveryInput = typeof TaskRecoveryInput.Type;
 export const FollowupTaskInput = Schema.Struct({
   requestId: CommandIdentifier,
   target: TaskPath,

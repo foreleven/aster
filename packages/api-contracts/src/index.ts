@@ -1,4 +1,4 @@
-import { ResumeTaskDeliveryInput } from "./task-control.js";
+import { TaskRecoveryInput } from "./task-control.js";
 import { ContextQueryInput, ContextQueryResult, ContextQueryError } from "./context-query.js";
 export * from "./context-query.js";
 import { RecoveryInput, ProcessingOwner, ProcessingSnapshot } from "./recovery.js";
@@ -49,8 +49,13 @@ export const QueryInvalidation = Schema.TaggedStruct("Invalidate", {
 });
 export type QueryInvalidation = typeof QueryInvalidation.Type;
 export const ApplicationRpcs = RpcGroup.make(
-  Rpc.make("ResumeTask", {
-    payload: ResumeTaskDeliveryInput,
+  Rpc.make("CheckTask", {
+    payload: TaskRecoveryInput,
+    success: CommandReceipt,
+    error: ApplicationError,
+  }),
+  Rpc.make("RetryTask", {
+    payload: TaskRecoveryInput,
     success: CommandReceipt,
     error: ApplicationError,
   }),

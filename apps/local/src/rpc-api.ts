@@ -24,7 +24,8 @@ export const applicationRpcHandlers = (api: ApplicationApi) =>
       traced("InspectProcessing", options.requestId, api.inspectProcessing(owner)),
     RecoverProcessing: (input, options) =>
       traced("RecoverProcessing", options.requestId, api.recoverProcessing(input)),
-    ResumeTask: (input, options) => traced("ResumeTask", options.requestId, api.resumeTask(input)),
+    CheckTask: (input, options) => traced("CheckTask", options.requestId, api.checkTask(input)),
+    RetryTask: (input, options) => traced("RetryTask", options.requestId, api.retryTask(input)),
     InspectTask: ({ path }, options) =>
       traced("InspectTask", options.requestId, api.inspectTask(path)),
     ListContexts: (_, options) => traced("ListContexts", options.requestId, api.contexts),

@@ -26,7 +26,7 @@ The primary Goal conversation handles simple exchanges and routes sustained work
 
 The primary Agent may directly use lightweight tools to read Contexts and memory, inspect Task progress, create Tasks and forward follow-up instructions. These tool interactions remain outside the public message list. Sustained work such as investigation, report generation and code modification belongs in a Task. Asking for a report's current status can be answered in the primary conversation; requesting an additional regional analysis is routed to the report's Task. The boundary is the responsibility and duration of the work, not whether any tool is called.
 
-Task owners use `/tasks/<sha256(source, requestId)>`. Internal execution uses a dedicated retained Pi conversation; external executor handles remain private Task state. Pi execution tasks are SDK mechanisms and do not introduce another Aster work entity.
+Task owners use `/tasks/<sha256(source, requestId)>`. Internal execution uses a dedicated retained Pi conversation; external executor handles remain private TaskExecution checkpoints in Pi. Pi execution tasks are SDK mechanisms and do not introduce another Aster work entity.
 
 ## Message storage and presentation
 
@@ -42,7 +42,7 @@ Message admission must commit to Pi before acceptance is acknowledged. Pi and Ac
 
 ## Implementation
 
-`packages/agent/src/conversations.ts` owns shared Pi writers and retained entry access. Goal admission and presentation live in `goals/state/inputs.ts`, `goals/actor.ts` and `goals/view.ts`. `tasks/actor.ts` owns internal/external execution and follow-up; `tasks/inspection.ts` provides execution details. External adapters implement continuation through `ExternalAgent.followUp`. The web Goal Timeline renders public dialogue, with Task and approval detail separate.
+`packages/agent/src/conversations.ts` owns shared Pi writers and retained entry access. Goal admission and presentation live in `goals/state/inputs.ts`, `goals/actor.ts` and `goals/view.ts`. `tasks/actor.ts` schedules execution and follow-up through its mailbox, `tasks/state/` owns the committed business model and Pi handoffs, and `tasks/execution/` invokes internal and external executors. `tasks/view.ts` provides execution details. External adapters implement continuation through `ExternalAgent.followUp`. The web Goal Timeline renders public dialogue, with Task and approval detail separate.
 
 The implementation replaces the old contracts without migration or compatibility aliases. Runtime data and credentials are not changed by development or validation.
 

@@ -10,6 +10,7 @@ import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster
 import type { ReactionCommand } from "../reactions/actor.js";
 import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
 import { GoalScreeningStore } from "../goals/screening/decision.js";
+import { PublicationsActor } from "../publications/actor.js";
 import { TasksRootActor } from "../tasks/root.js";
 import type { RuntimeEvent, RuntimePhase } from "@aster/api-contracts";
 import { RuntimeConfigurationError } from "./errors.js";
@@ -39,7 +40,7 @@ import { SystemOneClient } from "../decisions/system-one.js";
 import { AgentConversations } from "@aster/agent";
 import { GoalsRootActor } from "../goals/root.js";
 import { GoalSignals } from "../signals/goal-owner.js";
-import { ExternalAgents } from "../tasks/model.js";
+import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
 import { startContextReactions } from "./context-consumers.js";
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
@@ -175,8 +176,9 @@ const acquireRuntime = Effect.gen(function* () {
       .pipe(Effect.provideService(Scope.Scope, workScope));
     handles.push({ phase: module.phase, handle });
   }
+  yield* (yield* system.spawn("publications", PublicationsActor)).awaitStarted;
   const tasks = yield* system.spawn("tasks", TasksRootActor);
-  yield* tasks.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+  yield* tasks.awaitStarted;
   yield* endpoint.bind(signals);
   const goalActivation = yield* Deferred.make<void>();
   const goals = settings.definitions.length

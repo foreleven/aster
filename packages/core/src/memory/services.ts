@@ -1,6 +1,6 @@
 import { ContextCaptures } from "./capture.js";
 import { AgentConversations } from "@aster/agent";
-import { taskCapture } from "../tasks/capture.js";
+import { taskCapture } from "../tasks/view.js";
 import type { ActorRef } from "@aster/actor";
 import { Context, Deferred, Effect, Layer } from "effect";
 import { MemoryBackend, ContextCaptureSink } from "./contracts.js";

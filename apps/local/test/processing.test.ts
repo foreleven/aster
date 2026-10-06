@@ -2,7 +2,7 @@ import { ContextCaptures, ContextDescriptions, makeContextMaintenance } from "@a
 import { testConversations } from "./conversation-fixtures.js";
 import { taskCapture } from "@aster/core/testing";
 import { larkCaptures, larkDescriptions, larkContextViews } from "@aster/integrations";
-import { TaskActor, DEFAULT_EXECUTOR_PROMPT } from "@aster/core";
+import { TaskActor } from "@aster/core";
 import { ContextDescriptionError } from "@aster/core";
 import { ApprovalQueueActor, ExternalAgents } from "@aster/core";
 import assert from "node:assert/strict";
@@ -138,7 +138,7 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
             description: "Review",
             messages: [],
             state: {
-              status: "awaiting-confirmation",
+              status: "ready",
               inputs: [
                 {
                   requestId: "task",
@@ -147,7 +147,6 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
                   status: "pending",
                 },
               ],
-              executorPrompt: DEFAULT_EXECUTOR_PROMPT,
               admission: {
                 source: "/signals/review",
                 agent: "test",

@@ -1,10 +1,8 @@
 import { Match, Predicate, Schema } from "effect";
 import {
-  WritebackOperation,
   Task,
   SignalTrigger,
   PreparedTask,
-  ExecutionResumption,
   type PublicContext,
   type RuntimeEvent,
   type RuntimeSnapshot,
@@ -13,8 +11,6 @@ import {
 // Public Contexts stay open-ended. The dashboard only decodes the fields it presents.
 
 const DisplayState = Schema.Struct({
-  writeback: Schema.optional(WritebackOperation),
-  resumptions: Schema.optional(Schema.Array(ExecutionResumption)),
   // Delivery owners expose different payloads; related work only needs their source path.
   deliveries: Schema.optional(
     Schema.Array(Schema.Struct({ input: Schema.Struct({ source: Schema.String }) })),
@@ -64,9 +60,6 @@ const DisplayState = Schema.Struct({
   goal: Schema.optional(Schema.String),
   definition: Schema.optional(Schema.Struct({ goal: Schema.optional(Schema.String) })),
   request: Schema.optional(Schema.Struct({ taskPath: Schema.optional(Schema.String) })),
-  session: Schema.optional(
-    Schema.Struct({ sessionId: Schema.String, runId: Schema.optional(Schema.String) }),
-  ),
 });
 export type DisplayState = typeof DisplayState.Type;
 export const summaryText = (summary: DisplayState["summary"]): string | undefined =>

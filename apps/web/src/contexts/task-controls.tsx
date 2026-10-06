@@ -5,34 +5,43 @@ import { Cause, Exit, Schema } from "effect";
 import {
   ApplicationError,
   contextQueryKeys,
-  type ResumeTaskDeliveryInput,
+  type TaskRecoveryInput,
+  type WritebackOperation,
 } from "@aster/api-contracts";
-import { resumeTask } from "../api/client";
-const pendingResumes = Atom.make<Record<string, ResumeTaskDeliveryInput>>({}).pipe(Atom.keepAlive);
+import { checkTask, retryTask } from "../api/client";
 import type { ContextView } from "../dashboard/model";
-
+const pendingRequests = Atom.make<
+  Record<string, { input: TaskRecoveryInput; action: "check" | "retry" }>
+>({}).pipe(Atom.keepAlive);
 export function TaskControls({
   context,
-  navigate,
 }: {
   context: ContextView;
   navigate: (path: string) => void;
 }) {
-  const pending = useAtomValue(pendingResumes);
-  const setPending = useAtomSet(pendingResumes);
-  const resume = useAtomSet(resumeTask, { mode: "promiseExit" });
-  const busy = useAtomValue(resumeTask).waiting;
+  const pending = useAtomValue(pendingRequests);
+  const setPending = useAtomSet(pendingRequests);
+  const check = useAtomSet(checkTask, { mode: "promiseExit" });
+  const retry = useAtomSet(retryTask, { mode: "promiseExit" });
+  const checking = useAtomValue(checkTask).waiting;
+  const retrying = useAtomValue(retryTask).waiting;
   const [error, setError] = useState("");
-  async function submit() {
-    if (busy || context.revision === undefined) return;
-    const input = pending[context.path] ?? {
-      requestId: crypto.randomUUID(),
-      target: context.path,
-      expectedRevision: context.revision,
+  async function submit(action: "check" | "retry") {
+    if (checking || retrying || context.revision === undefined) return;
+    const request = pending[context.path] ?? {
+      action,
+      input: {
+        requestId: crypto.randomUUID(),
+        target: context.path,
+        expectedRevision: context.revision,
+      },
     };
-    setPending((previous) => ({ ...previous, [context.path]: input }));
+    setPending((previous) => ({ ...previous, [context.path]: request }));
     setError("");
-    const result = await resume({ payload: input, reactivityKeys: contextQueryKeys(context.path) });
+    const result = await (request.action === "check" ? check : retry)({
+      payload: request.input,
+      reactivityKeys: contextQueryKeys(context.path),
+    });
     if (Exit.isFailure(result)) {
       const failure = Cause.squash(result.cause);
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -42,65 +51,73 @@ export function TaskControls({
       Object.fromEntries(Object.entries(previous).filter(([key]) => key !== context.path)),
     );
   }
-  const publication = context.state.writeback;
   return (
     <section className="context-summary" aria-label="Task controls">
       {(["failed", "uncertain"].includes(context.state.status ?? "") || pending[context.path]) && (
         <>
           <button
             className="outline-action"
-            disabled={context.revision === undefined || busy}
-            onClick={() => void submit()}
+            disabled={checking || retrying}
+            onClick={() => void submit("check")}
           >
-            {pending[context.path] ||
-            context.state.resumptions?.some((item) => item.status === "pending")
-              ? "Reconcile resumption"
-              : "Resume execution"}
+            {pending[context.path] ? "Check request receipt" : "Check original execution"}
           </button>
-          <p>Checks the original execution before attempting to continue it.</p>
+          {!pending[context.path] && context.state.status === "failed" && (
+            <button
+              className="outline-action"
+              disabled={checking || retrying}
+              onClick={() => void submit("retry")}
+            >
+              Retry failed execution
+            </button>
+          )}
+          <p>
+            Checking does not submit the work again. Retry is available only for confirmed failures.
+          </p>
         </>
       )}
       {error && <p role="alert">{error}</p>}
-      {context.state.resumptions?.map((item) => (
-        <p key={item.input.requestId}>
-          Resumption {item.status}
-          {"error" in item && item.error ? `: ${item.error}` : ""}
-        </p>
-      ))}
-      {publication && (
-        <article className="context-work-card" aria-label="External publication">
-          <h2>External publication</h2>
-          <p>Status: {publication.status}</p>
-          <button
-            className="outline-action"
-            onClick={() => navigate(publication.request.action.channelPath)}
-          >
-            {publication.request.action.channelPath}
-          </button>
-          <p>Sending as: {publication.request.action.identity}</p>
-          <p className="whitespace-pre-wrap">{publication.request.content}</p>
-          {publication.status === "waiting-approval" && (
-            <>
-              <p>
-                The local result is complete. Publishing this exact content requires separate
-                approval.
-              </p>
-              <button className="outline-action" onClick={() => navigate("/approvals")}>
-                Review publication approval
-              </button>
-            </>
-          )}
-          {publication.status === "unknown" && (
-            <p>
-              Delivery is unconfirmed. Automatic resend is disabled; inspect the destination before
-              taking further action.
-            </p>
-          )}
-          {publication.externalId && <p>Receipt: {publication.externalId}</p>}
-          {publication.error && <p className="context-failure">{publication.error}</p>}
-          <small>Operation: {publication.request.requestId}</small>
-        </article>
-      )}
     </section>
+  );
+}
+export function PublicationDetails({
+  publication,
+  navigate,
+}: {
+  publication: WritebackOperation;
+  navigate: (path: string) => void;
+}) {
+  return (
+    <article className="context-work-card" aria-label="External publication">
+      <h2>External publication</h2>
+      <p>Status: {publication.status}</p>
+      <button
+        className="outline-action"
+        onClick={() => navigate(publication.request.action.channelPath)}
+      >
+        {publication.request.action.channelPath}
+      </button>
+      <p>Sending as: {publication.request.action.identity}</p>
+      <p className="whitespace-pre-wrap">{publication.request.content}</p>
+      {publication.status === "waiting-approval" && (
+        <>
+          <p>
+            The local result is complete. Publishing this exact content requires separate approval.
+          </p>
+          <button className="outline-action" onClick={() => navigate("/approvals")}>
+            Review publication approval
+          </button>
+        </>
+      )}
+      {publication.status === "unknown" && (
+        <p>
+          Delivery is unconfirmed. Automatic resend is disabled; inspect the destination before
+          taking further action.
+        </p>
+      )}
+      {publication.externalId && <p>Receipt: {publication.externalId}</p>}
+      {publication.error && <p className="context-failure">{publication.error}</p>}
+      <small>Operation: {publication.request.requestId}</small>
+    </article>
   );
 }

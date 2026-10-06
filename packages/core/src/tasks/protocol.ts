@@ -3,14 +3,12 @@ import {
   ApplicationError,
   CommandReceipt,
   TaskDeliveryInput,
-  ResumeTaskDeliveryInput,
+  TaskRecoveryInput,
   FollowupTaskInput,
 } from "@aster/api-contracts";
 import { Schema } from "effect";
 import { ApprovalResolved } from "../approvals/actor.js";
-import { ExecutionSession, ExecutionStatus } from "./model.js";
-import { WritebackFinished } from "./writeback.js";
-
+import { TaskOutcome } from "./state/snapshot.js";
 export const TaskAdmissionReply = Schema.Union([
   Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
   Schema.TaggedStruct("Rejected", { error: ApplicationError }),
@@ -20,57 +18,32 @@ export const StartTask = Schema.TaggedStruct("StartTask", {
   input: TaskDeliveryInput,
   replyTo: ReplyTo<TaskAdmissionReply>(),
 });
-export const FollowupTask = Schema.TaggedStruct("FollowupTask", {
+export const Input = Schema.TaggedStruct("Input", {
   input: FollowupTaskInput,
   replyTo: ReplyTo<TaskAdmissionReply>(),
 });
-export const ResumeTask = Schema.TaggedStruct("ResumeTask", {
-  input: ResumeTaskDeliveryInput,
+export const CheckTask = Schema.TaggedStruct("CheckTask", {
+  input: TaskRecoveryInput,
   replyTo: ReplyTo<TaskAdmissionReply>(),
 });
-export const TaskReady = Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() });
-const result = <A extends Schema.Constraint>(value: A) =>
-  Schema.Union([
-    Schema.TaggedStruct("Success", { value }),
-    Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
-  ]);
+export const RetryTask = Schema.TaggedStruct("RetryTask", {
+  input: TaskRecoveryInput,
+  replyTo: ReplyTo<TaskAdmissionReply>(),
+});
 export const TaskCommand = Schema.Union([
   StartTask,
-  FollowupTask,
-  ResumeTask,
-  TaskReady,
+  Input,
+  CheckTask,
+  RetryTask,
   ApprovalResolved,
-  WritebackFinished,
-  Schema.TaggedStruct("Resume", {}),
-  Schema.TaggedStruct("ResumeObserved", {
-    requestId: Schema.String,
-    result: result(ExecutionStatus),
-  }),
-  Schema.TaggedStruct("Resumed", { requestId: Schema.String, result: result(ExecutionSession) }),
-  Schema.TaggedStruct("SubmissionLocated", {
-    requestId: Schema.String,
-    result: result(Schema.Option(ExecutionSession)),
-  }),
-  Schema.TaggedStruct("InternalSettled", {
+  Schema.TaggedStruct("ExecutionSettled", { generation: Schema.String, outcome: TaskOutcome }),
+  Schema.TaggedStruct("DeliverySettled", { error: Schema.optional(Schema.String) }),
+  Schema.TaggedStruct("CancellationChecked", {
     generation: Schema.String,
-    inputId: Schema.String,
-    result: result(Schema.String),
+    reason: Schema.String,
+    confirmed: Schema.Boolean,
+    replyTo: Schema.optional(ReplyTo<void>()),
   }),
-  Schema.TaggedStruct("ExternalSubmitted", {
-    generation: Schema.String,
-    inputId: Schema.String,
-    result: result(ExecutionSession),
-  }),
-  Schema.TaggedStruct("ExternalStatus", {
-    generation: Schema.String,
-    result: result(ExecutionStatus),
-  }),
-  Schema.TaggedStruct("Responded", {
-    generation: Schema.String,
-    requestId: Schema.String,
-    result: result(Schema.Void),
-  }),
-  Schema.TaggedStruct("FeedbackDelivered", { result: result(Schema.Void) }),
   Schema.TaggedStruct("Cancel", {
     reason: Schema.String,
     replyTo: Schema.optional(ReplyTo<void>()),

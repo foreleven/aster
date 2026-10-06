@@ -781,6 +781,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
   await run(
     Effect.gen(function* () {
       const finished = yield* Deferred.make<void>();
+      const submitted = yield* Deferred.make<void>();
       let submissions = 0,
         calls = 0,
         gates = 0;
@@ -815,7 +816,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
               Effect.sync(() => {
                 submissions++;
                 return { sessionId: "external" };
-              }),
+              }).pipe(Effect.tap(() => Deferred.succeed(submitted, undefined))),
             status: () => Effect.succeed({ state: "running" }),
             wait: () =>
               Deferred.await(finished).pipe(
@@ -845,6 +846,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
             (record.state as { status?: string }).status === "running",
         ),
       );
+      yield* Deferred.await(submitted);
       assert.equal(submissions, 1);
       yield* env.submit("unrelated-user-turn", { _tag: "UserInput", text: "A different request" });
       yield* env.wait(() => env.state().inputs.at(-1)!.status === "completed");

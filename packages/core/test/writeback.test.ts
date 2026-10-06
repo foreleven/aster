@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { Deferred, Effect, Schema } from "effect";
 import {
   ChannelWrites,
+  publications,
   ChannelWriteError,
   approvalEntries,
   writebackApprovalId,
@@ -14,8 +15,7 @@ import {
   type ContextRecord,
 } from "../src/index.js";
 
-import { TaskState } from "../src/tasks/state.js";
-import { taskActorPath } from "../src/tasks/address.js";
+import { TaskSnapshot } from "../src/tasks/state/snapshot.js";
 
 const definition: TaskDeliveryInput = {
   ...taskInput("publish"),
@@ -32,7 +32,13 @@ const fixture = (options: {
     const env = yield* taskFixture(options);
     const record = () =>
       Object.values(env.registry.snapshot()).find((record) => /^\/tasks\/[^/]+$/.test(record.path));
-    const state = () => record() && Schema.decodeUnknownSync(TaskState)(record()!.state);
+    const state = () =>
+      record() && {
+        ...Schema.decodeUnknownSync(TaskSnapshot)(record()!.state),
+        writeback: publications(env.registry).find(
+          (item) => item.request.source === record()!.path,
+        ),
+      };
     const decide = (id: string, decision: "approve" | "reject") =>
       env.approvals.ask<{ error?: string }>((replyTo) => ({
         _tag: "Resolve",
@@ -71,12 +77,15 @@ test("Run persists the result and exact writeback before a separate approval; fo
           publish: (request, authorization) =>
             Effect.sync(() => {
               calls++;
-              const retained = Schema.decodeUnknownSync(TaskState)(
+              const retained = Schema.decodeUnknownSync(TaskSnapshot)(
                 records.get(request.source)!.state,
               );
               assert.equal(retained.status, "completed");
-              assert.equal(retained.writeback!.status, "sending");
-              assert.deepEqual(retained.writeback!.request, request);
+              const publication = Schema.decodeUnknownSync(
+                Schema.Struct({ operations: Schema.Array(WritebackOperation) }),
+              )(records.get("/publications")!.state).operations[0]!;
+              assert.equal(publication.status, "sending");
+              assert.deepEqual(publication.request, request);
               assert.equal(authorization.approvalId, writebackApprovalId(request));
               assert.ok(authorization.approvalsRevision > 0);
               assert.equal(request.content, "done");
@@ -95,14 +104,19 @@ test("Run persists the result and exact writeback before a separate approval; fo
         const entry = approvalEntries(env.registry).find((entry) => entry.id === id)!;
         assert.match(entry.request.prompt, /oc_test as user/);
         assert.match(entry.request.prompt, /\n\ndone\n\n/);
-        const actor = yield* env.system.select(taskActorPath(env.record()!.path)).resolve();
+        const actor = yield* env.system.select("/user/publications").resolve();
         yield* actor.tell({
           _tag: "ApprovalResolved",
           requestId: id,
           response: { decision: "approve" },
         });
         // A mailbox barrier: the following acknowledgement is processed after the forged message.
-        yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
+        yield* actor.ask<void>((replyTo) => ({
+          _tag: "Publish",
+          taskPath: env.record()!.path,
+          entryId: env.state()!.outcomeEntryId!,
+          replyTo,
+        }));
         assert.equal(calls, 0);
         assert.equal(env.state()!.writeback!.status, "waiting-approval");
         assert.deepEqual(yield* env.decide(id, "approve"), {});
@@ -112,13 +126,18 @@ test("Run persists the result and exact writeback before a separate approval; fo
           requestId: id,
           response: { decision: "approve" },
         });
-        yield* actor.tell({ _tag: "Finished", outcome: { _tag: "Completed", text: "done" } });
-        yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
+        yield* actor.ask<void>((replyTo) => ({
+          _tag: "Publish",
+          taskPath: env.record()!.path,
+          entryId: env.state()!.outcomeEntryId!,
+          replyTo,
+        }));
         assert.equal(calls, 1);
-        const view = env.registry.views.project(env.record()!);
+        const view = env.registry.views.project(env.registry.get("/publications")!);
         assert.equal(
-          Schema.decodeUnknownSync(Schema.Struct({ writeback: WritebackOperation }))(view.state)
-            .writeback.status,
+          Schema.decodeUnknownSync(Schema.Struct({ operations: Schema.Array(WritebackOperation) }))(
+            view.state,
+          ).operations[0]!.status,
           "published",
         );
       }),
@@ -155,9 +174,13 @@ for (const outcome of ["published", "unknown", "rejected"] as const) {
             }
             yield* env.until(() => env.state()?.writeback?.status === outcome);
 
-            const actor = yield* env.system.select(taskActorPath(env.record()!.path)).resolve();
-            yield* actor.tell({ _tag: "Resume" });
-            yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
+            const actor = yield* env.system.select("/user/publications").resolve();
+            yield* actor.ask<void>((replyTo) => ({
+              _tag: "Publish",
+              taskPath: env.record()!.path,
+              entryId: env.state()!.outcomeEntryId!,
+              replyTo,
+            }));
             assert.equal(calls, 1);
           }),
         ).pipe(Effect.timeout("5 seconds")),
@@ -238,8 +261,13 @@ test("a completed Run without an explicit Signal action stays local", async () =
           publish: () => Effect.die(new Error("Local results cannot publish")),
         });
         yield* env.completed;
-        const actor = yield* env.system.select(taskActorPath(env.record()!.path)).resolve();
-        yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
+        const actor = yield* env.system.select("/user/publications").resolve();
+        yield* actor.ask<void>((replyTo) => ({
+          _tag: "Publish",
+          taskPath: env.record()!.path,
+          entryId: env.state()!.outcomeEntryId!,
+          replyTo,
+        }));
         assert.equal(env.state()!.writeback, undefined);
         assert.equal(
           approvalEntries(env.registry).some((entry) => entry.id.includes(":writeback:")),
@@ -251,61 +279,72 @@ test("a completed Run without an explicit Signal action stays local", async () =
 });
 
 for (const phase of ["sending", "published"] as const) {
-  test(`lost ${phase} commit acknowledgement does not repeat publication after owner restart`, async () => {
-    const records = new Map<string, ContextRecord>();
-    const conversations = testConversations();
-    let calls = 0;
-    let lost = false;
-    const acknowledgementLost = Deferred.makeUnsafe<void>();
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const env = yield* fixture({
-            records,
-            conversations,
-            saved: (record) => {
-              if (
-                !lost &&
-                record.path.includes("/tasks/") &&
-                Schema.decodeUnknownSync(TaskState)(record.state).writeback?.status === phase
-              ) {
-                lost = true;
-                Deferred.doneUnsafe(acknowledgementLost, Effect.void);
-                throw new Error("Injected commit acknowledgement loss");
-              }
-            },
-            publish: () =>
-              Effect.sync(() => {
-                calls++;
-                return { externalId: "om_once" };
-              }),
-          });
-          yield* env.completed;
-          yield* env.waiting;
-          yield* env.decide(writebackApprovalId(env.state()!.writeback!.request), "approve");
-          yield* Deferred.await(acknowledgementLost);
-          assert.equal(lost, true);
-          assert.equal(calls, phase === "sending" ? 0 : 1);
-        }),
-      ).pipe(Effect.timeout("5 seconds")),
-    );
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const env = yield* fixture({
-            records,
-            conversations,
-            publish: () => Effect.die(new Error("Uncertain submission cannot retry")),
-          });
-          const status = phase === "sending" ? "unknown" : "published";
-          yield* env.until(() => env.state()?.writeback?.status === status);
+  for (const handoff of ["committed", "pi-only"] as const) {
+    test(`lost ${phase} ${handoff} acknowledgement does not repeat publication after owner restart`, async () => {
+      const records = new Map<string, ContextRecord>();
+      const conversations = testConversations();
+      let calls = 0;
+      let lost = false;
+      let previous: ContextRecord | undefined;
+      const acknowledgementLost = Deferred.makeUnsafe<void>();
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const env = yield* fixture({
+              records,
+              conversations,
+              saved: (record) => {
+                if (
+                  !lost &&
+                  record.path === "/publications" &&
+                  Schema.decodeUnknownSync(
+                    Schema.Struct({ operations: Schema.Array(WritebackOperation) }),
+                  )(record.state).operations[0]?.status === phase
+                ) {
+                  lost = true;
+                  if (handoff === "pi-only") records.set("/publications", previous!);
+                  Deferred.doneUnsafe(acknowledgementLost, Effect.void);
+                  throw new Error("Injected commit acknowledgement loss");
+                }
+                if (record.path === "/publications") previous = structuredClone(record);
+              },
+              publish: () =>
+                Effect.sync(() => {
+                  calls++;
+                  return { externalId: "om_once" };
+                }),
+            });
+            yield* env.completed;
+            yield* env.waiting;
+            yield* env.decide(writebackApprovalId(env.state()!.writeback!.request), "approve");
+            yield* Deferred.await(acknowledgementLost);
+            assert.equal(lost, true);
+            assert.equal(calls, phase === "sending" ? 0 : 1);
+          }),
+        ).pipe(Effect.timeout("5 seconds")),
+      );
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const env = yield* fixture({
+              records,
+              conversations,
+              publish: () => Effect.die(new Error("Uncertain submission cannot retry")),
+            });
+            const status = phase === "sending" ? "unknown" : "published";
+            yield* env.until(() => env.state()?.writeback?.status === status);
 
-          const actor = yield* env.system.select(taskActorPath(env.record()!.path)).resolve();
-          yield* actor.tell({ _tag: "Resume" });
-          yield* actor.ask<void>((replyTo) => ({ _tag: "Cancel", reason: "barrier", replyTo }));
-          assert.equal(calls, phase === "sending" ? 0 : 1);
-        }),
-      ).pipe(Effect.timeout("5 seconds")),
-    );
-  });
+            const actor = yield* env.system.select("/user/publications").resolve();
+            yield* actor.ask<void>((replyTo) => ({
+              _tag: "Publish",
+              taskPath: env.record()!.path,
+              entryId: env.state()!.outcomeEntryId!,
+              replyTo,
+            }));
+            assert.equal(calls, phase === "sending" ? 0 : 1);
+          }),
+        ).pipe(Effect.timeout("5 seconds")),
+      );
+    });
+  }
 }

@@ -2,7 +2,7 @@ import { Effect } from "effect";
 import { CurrentActors } from "../actors.js";
 import { Type } from "@aster/agent";
 import type { TaskMessage } from "@aster/api-contracts";
-import { deliverTask } from "../../tasks/message.js";
+import { deliverTask } from "../../tasks/delivery.js";
 import { commandTool } from "../define.js";
 import { actorTask } from "./schema.js";
 

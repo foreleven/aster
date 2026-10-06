@@ -64,3 +64,28 @@ test("interrupting execution forwards cancellation to transport and preserves Fi
     ),
   );
 });
+
+test("external adapter forwards stable submission identity and explicit cancellation confirmation", async () => {
+  const session = { sessionId: "original" };
+  const identity = { requestId: "task-identity" };
+  const agent = adaptExternalAgent(
+    driver({
+      submit: async (_task, signal, submission) => {
+        assert.equal(signal.aborted, false);
+        assert.deepEqual(submission, identity);
+        return session;
+      },
+      cancel: async (current, signal) => {
+        assert.deepEqual(current, session);
+        assert.equal(signal.aborted, false);
+        return true;
+      },
+    }),
+  );
+  assert.deepEqual(
+    await Effect.runPromise(agent.submit({ instructions: "Review", input: [] }, identity)),
+    session,
+  );
+  assert.equal(await Effect.runPromise(agent.cancel!(session)), true);
+  assert.equal(adaptExternalAgent(driver({})).cancel, undefined);
+});

@@ -4,7 +4,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { contextQueryKeys } from "@aster/api-contracts";
 import { sendGoalMessage, endGoal } from "../api/client";
 import { GoalFeed } from "./goal-feed";
-import React, { useState } from "react";
+import { useState } from "react";
 import {
   Sheet,
   SheetContent,
@@ -16,9 +16,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Field, FieldLabel } from "@/components/ui/field";
-import { ArrowRight, Check } from "lucide-react";
 import { Status, Messages } from "./shared";
-import { taskStages } from "@/lib/dashboard";
 import { inspectorView, contextViews } from "./state";
 import { projectMessage, summaryText, type DisplayState } from "./model";
 import { titleFor } from "../goals/presentation";
@@ -112,32 +110,6 @@ export function Inspector({
               <p className="text-sm text-destructive mt-3">
                 Latest runtime error: {row.actor.lastError}
               </p>
-            )}
-            {!restricted && c?.path.includes("/tasks/") && (
-              <div className="flow">
-                {taskStages(c).map((v, i) => (
-                  <React.Fragment key={v.title}>
-                    {i > 0 && <ArrowRight className="size-3 shrink-0 text-muted-foreground" />}
-                    <div
-                      className="flow-step text-xs"
-                      data-stage={v.done ? "done" : v.active ? "active" : "pending"}
-                    >
-                      {v.done && <Check className="size-3 mb-1" />}
-                      {v.title}
-                      <p className="mt-1 text-muted-foreground">
-                        {v.done ? "Completed" : v.active ? "Current stage" : "Not reached"}
-                      </p>
-                    </div>
-                  </React.Fragment>
-                ))}
-              </div>
-            )}
-            {s.session && (
-              <div className="my-4 text-xs flex flex-col gap-2">
-                <b>External session</b>
-                <p className="mono break-all">session · {s.session.sessionId}</p>
-                <p className="mono break-all">run · {s.session.runId || "—"}</p>
-              </div>
             )}
             {related.length > 0 && (
               <div className="flex flex-wrap gap-1 my-4">

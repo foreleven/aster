@@ -11,9 +11,9 @@ import {
   MemoryRecall,
   ExternalAgents,
   defineContext,
-  TaskState,
+  TaskSnapshot,
 } from "../src/index.js";
-import { taskPathFor } from "../src/tasks/admission.js";
+import { taskPathFor } from "../src/tasks/state/admission.js";
 import { GoalState } from "../src/goals/state/model.js";
 import { GoalSnapshot } from "../src/goals/state/snapshot.js";
 import { makeContextRegistry } from "../src/testing/context.js";
@@ -188,7 +188,7 @@ test("Goal task references recover interrupted attachment and reject unrelated T
           const taskPath = taskPathFor(source, id);
           yield* registry.register(
             taskPath,
-            defineContext({ state: TaskState, message: Schema.Never }),
+            defineContext({ state: TaskSnapshot, message: Schema.Never }),
           );
           yield* registry.commit(
             {
@@ -202,8 +202,7 @@ test("Goal task references recover interrupted attachment and reject unrelated T
                   agent: "test",
                   causal: { rootRequestId: id, remainingAgentTurns: 3 },
                 },
-                executorPrompt: "Test executor",
-                status: "awaiting-confirmation",
+                status: "ready",
                 inputs: [
                   {
                     requestId: id,

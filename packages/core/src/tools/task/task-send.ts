@@ -1,7 +1,7 @@
 import { Effect } from "effect";
 import { CurrentActors } from "../actors.js";
 import { Type } from "@aster/agent";
-import { followupTask } from "../../tasks/commands.js";
+import { followupTask } from "../../tasks/delivery.js";
 import { commandTool } from "../define.js";
 
 export const taskSend = (source: string, requestId: (callId: string) => string) =>
