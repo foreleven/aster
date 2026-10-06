@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, type Duration } from "effect";
+import { Context, Data, Effect, Layer, Schema, type Duration } from "effect";
 import type { ActorPersistence } from "./persistence.js";
 
 export type ActorPath = string;
@@ -47,9 +47,22 @@ export class AskTimeoutError extends Error {
   }
 }
 
+export class ActorStartupError extends Data.TaggedError("ActorStartupError")<{
+  readonly path: ActorPath;
+  readonly cause: unknown;
+}> {
+  override get message() {
+    return `Actor startup failed: ${this.path}`;
+  }
+}
+
 export interface ActorRef<in Command> {
   readonly path: ActorPath;
   readonly incarnation: string;
+  /** First initialization outcome, including Layer acquisition, recovery and started.
+   * Not a processing barrier or health check. Cancelling a waiter does not stop the Actor.
+   */
+  readonly awaitStarted: Effect.Effect<void, ActorStartupError>;
   /** Enqueue only; stopped targets emit a redacted DeadLetter instead of failing the sender. */
   tell(command: Command): Effect.Effect<void>;
   /** First reply wins. Timeout/cancellation closes the reply ref, not the receiver's work. */
@@ -97,6 +110,8 @@ export const ReplyTo = <Response>() =>
       typeof value.path === "string" &&
       "incarnation" in value &&
       typeof value.incarnation === "string" &&
+      "awaitStarted" in value &&
+      Effect.isEffect(value.awaitStarted) &&
       "tell" in value &&
       typeof value.tell === "function" &&
       "ask" in value &&

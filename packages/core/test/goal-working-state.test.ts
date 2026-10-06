@@ -1,10 +1,12 @@
 import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { GoalActor, makeApplicationApi } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
-import { goalWorkingState } from "../src/goals/working-state.js";
+import { makeGoalStore } from "../src/goals/state/store.js";
+import { ContextRegistry } from "../src/context/registry.js";
+import { GoalSnapshot } from "../src/goals/state/snapshot.js";
 
 test("Goal keeps message references while public conversation reads Pi history", async () => {
   await Effect.runPromise(
@@ -25,6 +27,7 @@ test("Goal keeps message references while public conversation reads Pi history",
               summary: "",
               inputs: [],
               receipts: [],
+              tasks: [],
             },
           },
           { expectedRevision: 0 },
@@ -40,7 +43,11 @@ test("Goal keeps message references while public conversation reads Pi history",
           inputId: "input-104",
           text: "Here is the result",
         });
-        yield* goalWorkingState(registry, () => path).save({ summary: "Current understanding" });
+        const store = yield* makeGoalStore(
+          path,
+          Schema.decodeUnknownSync(GoalSnapshot)(registry.get(path)!.state),
+        ).pipe(Effect.provideService(ContextRegistry, registry));
+        yield* store.save({ summary: "Current understanding" });
         assert.deepEqual(registry.get(path)!.messages, []);
         const api = makeApplicationApi({ registry, conversations, inspect: Effect.succeed(null) });
         const page = yield* api.goals.timeline("demo", { limit: 100 });
@@ -90,6 +97,7 @@ test("Goal public error reflects the latest settled input without storing an err
               status: "active",
               summary: "",
               receipts: [],
+              tasks: [],
               inputs:
                 status === "failed"
                   ? [first]

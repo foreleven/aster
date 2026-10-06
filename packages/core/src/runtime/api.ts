@@ -6,7 +6,7 @@ import { randomUUID } from "node:crypto";
 import { ContextQueries, ContextQueryError, type ContextQueryInput } from "../context/queries.js";
 import { inspectProcessing } from "./processing.js";
 import { RecoveryInput, type ProcessingOwner, type CommandReceipt } from "@aster/api-contracts";
-import { goalTimeline } from "../goals/timeline.js";
+import { goalTimeline } from "../goals/view.js";
 import { Effect, Schema, Stream } from "effect";
 import {
   ApplicationError,
@@ -21,7 +21,8 @@ import type { ContextRegistry } from "../context/registry.js";
 import { publicJson } from "../context/json.js";
 import { PublicApprovalEntry } from "../approvals/view.js";
 import type { AgentConversations } from "@aster/agent";
-import type { GoalCommand, GoalCommandReply, GoalsRootCommand } from "../goals/actors.js";
+import type { GoalCommand, GoalCommandReply } from "../goals/protocol.js";
+import type { GoalsRootCommand } from "../goals/root.js";
 import { approvalEntries, type ApprovalCommand } from "../approvals/actor.js";
 import type { ApprovalResponse } from "../tasks/model.js";
 

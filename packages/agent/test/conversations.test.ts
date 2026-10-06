@@ -167,31 +167,28 @@ test("shared Pi turn includes busy steering before completion and retains contex
           ),
         );
         const execute = (requestId: string) =>
-          runner.run((invoke) =>
-            Effect.succeed({
-              name: "test",
-              durable: { owner: "tasks", sessionId: "work", requestId },
-              messages: [{ role: "user", content: "Analyze", timestamp: 0 }],
-              tools: [
-                {
-                  name: "read",
-                  label: "Read",
-                  description: "Read",
-                  parameters: Type.Object({}),
-                  replay: "safe",
-                  execute: async (_id, _args, signal) => {
-                    await invoke(
-                      Deferred.succeed(entered, undefined).pipe(
-                        Effect.andThen(Deferred.await(release)),
-                      ),
-                      signal,
-                    );
-                    return { content: [{ type: "text", text: "Evidence" }], details: undefined };
-                  },
-                },
-              ],
-            }),
-          );
+          runner.run({
+            name: "test",
+            durable: { owner: "tasks", sessionId: "work", requestId },
+            messages: [{ role: "user", content: "Analyze", timestamp: 0 }],
+            tools: [
+              {
+                name: "read",
+                label: "Read",
+                description: "Read",
+                parameters: Type.Object({}),
+                replay: "safe",
+                execute: () =>
+                  Deferred.succeed(entered, undefined).pipe(
+                    Effect.andThen(Deferred.await(release)),
+                    Effect.as({
+                      content: [{ type: "text" as const, text: "Evidence" }],
+                      details: undefined,
+                    }),
+                  ),
+              },
+            ],
+          });
         const work = yield* execute("initial").pipe(Effect.forkScoped);
         yield* Deferred.await(entered);
         yield* conversations.append("/tasks/work", "followup", "task.input", {
@@ -272,32 +269,25 @@ test("interrupting a shared conversation drains tool callbacks before another tu
           ),
         );
         const work = yield* runner
-          .run((invoke) =>
-            Effect.succeed({
-              name: "test",
-              durable: { owner: "tasks", sessionId: "cancel", requestId: "initial" },
-              messages: [{ role: "user", content: "Analyze", timestamp: 0 }],
-              tools: [
-                {
-                  name: "read",
-                  label: "Read",
-                  description: "Read",
-                  parameters: Type.Object({}),
-                  replay: "safe",
-                  execute: async (_id, _args, signal) => {
-                    await invoke(
-                      Deferred.succeed(entered, undefined).pipe(
-                        Effect.andThen(Effect.never),
-                        Effect.ensuring(Deferred.succeed(released, undefined)),
-                      ),
-                      signal,
-                    );
-                    return { content: [{ type: "text", text: "Evidence" }], details: undefined };
-                  },
-                },
-              ],
-            }),
-          )
+          .run({
+            name: "test",
+            durable: { owner: "tasks", sessionId: "cancel", requestId: "initial" },
+            messages: [{ role: "user", content: "Analyze", timestamp: 0 }],
+            tools: [
+              {
+                name: "read",
+                label: "Read",
+                description: "Read",
+                parameters: Type.Object({}),
+                replay: "safe",
+                execute: () =>
+                  Deferred.succeed(entered, undefined).pipe(
+                    Effect.andThen(Effect.never),
+                    Effect.ensuring(Deferred.succeed(released, undefined)),
+                  ),
+              },
+            ],
+          })
           .pipe(Effect.forkScoped);
         yield* Deferred.await(entered);
         yield* Fiber.interrupt(work);

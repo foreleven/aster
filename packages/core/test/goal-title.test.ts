@@ -3,12 +3,12 @@ import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { ConfigProvider, Effect, Layer, Schema } from "effect";
+import { Deferred, ConfigProvider, Effect, Layer, Schema } from "effect";
 import {
   ContextRegistry,
   ExternalAgents,
   GoalSettings,
-  GoalState,
+  GoalSnapshot,
   GoalsRootActor,
   makeApplicationApi,
   parseConfig,
@@ -104,8 +104,12 @@ test("Goal startup refreshes the entire definition without losing work", async (
               }),
             ),
           );
-          const root = yield* system.spawn("goals", GoalsRootActor);
-          yield* root.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
+          const goalActivation = yield* Deferred.make<void>();
+          const root = yield* system.spawn("goals", GoalsRootActor, {
+            metadata: { goalActivation },
+          });
+          yield* root.awaitStarted;
+          yield* (yield* system.select("/user/goals/project").resolve()).awaitStarted;
           const api = makeApplicationApi({
             registry,
             conversations: history,
@@ -113,7 +117,7 @@ test("Goal startup refreshes the entire definition without losing work", async (
           });
           const record = yield* api.context("/goals/project");
           const canonical = registry.get(record.path)!;
-          const state = Schema.decodeUnknownSync(GoalState)(canonical.state);
+          const state = Schema.decodeUnknownSync(GoalSnapshot)(canonical.state);
           assert.deepEqual(state.definition, definition);
           assert.equal(
             Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }))(record.state).title,

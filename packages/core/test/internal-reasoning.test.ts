@@ -1,3 +1,5 @@
+import { CurrentActors } from "../src/tools/actors.js";
+import { toolSystem } from "./tool-fixtures.js";
 import { AgentConversations } from "@aster/agent";
 import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
@@ -61,6 +63,7 @@ test("AgentRunner cancellation releases memory tools before SDK idle for descrip
       Effect.scoped(
         Effect.gen(function* () {
           const entered = yield* Deferred.make<void>();
+          const cancelled = yield* Deferred.make<void>();
           let released = false,
             idle = false;
           t.mock.method(Agent, "make", (options: Parameters<typeof Agent.make>[0]) =>
@@ -101,11 +104,13 @@ test("AgentRunner cancellation releases memory tools before SDK idle for descrip
             Effect.ensuring(
               Effect.sync(() => {
                 released = true;
-              }),
+              }).pipe(Effect.andThen(Deferred.succeed(cancelled, undefined))),
             ),
           );
           const memory = { search: () => blocked, expand: () => Effect.succeed({ results: [] }) };
-          const run = yield* makeStructuredReasoning("test", memory).pipe(
+          const { system } = yield* toolSystem({ memory });
+          const run = yield* makeStructuredReasoning("test").pipe(
+            Effect.provideService(CurrentActors, system),
             Effect.provide(
               AgentRunner.layer.pipe(
                 Layer.provide(models),
@@ -113,12 +118,13 @@ test("AgentRunner cancellation releases memory tools before SDK idle for descrip
               ),
             ),
           );
-          const work = makeDescriptionInitializer((prompt, schema) => run(prompt, schema, {}))(
+          const work = makeDescriptionInitializer((prompt, schema) => run(prompt, schema))(
             identity,
           );
           const fiber = yield* work.pipe(Effect.forkScoped);
           yield* Deferred.await(entered).pipe(Effect.timeout("2 seconds"));
           yield* Fiber.interrupt(fiber).pipe(Effect.timeout("2 seconds"));
+          yield* Deferred.await(cancelled).pipe(Effect.timeout("2 seconds"));
           assert.equal(released, true);
           assert.equal(idle, true);
         }),

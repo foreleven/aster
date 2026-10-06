@@ -1,23 +1,11 @@
-import { createHash } from "node:crypto";
-import { Effect, Match, Schema } from "effect";
+import type { StoredGoalInput, GoalSnapshot } from "./snapshot.js";
+import { GoalReceipt } from "../protocol.js";
+import type { GoalStore } from "./store.js";
+import { AgentConversations } from "@aster/agent";
 import { ApplicationError, CausalChain, GoalInputPayload } from "@aster/api-contracts";
-import { AgentConversations, type AgentMessage } from "@aster/agent";
-import type { goalWorkingState } from "./working-state.js";
-import { goalIntentMessage } from "./intent.js";
-import { GoalReceipt } from "./protocol.js";
-import type { GoalState } from "./state.js";
+import { Effect, Schema } from "effect";
+import { createHash } from "node:crypto";
 
-export const StoredGoalInput = Schema.Struct({
-  inputId: Schema.String,
-  entryId: Schema.Int,
-  kind: Schema.Union(GoalInputPayload.members.map((member) => member.fields._tag)),
-  status: Schema.Literals(["pending", "running", "completed", "failed", "unknown", "ignored"]),
-  relevant: Schema.optional(Schema.Boolean),
-  error: Schema.optional(Schema.String),
-  retryOf: Schema.optional(Schema.String),
-  causal: CausalChain,
-});
-export type StoredGoalInput = typeof StoredGoalInput.Type;
 export type ResolvedGoalInput = StoredGoalInput & {
   readonly payload: typeof GoalInputPayload.Type;
   readonly receivedAt: string;
@@ -26,26 +14,6 @@ export const goalInputId = (goal: string, kind: string, key: string) =>
   createHash("sha256")
     .update(JSON.stringify([goal, kind, key]))
     .digest("hex");
-export const inputMessage = (input: ResolvedGoalInput): AgentMessage =>
-  Match.value(input.payload).pipe(
-    Match.tag("GoalIntent", ({ intent }) => goalIntentMessage(intent)),
-    Match.tag("GoalStarted", () => ({
-      role: "user" as const,
-      content: "Begin pursuing the configured Goal now.",
-      timestamp: Date.parse(input.receivedAt),
-    })),
-    Match.tag("UserInput", ({ text }) => ({
-      role: "user" as const,
-      content: text,
-      timestamp: Date.parse(input.receivedAt),
-    })),
-    Match.orElse((payload) => ({
-      role: "user" as const,
-      content: `[Internal Goal evidence, not a user statement or authorization]\n${JSON.stringify(payload)}`,
-      timestamp: Date.parse(input.receivedAt),
-    })),
-  );
-
 const GoalInputEntry = Schema.Struct({
   payload: GoalInputPayload,
   causal: CausalChain,
@@ -66,21 +34,18 @@ const inputReference = (
   ...(data.retryOf ? { retryOf: data.retryOf } : {}),
 });
 
-/** Pi owns bodies; the mailbox commits only input references and delivery state. */
-export const goalInputs = (
-  working: ReturnType<typeof goalWorkingState>,
-  messages: AgentConversations["Service"],
-) => {
+/** Pi owns bodies; GoalState commits only input references and delivery state. */
+export const goalInputs = (working: GoalStore, messages: AgentConversations["Service"]) => {
   const accept = Effect.fn("GoalInputs.accept")(function* (
     payload: typeof GoalInputPayload.Type,
     key: string,
     causal: CausalChain,
-    patch: Partial<GoalState> = {},
+    patch: Partial<GoalSnapshot> = {},
     expectedRevision?: number,
     retryOf?: string,
   ) {
-    const state = working.state();
-    if (expectedRevision !== undefined && expectedRevision !== working.current().revision)
+    const state = yield* working.read;
+    if (expectedRevision !== undefined && expectedRevision !== (yield* working.current).revision)
       return yield* new ApplicationError({
         kind: "conflict",
         message: "Goal revision changed; refresh before submitting",
@@ -105,7 +70,7 @@ export const goalInputs = (
     return !prior;
   });
   const recover = Effect.fn("GoalInputs.recover")(function* () {
-    const state = working.state();
+    const state = yield* working.read;
     const entries = yield* messages.read(`/goals/${state.definition.slug}`).pipe(Effect.orDie);
     const inputs = [...state.inputs];
     const receipts = [...state.receipts];
@@ -121,7 +86,9 @@ export const goalInputs = (
       yield* working.save({ inputs, receipts }).pipe(Effect.orDie);
   });
   const resolve = Effect.fn("GoalInputs.resolve")(function* (input: StoredGoalInput) {
-    const entry = yield* messages.get(working.current().path, input.entryId).pipe(Effect.orDie);
+    const entry = yield* messages
+      .get((yield* working.current).path, input.entryId)
+      .pipe(Effect.orDie);
     const { payload } = yield* decodeInput(entry.data).pipe(Effect.orDie);
     return { ...input, payload, receivedAt: entry.at } satisfies ResolvedGoalInput;
   });

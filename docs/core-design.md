@@ -38,7 +38,7 @@ Agent and Delegate Tasks create `/tasks/<sha256(source, requestId)>`. One TaskAc
 
 ## Durability and cancellation
 
-Actor mailboxes are the single writers. Accepted inputs, decisions and occurrences commit before acknowledgement. Exact retries reuse their receipt; identity collisions fail. Long operations use scoped Effects and `pipeToSelf`; late results carry generation checks. Context and Goal queries expose public projections rather than private recovery state.
+Actor mailboxes own lifecycle and execution scheduling. Goal business writes use one Actor-local GoalState service that serializes both mailbox requests and local tool calls; other domain state remains mailbox-owned. Accepted inputs, decisions and occurrences commit before acknowledgement. Exact retries reuse their receipt; identity collisions fail. Long operations use scoped Effects and `pipeToSelf`; late results carry generation checks. Context and Goal queries expose public projections rather than private recovery state.
 
 Unknown external outcomes never authorize automatic resubmission. Task observes or looks up the original execution. Explicit Task resumption retains its own durable receipt and uncertainty markers. Goal End interrupts local conversation work and revokes unstarted Tasks and owned Signals; already-submitted external work keeps its existing owner.
 

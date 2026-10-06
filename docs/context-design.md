@@ -32,7 +32,7 @@ Callers supply `expectedRevision` separately from content. Optional `mode: "boot
 | `core/reactions/`                                            | System One screening, phase-specific work, durable delivery, receipts and inspection                          |
 | `core/memory/contracts.ts`, `capture.ts`, `actor.ts`         | Memory ports, capture policies and durable queue/deduplication                                                |
 | `core/reasoning/context-description.ts`                      | Description identity policies and generation                                                                  |
-| `core/reasoning/context-tools.ts`, `context-query-tools.ts`  | Agent tool adapters                                                                                           |
+| `core/tools/context/`                                        | Agent tool adapters                                                                                           |
 | `core/runtime/context-*.ts`, `processing.ts`                 | Consumer lifecycle, core policy assembly and diagnostic composition                                           |
 | `core/{goals,signals,tasks,delegation,approvals}/view.ts`    | Owner-specific public schemas                                                                                 |
 | `core/commands/recovery.ts`                                  | Shared recovery-command receipt validation                                                                    |
@@ -49,7 +49,7 @@ A commit validates owner schemas, compares the observed revision, then persists 
 
 The kernel creates the event revision and stable ID. The source path and revision live in its public record, and the System One target is implied by the consumer. Owner reads do not expose journals. `DurableContext.journal()` supports durable consumption; `exportRecords()` supports storage migration and authority validation.
 
-Admitted commits drain persistence and publication even when their caller is interrupted. Waiting writers remain interruptible. Failed or uncertain writes fence the path until registration recovers authoritative storage. Recovery rejects missing or regressed snapshots, preserves original journal identities and does not invent a new source event. Actor mailboxes remain the single writers of domain state.
+Admitted commits drain persistence and publication even when their caller is interrupted. Waiting writers remain interruptible. Failed or uncertain writes fence the path until registration recovers authoritative storage. Recovery rejects missing or regressed snapshots, preserves original journal identities and does not invent a new source event. Domain owners serialize business writes: GoalState owns Goal transitions from mailbox handlers and local tools, while other domain state remains mailbox-owned. ContextRegistry persistence and publication do not introduce another business writer.
 
 ## Reaction work
 

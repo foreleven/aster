@@ -4,12 +4,18 @@ import {
   type AgentTool,
   type StreamFn,
 } from "@earendil-works/pi-agent-core";
-import { createModels, toToolDeclaration, type Model, type Api } from "@earendil-works/pi-ai";
+import {
+  createModels,
+  toToolDeclaration,
+  type Model,
+  type Api,
+  type AssistantMessage,
+} from "@earendil-works/pi-ai";
 import { minimaxProvider } from "@earendil-works/pi-ai/providers/minimax";
 import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { Config, ConfigProvider, Context, Effect, Layer, Redacted, Schema } from "effect";
-import { withAgentCallbacks, type AgentCallbackInvoker } from "./agent-callbacks.js";
+import { withAgentCallbacks } from "./agent-callbacks.js";
 import { secretConfig } from "./configuration.js";
 import { AgentConversations } from "./conversations.js";
 export { AgentConversations, ConversationError, ConversationEntry } from "./conversations.js";
@@ -25,7 +31,8 @@ import {
 import { DurableAgentFailure } from "./durable-error.js";
 export { secretConfig } from "./configuration.js";
 export { rejectedToolResult } from "./durable-tools.js";
-export { type AgentCallbackInvoker } from "./agent-callbacks.js";
+import { nativeInvocation, type AgentRequest } from "./effect-tools.js";
+export type { EffectTool, AgentRequest } from "./effect-tools.js";
 
 export type {
   AgentMessage,
@@ -34,7 +41,7 @@ export type {
   StreamFn,
 } from "@earendil-works/pi-agent-core";
 export { Type } from "@earendil-works/pi-ai";
-export type { TSchema, Message, ToolResultMessage } from "@earendil-works/pi-ai";
+export type { TSchema, Message, AssistantMessage, ToolResultMessage } from "@earendil-works/pi-ai";
 
 export const ModelConfig = Schema.Struct({
   name: Schema.String,
@@ -149,6 +156,8 @@ export const Agent = {
     readonly tools?: readonly AgentTool[];
     readonly resultTool?: string;
     readonly onMessage?: (message: AgentMessage) => Promise<void> | void;
+    /** Live provider responses before tool execution; observational, not a durable acknowledgement. */
+    readonly onResponse?: (message: AssistantMessage, signal?: AbortSignal) => Promise<void> | void;
     readonly transformContext?: (
       messages: AgentMessage[],
       signal?: AbortSignal,
@@ -202,6 +211,7 @@ export const Agent = {
                               tools,
                               resultTool: options.resultTool,
                               onMessage: options.onMessage,
+                              onResponse: options.onResponse,
                               transformContext: options.transformContext,
                               durable: { ...durable, contextBudget },
                               signal: controller.signal,
@@ -279,6 +289,7 @@ export const Agent = {
                         tools,
                         resultTool: options.resultTool,
                         onMessage: options.onMessage,
+                        onResponse: options.onResponse,
                         transformContext: options.transformContext,
                         durable: {
                           ...durable,
@@ -351,6 +362,8 @@ export const Agent = {
                   pi.subscribe(async (event) => {
                     if (event.type === "message_end") {
                       generated.push(event.message);
+                      if (event.message.role === "assistant")
+                        await options.onResponse?.(event.message);
                       await options.onMessage?.(event.message);
                     }
                   });
@@ -443,16 +456,16 @@ export type AgentResult = Effect.Success<ReturnType<Agent["run"]>>;
 export class AgentRunner extends Context.Service<
   AgentRunner,
   {
-    readonly run: <E, R>(
-      invocation: (invoke: AgentCallbackInvoker) => Effect.Effect<AgentInvocation, E, R>,
-    ) => Effect.Effect<AgentResult, E | AgentError, R>;
+    readonly run: <E, R>(request: AgentRequest<E, R>) => Effect.Effect<AgentResult, AgentError, R>;
   }
 >()("agent/Runner") {
   static readonly make = (
     execute: (invocation: AgentInvocation) => Effect.Effect<AgentResult, AgentError>,
   ): AgentRunner["Service"] => ({
-    run: (invocation) =>
-      withAgentCallbacks((invoke) => invocation(invoke).pipe(Effect.flatMap(execute))),
+    run: <E, R>(request: AgentRequest<E, R>) =>
+      withAgentCallbacks<AgentResult, AgentError, R>((invoke) =>
+        execute(nativeInvocation(request, invoke)),
+      ),
   });
 
   static readonly layer = Layer.effect(

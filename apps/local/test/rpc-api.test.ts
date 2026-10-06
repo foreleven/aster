@@ -3,7 +3,7 @@ import { testConversations } from "./conversation-fixtures.js";
 import { AgentRunner } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Layer, Schema, Stream } from "effect";
+import { Deferred, Effect, Layer, Schema, Stream } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { RpcClient, RpcSerialization } from "effect/rpc";
 import { ApplicationRpcs } from "@aster/api-contracts";
@@ -64,8 +64,11 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
             ),
           ),
         );
-        const goals = yield* system.spawn("goals", GoalsRootActor);
-        yield* goals.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
+        const goalActivation = yield* Deferred.make<void>();
+        const goals = yield* system.spawn("goals", GoalsRootActor, {
+          metadata: { goalActivation },
+        });
+        yield* goals.awaitStarted;
         const application = makeApplicationApi({
           conversations,
           registry,

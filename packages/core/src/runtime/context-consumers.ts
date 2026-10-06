@@ -1,3 +1,4 @@
+import { CurrentActors } from "../tools/actors.js";
 import { DurableContext } from "../context/persistence.js";
 import { type ActorSystem, type ActorRef } from "@aster/actor";
 import { Effect, Stream } from "effect";
@@ -13,7 +14,6 @@ import {
   makeConfiguredDescriptionInitializer,
 } from "../reasoning/context-description.js";
 import { GoalSettings } from "../config/settings.js";
-import type { GoalsRootCommand } from "../goals/actors.js";
 import type { SignalRootCommand } from "../signals/actors.js";
 import { SystemOneActor } from "../reactions/actor.js";
 import { ReactionPolicy } from "../reactions/policy.js";
@@ -25,22 +25,17 @@ export const startContextReactions = <Services>(roots: {
   >;
   readonly changes: Stream.Stream<ContextChange>;
   readonly signals: ActorRef<SignalRootCommand>;
-  readonly goals?: ActorRef<GoalsRootCommand>;
 }) =>
   Effect.gen(function* () {
     const registry = yield* ContextRegistry;
     const capture = yield* ContextCaptureSink;
     const captures = yield* ContextCaptures;
     const descriptions = yield* ContextDescriptions;
-    const describe = yield* makeConfiguredDescriptionInitializer();
-    // Source ingestion needs the restored target catalogue, not partially started roots.
+    const describe = yield* makeConfiguredDescriptionInitializer().pipe(
+      Effect.provideService(CurrentActors, roots.system),
+    );
+    // Goal receivers initialize independently; their mailboxes queue delivered work.
     yield* roots.signals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
-    if (roots.goals) {
-      const ready = yield* roots.goals.ask<import("../goals/protocol.js").GoalReadyReply>(
-        (replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }),
-      );
-      if (ready._tag === "Failed") return yield* ready.error;
-    }
     const changes = roots.changes;
     const reactions = yield* roots.system.spawn("system-one", SystemOneActor);
     yield* reactions.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));

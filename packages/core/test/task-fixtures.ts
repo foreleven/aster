@@ -17,6 +17,7 @@ import {
   type ExternalAgent,
 } from "../src/index.js";
 import { GoalCommand } from "../src/goals/protocol.js";
+import { GoalMailbox } from "../src/goals/protocol.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { fakeAgent } from "./fixtures.js";
 import { taskPathFor } from "../src/tasks/admission.js";
@@ -53,12 +54,20 @@ export const taskFixture = Effect.fnUntraced(function* (
     },
   });
   const feedback: GoalCommand[] = [];
-  class GoalSink extends Actor.Service<GoalSink>()("test/TaskGoal", { command: GoalCommand }) {
+  class GoalSink extends Actor.Service<GoalSink>()("test/TaskGoal", { command: GoalMailbox }) {
     static readonly layer = Layer.succeed(
       GoalSink,
       GoalSink.of({
         receive: (command) =>
           Effect.gen(function* () {
+            if (command._tag === "AttachTask")
+              return yield* command.replyTo.tell({ _tag: "Attached" });
+            if (
+              command._tag !== "SubmitInput" &&
+              command._tag !== "End" &&
+              command._tag !== "RetryTurn"
+            )
+              return yield* Effect.die(new Error(`Unexpected Goal command ${command._tag}`));
             feedback.push(command);
             yield* command.replyTo.tell({
               _tag: "Accepted",

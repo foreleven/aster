@@ -3,13 +3,14 @@ import { AgentConversations } from "@aster/agent";
 import { taskCapture } from "../tasks/capture.js";
 import type { ActorRef } from "@aster/actor";
 import { Context, Deferred, Effect, Layer } from "effect";
-import { MemoryBackend, MemoryRecall, ContextCaptureSink } from "./contracts.js";
+import { MemoryBackend, ContextCaptureSink } from "./contracts.js";
 import { ContextRegistry } from "../context/registry.js";
 import { RuntimeIntegrations, defineIntegration } from "../runtime/integration.js";
 import { MemoryActor, memoryView, type MemoryCommand } from "./actor.js";
 
 /** Internal consumer assembly. Hosts supply only MemoryBackend, never the Actor graph. */
-export const memoryLayer = Layer.effectContext(
+export const memoryLayer = Layer.effect(
+  ContextCaptureSink,
   Effect.gen(function* () {
     const backend = yield* MemoryBackend;
     const registry = yield* ContextRegistry;
@@ -35,17 +36,15 @@ export const memoryLayer = Layer.effectContext(
           }),
       }),
     );
-    return Context.make(MemoryRecall, backend.recall).pipe(
-      Context.add(ContextCaptureSink, {
-        capture: (input) =>
-          Deferred.await(ready).pipe(
-            Effect.flatMap((root) =>
-              root.ask<void>((replyTo) => ({ _tag: "Capture", input, replyTo })),
-            ),
-            Effect.orDie,
+    return ContextCaptureSink.of({
+      capture: (input) =>
+        Deferred.await(ready).pipe(
+          Effect.flatMap((root) =>
+            root.ask<void>((replyTo) => ({ _tag: "Capture", input, replyTo })),
           ),
-        drain: backend.drain,
-      }),
-    );
+          Effect.orDie,
+        ),
+      drain: backend.drain,
+    });
   }),
 );

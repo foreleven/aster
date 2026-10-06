@@ -5,10 +5,10 @@ import { Clock, Context, Effect, Match, Ref, Schema } from "effect";
 import type { SystemOneClient } from "../decisions/system-one.js";
 import { makeSystemOneGate } from "../signals/detect.js";
 import { sourceSignals } from "../signals/policy.js";
-import { relevantGoals } from "../goals/relevance.js";
-import type { GoalScreeningStore, GoalScreeningRecord } from "../goals/screening.js";
-import { makeGoalIntent } from "../goals/intent.js";
-import type { GoalsRootCommand } from "../goals/actors.js";
+import { relevantGoals } from "../goals/screening/decision.js";
+import type { GoalScreeningStore, GoalScreeningRecord } from "../goals/screening/decision.js";
+import { makeGoalIntent } from "../goals/screening/intent.js";
+import type { GoalsRootCommand } from "../goals/root.js";
 import type { SignalRootCommand } from "../signals/actors.js";
 import type {
   ReactionDeliveryInput,

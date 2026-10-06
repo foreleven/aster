@@ -60,7 +60,7 @@ A data-ingress behavior of a Channel Context, such as Feishu IM, Feishu Mail, or
 A Context representing one email in one mailbox, identified by that mailbox's email ID. Repeated observations of the same email address the same Context.
 
 **Goal**:
-A user-defined desired outcome or ongoing responsibility pursued across conversations, observations, and actions, with Goal Tasks tracking work and Signals monitoring conditions for action. A Goal with completion criteria can complete when the evidence satisfies them; a Goal without completion criteria remains active until the user ends it.
+A continuing assistant responsibility pursued across conversations, observations, and actions, with Tasks tracking individual pieces of work and Signals monitoring conditions for action. A Goal can be paused, resumed or manually deleted; completion belongs to a Task, not to the Goal itself.
 
 **Goal Summary**:
 The current understanding of a Goal's progress, established findings, outstanding work, and relevant prior outcomes. It provides continuity across successive planning conversations.

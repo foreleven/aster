@@ -6,7 +6,7 @@ import { startTask } from "./commands.js";
 import { delegateInput } from "./admission.js";
 /** The caller owns durable retry: Signal occurrence or Pi tool identity. Targets acknowledge commits. */
 export const deliverTask = Effect.fn("Task.deliver")(function* <C, R>(
-  actor: ActorContext<C, R>,
+  actor: Pick<ActorContext<C, R>, "select">,
   raw: TaskMessage,
 ): Effect.fn.Return<CommandReceipt, ApplicationError> {
   const input = yield* Schema.decodeUnknownEffect(TaskMessage)(raw).pipe(

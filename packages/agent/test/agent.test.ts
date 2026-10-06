@@ -278,12 +278,16 @@ test("missing results are bounded and token truncation is diagnosed without retr
 
 test("message persistence is awaited before tools and context guards apply to subsequent provider calls", async () => {
   const persisted: AgentMessage[] = [];
+  const responses: AssistantMessage[] = [];
   let requests = 0,
     guardCalls = 0;
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const agent = yield* Agent.make({
         name: "test",
+        onResponse: (message) => {
+          responses.push(message);
+        },
         onMessage: async (message) => {
           await Promise.resolve();
           persisted.push(message);
@@ -302,6 +306,10 @@ test("message persistence is awaited before tools and context guards apply to su
             parameters: Type.Object({}),
             execute: async () => {
               assert.equal(persisted.at(-1)?.role, "assistant");
+              assert.deepEqual(
+                responses,
+                persisted.filter((message) => message.role === "assistant"),
+              );
               return { content: [{ type: "text", text: "evidence" }], details: undefined };
             },
           },

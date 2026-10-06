@@ -16,6 +16,7 @@ import {
 } from "effect";
 import {
   actorSelectionPath,
+  ActorStartupError,
   type ActorBehavior,
   type ActorContext,
   type ActorRef,
@@ -63,6 +64,7 @@ export interface CellRuntime {
 
 /** Stable cell lifetime owns refs, mailbox and children; instanceScope owns replaceable behavior. */
 export class ActorCell {
+  private readonly startup = Deferred.makeUnsafe<void, ActorStartupError>();
   readonly incarnation = randomUUID();
   readonly children = new Map<string, ActorCell>();
   readonly watchers = new Set<ActorCell>();
@@ -97,7 +99,13 @@ export class ActorCell {
     readonly scope: Scope.Closeable,
     readonly done: Deferred.Deferred<void>,
   ) {
-    this.ref = new ActorRefImpl(path, this.incarnation, (command) => this.deliver(command), system);
+    this.ref = new ActorRefImpl(
+      path,
+      this.incarnation,
+      (command) => this.deliver(command),
+      system,
+      Deferred.await(this.startup),
+    );
   }
 
   deliver(command: unknown): Effect.Effect<void> {
@@ -137,6 +145,7 @@ export class ActorCell {
     return Effect.gen({ self: this }, function* () {
       if (this.status !== "running") return;
       this.status = "stopping";
+      yield* Deferred.interrupt(this.startup);
       this.terminalCause = cause;
       while (true) {
         const item = yield* Queue.poll(this.mailbox);
@@ -303,7 +312,18 @@ export class ActorCell {
   run(): Effect.Effect<void> {
     const loop = Effect.gen({ self: this }, function* () {
       while (this.status === "running") {
-        const initialized = yield* Effect.exit(this.initialize());
+        const initialized = yield* Effect.exit(
+          this.initialize().pipe(
+            Effect.onExit((exit) =>
+              Deferred.done(
+                this.startup,
+                Exit.asVoid(
+                  Exit.mapError(exit, (cause) => new ActorStartupError({ path: this.path, cause })),
+                ),
+              ),
+            ),
+          ),
+        );
         if (Exit.isFailure(initialized)) {
           if (!(yield* this.supervise(initialized.cause))) break;
           continue;
@@ -382,6 +402,7 @@ export class ActorCell {
   finish(): Effect.Effect<void> {
     return Effect.gen({ self: this }, function* () {
       if (this.status === "stopped") return;
+      yield* Deferred.interrupt(this.startup);
       // Children may still be completing a handler. Keep the parent's behavior
       // resources alive until its descendants have fully stopped.
       for (const child of this.children.values()) yield* child.requestStop();

@@ -31,6 +31,7 @@ const record = (path: string, state: object): ContextRecord => ({
         summary: "",
         inputs: [],
         receipts: [],
+        tasks: [],
         ...state,
       }
     : state,
@@ -147,7 +148,6 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
           system,
           changes: yield* registry.subscribe,
           signals: signalProbe.ref,
-          goals: goalProbe.ref,
         }).pipe(
           Effect.provide(Layer.mergeAll(ContextCaptures.layer, ContextDescriptions.layer)),
           Effect.forkScoped,
@@ -155,9 +155,6 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         const signalReady = yield* signalProbe.take();
         assert.equal(signalReady._tag, "Ready");
         if (signalReady._tag === "Ready") yield* signalReady.replyTo.tell(undefined);
-        const goalReady = yield* goalProbe.take();
-        assert.equal(goalReady._tag, "AwaitReady");
-        if (goalReady._tag === "AwaitReady") yield* goalReady.replyTo.tell({ _tag: "Ready" });
         yield* Fiber.join(starting);
         // The subscription is acquired before this returns, even without yieldNow.
         yield* registry.commit(record("/source", { summary: "A relevant source summary" }), {

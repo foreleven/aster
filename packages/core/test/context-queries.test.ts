@@ -1,9 +1,12 @@
+import { CurrentActors } from "../src/tools/actors.js";
+import type { CoreTool } from "../src/tools/define.js";
+import { toolSystem } from "./tool-fixtures.js";
+import { ContextsActor } from "../src/context/queries-actor.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Schema, Scope, Exit } from "effect";
 import { ContextQueries } from "../src/context/queries.js";
-import { contextQueryTools } from "../src/reasoning/context-query-tools.js";
-import type { AgentTool } from "@aster/agent";
+import { contextQueryTools } from "../src/tools/catalogues.js";
 
 const input = { path: "/apps/ctrip", command: "search", args: { query: "Sanya" } };
 test("Context query routes follow ownership scopes and reject unavailable/invalid requests", async () => {
@@ -33,40 +36,78 @@ test("Context query routes follow ownership scopes and reject unavailable/invali
   );
 });
 
-test("query tools retain paginated results per evaluation without repeating external calls", async () => {
+test("query tools retain isolated pages across Actor restart and reject changed operation identity", async () => {
   let calls = 0;
   const data = { note: "Travel evidence ".repeat(2500) };
-  const tools: readonly AgentTool[] = contextQueryTools(
-    {
-      register: () => Effect.void,
-      query: (input) =>
-        Effect.sync(() => {
-          calls++;
-          return { ...input, queriedAt: "2026-10-04T00:00:00.000Z", data };
-        }),
-    },
-    (effect, signal) => Effect.runPromise(effect, { signal }),
-  );
-  const pageSchema = Schema.fromJsonString(
-    Schema.Struct({ content: Schema.String, nextOffset: Schema.NullOr(Schema.Number) }),
-  );
-  const page = (result: Awaited<ReturnType<AgentTool["execute"]>>) =>
-    Schema.decodeUnknownSync(pageSchema)(
-      result.content.map((entry) => (entry.type === "text" ? entry.text : "")).join(""),
-    );
-  const first = page(await tools[0]!.execute("1", input));
-  assert.equal(first.nextOffset, 2000);
-  let text = first.content;
-  let offset: number | null = first.nextOffset;
-  while (offset !== null) {
-    const next = page(await tools[1]!.execute("2", { path: input.path, offset }));
-    text += next.content;
-    offset = next.nextOffset;
-  }
-  assert.equal(calls, 1);
-  assert.deepEqual(JSON.parse(text).data, data);
-  assert.deepEqual(
-    contextQueryTools(undefined, (effect, signal) => Effect.runPromise(effect, { signal })),
-    [],
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const env = yield* toolSystem({
+          queries: {
+            register: () => Effect.void,
+            query: (input) =>
+              Effect.sync(() => {
+                calls++;
+                return { ...input, queriedAt: "2026-10-04T00:00:00.000Z", data };
+              }),
+          },
+        });
+        const makeTools = (owner = "/goals/one") => contextQueryTools(owner, (id) => `query:${id}`);
+        const execute = (tool: CoreTool, id: string, args: object) =>
+          tool.execute(id, args).pipe(Effect.provideService(CurrentActors, env.system));
+        const page = (result: Effect.Success<ReturnType<CoreTool["execute"]>>) =>
+          Schema.decodeUnknownSync(
+            Schema.fromJsonString(
+              Schema.Struct({
+                resultId: Schema.Int,
+                content: Schema.String,
+                nextOffset: Schema.NullOr(Schema.Int),
+              }),
+            ),
+          )(result.content.map((entry) => (entry.type === "text" ? entry.text : "")).join(""));
+        const tools = makeTools();
+        const first = page(yield* execute(tools[0]!, "one", input));
+        assert.equal(first.nextOffset, 2000);
+        assert.equal(page(yield* execute(tools[0]!, "one", input)).resultId, first.resultId);
+        assert.equal(calls, 1);
+        assert.equal(
+          (yield* execute(tools[0]!, "one", { ...input, args: { query: "changed" } })).isError,
+          true,
+        );
+        const second = page(
+          yield* execute(tools[0]!, "two", { ...input, args: { query: "another" } }),
+        );
+        assert.notEqual(second.resultId, first.resultId);
+        yield* env.system.stop(env.contexts);
+        const contexts = yield* env.system.spawn("contexts", ContextsActor);
+        yield* contexts.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        const reopened = makeTools();
+        let text = first.content;
+        let offset: number | null = first.nextOffset;
+        while (offset !== null) {
+          const next = page(
+            yield* execute(reopened[1]!, "page", { resultId: first.resultId, offset }),
+          );
+          text += next.content;
+          offset = next.nextOffset;
+        }
+        assert.equal(calls, 2);
+        assert.deepEqual(JSON.parse(text).data, data);
+        // Pi checks both conversation ownership and the custom entry kind.
+        const foreign = makeTools("/goals/two");
+        const denied = yield* execute(foreign[1]!, "page", {
+          resultId: first.resultId,
+          offset: 0,
+        }).pipe(Effect.exit);
+        assert.ok(Exit.isFailure(denied) || denied.value.isError);
+        const reply = yield* env.messages.append("/goals/one", "reply", "goal.reply", {
+          text: "PRIVATE",
+        });
+        assert.equal(
+          (yield* execute(reopened[1]!, "page", { resultId: reply.id, offset: 0 })).isError,
+          true,
+        );
+      }),
+    ),
   );
 });

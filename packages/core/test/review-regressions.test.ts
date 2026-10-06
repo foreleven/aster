@@ -56,8 +56,9 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
             }),
           ),
         );
-        const root = yield* system.spawn("goals", GoalsRootActor);
-        yield* root.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
+        const goalActivation = yield* Deferred.make<void>();
+        const root = yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } });
+        yield* root.awaitStarted;
         const api = makeApplicationApi({
           registry,
           goals: root,

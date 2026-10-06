@@ -1,15 +1,16 @@
 import type { ActorContext, ActorRef } from "@aster/actor";
-import { ApplicationError, TaskPath, type TaskDeliveryInput } from "@aster/api-contracts";
+import { ApplicationError, GoalPath, TaskPath, type TaskDeliveryInput } from "@aster/api-contracts";
 import { Effect, Schema } from "effect";
 import type { TasksRootCommand } from "./root.js";
 import type { TaskAdmissionReply, TaskCommand } from "./protocol.js";
 import type { ContextRegistry } from "../context/registry.js";
 import { taskActorPath } from "./address.js";
 import { TaskState } from "./state.js";
+import type { GoalMailbox, GoalTaskReply } from "../goals/protocol.js";
 
 /** Submission creates a durable Task. Its lifetime is independent of the calling conversation. */
 export const startTask = Effect.fn("Tasks.start")(function* <C, R>(
-  actor: ActorContext<C, R>,
+  actor: Pick<ActorContext<C, R>, "select">,
   input: TaskDeliveryInput,
 ) {
   const root = yield* actor
@@ -36,12 +37,28 @@ export const startTask = Effect.fn("Tasks.start")(function* <C, R>(
       ),
     );
   if (reply._tag === "Rejected") return yield* reply.error;
+  // Admission commits first. Goal attachment is idempotent and restored from Task metadata after interruption.
+  const unavailable = () =>
+    new ApplicationError({
+      kind: "unavailable",
+      message:
+        "Task accepted but Goal attachment is unconfirmed; retain the original request identity",
+    });
+  const goals = new Set([input.replyTo]);
+  if (Schema.is(GoalPath)(input.source)) goals.add(input.source);
+  for (const goal of goals) {
+    const target = yield* actor.select(`/user${goal}`).resolve().pipe(Effect.mapError(unavailable));
+    const attached = yield* (target as ActorRef<GoalMailbox>)
+      .ask<GoalTaskReply>((replyTo) => ({ _tag: "AttachTask", taskPath: input.target, replyTo }))
+      .pipe(Effect.mapError(unavailable));
+    if (attached._tag === "Rejected") return yield* unavailable();
+  }
   return { ...reply.receipt, taskPath: input.target };
 });
 
 /** Ending a Goal revokes unstarted work. Submitted external work retains its execution owner. */
 export const cancelGoalTasks = Effect.fn("Tasks.cancelGoal")(function* <C, R>(
-  actor: ActorContext<C, R>,
+  actor: Pick<ActorContext<C, R>, "select">,
   registry: ContextRegistry["Service"],
   source: string,
 ) {
@@ -64,7 +81,7 @@ export const cancelGoalTasks = Effect.fn("Tasks.cancelGoal")(function* <C, R>(
 
 /** Goal startup reattaches feedback after both peer owners exist, including already-finished Tasks. */
 export const attachGoalTasks = Effect.fn("Tasks.attachGoal")(function* <R>(
-  actor: ActorContext<import("../goals/actors.js").GoalMailbox, R>,
+  actor: ActorContext<GoalMailbox, R>,
   registry: ContextRegistry["Service"],
   source: string,
 ) {
@@ -81,7 +98,7 @@ export const attachGoalTasks = Effect.fn("Tasks.attachGoal")(function* <R>(
 });
 
 export const followupTask = Effect.fn("Tasks.followUp")(function* <C, R>(
-  actor: ActorContext<C, R>,
+  actor: Pick<ActorContext<C, R>, "select">,
   input: import("@aster/api-contracts").FollowupTaskInput,
 ) {
   const target = yield* actor

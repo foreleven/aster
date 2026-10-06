@@ -43,6 +43,82 @@ const assistant = (): AssistantMessage => ({
   },
 });
 
+test("durable response observers run before tools and do not replay settled responses", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "aster-pi-response-"));
+  const events: string[] = [];
+  let calls = 0;
+  const layer = Layer.succeed(Models, {
+    resolve: () =>
+      Effect.succeed({
+        model,
+        getApiKey: () => "test",
+        stream: () => {
+          const message = assistant();
+          if (++calls === 1) {
+            message.stopReason = "toolUse";
+            message.content = [
+              { type: "thinking", thinking: "Inspect the current state" },
+              { type: "toolCall", id: "read-1", name: "read", arguments: {} },
+            ];
+          }
+          const stream = createAssistantMessageEventStream();
+          stream.push({ type: "done", reason: calls === 1 ? "toolUse" : "stop", message });
+          return stream;
+        },
+      }),
+  });
+  const run = Effect.gen(function* () {
+    const agent = yield* Agent.make({
+      name: "test",
+      durable: { sessionId: "response", requestId: "one", storageDirectory: directory },
+      onResponse: (message, signal) => {
+        assert.equal(signal?.aborted, false);
+        events.push(`response:${message.stopReason}`);
+        if (message.stopReason === "toolUse")
+          assert.deepEqual(message.content[0], {
+            type: "thinking",
+            thinking: "Inspect the current state",
+          });
+      },
+      onMessage: () => {
+        events.push("settled");
+      },
+      tools: [
+        {
+          name: "read",
+          label: "Read",
+          description: "Read",
+          replay: "safe",
+          parameters: Type.Object({}),
+          execute: async () => {
+            assert.deepEqual(events, ["response:toolUse"]);
+            events.push("tool");
+            return { content: [{ type: "text", text: "state" }], details: {} };
+          },
+        },
+      ],
+    });
+    return yield* agent.run({ messages: [{ role: "user", content: "Read", timestamp: 0 }] });
+  }).pipe(Effect.provide(layer));
+  try {
+    const first = await Effect.runPromise(run);
+    assert.deepEqual(events, [
+      "response:toolUse",
+      "tool",
+      "response:stop",
+      "settled",
+      "settled",
+      "settled",
+    ]);
+    events.length = 0;
+    assert.deepEqual(await Effect.runPromise(run), first);
+    assert.deepEqual(events, ["settled", "settled", "settled"]);
+    assert.equal(calls, 2);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("durable collection paginates a long run and applies the context guard every round", async () => {
   let calls = 0;
   let guards = 0;

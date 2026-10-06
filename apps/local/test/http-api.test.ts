@@ -16,6 +16,7 @@ import { startGoalApi } from "../src/http-api.js";
 const goalRef = (commands: GoalsRootCommand[]): ActorRef<GoalsRootCommand> => ({
   path: "/user/goals",
   incarnation: "test",
+  awaitStarted: Effect.void,
   tell: (command) =>
     Effect.sync(() => {
       commands.push(command);
@@ -25,11 +26,10 @@ const goalRef = (commands: GoalsRootCommand[]): ActorRef<GoalsRootCommand> => ({
       const probe = yield* ActorTestKit.probe<Response>();
       const command = build(probe.ref);
       commands.push(command);
-      if (command._tag === "Route")
-        yield* command.command.replyTo.tell({
-          _tag: "Accepted",
-          receipt: { requestId: command.command.requestId, revision: 1 },
-        });
+      yield* command.command.replyTo.tell({
+        _tag: "Accepted",
+        receipt: { requestId: command.command.requestId, revision: 1 },
+      });
       return yield* probe.take();
     }).pipe(Effect.scoped),
 });
@@ -149,6 +149,7 @@ test("Goal HTTP API reads public messages, routes user input, and rejects cross-
           summary: "",
           inputs: [],
           receipts: [],
+          tasks: [],
         },
         messages: [],
       },
@@ -272,6 +273,7 @@ test("dashboard returns public contexts and runtime observations with origin pro
           summary: "",
           inputs: [],
           receipts: [],
+          tasks: [],
         },
         messages: [],
       },
@@ -317,6 +319,7 @@ test("Goal feed paginates full history independently of its working messages", a
           summary: "Older history summarized",
           inputs: [],
           receipts: [],
+          tasks: [],
         },
         messages: [],
       },

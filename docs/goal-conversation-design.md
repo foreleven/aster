@@ -22,7 +22,7 @@ All Aster-owned Goal and Task messages use pi-durable as their authoritative sto
 
 ## Conversation and Task split
 
-The primary Goal conversation handles simple exchanges and routes sustained work through Tasks. Follow-up input concerning existing work returns to that Task; unrelated work may create another Task. The primary conversation remains the user-facing speaker, while Tasks retain their working context and tool activity. Internal Agent execution and external delegation are execution choices for the same Task concept.
+The primary Goal conversation handles simple exchanges and routes sustained work through Tasks. Follow-up input concerning existing work returns to that Task; unrelated work may create another Task. The primary conversation remains the user-facing speaker, while Tasks retain their working context and tool activity. Pending user input has priority over ready background inputs. Context screening runs in a separate bounded read-only slot, so a slow gate does not reserve the main conversation; an executing or recovering main turn remains serial and is not preempted. Internal Agent execution and external delegation are execution choices for the same Task concept.
 
 The primary Agent may directly use lightweight tools to read Contexts and memory, inspect Task progress, create Tasks and forward follow-up instructions. These tool interactions remain outside the public message list. Sustained work such as investigation, report generation and code modification belongs in a Task. Asking for a report's current status can be answered in the primary conversation; requesting an additional regional analysis is routed to the report's Task. The boundary is the responsibility and duration of the work, not whether any tool is called.
 
@@ -36,13 +36,13 @@ Pi supports custom entries and write-only submissions, so retaining evidence or 
 
 Selected reply entries can be identified by durable references in Pi rather than copying their text into Goal state. `goal.input` and `goal.reply` distinguish admitted evidence from selected public text. Task entries use `task.admission`, `task.input` and `task.result`. Use committed order and stable request/entry identities for replay and deduplication. Pi compaction and reset retain older entries in storage; full-history pagination must read retained entries, not just the current model context or active transcript view.
 
-The separate GoalHistory interface, memory/file implementations and runtime wiring have been removed. The implementation replaces duplicated Goal input payloads, response strings and Task message bodies in Actor persistence with Pi conversation, submission or entry references as appropriate. Actor state continues to own business state and delivery/recovery bookkeeping; Pi owns message content. This does not move all business state into Pi or replace the Actor mailbox as its single writer.
+The separate GoalHistory interface, memory/file implementations and runtime wiring have been removed. The implementation replaces duplicated Goal input payloads, response strings and Task message bodies in Actor persistence with Pi conversation, submission or entry references as appropriate. Actor state continues to own business state and delivery/recovery bookkeeping; Pi owns message content. Goal business mutations go through the Actor-local GoalState service, shared by command handlers and local tools; Pi remains the message store.
 
 Message admission must commit to Pi before acceptance is acknowledged. Pi and Actor storage do not share an atomic transaction: use stable identities and a recoverable handoff so a crash between message admission and Actor-state updates neither loses work nor repeats an accepted execution. The shared scoped Pi writer supports message admission while a Task executes. SDK operations and writer ownership stay in packages/agent, with Effect capabilities consumed by core.
 
 ## Implementation
 
-`packages/agent/src/conversations.ts` owns shared Pi writers and retained entry access. Goal admission and presentation live in `goals/inputs.ts`, `actors.ts` and `timeline.ts`. `tasks/actor.ts` owns internal/external execution and follow-up; `tasks/inspection.ts` provides execution details. External adapters implement continuation through `ExternalAgent.followUp`. The web Goal Timeline renders public dialogue, with Task and approval detail separate.
+`packages/agent/src/conversations.ts` owns shared Pi writers and retained entry access. Goal admission and presentation live in `goals/state/inputs.ts`, `goals/actor.ts` and `goals/view.ts`. `tasks/actor.ts` owns internal/external execution and follow-up; `tasks/inspection.ts` provides execution details. External adapters implement continuation through `ExternalAgent.followUp`. The web Goal Timeline renders public dialogue, with Task and approval detail separate.
 
 The implementation replaces the old contracts without migration or compatibility aliases. Runtime data and credentials are not changed by development or validation.
 
@@ -52,7 +52,7 @@ The implementation replaces the old contracts without migration or compatibility
 - Commit message admission in Pi before acknowledgement. Recover the Actor handoff from committed entry/submission identities when a crash separates those commits. Neither an Actor receipt alone nor a transient callback substitutes for the stored input.
 - Record gate results and public-reply selection against stable input/entry references. Replaying a completed invocation must not rerun its model call or duplicate its public reply.
 - Keep model-context compaction independent of retained chat history. A read or UI reconnect must not start an Agent execution.
-- Receiving input during Task execution must not block behind the whole model invocation. Model/tool work returns through the Actor mailbox with generation checks; only its owner changes business state.
+- Receiving input during Task execution must not block behind the whole model invocation. Model execution results return through the Actor mailbox with generation checks. Local Goal tools use the injected GoalState business methods, which serialize state changes without holding a writer during model execution.
 - A Task with accepted, unsettled follow-ups is not complete merely because one execution round ended. Preserve the input coverage reported by each execution so late completion cannot overwrite newer work.
 - Keep Task execution independent of the main conversation's current turn. Ending a turn does not stop its Tasks; changing this lifecycle must not accidentally inherit ordinary blocking subagent ownership.
 

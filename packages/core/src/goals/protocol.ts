@@ -1,14 +1,16 @@
-import { createHash } from "node:crypto";
-import { publicJson } from "../context/json.js";
-import { ReplyTo } from "@aster/actor";
-import { Predicate, Schema } from "effect";
+import { GoalIntentInput } from "./screening/intent.js";
 import {
   ApplicationError,
   GoalExecutionFeedback,
   TaskMessage,
   CommandReceipt,
+  TaskPath,
 } from "@aster/api-contracts";
-import { GoalIntentInput } from "./intent.js";
+import { Predicate, Schema } from "effect";
+import { ReplyTo } from "@aster/actor";
+import { publicJson } from "../context/json.js";
+import { createHash } from "node:crypto";
+import { AgentError } from "@aster/agent";
 
 /** Producer-specific envelopes preserve provenance; only UserInput crosses public ingress. */
 export const GoalSubmission = Schema.Union([
@@ -63,15 +65,43 @@ export const goalRequestFingerprint = (request: GoalRequestData): string =>
       ),
     )
     .digest("hex");
-export const GoalReadyReply = Schema.Union([
-  Schema.TaggedStruct("Ready", {}),
-  Schema.TaggedStruct("Failed", { error: ApplicationError }),
+export const GoalTaskReply = Schema.Union([
+  Schema.TaggedStruct("Attached", {}),
+  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
 ]);
-export type GoalReadyReply = typeof GoalReadyReply.Type;
-export const GoalControl = Schema.Union([
-  Schema.TaggedStruct("Activate", {}),
-  Schema.TaggedStruct("AwaitReady", {
-    stage: Schema.optional(Schema.Literals(["restored", "activated"])),
-    replyTo: ReplyTo<GoalReadyReply>(),
+export type GoalTaskReply = typeof GoalTaskReply.Type;
+
+export const GoalMailbox = Schema.Union([
+  GoalCommand,
+  Schema.TaggedStruct("AttachTask", {
+    taskPath: TaskPath,
+    replyTo: ReplyTo<GoalTaskReply>(),
+  }),
+  Schema.TaggedStruct("RunNext", {}),
+  Schema.TaggedStruct("GateSettled", {
+    generation: Schema.String,
+    inputId: Schema.String,
+    result: Schema.Union([
+      Schema.TaggedStruct("Success", {
+        value: Schema.Struct({ relevant: Schema.Boolean, reason: Schema.String }),
+      }),
+      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(AgentError) }),
+    ]),
+  }),
+  Schema.TaggedStruct("ConversationSettled", {
+    generation: Schema.String,
+    inputId: Schema.String,
+    result: Schema.Union([
+      Schema.TaggedStruct("Success", { value: Schema.String }),
+      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(AgentError) }),
+    ]),
+  }),
+  Schema.TaggedStruct("PeersEnded", {
+    generation: Schema.String,
+    result: Schema.Union([
+      Schema.TaggedStruct("Success", { value: Schema.Void }),
+      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
+    ]),
   }),
 ]);
+export type GoalMailbox = typeof GoalMailbox.Type;

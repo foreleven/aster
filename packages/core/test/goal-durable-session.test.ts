@@ -1,3 +1,5 @@
+import { CurrentActors } from "../src/tools/actors.js";
+import { toolSystem } from "./tool-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { AgentConversations } from "@aster/agent";
 import assert from "node:assert/strict";
@@ -8,7 +10,15 @@ import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
 import { Effect, Layer } from "effect";
-import { runGoalConversation, conversationText } from "../src/index.js";
+import {
+  GoalActor,
+  GoalState,
+  GoalAgent,
+  GoalSettings,
+  ContextRegistry,
+  MemoryRecall,
+  ExternalAgents,
+} from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
 test("reopened Goal sessions keep their policy and history while tools read the new turn", async (t) => {
@@ -99,6 +109,7 @@ test("reopened Goal sessions keep their policy and history while tools read the 
                 status: "active",
                 inputs: [],
                 receipts: [],
+                tasks: [],
                 summary: `PRIVATE_summary_${turn}`,
               },
               messages: [],
@@ -106,27 +117,40 @@ test("reopened Goal sessions keep their policy and history while tools read the 
           ],
           save: () => {},
         });
-        return yield* runGoalConversation({
-          goal: { slug: "test", description: `PRIVATE_goal_${turn}` },
-          model: "test",
+        yield* registry.register("/goals/test", GoalActor.context);
+        const { system } = yield* toolSystem({
           registry,
-          memory: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
-          executors: [],
-          reconcile: false,
-          input: {
-            kind: "UserInput",
-            entryId: 0,
-            inputId: `turn-${turn}`,
-            receivedAt: "2026-10-01T00:00:00Z",
-            causal: { rootRequestId: "test", remainingAgentTurns: 4 },
-            status: "pending",
-            payload: { _tag: "UserInput", text: "Continue the Goal" },
-          },
-          update: () => Effect.die("No update expected"),
-          followupTask: () => Effect.die("No follow-up expected"),
-          startTask: () => Effect.die("No Task expected"),
-          signal: () => Effect.die("No Signal expected"),
+          messages: conversations,
         });
+        return yield* GoalAgent.use((agent) =>
+          agent.converse({
+            goal: { slug: "test", description: `PRIVATE_goal_${turn}` },
+            reconcile: false,
+            input: {
+              kind: "UserInput",
+              entryId: 0,
+              inputId: `turn-${turn}`,
+              receivedAt: "2026-10-01T00:00:00Z",
+              causal: { rootRequestId: "test", remainingAgentTurns: 4 },
+              status: "pending",
+              payload: { _tag: "UserInput", text: "Continue the Goal" },
+            },
+          }),
+        ).pipe(
+          Effect.provide([
+            GoalAgent.layer,
+            GoalState.layer("/goals/test", { slug: "test", description: `PRIVATE_goal_${turn}` }),
+          ]),
+          Effect.provideService(AgentConversations, conversations),
+          Effect.provideService(CurrentActors, system),
+          Effect.provideService(ContextRegistry, registry),
+          Effect.provideService(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
+          Effect.provideService(MemoryRecall, {
+            search: () => Effect.succeed([]),
+            expand: () => Effect.succeed([]),
+          }),
+          Effect.provideService(ExternalAgents, {}),
+        );
       }).pipe(
         Effect.provide(
           AgentRunner.layer.pipe(
@@ -135,12 +159,13 @@ test("reopened Goal sessions keep their policy and history while tools read the 
           ),
         ),
         Effect.timeout("10 seconds"),
+        Effect.scoped,
       ),
     );
   const first = await run(0);
   const next = await run(1);
-  assert.equal(conversationText(first.messages), "Recorded turn 0");
-  assert.equal(conversationText(next.messages), "Recorded turn 1");
+  assert.equal(first, "Recorded turn 0");
+  assert.equal(next, "Recorded turn 1");
   assert.equal(calls, 4);
   assert.deepEqual(await run(0), first);
   assert.equal(calls, 4, "Replaying a completed turn must not call the model again");

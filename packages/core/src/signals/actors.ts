@@ -1,3 +1,4 @@
+import { queryReplyTo } from "../context/query-protocol.js";
 import { ReplyTo, type ActorContext, type ActorRef } from "@aster/actor";
 import { ApplicationError, CommandReceipt, TaskMessage } from "@aster/api-contracts";
 import { Clock, Context, Cron, Effect, Layer, Match, Schema } from "effect";
@@ -277,6 +278,7 @@ export class SignalActor extends ContextActor.Service<SignalActor, SignalDefinit
   );
 }
 export const SignalRootCommand = Schema.Union([
+  Schema.TaggedStruct("ListByGoal", { goal: Schema.String, replyTo: queryReplyTo }),
   Ready,
   Activate,
   React,
@@ -320,6 +322,18 @@ export class SignalRootActor extends ContextActor.Service<SignalRootActor, Signa
           }),
         receive: (command, actor) =>
           Match.value(command).pipe(
+            Match.tag("ListByGoal", ({ goal, replyTo }) =>
+              replyTo.tell({
+                _tag: "Success",
+                value: Object.values(registry.reader.snapshot()).filter(
+                  (record) =>
+                    /^\/signals\/[^/]+$/.test(record.path) &&
+                    Schema.decodeUnknownSync(
+                      Schema.Struct({ goal: Schema.optional(Schema.String) }),
+                    )(record.state).goal === goal,
+                ),
+              }),
+            ),
             Match.tag("Ready", ({ replyTo }) =>
               Effect.gen(function* () {
                 for (const child of yield* actor.children())

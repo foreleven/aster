@@ -1,5 +1,4 @@
 import { internalAgentSettings } from "../config/settings.js";
-import { MemoryRecall } from "../memory/contracts.js";
 import { makeStructuredReasoning } from "./structured.js";
 import { Context, Data, Effect, Layer, Schema } from "effect";
 import type { ContextRegistry } from "../context/registry.js";
@@ -86,8 +85,8 @@ export const makeConfiguredDescriptionInitializer = Effect.fn(
   "makeConfiguredDescriptionInitializer",
 )(function* () {
   const settings = yield* internalAgentSettings;
-  const run = yield* makeStructuredReasoning(settings.model, yield* MemoryRecall);
-  return makeDescriptionInitializer((prompt, schema) => run(prompt, schema, {}));
+  const run = yield* makeStructuredReasoning(settings.model);
+  return makeDescriptionInitializer((prompt, schema) => run(prompt, schema));
 });
 
 /** Description initialization never replaces content committed while the model was running. */

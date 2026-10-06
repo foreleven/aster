@@ -1,12 +1,12 @@
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations, AgentRunner } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Models, PiStorageLease } from "@aster/agent";
-import { Cause, ConfigProvider, Context, Effect, Exit, Layer } from "effect";
+import { Cause, ConfigProvider, Context, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import {
   AsterRuntime,
   MemoryBackend,
@@ -23,6 +23,7 @@ const integration = (
   phase: "source" | "consumer",
   stop: Effect.Effect<void>,
   ready: Effect.Effect<void, Error> = Effect.void,
+  runner?: AgentRunner["Service"],
 ) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -31,7 +32,7 @@ const integration = (
         defineIntegration({
           name,
           phase,
-          services: Context.empty(),
+          services: runner ? Context.make(AgentRunner, runner) : Context.empty(),
           activate: () => Effect.succeed({ stop, ready }),
         }),
       );
@@ -80,13 +81,13 @@ test("runtime readiness includes the built-in Goal assistant and ordinary Goal c
     Effect.gen(function* () {
       const runtime = yield* AsterRuntime;
       yield* runtime.ready;
-      const personal = yield* runtime.api.context("/goals/personal");
-      assert.equal(personal.path, "/goals/personal");
       const accepted = yield* runtime.api.goals.sendMessage(
         "personal",
         "Track my work",
         "runtime-input",
       );
+      const personal = yield* runtime.api.context("/goals/personal");
+      assert.equal(personal.path, "/goals/personal");
       assert.deepEqual(
         yield* runtime.api.goals.sendMessage("personal", "Track my work", "runtime-input"),
         accepted,
@@ -179,5 +180,102 @@ test("runtime inspection exposes current storage ownership without local filesys
         false,
       );
     }).pipe(Effect.provide(live)),
+  );
+});
+
+test("restored Goals admit input while integration readiness gates execution", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void>();
+        const called = yield* Deferred.make<void>();
+        const live = AsterRuntime.layer({
+          integrations: [
+            integration(
+              "pending",
+              "source",
+              Effect.void,
+              Deferred.await(release),
+              AgentRunner.make(() =>
+                Deferred.succeed(called, undefined).pipe(Effect.as({ messages: [] })),
+              ),
+            ),
+          ],
+        }).pipe(Layer.provide(infrastructure()), Layer.provide(config));
+        yield* Effect.gen(function* () {
+          const runtime = yield* AsterRuntime;
+          const readiness = yield* runtime.ready.pipe(Effect.forkScoped);
+          yield* runtime.api.goals.sendMessage("personal", "Hello", "before-ready");
+          const goals = yield* runtime.api.goals.list;
+          assert.deepEqual(
+            goals.map((goal) => goal.path),
+            ["/goals/personal"],
+          );
+          assert.equal(yield* Deferred.isDone(called), false);
+          assert.equal(readiness.pollUnsafe(), undefined);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(readiness);
+          yield* Deferred.await(called);
+        }).pipe(Effect.provide(live));
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("runtime becomes ready while a Goal restores; its mailbox resumes after restoration", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const reading = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const called = yield* Deferred.make<void>();
+        const history = testConversations();
+        const services = Context.make(AgentConversations, {
+          ...history,
+          read: (path) =>
+            Deferred.succeed(reading, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.andThen(history.read(path)),
+            ),
+        }).pipe(
+          Context.add(
+            AgentRunner,
+            AgentRunner.make(() =>
+              Deferred.succeed(called, undefined).pipe(Effect.as({ messages: [] })),
+            ),
+          ),
+        );
+        const live = AsterRuntime.layer({
+          integrations: [
+            Layer.effectDiscard(
+              RuntimeIntegrations.use((modules) =>
+                modules.register(
+                  defineIntegration({
+                    name: "slow-goal-storage",
+                    phase: "source",
+                    services,
+                    activate: () => Effect.succeed({ ready: Effect.void, stop: Effect.void }),
+                  }),
+                ),
+              ),
+            ),
+          ],
+        }).pipe(Layer.provide(infrastructure()), Layer.provide(config));
+        yield* Effect.gen(function* () {
+          const runtime = yield* AsterRuntime;
+          yield* Deferred.await(reading);
+          yield* runtime.ready;
+          assert.equal(yield* Deferred.isDone(called), false);
+          const sending = yield* runtime.api.goals
+            .sendMessage("personal", "Hello", "during-restore")
+            .pipe(Effect.forkScoped);
+          yield* Effect.yieldNow;
+          assert.equal(sending.pollUnsafe(), undefined);
+          yield* Deferred.succeed(release, undefined);
+          yield* Fiber.join(sending);
+          yield* Deferred.await(called);
+        }).pipe(Effect.provide(live));
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
   );
 });

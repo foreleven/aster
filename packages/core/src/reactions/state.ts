@@ -8,8 +8,8 @@ import { Schema } from "effect";
 import { ContextEvent } from "../context/model.js";
 import { contextEventId } from "../context/model.js";
 import { GoalTitle } from "../config/schema.js";
-import { GoalIntentInput } from "../goals/intent.js";
-import { GoalScreeningRecord } from "../goals/screening.js";
+import { GoalIntentInput } from "../goals/screening/intent.js";
+import { GoalScreeningRecord } from "../goals/screening/decision.js";
 import { SignalReactionInput } from "../signals/reaction.js";
 
 const Attempts = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));

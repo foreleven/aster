@@ -7,6 +7,7 @@ import {
   lazyStream,
   type ProviderStreams,
   type SimpleStreamOptions,
+  type AssistantMessage,
 } from "@earendil-works/pi-ai";
 import {
   createRegistry,
@@ -170,6 +171,7 @@ export const runDurableAgent = async (input: {
   readonly tools: readonly AgentTool[];
   readonly resultTool?: string;
   readonly onMessage?: (message: AgentMessage) => Promise<void> | void;
+  readonly onResponse?: (message: AssistantMessage, signal?: AbortSignal) => Promise<void> | void;
   readonly transformContext?: (
     messages: AgentMessage[],
     signal?: AbortSignal,
@@ -205,6 +207,7 @@ export const runDurableAgent = async (input: {
     hooks: [
       hook(GenerationTask, {
         beforeRequest: fence.beforeRequest,
+        afterResponse: (message, _api, context) => input.onResponse?.(message, context.abortSignal),
       }),
       hook(CompactionTask, { beforeCompact: fence.beforeCompact }),
     ],

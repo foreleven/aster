@@ -42,18 +42,18 @@ const RuntimeLive = AsterRuntime.layer({
 );
 ```
 
-| External capability                                | Local implementation                  | Internal consumer                                                  |
-| -------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------------ |
-| ConfigProvider, ConfigLocation, ProcessEnvironment | LocalConfig.layer                     | Module Config declarations and adapters                            |
-| DurableContext                                     | ConfiguredDurableInfrastructure.layer | ContextRegistry.layer                                              |
-| Models                                             | Models.configured                     | Internal Agent, Goal reasoner, Lark summarizer                     |
-| SystemOneClient                                    | SystemOneClientLive.layer             | Signal/Goal policies and Lark summary gate                         |
-| MemoryBackend                                      | AgentMemoryBackend.layer              | Core builds MemoryRecall, ContextCaptureSink, and the Memory Actor |
-| ExternalAgents                                     | ConfiguredDurableInfrastructure.layer | Task confirmation and execution                                    |
+| External capability                                | Local implementation                  | Internal consumer                                                       |
+| -------------------------------------------------- | ------------------------------------- | ----------------------------------------------------------------------- |
+| ConfigProvider, ConfigLocation, ProcessEnvironment | LocalConfig.layer                     | Module Config declarations and adapters                                 |
+| DurableContext                                     | ConfiguredDurableInfrastructure.layer | ContextRegistry.layer                                                   |
+| Models                                             | Models.configured                     | Internal Agent, Goal reasoner, Lark summarizer                          |
+| SystemOneClient                                    | SystemOneClientLive.layer             | Signal/Goal policies and Lark summary gate                              |
+| MemoryBackend                                      | AgentMemoryBackend.layer              | Core builds ContextCaptureSink and the Memory Actor with backend recall |
+| ExternalAgents                                     | ConfiguredDurableInfrastructure.layer | Task confirmation and execution                                         |
 
-`ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. Every host supplies MemoryBackend; core internally assembles MemoryRecall and ContextCaptureSink. Local never supplies the internal registry, command endpoint, business reasoning workflows separately.
+`ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. Every host supplies MemoryBackend; core internally assembles the Memory Actor and ContextCaptureSink. Local never supplies the internal registry, command endpoint, business reasoning workflows separately.
 
-Startup phases: acquire dependencies and subscribe to Context changes; register/activate source integrations; restore Signals and Tasks; register Goals; bind decision delivery and start journal consumption. Buffered changes and the durable journal preserve early source commits. Signal activation waits for Goal restoration. After source readiness, runtime initializes Goals once and waits for their activation, not model completion. The built-in personal assistant is an idle ordinary Goal at `/goals/personal`.
+Startup phases: acquire dependencies and subscribe to Context changes; register/activate source integrations; restore Signals and Tasks; register Goals; bind decision delivery and start journal consumption. Buffered changes and the durable journal preserve early source commits. Signal activation waits for Goal routing registration. After integration readiness, runtime opens its shared Goal execution gate without waiting for model completion. The built-in personal assistant is an idle ordinary Goal at `/goals/personal`.
 
 Shutdown phases: close admission/stop sources; stop startup coordination and reaction producers; finish or durably retain pending work according to existing domain contracts; stop Actors; release adapter resources. Store lock and signal handlers outlive all finalizers. Interrupted startup must release every resource already acquired.
 
@@ -61,7 +61,7 @@ Readiness is completed with the startup Exit, not only its typed error channel. 
 
 Internal domain operations also preserve the caller's Effect execution. Goal Signal edits/deactivation return Effects rather than starting independent Promise runtimes. Mailbox handlers use `pipeToSelf` for remote acknowledgements; per-Goal Signal operations remain serialized without preventing the Goal mailbox from accepting End or UserMessage. The shared Task workflow lives in `core/tasks`, below both Goals and Signals.
 
-Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluation performs history reads and generation-tagged mailbox acknowledgements directly. Only the Agent adapter bridges SDK Promise callbacks, preserving the calling Context and cancelling pending callbacks before Agent cleanup waits for idle. Goal End signals cancellation through a Deferred; restart and shutdown use the Behavior scope. Expected reasoning failures remain tagged, while defects enter supervision. MemoryRecall and Context description also expose Effect ports. The agentmemory adapter in infra owns the Promise-to-Effect adapter and forwards cancellation to the backend HTTP request, including expansion fallbacks. Goal and structured reasoning use AgentRunner from @aster/agent, which owns their SDK callback lifecycle; no additional host Layer is needed.
+Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluation performs history reads and generation-tagged mailbox acknowledgements directly. Only the Agent adapter bridges SDK Promise callbacks, preserving the calling Context and cancelling pending callbacks before Agent cleanup waits for idle. Goal End signals cancellation through a Deferred; restart and shutdown use the Behavior scope. Expected reasoning failures remain tagged, while defects enter supervision. The Memory backend recall capability and Context description also expose Effect ports. The agentmemory adapter in infra owns the Promise-to-Effect adapter and forwards cancellation to the backend HTTP request, including expansion fallbacks. Goal and structured reasoning use AgentRunner from @aster/agent, which owns their SDK callback lifecycle; no additional host Layer is needed.
 
 ## Configuration
 
@@ -113,10 +113,16 @@ Apps readiness means that the configured query Contexts are durably registered a
 
 ## Goal readiness and activation
 
-Sources register first; Signal and Task roots restore before Goal registration. Goal receivers restore before Signals activate. Root `AwaitReady` with `stage: "restored"` waits for restoration only; the default activated stage also waits for `Initialize`. Readiness aggregation is scoped and does not block root routing. After integrations are ready, runtime activates Goals and awaits admission readiness, without waiting for model results. Restoration defects fail readiness through supervision or the readiness timeout. Supervised child restarts inherit the root activation gate.
+Sources register first; Signal and Task roots restore before Goal registration. GoalsRootActor registers and watches every configured child in `started`, without awaiting child recovery. Runtime awaits only root registration before starting System One and activating Signals. Each child mailbox queues its own Commands during initialization. Slow or failed children do not block root routing or sibling Goals. System One reads currently committed Context snapshots; runtime readiness does not promise that every Goal snapshot has finished restoration.
+
+Supervision retries child failures independently. If a child finally terminates, `watch` delivers `Terminated` to the root, which logs its path and cause. Later requests to that missing child are rejected. The root does not create an unbounded replacement loop or fail healthy siblings.
+
+Runtime owns one transient `Deferred<void>` execution gate passed through Actor spawn metadata. After integrations are ready, it opens the gate and completes runtime readiness without waiting for model results. Restored Goal Actors can admit inputs while this gate is closed; a scoped waiter wakes the mailbox with `RunNext` when it opens. Supervised root and child restarts retain this same gate. Goal Actors spawned without a gate execute immediately after restoration. Root startup failures propagate through `awaitStarted`; child failures follow supervision and watch.
 
 ## Context consumer composition
 
 See [Context design](context-design.md) for Context ownership and persistence compatibility. Runtime installs core view and description policies before starting consumers, and constructs the runtime-local `ContextCaptures` and `ContextDescriptions` registries. Integrations register their own policies during activation, before source writes. Memory installs the Task capture policy and owns durable capture deduplication. Capture policies return Effects so Task evidence can be resolved from Pi references before durable handoff.
 
 `runtime/context-consumers.ts` subscribes before source activation, wakes durable System One processing, and coordinates description initialization followed by Memory handoff. It contains no inline Signal/Goal evaluation callback. `reactions/` owns screening, frozen evidence, delivery and recovery. `runtime/processing.ts` composes reaction diagnostics. Storage selection and Local/Pi routing remain in infra; the host supplies the resulting `DurableContext` Layer.
+
+Agent tool queries use the Runtime-owned `/user/contexts` root and domain query commands. Context queries and Memory are ready before restored Tasks can resume Agent execution. Goal and Task tools share the implementations in `core/src/tools/`; runtime reasoning receives this same ActorSystem for its memory queries.

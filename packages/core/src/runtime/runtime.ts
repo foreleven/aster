@@ -1,3 +1,4 @@
+import { ContextsActor } from "../context/queries-actor.js";
 import { ContextCaptures } from "../memory/capture.js";
 import { ContextDescriptions } from "../reasoning/context-description.js";
 import { coreDescriptions } from "./context-descriptions.js";
@@ -8,7 +9,7 @@ import { memoryLayer } from "../memory/services.js";
 import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster/api-contracts";
 import type { ReactionCommand } from "../reactions/actor.js";
 import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
-import { GoalScreeningStore } from "../goals/screening.js";
+import { GoalScreeningStore } from "../goals/screening/decision.js";
 import { TasksRootActor } from "../tasks/root.js";
 import type { RuntimeEvent, RuntimePhase } from "@aster/api-contracts";
 import { RuntimeConfigurationError } from "./errors.js";
@@ -36,10 +37,9 @@ import { SignalCommands } from "../signals/commands.js";
 import { SignalDefinitions, SignalRootActor } from "../signals/actors.js";
 import { SystemOneClient } from "../decisions/system-one.js";
 import { AgentConversations } from "@aster/agent";
-import { GoalsRootActor } from "../goals/actors.js";
+import { GoalsRootActor } from "../goals/root.js";
 import { GoalSignals } from "../signals/goal-owner.js";
 import { ExternalAgents } from "../tasks/model.js";
-import { MemoryRecall } from "../memory/contracts.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
 import { startContextReactions } from "./context-consumers.js";
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
@@ -52,7 +52,6 @@ type RuntimeDiagnostics = {
 
 type ActorServices =
   | AgentRunner
-  | MemoryRecall
   | ContextQueries
   | AgentConversations
   | GoalSettings
@@ -87,7 +86,6 @@ const acquireRuntime = Effect.gen(function* () {
   const shared = Context.pick(
     DurableContext,
     AgentRunner,
-    MemoryRecall,
     ContextQueries,
     AgentConversations,
     GoalSettings,
@@ -166,36 +164,34 @@ const acquireRuntime = Effect.gen(function* () {
       .pipe(Effect.provideService(Scope.Scope, workScope));
     handles.push({ phase: module.phase, handle });
   }
+  const contexts = yield* system.spawn("contexts", ContextsActor);
+  yield* contexts.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
   const signals = yield* system.spawn("signals", SignalRootActor);
   yield* signals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
-  const tasks = yield* system.spawn("tasks", TasksRootActor);
-  yield* tasks.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
-  yield* endpoint.bind(signals);
-  const goals = settings.definitions.length
-    ? yield* system.spawn("goals", GoalsRootActor)
-    : undefined;
   for (const module of modules.filter((module) => module.phase === "consumer")) {
     const handle = yield* module
       .activate(system)
       .pipe(Effect.provideService(Scope.Scope, workScope));
     handles.push({ phase: module.phase, handle });
   }
+  const tasks = yield* system.spawn("tasks", TasksRootActor);
+  yield* tasks.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+  yield* endpoint.bind(signals);
+  const goalActivation = yield* Deferred.make<void>();
+  const goals = settings.definitions.length
+    ? yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } })
+    : undefined;
+  // The root registers routing targets; each child queues work until its own startup completes.
+  if (goals) yield* goals.awaitStarted;
   yield* reactionPolicy.bind(signals, goals);
-  running.reactions = yield* startContextReactions({ system, signals, goals, changes }).pipe(
+  running.reactions = yield* startContextReactions({ system, signals, changes }).pipe(
     Effect.provideService(Scope.Scope, workScope),
   );
   running.initialization = yield* Effect.gen(function* () {
     yield* signals.tell({ _tag: "Activate" });
     yield* Effect.forEach(handles, ({ handle }) => handle.ready, { concurrency: "unbounded" });
-    if (goals) {
-      yield* goals.tell({ _tag: "Initialize" });
-      const reply = yield* goals.ask<import("../goals/protocol.js").GoalReadyReply>((replyTo) => ({
-        _tag: "AwaitReady",
-        replyTo,
-      }));
-      if (reply._tag === "Failed") return yield* reply.error;
-    }
+    yield* Deferred.succeed(goalActivation, undefined);
   }).pipe(
     // Readiness is a completion contract, including defects and cancellation;
     // catching only typed errors strands waiters when startup never succeeds.

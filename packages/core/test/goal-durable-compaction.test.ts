@@ -1,3 +1,5 @@
+import { CurrentActors } from "../src/tools/actors.js";
+import { toolSystem } from "./tool-fixtures.js";
 import { createHash } from "node:crypto";
 import { testConversations } from "./conversation-fixtures.js";
 import { AgentConversations } from "@aster/agent";
@@ -9,7 +11,17 @@ import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
 import { Effect, Layer, Schema } from "effect";
-import { runGoalConversation, conversationText, defineContext, contextView } from "../src/index.js";
+import {
+  GoalActor,
+  GoalState,
+  GoalAgent,
+  GoalSettings,
+  ContextRegistry,
+  MemoryRecall,
+  ExternalAgents,
+  defineContext,
+  contextView,
+} from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
 test("durable Goal compacts its native transcript and finishes the same request", async (t) => {
@@ -67,7 +79,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
                     type: "toolCall" as const,
                     id: `call-${generations}-${page}`,
                     name: "read_context",
-                    arguments: { path: "/source", offset: page * 2000 },
+                    arguments: { path: "/source", offset: page * 2000, revision: 0 },
                   }))
                 : [{ type: "text", text: "Review completed" }],
             usage: {
@@ -113,28 +125,40 @@ test("durable Goal compacts its native transcript and finishes the same request"
         }),
       }),
     );
-    return yield* runGoalConversation({
-      goal: { slug: "test", description: "Review evidence" },
-      model: "test",
-      registry,
-      memory: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
-      executors: [],
-      contextTokens: 48000,
-      reconcile: false,
-      input: {
-        kind: "UserInput",
-        entryId: 0,
-        inputId: "review",
-        receivedAt: "2026-10-01T00:00:00Z",
-        causal: { rootRequestId: "test", remainingAgentTurns: 4 },
-        status: "pending",
-        payload: { _tag: "UserInput", text: "Review the evidence" },
-      },
-      update: () => Effect.die("No update expected"),
-      followupTask: () => Effect.die("No follow-up expected"),
-      startTask: () => Effect.die("No Task expected"),
-      signal: () => Effect.die("No Signal expected"),
-    });
+    yield* registry.register("/goals/test", GoalActor.context);
+    const { system } = yield* toolSystem({ registry, messages: conversations });
+    return yield* GoalAgent.use((agent) =>
+      agent.converse({
+        goal: { slug: "test", description: "Review evidence" },
+        reconcile: false,
+        input: {
+          kind: "UserInput",
+          entryId: 0,
+          inputId: "review",
+          receivedAt: "2026-10-01T00:00:00Z",
+          causal: { rootRequestId: "test", remainingAgentTurns: 4 },
+          status: "pending",
+          payload: { _tag: "UserInput", text: "Review the evidence" },
+        },
+      }),
+    ).pipe(
+      Effect.provide([
+        GoalAgent.layer,
+        GoalState.layer("/goals/test", { slug: "test", description: "Review evidence" }),
+      ]),
+      Effect.provideService(AgentConversations, conversations),
+      Effect.provideService(CurrentActors, system),
+      Effect.provideService(ContextRegistry, registry),
+      Effect.provideService(GoalSettings, {
+        definitions: [],
+        reasoning: { model: "test", contextTokens: 48000 },
+      }),
+      Effect.provideService(MemoryRecall, {
+        search: () => Effect.succeed([]),
+        expand: () => Effect.succeed([]),
+      }),
+      Effect.provideService(ExternalAgents, {}),
+    );
   }).pipe(
     Effect.provide(
       AgentRunner.layer.pipe(
@@ -143,9 +167,10 @@ test("durable Goal compacts its native transcript and finishes the same request"
       ),
     ),
     Effect.timeout("15 seconds"),
+    Effect.scoped,
   );
   const result = await Effect.runPromise(run);
-  assert.equal(conversationText(result.messages), "Review completed");
+  assert.equal(result, "Review completed");
   assert.ok(summaries > 0, "Native compaction must run before the Goal gives up");
   assert.equal(sawSummary, true);
   assert.match(

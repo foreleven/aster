@@ -1,11 +1,8 @@
-import { createHash } from "node:crypto";
+import { GoalIntent, type PublicContext as ContextRecord } from "@aster/api-contracts";
+import { contextSummaryText, type GoalRelevance } from "./decision.js";
 import { Schema } from "effect";
-import type { AgentMessage } from "@aster/agent";
-import type { PublicContext as ContextRecord } from "@aster/api-contracts";
-import type { GoalRelevance } from "./relevance.js";
-import { contextSummaryText } from "./screening.js";
+import { createHash } from "node:crypto";
 
-import { GoalIntent } from "@aster/api-contracts";
 export { GoalIntent } from "@aster/api-contracts";
 
 /** Frozen System One delivery; acknowledgement refers to the receiver's durable inbox. */
@@ -51,14 +48,3 @@ export const makeGoalIntent = (
     createdAt,
   };
 };
-
-export const goalIntentMessage = (intent: GoalIntent): AgentMessage => ({
-  role: "user",
-  content: [
-    {
-      type: "text",
-      text: `[Goal intent]\n${JSON.stringify(intent)}`,
-    },
-  ],
-  timestamp: Date.parse(intent.createdAt),
-});

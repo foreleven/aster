@@ -1,6 +1,13 @@
+import { ApplicationError } from "@aster/api-contracts";
+import {
+  QueryReply,
+  queryReplyTo,
+  queryCancelled,
+  cancellableQuery,
+} from "../context/query-protocol.js";
 import { ContextCaptures } from "./capture.js";
 import { ReplyTo, type ActorContext } from "@aster/actor";
-import { Effect, HashSet, Layer, Match, Schema } from "effect";
+import { Deferred, Effect, HashSet, Layer, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ContextRegistry } from "../context/registry.js";
 import { PublicContext as ContextRecord } from "@aster/api-contracts";
@@ -19,6 +26,19 @@ const MemoryState = Schema.Struct({
 });
 
 export const MemoryCommand = Schema.Union([
+  Schema.TaggedStruct("Search", {
+    query: Schema.String,
+    cancelled: queryCancelled,
+    replyTo: queryReplyTo,
+  }),
+  Schema.TaggedStruct("Expand", {
+    items: Schema.Array(
+      Schema.Struct({ obsId: Schema.String, sessionId: Schema.optional(Schema.String) }),
+    ),
+    cancelled: queryCancelled,
+    replyTo: queryReplyTo,
+  }),
+  Schema.TaggedStruct("RecallSettled", { id: Schema.String, result: QueryReply }),
   Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() }),
   Schema.TaggedStruct("Retry", {}),
   Schema.TaggedStruct("Capture", { input: Capture, replyTo: ReplyTo<void>() }),
@@ -56,6 +76,7 @@ export class MemoryActor extends ContextActor.Service<
     MemoryActor,
     Effect.gen(function* () {
       const backend = yield* MemoryBackend;
+      const recalls = new Map<string, Extract<MemoryCommand, { _tag: "Search" | "Expand" }>>();
       const captures = yield* ContextCaptures;
       const registry = yield* ContextRegistry;
       // Only the mailbox changes this set. Each Behavior gets a fresh set on recovery.
@@ -126,6 +147,44 @@ export class MemoryActor extends ContextActor.Service<
         receive: (command, context) =>
           Match.value(command).pipe(
             Match.tag("Ready", ({ replyTo }) => replyTo.tell(undefined)),
+            Match.tag("Search", "Expand", (request) =>
+              Effect.gen(function* () {
+                if (yield* Deferred.isDone(request.cancelled)) return;
+                if (recalls.size >= 4)
+                  return yield* request.replyTo.tell({
+                    _tag: "Failure",
+                    error: new ApplicationError({
+                      kind: "unavailable",
+                      message: "Memory query capacity reached",
+                    }),
+                  });
+                recalls.set(request.replyTo.path, request);
+                const work =
+                  request._tag === "Search"
+                    ? backend.recall.search(request.query)
+                    : backend.recall.expand(request.items);
+                yield* context.pipeToSelf(
+                  cancellableQuery(
+                    work.pipe(
+                      Effect.mapError(
+                        (error) =>
+                          new ApplicationError({ kind: "unavailable", message: error.message }),
+                      ),
+                    ),
+                    request.cancelled,
+                  ),
+                  (result) => ({ _tag: "RecallSettled", id: request.replyTo.path, result }),
+                );
+              }),
+            ),
+            Match.tag("RecallSettled", ({ id, result }) =>
+              Effect.gen(function* () {
+                const request = recalls.get(id);
+                if (!request) return;
+                recalls.delete(id);
+                yield* request.replyTo.tell(result);
+              }),
+            ),
             Match.tag("Capture", ({ input, replyTo }) =>
               Effect.gen(function* () {
                 yield* admit(input);

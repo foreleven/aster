@@ -1,3 +1,4 @@
+import { CurrentActors } from "../tools/actors.js";
 import { isDeepStrictEqual } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -13,8 +14,6 @@ import { type ActorContext, type ActorRef } from "@aster/actor";
 import { ContextActor, contextPath } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
-import { ContextQueries } from "../context/queries.js";
-import { MemoryRecall } from "../memory/contracts.js";
 import { GoalSettings } from "../config/settings.js";
 import { taskPathFor, sourceTask, delegateInput } from "./admission.js";
 import { ExternalAgents, taskPrompt, DEFAULT_EXECUTOR_PROMPT } from "./model.js";
@@ -23,11 +22,10 @@ import { ExternalAgentError } from "./errors.js";
 import { executeTask } from "./execution.js";
 import { makeTaskWriteback, planWriteback } from "./writeback.js";
 import { sendApproval, approvalEntries } from "../approvals/actor.js";
-import type { GoalCommand, GoalCommandReply } from "../goals/actors.js";
+import type { GoalCommand, GoalCommandReply } from "../goals/protocol.js";
 
 import { TaskCommand } from "./protocol.js";
-export type TaskServices =
-  ExternalAgents | AgentConversations | AgentRunner | GoalSettings | ContextQueries | MemoryRecall;
+export type TaskServices = ExternalAgents | AgentConversations | AgentRunner | GoalSettings;
 const TaskOutcome = Schema.Struct({
   text: Schema.String,
   status: TaskState.fields.status,
@@ -48,8 +46,6 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
       const agents = yield* ExternalAgents;
       const settings = yield* GoalSettings;
       const runner = yield* AgentRunner;
-      const memory = yield* MemoryRecall;
-      const queries = yield* ContextQueries;
       let path = "";
       let generation = randomUUID();
       let busy = false;
@@ -291,9 +287,7 @@ export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("
               reconcile: input.status === "sending",
             }).pipe(
               Effect.provideService(AgentRunner, runner),
-              Effect.provideService(ContextRegistry, registry),
-              Effect.provideService(ContextQueries, queries),
-              Effect.provideService(MemoryRecall, memory),
+              Effect.provideService(CurrentActors, owner),
             ),
             (result) => ({
               _tag: "InternalSettled",

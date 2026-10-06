@@ -20,7 +20,7 @@ Internal modules are not package exports. Callers use actor definitions and the 
 
 ## Lifecycle contracts
 
-- `spawn` returns after registration; Layer acquisition, recovery and `started` run asynchronously under supervision. `tell` only enqueues work. Use a domain reply when readiness or processing completion matters.
+- `spawn` returns after registration; Layer acquisition, recovery and `started` run asynchronously under supervision. `tell` only enqueues work. `ActorRef.awaitStarted` waits for the first initialization outcome; it is not a health check or a processing barrier. Use a domain reply when processing completion matters.
 - `ask` accepts one reply. Timeout or caller cancellation closes the temporary reply reference without cancelling the receiver's work.
 - Restart retains the ref, mailbox, children and watches, while replacing the Behavior Scope and recovering persistent state. `pipeToSelf` belongs to that Scope; old work cannot deliver results or failures into a replacement Behavior.
 - `context.stop(child)` requests a direct child's stop. `system.stop(root)` awaits one root's subtree. Descendants finish before the parent's Behavior resources close.

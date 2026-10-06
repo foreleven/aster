@@ -1,7 +1,7 @@
 import { testConversations } from "./conversation-fixtures.js";
 import { goalIntentRecords } from "./goal-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
-import { goalInputId } from "../src/goals/inputs.js";
+import { goalInputId } from "../src/goals/state/inputs.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -9,14 +9,14 @@ import { Deferred, Effect, Layer, Schema } from "effect";
 import {
   ContextRegistry,
   ExternalAgents,
-  GoalState,
+  GoalSnapshot,
   GoalsRootActor,
   type ContextRecord,
   type GoalCommandReply,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { ConversationError } from "@aster/agent";
-import { type GoalIntentInput } from "../src/goals/intent.js";
+import { type GoalIntentInput } from "../src/goals/screening/intent.js";
 
 const input: GoalIntentInput = {
   requestId: "source-revision-one-to-project",
@@ -68,7 +68,7 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
                   fail &&
                   fault === "actor-ack" &&
                   record.path === "/goals/project" &&
-                  goalIntentRecords(Schema.decodeUnknownSync(GoalState)(record.state)).length
+                  goalIntentRecords(Schema.decodeUnknownSync(GoalSnapshot)(record.state)).length
                 ) {
                   fail = false;
                   Effect.runSync(Deferred.succeed(cut, undefined));
@@ -94,7 +94,7 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
                         ) {
                           assert.equal(
                             goalIntentRecords(
-                              Schema.decodeUnknownSync(GoalState)(records.get(owner)!.state),
+                              Schema.decodeUnknownSync(GoalSnapshot)(records.get(owner)!.state),
                             ).length,
                             0,
                           );
@@ -113,8 +113,12 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
                 }),
               ),
             );
-            const root = yield* system.spawn("goals", GoalsRootActor);
-            yield* root.ask((replyTo) => ({ _tag: "AwaitReady", stage: "restored", replyTo }));
+            const goalActivation = yield* Deferred.make<void>();
+            const root = yield* system.spawn("goals", GoalsRootActor, {
+              metadata: { goalActivation },
+            });
+            yield* root.awaitStarted;
+            yield* (yield* system.select("/user/goals/project").resolve()).awaitStarted;
             const send = (value: GoalIntentInput) =>
               root.ask<GoalCommandReply>((replyTo) => ({
                 _tag: "Route",
@@ -147,7 +151,7 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
             const accepted = yield* send(firstInput);
             assert.equal(accepted._tag, "Accepted");
             if (accepted._tag !== "Accepted") return;
-            const stored = Schema.decodeUnknownSync(GoalState)(
+            const stored = Schema.decodeUnknownSync(GoalSnapshot)(
               registry.get("/goals/project")!.state,
             );
             assert.equal(goalIntentRecords(stored).length, 1);

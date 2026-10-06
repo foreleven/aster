@@ -1,6 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Deferred, Effect, type Duration } from "effect";
-import { AskTimeoutError, type ActorRef, type FailureSummary } from "../actor.js";
+import {
+  AskTimeoutError,
+  type ActorRef,
+  type ActorStartupError,
+  type FailureSummary,
+} from "../actor.js";
 
 /** Only the delivery/diagnostic capability is shared with temporary reply references. */
 export interface RefRuntime {
@@ -20,6 +25,8 @@ export class ActorRefImpl<Command> implements ActorRef<Command> {
     readonly incarnation: string,
     private readonly send: (command: Command) => Effect.Effect<void>,
     private readonly system: RefRuntime,
+    // Temporary reply references and test probes are immediately available.
+    readonly awaitStarted: Effect.Effect<void, ActorStartupError> = Effect.void,
   ) {}
 
   tell(command: Command): Effect.Effect<void> {

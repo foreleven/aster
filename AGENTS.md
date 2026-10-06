@@ -53,7 +53,7 @@ Do not expand a focused change into an unrelated migration. When a required nati
 - `apps/local`: Configuration source selection, adapter selection, CLI, HTTP/SSE, and process boundary. Do not make it assemble core's internal services or start integrations independently of runtime.
 - `apps/web`: Presentation and calls to the public application API; no Actor/persistence internals.
 
-For Actor work, the mailbox remains the domain state's single writer. Use `context.pipeToSelf` for asynchronous work and retain generation checks where late results matter. Commands are transient; persisted events/state contain stable identifiers, not live refs. Keep explicit typed `ReplyTo<Response>`; do not introduce an implicit sender model without a concrete new requirement.
+For Actor work, the mailbox owns lifecycle and execution scheduling. Domain state is mailbox-owned by default; Goal business state is owned by its Actor-local `GoalState` service, whose serialized methods are shared by mailbox handlers and local Agent tools. Do not bypass that service to mutate Goal snapshots. Use `context.pipeToSelf` for asynchronous execution results and retain generation checks where late results matter. Commands are transient; persisted events/state contain stable identifiers, not live refs. Keep explicit typed `ReplyTo<Response>`; do not introduce an implicit sender model without a concrete new requirement.
 
 Read the relevant design before changing its contract: [runtime](docs/runtime-design.md), [Actor](docs/actor-design.md), [core](docs/core-design.md), [Goals](docs/goals-design.md), [delegation](docs/task-delegation-design.md), and the affected package README.
 

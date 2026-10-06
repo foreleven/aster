@@ -8,11 +8,13 @@ Task describes work delivered to an Actor. `Goal` sends a message to a Goal; `Ag
 
 TaskActor commits instructions/evidence as `task.admission` in Pi, then saves business metadata, Pi references and the receipt before acknowledging. `task.input` retains follow-up instructions and their original receipts. Startup recovers Pi admissions whose Actor handoff was interrupted, using the same input-admission transition as live delivery so completed or failed work reactivates consistently. The first input owns the initial Pi reference and receipt; admission contains only source, reply Goal, executor, causal budget and optional publication action. Actor state does not duplicate message bodies or confirmation IDs already owned by ApprovalQueue.
 
+After Task admission, the delivery operation attaches its stable path through each related Goal mailbox: the source Goal, when present, and the reply Goal. Goal attachment is idempotent and must commit before the delivery operation returns success. A failed attachment retains the accepted Task identity; it is not a rejected Task submission. Goal restoration reconstructs missing attachments from Task admission metadata.
+
 A Task retains its identity across follow-ups and completed-work reactivation. Each instruction has its own request identity and delivery status. Exact retries return their original receipts even after completion. Rejected, cancelled and uncertain Tasks do not accept new work that would bypass reconciliation.
 
 ## Execution and follow-up
 
-Internal execution uses a dedicated Pi conversation and AgentRunner. Execution is asynchronous to both the Task mailbox and the main Goal conversation. Busy instructions use native Pi steering when its runner is active; otherwise they remain pending for the next invocation. Completed Task follow-ups use the same retained working context.
+Internal execution uses a dedicated Pi conversation and AgentRunner. Context and memory tools use the shared `tools/` implementations through Actor asks; Context reads are live public projections, with revision-checked page continuations. Execution is asynchronous to both the Task mailbox and the main Goal conversation. Busy instructions use native Pi steering when its runner is active; otherwise they remain pending for the next invocation. Completed Task follow-ups use the same retained working context.
 
 External execution freezes executor policy and requires confirmation through ApprovalQueue. Only a matching persisted decision permits submission. The adapter owns busy follow-up behavior: Codex steers an active turn and starts a new turn in the same thread after completion; Pi retains context through its execution conversation. The current Doubao adapter explicitly rejects follow-up delivery because it has no implemented continuation API.
 

@@ -1,7 +1,7 @@
 import { testConversations } from "./conversation-fixtures.js";
 import { AgentConversations } from "@aster/agent";
 import { AgentRunner, AgentError, type AgentInvocation, type AgentResult } from "@aster/agent";
-import { ConfigProvider, Effect, Layer, Option, Schema } from "effect";
+import { Context, ConfigProvider, Effect, Layer, Option, Schema } from "effect";
 
 import { MemoryRecall, GoalSettings, GoalSignals, type ContextRecord } from "../src/index.js";
 
@@ -29,27 +29,28 @@ export const agentResult = (toolName: string, details: unknown): AgentResult => 
 });
 const agentFailure = (cause: Error) => new AgentError(cause.message, [], { cause });
 
-/** Each fake handles one model protocol and delegates other invocations to the preceding fake. */
+class ModelResponder extends Context.Service<
+  ModelResponder,
+  (invocation: AgentInvocation) => Effect.Effect<AgentResult, AgentError>
+>()("test/ModelResponder") {}
+
+/** Compose fake native responders beneath the runner's single SDK adaptation boundary. */
 export const modelReplyLayer = (
   resultTool: string | undefined,
   execute: (invocation: AgentInvocation) => Effect.Effect<AgentResult, AgentError>,
 ) =>
-  Layer.effect(
-    AgentRunner,
+  Layer.effectContext(
     Effect.gen(function* () {
-      const previous = yield* Effect.serviceOption(AgentRunner);
-      return AgentRunner.of({
-        run: (invocation) => {
-          // The fallback also owns the callback scope of the invocation it executes.
-          return AgentRunner.make((options) =>
-            options.resultTool === resultTool
-              ? execute(options)
-              : Option.isSome(previous)
-                ? previous.value.run(() => Effect.succeed(options))
-                : Effect.die(new Error(`Unexpected model invocation: ${options.resultTool}`)),
-          ).run(invocation);
-        },
-      });
+      const previous = yield* Effect.serviceOption(ModelResponder);
+      const respond = (options: AgentInvocation) =>
+        options.resultTool === resultTool
+          ? execute(options)
+          : Option.isSome(previous)
+            ? previous.value(options)
+            : Effect.die(new Error(`Unexpected model invocation: ${options.resultTool}`));
+      return Context.make(ModelResponder, respond).pipe(
+        Context.add(AgentRunner, AgentRunner.make(respond)),
+      );
     }),
   );
 
@@ -116,12 +117,7 @@ export const goalWorkflowLayer = (scenario: GoalScenario) =>
             messages: input.messages.filter((message) => message.role !== "system"),
           })
           .pipe(Effect.mapError(agentFailure));
-        yield* callTool(input, "update_goal", {
-          progress: response.progress,
-          completed:
-            response.completed && !!current.goal.completionCriteria && !!response.evidence.length,
-          evidence: response.evidence,
-        });
+        yield* callTool(input, "update_summary", { summary: response.progress });
         return { messages: [] };
       }),
     ),
