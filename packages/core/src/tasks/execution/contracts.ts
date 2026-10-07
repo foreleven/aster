@@ -1,8 +1,9 @@
-import { ApprovalResponse, InputRequest, PreparedTask } from "@aster/api-contracts";
-export { ApprovalResponse, InputRequest } from "@aster/api-contracts";
+import { ApprovalResponse, InputRequest } from "../../approvals/contracts.js";
+import { PreparedTask } from "../contracts.js";
+export { ApprovalResponse, InputRequest } from "../../approvals/contracts.js";
 import { Context, Data, Effect, Option, Schema } from "effect";
 
-export { PreparedTask, Task } from "@aster/api-contracts";
+export { PreparedTask, Task } from "../contracts.js";
 export const TaskResult = Schema.Struct({ text: Schema.String });
 export type TaskResult = typeof TaskResult.Type;
 export const ExecutionSession = Schema.Struct({

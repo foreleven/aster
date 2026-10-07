@@ -1,13 +1,8 @@
 import { createHash } from "node:crypto";
 import { type ActorContext, type ActorRef } from "@aster/actor";
-import {
-  ApplicationError,
-  GoalPath,
-  TaskPath,
-  type TaskDeliveryInput,
-  TaskMessage,
-  CommandReceipt,
-} from "@aster/api-contracts";
+import { ApplicationError, CommandReceipt } from "../operations.js";
+import { GoalPath } from "../goals/contracts.js";
+import { TaskPath, type TaskDeliveryInput, TaskMessage } from "./contracts.js";
 import { Effect, Schedule, Schema, Match } from "effect";
 import { type TasksRootCommand } from "./root.js";
 import { type TaskAdmissionReply, type TaskCommand } from "./protocol.js";
@@ -91,7 +86,7 @@ export const cancelGoalTasks = Effect.fn("Tasks.cancelGoal")(function* <C, R>(
 
 export const followupTask = Effect.fn("Tasks.followUp")(function* <C, R>(
   actor: Pick<ActorContext<C, R>, "select">,
-  input: import("@aster/api-contracts").FollowupTaskInput,
+  input: import("./contracts.js").FollowupTaskInput,
 ) {
   const target = yield* actor
     .select(`/user${input.target}`)

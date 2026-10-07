@@ -1,5 +1,5 @@
 import { Context, Data, Effect } from "effect";
-import type { PublicContext } from "@aster/api-contracts";
+import type { PublicContext } from "../context/contracts.js";
 export interface ContextCapture {
   readonly sessionId: string;
   readonly records: readonly PublicContext[];

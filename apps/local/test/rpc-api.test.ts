@@ -1,6 +1,6 @@
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations, AgentRunner } from "@aster/agent";
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentRunner } from "@aster/agent";
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Layer, Schema, Stream } from "effect";
@@ -135,12 +135,12 @@ test("RPC shares typed query contracts and propagates application failures witho
         Effect.gen(function* () {
           const client = yield* RpcClient.make(ApplicationRpcs, { flatten: true });
           assert.deepEqual(yield* client("ListContexts", undefined), [
-            { ...record, revision: 1, projection: { version: 1, visibility: "public" } },
+            { ...record, revision: 1, projection: { visibility: "public" } },
           ]);
           assert.deepEqual(yield* client("GetContext", { path: record.path }), {
             ...record,
             revision: 1,
-            projection: { version: 1, visibility: "public" },
+            projection: { visibility: "public" },
           });
           assert.deepEqual(yield* client("InspectRuntime", undefined), {
             phase: "ready",
@@ -248,7 +248,7 @@ test("ListContexts encodes cleared optional fields in public state and nested me
       path,
       revision: 1,
       description: "Cleared error",
-      projection: { version: 1, visibility: "public" },
+      projection: { visibility: "public" },
       state: { nested: { active: false } },
       messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
     });
@@ -274,7 +274,7 @@ test(
       port: 0,
       application: {
         ...application,
-        subscribeInvalidations: Effect.acquireRelease(
+        subscribeChanges: Effect.acquireRelease(
           Effect.sync(() => {
             active++;
           }),
@@ -282,7 +282,7 @@ test(
             Effect.sync(() => {
               if (--active === 0) released.resolve();
             }),
-        ).pipe(Effect.andThen(application.subscribeInvalidations)),
+        ).pipe(Effect.andThen(application.subscribeChanges)),
       },
     });
     const controllers = [new AbortController(), new AbortController()];
@@ -335,7 +335,7 @@ test("failed persistence and unchanged writes do not invalidate application quer
           conversations: testConversations(),
           inspect: Effect.succeed(null),
         });
-        const changes = yield* api.subscribeInvalidations;
+        const changes = yield* api.subscribeChanges;
         const received: unknown[] = [];
         yield* Stream.runForEach(changes, (change) =>
           Effect.sync(() => {

@@ -1,12 +1,15 @@
 import { Effect } from "effect";
 import { CurrentActors } from "../../services/actors.js";
 import { Type } from "@aster/agent";
-import type { TaskMessage } from "@aster/api-contracts";
+import type { TaskMessage } from "../../tasks/contracts.js";
 import { deliverTask } from "../../tasks/delivery.js";
 import { commandTool } from "../define.js";
 import { actorTask } from "./schema.js";
 
-export type TaskOrigin = Pick<TaskMessage, "requestId" | "source" | "createdAt" | "causal">;
+export type TaskOrigin = Pick<
+  TaskMessage,
+  "requestId" | "source" | "createdAt" | "remainingAgentTurns"
+>;
 export const startTask = (origin: (callId: string) => TaskOrigin) =>
   commandTool(
     {

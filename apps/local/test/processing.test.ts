@@ -1,17 +1,28 @@
-import { ContextCaptures } from "@aster/core";
+import {
+  ContextCaptures,
+  TaskActor,
+  ApprovalQueueActor,
+  ExternalAgents,
+  MemoryActor,
+  MemoryBackend,
+  type ContextCapture as MemoryCapture,
+  ContextRegistry,
+  type ContextInput,
+} from "@aster/core";
 import { testConversations } from "./conversation-fixtures.js";
-import { taskCapture } from "@aster/core/testing";
-import { larkCaptures, larkContextViews } from "@aster/integrations";
-import { TaskActor } from "@aster/core";
-import { ApprovalQueueActor, ExternalAgents } from "@aster/core";
+import { taskCapture, makeContextRegistry } from "@aster/core/testing";
+import {
+  larkCaptures,
+  larkContextViews,
+  LarkRootActor,
+  LarkEmailChannelActor,
+  LarkMailMessageActor,
+} from "@aster/integrations";
+
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { MemoryActor } from "@aster/core";
-import { MemoryBackend, type ContextCapture as MemoryCapture } from "@aster/core";
-import { ContextRegistry, type ContextInput } from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
-import { LarkRootActor, LarkEmailChannelActor, LarkMailMessageActor } from "@aster/integrations";
+
 import { Effect, Layer } from "effect";
 
 const source = (subject: string): ContextInput => ({
@@ -98,7 +109,7 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
           task: { instructions: "Review", input: [] },
           replyTo: "/goals/personal",
           evidence: confirmed,
-          causal: { rootRequestId: "task", remainingAgentTurns: 3 },
+          remainingAgentTurns: 3,
         };
         const entry = yield* conversations.append(taskPath, "task", "task.admission", input);
         yield* registry.register(taskPath, TaskActor.context);
@@ -121,7 +132,7 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
                 source: "/signals/review",
                 agent: "test",
                 replyTo: "/goals/personal",
-                causal: { rootRequestId: "task", remainingAgentTurns: 3 },
+                remainingAgentTurns: 3,
               },
             },
           },

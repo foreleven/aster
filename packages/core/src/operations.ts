@@ -11,3 +11,8 @@ export const CommandReceipt = Schema.Struct({
   revision: ContextRevision,
 });
 export type CommandReceipt = typeof CommandReceipt.Type;
+
+export class ApplicationError extends Schema.TaggedError<ApplicationError>()("ApplicationError", {
+  kind: Schema.Literals(["not-found", "invalid-input", "unavailable", "conflict"]),
+  message: Schema.String,
+}) {}

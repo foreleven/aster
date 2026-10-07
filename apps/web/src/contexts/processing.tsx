@@ -2,13 +2,12 @@ import { useMemo, useState } from "react";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Cause, Exit, Match, Schema } from "effect";
 import { Atom } from "effect/reactivity";
+import { ApplicationError, type RecoveryInput } from "@aster/core/contracts";
 import {
-  ApplicationError,
   QueryKeys,
   contextQueryKeys,
   type ProcessingOwner,
   type ProcessingSnapshot,
-  type RecoveryInput,
 } from "@aster/api-contracts";
 import { ApplicationClient, resultError, resultValue } from "../api/client";
 

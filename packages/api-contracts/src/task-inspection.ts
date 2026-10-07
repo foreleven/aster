@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { ContextRevision } from "./command.js";
+import { ContextRevision } from "@aster/core/contracts";
 
 const InspectionTaskPath = Schema.String.check(Schema.isPattern(/^\/tasks\/[^/]+$/));
 /** Business inspection deliberately excludes provider metadata, native frames and credential handles. */

@@ -1,9 +1,10 @@
 import { Context, Effect, Layer, Option, Ref, Schema, Match } from "effect";
-import { ApplicationError, type RecoveryInput, type RecoveryReceipt } from "@aster/api-contracts";
+import { ApplicationError } from "../operations.js";
+import { type RecoveryInput, type RecoveryReceipt } from "./contracts.js";
 import { isDeepStrictEqual } from "node:util";
 import { ContextRegistry } from "../context/registry.js";
 import type { ContextEvent } from "../context/model.js";
-import { reactionTargets } from "./policy.js";
+import { reactionTargets, type ReactionFailure } from "./policy.js";
 import { GoalSettings } from "../config/settings.js";
 import {
   ReactionSnapshot,
@@ -16,7 +17,6 @@ import {
   type ReactionPlan,
   type ReactionReply,
 } from "./state.js";
-import type { ReactionFailure } from "./policy.js";
 
 /** Mailbox-only preflight. The owner commits the returned authorization with its domain transition. */
 const recoveryReplay = Effect.fn("Recovery.replay")(function* (

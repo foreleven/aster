@@ -1,6 +1,6 @@
 import { AgentConversations } from "@aster/agent";
 import { type ActorContext, type ActorRef } from "@aster/actor";
-import { ApplicationError } from "@aster/api-contracts";
+import { ApplicationError } from "../operations.js";
 import { Effect, Layer, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";

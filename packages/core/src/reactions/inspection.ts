@@ -1,9 +1,5 @@
 import { Effect, Schema } from "effect";
-import {
-  ApplicationError,
-  type ProcessingSnapshot,
-  type ProcessingOwner,
-} from "@aster/api-contracts";
+import { ApplicationError } from "../operations.js";
 import type { ContextRegistry } from "../context/registry.js";
 import {
   ReactionSnapshot,
@@ -42,9 +38,8 @@ export const reactionWorkView = (work: ReactionWork) => {
 
 export const inspectReactions = Effect.fn("Reactions.inspect")(function* (
   registry: ContextRegistry["Service"],
-  owner: ProcessingOwner,
-): Effect.fn.Return<ProcessingSnapshot, ApplicationError> {
-  const current = registry.get(`/${owner}`);
+) {
+  const current = registry.get("/system-one");
   if (!current)
     return yield* new ApplicationError({
       kind: "not-found",
@@ -57,12 +52,12 @@ export const inspectReactions = Effect.fn("Reactions.inspect")(function* (
     ),
   );
   return {
-    owner,
+    owner: "system-one" as const,
     revision: current.revision ?? 0,
-    entries: state.work.map(reactionWorkView).flatMap((work): ProcessingSnapshot["entries"] => [
+    entries: state.work.map(reactionWorkView).flatMap((work) => [
       {
         id: work.event.id,
-        kind: "screening",
+        kind: "screening" as const,
         workId: work.event.id,
         source: work.event.record.path,
         target: "/system-one",

@@ -21,12 +21,13 @@ import {
   contextView,
   type SignalRootCommand,
   type GoalsRootCommand,
-  type ContextInput,
+  type ContextSnapshot,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
-const record = (path: string, state: object): ContextInput => ({
+const record = (path: string, state: object): ContextSnapshot => ({
   path,
+  revision: 1,
   description: path,
   state: path.startsWith("/goals/")
     ? {
@@ -235,6 +236,7 @@ test("Signal matching sends one condition and preserves the source fields", asyn
         client,
         {
           path: "/email",
+          revision: 1,
           description: "Email",
           state: { subject: "Draft" },
           messages: [],

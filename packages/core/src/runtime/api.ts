@@ -1,7 +1,7 @@
 import { inspectTask } from "../tasks/view.js";
 import type { TasksRootCommand } from "../tasks/root.js";
 import type { TaskAdmissionReply } from "../tasks/protocol.js";
-import { TaskRecoveryInput } from "@aster/api-contracts";
+import { TaskRecoveryInput } from "../tasks/contracts.js";
 import { randomUUID } from "node:crypto";
 import {
   ContextQueries,
@@ -9,36 +9,33 @@ import {
   type ContextQueryInput,
 } from "../context/queries/routes.js";
 import { inspectReactions } from "../reactions/inspection.js";
-import { RecoveryInput, type ProcessingOwner, type CommandReceipt } from "@aster/api-contracts";
+import { RecoveryInput } from "../reactions/contracts.js";
+import { type CommandReceipt, ApplicationError } from "../operations.js";
 import { goalTimeline } from "../goals/view.js";
 import { Effect, Schema, Stream } from "effect";
-import {
-  ApplicationError,
-  RetryGoalTurnInput,
-  contextQueryKeys,
-  RuntimeSnapshot,
-} from "@aster/api-contracts";
-export { ApplicationError } from "@aster/api-contracts";
+
+import { GoalRequestData, type GoalCommand, type GoalCommandReply } from "../goals/protocol.js";
+export { ApplicationError } from "../operations.js";
 import type { ActorRef } from "@aster/actor";
-import { PublicContext as ContextRecord } from "@aster/api-contracts";
+import { PublicContext as ContextRecord } from "../context/contracts.js";
 import type { ContextRegistry } from "../context/registry.js";
 import { publicJson } from "../json.js";
 import { PublicApprovalEntry } from "../approvals/view.js";
 import type { AgentConversations } from "@aster/agent";
-import type { GoalCommand, GoalCommandReply } from "../goals/protocol.js";
+
 import type { GoalsRootCommand } from "../goals/root.js";
 import { approvalEntries, type ApprovalCommand, type ApprovalReply } from "../approvals/actor.js";
 import type { ApprovalResponse } from "../tasks/execution/contracts.js";
 
 /** Transport-independent queries and commands. Actor paths remain inside core. */
-export const makeApplicationApi = (options: {
+export const makeApplicationApi = <Inspection>(options: {
   readonly registry: ContextRegistry["Service"];
   readonly queries?: ContextQueries["Service"];
   readonly conversations: AgentConversations["Service"];
   readonly goals?: ActorRef<GoalsRootCommand>;
   readonly tasks?: ActorRef<TasksRootCommand>;
   readonly approvals?: ActorRef<ApprovalCommand>;
-  readonly inspect: Effect.Effect<unknown>;
+  readonly inspect: Effect.Effect<Inspection>;
   readonly recoverProcessing?: (
     input: RecoveryInput,
   ) => Effect.Effect<CommandReceipt, ApplicationError>;
@@ -132,7 +129,7 @@ export const makeApplicationApi = (options: {
         : Effect.fail(
             new ContextQueryError({ kind: "unavailable", message: "Context queries unavailable" }),
           ),
-    inspectProcessing: (owner: ProcessingOwner) => inspectReactions(registry, owner),
+    inspectProcessing: () => inspectReactions(registry),
     recoverProcessing: Effect.fn("ApplicationApi.recoverProcessing")(function* (
       raw: RecoveryInput,
     ) {
@@ -156,24 +153,15 @@ export const makeApplicationApi = (options: {
       })),
     ),
     // Acquisition subscribes before transports acknowledge readiness to a client.
-    subscribeInvalidations: registry.subscribe.pipe(
+    subscribeChanges: registry.subscribe.pipe(
       Effect.map((changes) =>
         changes.pipe(
-          Stream.map(({ record }) => ({
-            _tag: "Invalidate" as const,
-            keys: contextQueryKeys(record.path),
-          })),
+          Stream.map(({ record }) => ({ path: record.path, revision: record.revision })),
         ),
       ),
     ),
     contexts: wireContexts,
-    inspect: options.inspect.pipe(
-      Effect.flatMap(Schema.decodeUnknownEffect(RuntimeSnapshot)),
-      Effect.mapError(
-        () =>
-          new ApplicationError({ kind: "unavailable", message: "Runtime inspection unavailable" }),
-      ),
-    ),
+    inspect: options.inspect,
     context: (path: string) =>
       Effect.suspend(() => {
         const record = registry.reader.get(path);
@@ -189,13 +177,18 @@ export const makeApplicationApi = (options: {
       };
     }),
     goals: {
-      retryTurn: Effect.fn("ApplicationApi.retryGoalTurn")(function* (raw: RetryGoalTurnInput) {
-        const input = yield* Schema.decodeUnknownEffect(RetryGoalTurnInput)(raw).pipe(
+      retryTurn: Effect.fn("ApplicationApi.retryGoalTurn")(function* (
+        slug: string,
+        request: Omit<Extract<GoalRequestData, { _tag: "RetryTurn" }>, "_tag">,
+      ) {
+        const input = yield* Schema.decodeUnknownEffect(
+          GoalRequestData.pipe(Schema.toTaggedUnion("_tag")).cases.RetryTurn,
+        )({ ...request, _tag: "RetryTurn" }).pipe(
           Effect.mapError(
             () => new ApplicationError({ kind: "invalid-input", message: "Invalid turn retry" }),
           ),
         );
-        yield* requireGoal(input.slug);
+        yield* requireGoal(slug);
         if (!options.goals)
           return yield* new ApplicationError({
             kind: "unavailable",
@@ -204,7 +197,7 @@ export const makeApplicationApi = (options: {
         const reply = yield* options.goals
           .ask<GoalCommandReply>((replyTo) => ({
             _tag: "Route",
-            slug: input.slug,
+            slug,
             command: {
               _tag: "RetryTurn",
               requestId: input.requestId,
@@ -275,4 +268,6 @@ export const makeApplicationApi = (options: {
     },
   };
 };
-export type ApplicationApi = ReturnType<typeof makeApplicationApi>;
+export type ApplicationApi<Inspection = unknown> = ReturnType<
+  typeof makeApplicationApi<Inspection>
+>;

@@ -5,10 +5,9 @@ import {
 import { AgentConversations, AgentRunner } from "@aster/agent";
 import { testConversations } from "./conversation-fixtures.js";
 import { emptyRecall } from "./workflow-fixtures.js";
-import { GoalSettings, ContextQueries } from "../src/index.js";
-import { Actor, ActorSystem } from "@aster/actor";
-import { Clock, Effect, Layer, Schema, Stream } from "effect";
 import {
+  GoalSettings,
+  ContextQueries,
   ApprovalQueueActor,
   SignalDefinitions,
   ContextRegistry,
@@ -19,12 +18,15 @@ import {
   type StoredContext,
   type ExternalAgent,
 } from "../src/index.js";
-import { GoalCommand } from "../src/goals/protocol.js";
-import { GoalMailbox } from "../src/goals/protocol.js";
+import { Actor, ActorSystem } from "@aster/actor";
+import { Clock, Effect, Layer, Schema, Stream } from "effect";
+
+import { GoalCommand, GoalMailbox } from "../src/goals/protocol.js";
+
 import { makeContextRegistry } from "../src/testing/context.js";
 import { fakeAgent } from "./fixtures.js";
 import { taskPathFor } from "../src/tasks/state/admission.js";
-import type { TaskDeliveryInput } from "@aster/api-contracts";
+import type { TaskDeliveryInput } from "../src/tasks/contracts.js";
 
 export const taskInput = (requestId = "task", source = "/goals/personal"): TaskDeliveryInput => ({
   requestId,
@@ -34,7 +36,7 @@ export const taskInput = (requestId = "task", source = "/goals/personal"): TaskD
   agent: "test",
   task: { instructions: "Read evidence", input: [] },
   replyTo: "/goals/personal",
-  causal: { rootRequestId: requestId, remainingAgentTurns: 3 },
+  remainingAgentTurns: 3,
 });
 export const taskFixture = Effect.fnUntraced(function* (
   options: {
@@ -142,7 +144,7 @@ export const retainedTask = Effect.fnUntraced(function* (
   input = taskInput(),
 ) {
   const entry = yield* messages.append(input.target, input.requestId, "task.admission", input);
-  const { source, replyTo, agent, causal } = input;
+  const { source, replyTo, agent, remainingAgentTurns } = input;
   const terminal = ["completed", "failed", "cancelled", "uncertain"].includes(status);
   const inputs: TaskSnapshot["inputs"] = [
     {
@@ -161,7 +163,7 @@ export const retainedTask = Effect.fnUntraced(function* (
       })
     : undefined;
   const state: TaskSnapshot = {
-    admission: { source, replyTo, agent, causal },
+    admission: { source, replyTo, agent, remainingAgentTurns },
     roundId: input.requestId,
     status,
     inputs,

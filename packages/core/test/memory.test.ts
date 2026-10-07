@@ -206,6 +206,7 @@ test("recovered captures exclude private source data and Memory queue state stay
         records: [
           {
             path: "/tasks/" + "a".repeat(64),
+            revision: 1,
             description: "Result",
             state: {
               ...retained.snapshot.state,

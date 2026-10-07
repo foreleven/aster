@@ -13,6 +13,11 @@
       "aster-source": "./src/testing/context.ts",
       "types": "./dist/testing/context.d.ts",
       "default": "./dist/testing/context.js"
+    },
+    "./contracts": {
+      "aster-source": "./src/contracts.ts",
+      "types": "./dist/contracts.d.ts",
+      "default": "./dist/contracts.js"
     }
   },
   "scripts": {
@@ -23,7 +28,6 @@
   "dependencies": {
     "@aster/actor": "workspace:*",
     "@aster/agent": "workspace:*",
-    "@aster/api-contracts": "workspace:*",
     "effect": "4.0.0"
   },
   "devDependencies": {

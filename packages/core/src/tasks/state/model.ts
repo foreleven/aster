@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AgentConversations } from "@aster/agent";
-import { ApplicationError } from "@aster/api-contracts";
+import { ApplicationError } from "../../operations.js";
 import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { ContextRegistry } from "../../context/registry.js";
 import { approvalEntries } from "../../approvals/actor.js";
@@ -114,10 +114,10 @@ const makeTaskState = Effect.fn("TaskState.make")(function* (path: string) {
           return yield* conflict("Reply Goal is missing or ended");
         const entry = yield* messages.append(path, id, "task.admission", value).pipe(Effect.orDie);
         const receipt = { requestId: id, revision: 1 };
-        const { source: owner, replyTo, agent, causal } = value;
+        const { source: owner, replyTo, agent, remainingAgentTurns } = value;
         yield* store.commit(
           {
-            admission: { source: owner, replyTo, agent, causal },
+            admission: { source: owner, replyTo, agent, remainingAgentTurns },
             status: "ready",
             inputs: [{ requestId: id, entryId: entry.id, receipt, status: "pending" }],
           },

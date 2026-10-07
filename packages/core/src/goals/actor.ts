@@ -66,7 +66,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
             input.status === "pending" &&
             input.kind === "GoalIntent" &&
             input.relevant === undefined &&
-            input.causal.remainingAgentTurns > 0,
+            input.remainingAgentTurns > 0,
         );
         if (!input) return;
         const { payload } = yield* model.resolve(input);
@@ -162,10 +162,10 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
             (input) =>
               input.kind !== "GoalIntent" ||
               input.relevant === true ||
-              input.causal.remainingAgentTurns <= 0,
+              input.remainingAgentTurns <= 0,
           );
         if (!input) return;
-        if (input.causal.remainingAgentTurns <= 0) {
+        if (input.remainingAgentTurns <= 0) {
           yield* model.exhaust(input);
           yield* wake(context);
           return;

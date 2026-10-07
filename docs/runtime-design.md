@@ -77,7 +77,7 @@ Use one credential resolver for exact `${ENV_VAR}` references and memory `apiKey
 
 ## Application interface
 
-Runtime exposes Context reads/change notifications, normalized query invalidations, Goal list/history/sendMessage/end, approvals list/respond, and Schema-backed runtime diagnostics. Browser-safe RPC contracts live in `packages/api-contracts`. HTTP validates transport inputs and maps application errors to responses; it does not inspect domain paths to identify entities, compute history pages or send Actor Commands.
+Runtime exposes Context reads and scoped path/revision notifications, Goal list/history/sendMessage/end, approvals list/respond, and native runtime diagnostics. Domain schemas live in `@aster/core/contracts`; API response schemas and RPC live in `packages/api-contracts`. Local maps Context notifications to query invalidations and validates runtime diagnostics at the RPC boundary. HTTP validates transport inputs and maps application errors to responses; it does not inspect domain paths to identify entities, compute history pages or send Actor Commands.
 
 ## Refactoring and acceptance
 

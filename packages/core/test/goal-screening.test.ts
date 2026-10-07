@@ -11,15 +11,15 @@ import {
   GoalScreeningStoreError,
   type GoalScreeningRecord,
   type SystemOneClient,
-  type ContextInput,
+  type ContextSnapshot,
 } from "../src/index.js";
 
 const relevantGoals = (
   client: SystemOneClient,
-  source: ContextInput,
+  source: ContextSnapshot,
   goals: readonly GoalDefinition[],
   options: {
-    goalRecords?: Record<string, import("@aster/api-contracts").PublicContext>;
+    goalRecords?: Record<string, import("../src/context/contracts.js").PublicContext>;
     screening?: GoalScreeningStore["Service"];
   } = {},
 ) =>
@@ -40,8 +40,9 @@ const relevantGoals = (
     ),
   );
 
-const source: ContextInput = {
+const source: ContextSnapshot = {
   path: "/lark/im/chats/project",
+  revision: 1,
   description: "Project chat",
   state: { summary: "The launch is blocked by a backend API delay." },
   messages: [],

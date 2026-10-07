@@ -1,5 +1,6 @@
 import { AgentConversations, AgentError, AgentRunner } from "@aster/agent";
-import { ApplicationError, TaskDeliveryInput, type PreparedTask } from "@aster/api-contracts";
+import { ApplicationError } from "../../operations.js";
+import { TaskDeliveryInput, type PreparedTask } from "../contracts.js";
 import { Context, Deferred, Effect, Layer, Option, Ref, Schedule, Schema, Semaphore } from "effect";
 import { GoalSettings } from "../../config/settings.js";
 import { CurrentActors } from "../../services/actors.js";
@@ -9,8 +10,9 @@ import {
   type TaskInputRef,
   type TaskOutcome,
   type TaskWork,
+  StoredTaskInput,
 } from "../state/snapshot.js";
-import { StoredTaskInput } from "../state/snapshot.js";
+
 import { ExternalAgents, ExternalAgentError, type ExecutionStatus } from "./contracts.js";
 import { executionCheckpoint } from "./checkpoint.js";
 import { DEFAULT_EXECUTOR_PROMPT, taskPrompt } from "./external.js";

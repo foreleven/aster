@@ -1,11 +1,7 @@
 import { GoalIntentInput } from "./screening/intent.js";
-import {
-  ApplicationError,
-  GoalExecutionFeedback,
-  TaskMessage,
-  CommandReceipt,
-  TaskPath,
-} from "@aster/api-contracts";
+import { ApplicationError, CommandReceipt } from "../operations.js";
+import { GoalExecutionFeedback } from "./contracts.js";
+import { TaskMessage, TaskPath } from "../tasks/contracts.js";
 import { Predicate, Schema } from "effect";
 import { ReplyTo } from "@aster/actor";
 import { publicJson } from "../json.js";

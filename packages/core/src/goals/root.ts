@@ -5,7 +5,7 @@ import { AgentRunner, AgentConversations } from "@aster/agent";
 import { GoalSettings } from "../config/settings.js";
 import { ContextRegistry } from "../context/registry.js";
 import { Effect, Layer, Schema } from "effect";
-import { ApplicationError } from "@aster/api-contracts";
+import { ApplicationError } from "../operations.js";
 import { Actor, type ActorRef } from "@aster/actor";
 
 export const GoalsRootCommand = Schema.TaggedStruct("Route", {

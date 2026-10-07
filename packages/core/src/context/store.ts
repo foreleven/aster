@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import type { PublicContext } from "@aster/api-contracts";
+import type { PublicContext } from "./contracts.js";
 import {
   Cause,
   Clock,

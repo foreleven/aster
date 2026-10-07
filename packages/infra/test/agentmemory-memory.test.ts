@@ -160,6 +160,7 @@ test("session ends only after compression; search provenance survives reopening"
   try {
     const record = {
       path: "/lark",
+      revision: 1,
       description: "My work account",
       state: { name: "Alice" },
       messages: [],
@@ -300,7 +301,7 @@ test("failed compression leaves its session open and reports failure", async () 
     await assert.rejects(
       client.capture({
         sessionId: "failed",
-        records: [{ path: "/x", description: "x", state: {}, messages: [] }],
+        records: [{ path: "/x", revision: 1, description: "x", state: {}, messages: [] }],
       }),
       /timed out/,
     );

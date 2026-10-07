@@ -87,6 +87,9 @@ importers:
       '@aster/api-contracts':
         specifier: workspace:*
         version: link:../../packages/api-contracts
+      '@aster/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@effect/atom-react':
         specifier: 4.0.0
         version: 4.0.0(effect@4.0.0)(react@19.2.4)(scheduler@0.27.0)
@@ -169,6 +172,9 @@ importers:
 
   packages/api-contracts:
     dependencies:
+      '@aster/core':
+        specifier: workspace:*
+        version: link:../core
       effect:
         specifier: 4.0.0
         version: 4.0.0
@@ -181,9 +187,6 @@ importers:
       '@aster/agent':
         specifier: workspace:*
         version: link:../agent
-      '@aster/api-contracts':
-        specifier: workspace:*
-        version: link:../api-contracts
       effect:
         specifier: 4.0.0
         version: 4.0.0

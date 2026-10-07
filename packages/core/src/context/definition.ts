@@ -1,5 +1,5 @@
 import { Option, Schema } from "effect";
-import type { PublicContext } from "@aster/api-contracts";
+import type { PublicContext } from "./contracts.js";
 import type { ContextInput } from "./model.js";
 export interface ContextViewPolicy {
   readonly matches?: ((path: string) => boolean) | undefined;
@@ -60,7 +60,7 @@ export const contextView = <State extends object, Message>(options: {
       description: record.description,
       state: state.value,
       messages,
-      projection: { version: 1, visibility: "public" },
+      projection: { visibility: "public" },
     };
   },
 });
@@ -74,5 +74,5 @@ export const restrictedContext = (
   description: record.description,
   state: {},
   messages: [],
-  projection: { version: 1, visibility: "restricted", reason },
+  projection: { visibility: "restricted", reason },
 });

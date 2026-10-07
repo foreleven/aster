@@ -1,9 +1,5 @@
-import {
-  ApplicationError,
-  CommandReceipt,
-  RecoveryReceipt,
-  type ReactionMatch,
-} from "@aster/api-contracts";
+import { ApplicationError, CommandReceipt } from "../operations.js";
+import { RecoveryReceipt } from "./contracts.js";
 import { Match, Schema } from "effect";
 import { ContextEvent, contextEventId } from "../context/model.js";
 import { GoalIntentInput } from "../goals/screening/intent.js";
@@ -74,24 +70,22 @@ export const deliveriesOf = (work: ReactionWork): readonly ReactionDelivery[] =>
   work.status === "queued"
     ? []
     : work.targets.flatMap(({ result }) => (result._tag === "Matched" ? [result.delivery] : []));
-export const matchesOf = (work: ReactionWork): readonly ReactionMatch[] =>
-  work.status === "queued"
-    ? []
-    : work.targets.flatMap(({ input, result }): ReactionMatch[] =>
-        Match.value(result).pipe(
-          Match.tag("Pending", () => []),
-          Match.tag("Failed", ({ error }) => [
-            { _tag: "Failed" as const, target: targetPath(input), error },
-          ]),
-          Match.tag("NotMatched", ({ reason }) => [
-            { _tag: "NotMatched" as const, target: targetPath(input), reason },
-          ]),
-          Match.tag("Matched", ({ reason }) => [
-            { _tag: "Matched" as const, target: targetPath(input), reason },
-          ]),
-          Match.exhaustive,
-        ),
-      );
+const matchOf = ({ input, result }: typeof ReactionTarget.Type) =>
+  Match.value(result).pipe(
+    Match.tag("Pending", () => []),
+    Match.tag("Failed", ({ error }) => [
+      { _tag: "Failed" as const, target: targetPath(input), error },
+    ]),
+    Match.tag("NotMatched", ({ reason }) => [
+      { _tag: "NotMatched" as const, target: targetPath(input), reason },
+    ]),
+    Match.tag("Matched", ({ reason }) => [
+      { _tag: "Matched" as const, target: targetPath(input), reason },
+    ]),
+    Match.exhaustive,
+  );
+export const matchesOf = (work: ReactionWork) =>
+  work.status === "queued" ? [] : work.targets.flatMap<ReturnType<typeof matchOf>[number]>(matchOf);
 /** The lifecycle shown in diagnostics is derived, never persisted alongside target state. */
 export const workStatus = (work: ReactionWork) => {
   if (work.status === "queued") return "pending";

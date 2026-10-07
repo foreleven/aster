@@ -1,4 +1,12 @@
-import { conversationText, Type, type EffectTool } from "@aster/agent";
+import {
+  conversationText,
+  Type,
+  type EffectTool,
+  AgentRunner,
+  type AgentMessage,
+  AgentError,
+  type AssistantMessage,
+} from "@aster/agent";
 import { goalTools } from "../tools/catalogues.js";
 import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { GoalState } from "./state/model.js";
@@ -7,7 +15,7 @@ import type { ResolvedGoalInput } from "./state/inputs.js";
 import type { GoalDefinition } from "../config/schema.js";
 import { GoalSettings } from "../config/settings.js";
 import { Effect, Clock, Context, Layer, Schema, Match } from "effect";
-import { AgentRunner, type AgentMessage, AgentError, type AssistantMessage } from "@aster/agent";
+
 import type { CurrentActors } from "../services/actors.js";
 import { createHash } from "node:crypto";
 import { output } from "../tools/define.js";
@@ -51,10 +59,7 @@ export class GoalAgent extends Context.Service<
               .update(JSON.stringify([source, input.inputId, callId]))
               .digest("hex"),
             createdAt: input.receivedAt,
-            causal: {
-              rootRequestId: input.causal.rootRequestId,
-              remainingAgentTurns: Math.max(0, input.causal.remainingAgentTurns - 1),
-            },
+            remainingAgentTurns: Math.max(0, input.remainingAgentTurns - 1),
           });
           const timestamp = yield* Clock.currentTimeMillis;
           const result = yield* runner.run({

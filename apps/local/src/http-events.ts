@@ -1,3 +1,4 @@
+import { contextQueryKeys } from "@aster/api-contracts";
 import { Data, Effect, Queue, Stream } from "effect";
 import { HttpServerResponse } from "effect/http";
 import type { ApplicationApi } from "@aster/core";
@@ -7,13 +8,13 @@ class SlowEventClient extends Data.TaggedError("SlowEventClient") {}
 /** Register before ready. Slow clients reconnect and re-query; notifications are not an audit log. */
 export const eventResponse = (application: ApplicationApi) =>
   Effect.gen(function* () {
-    const changes = yield* application.subscribeInvalidations;
+    const changes = yield* application.subscribeChanges;
     const frames = yield* Queue.dropping<string, SlowEventClient>(64);
     yield* Stream.runForEach(changes, (change) =>
       Effect.gen(function* () {
         const accepted = yield* Queue.offer(
           frames,
-          `event: invalidate\ndata: ${JSON.stringify(change)}\n\n`,
+          `event: invalidate\ndata: ${JSON.stringify({ _tag: "Invalidate", keys: contextQueryKeys(change.path) })}\n\n`,
         );
         if (!accepted) return yield* new SlowEventClient();
       }),

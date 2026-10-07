@@ -1,5 +1,5 @@
 import { type ActorRef, type ReplyTo } from "@aster/actor";
-import { ApplicationError } from "@aster/api-contracts";
+import { ApplicationError } from "../operations.js";
 import { Deferred, Effect } from "effect";
 import { CurrentActors, type QueryReply } from "../services/actors.js";
 

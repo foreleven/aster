@@ -1,9 +1,11 @@
 import { Schema } from "effect";
-import { CausalChain } from "./causal.js";
-import { CommandIdentifier, CommandReceipt } from "./command.js";
-import { PublicContext } from "./models.js";
 
-export const GoalPath = Schema.String.check(Schema.isPattern(/^\/goals\/[a-z0-9][a-z0-9-]*$/));
+import { CommandIdentifier, ContextRevision } from "../operations.js";
+import { PublicContext } from "../context/contracts.js";
+
+import { GoalPath } from "../goals/contracts.js";
+export const RemainingAgentTurns = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 4 }));
+export type RemainingAgentTurns = typeof RemainingAgentTurns.Type;
 export const PreparedTask = Schema.Struct({
   instructions: Schema.NonEmptyString,
   input: Schema.Array(
@@ -27,7 +29,7 @@ export const TaskMessage = Schema.Struct({
   source: Schema.String.check(Schema.isPattern(/^\/(?:goals|signals)\/[a-z0-9][a-z0-9-]*$/)),
   task: Task,
   createdAt: Schema.NonEmptyString,
-  causal: CausalChain,
+  remainingAgentTurns: RemainingAgentTurns,
   evidence: Schema.optional(PublicContext),
 });
 export type TaskMessage = typeof TaskMessage.Type;
@@ -40,8 +42,23 @@ export const TaskDeliveryInput = Schema.Struct({
   agent: Schema.NonEmptyString,
   task: PreparedTask,
   replyTo: GoalPath,
-  causal: CausalChain,
+  remainingAgentTurns: RemainingAgentTurns,
   evidence: Schema.optional(PublicContext),
 });
 export type TaskDeliveryInput = typeof TaskDeliveryInput.Type;
-export const TaskAdmission = Schema.Struct({ input: TaskDeliveryInput, receipt: CommandReceipt });
+
+export const TaskPath = Schema.String.check(Schema.isPattern(/^\/tasks\/[a-f0-9]{64}$/));
+/** Explicit operator authorization, addressed directly to the execution owner. */
+export const TaskRecoveryInput = Schema.Struct({
+  requestId: CommandIdentifier,
+  target: TaskPath,
+  expectedRevision: ContextRevision,
+});
+export type TaskRecoveryInput = typeof TaskRecoveryInput.Type;
+export const FollowupTaskInput = Schema.Struct({
+  requestId: CommandIdentifier,
+  target: TaskPath,
+  source: Schema.String.check(Schema.isPattern(/^\/goals\/[a-z0-9][a-z0-9-]*$/)),
+  text: Schema.NonEmptyString,
+});
+export type FollowupTaskInput = typeof FollowupTaskInput.Type;

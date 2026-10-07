@@ -1,15 +1,16 @@
 import { ContextsActor } from "../src/context/queries/actor.js";
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentConversations } from "@aster/agent";
-import assert from "node:assert/strict";
-import { test } from "node:test";
-import { ActorSystem } from "@aster/actor";
 import {
+  AgentConversations,
   AgentError,
   type AgentInvocation,
   type AgentResult,
   type AssistantMessage,
 } from "@aster/agent";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { ActorSystem } from "@aster/actor";
+
 import { Deferred, Effect, Layer, Logger, Schema, Stream } from "effect";
 import {
   ContextRegistry,
@@ -124,24 +125,17 @@ const contextInput = (requestId: string): GoalSubmission => ({
     target: "/goals/project",
     intent: {
       intentId: requestId,
-      goalSlug: "project",
       source: {
         contextPath: "/chats/project",
-        actorPath: "/chats/project",
         name: "Project",
-        kind: "context",
       },
       content: {
         summary: "Project evidence",
-        summaryRevision: requestId,
-        summaryFingerprint: requestId,
       },
       relevance: {
         score: 1,
         rationale: "Candidate",
-        screeningRecordId: requestId,
         threshold: 0.7,
-        policyVersion: "test",
       },
       createdAt: "2026-10-01T00:00:00Z",
     },
@@ -344,7 +338,7 @@ test("queued users precede ready Context and Task inputs without overlapping mai
           source: "/goals/project",
           task: { _tag: "Goal", target: "/goals/project", text: "Task update" },
           createdAt: "2026-10-01T00:00:00Z",
-          causal: { rootRequestId: "task", remainingAgentTurns: 3 },
+          remainingAgentTurns: 3,
         },
       });
       yield* env.submit("user-one", { _tag: "UserInput", text: "First question" });
@@ -541,7 +535,7 @@ test("Goal persists input before acknowledgement, serializes delivery, and start
         "lastError",
         "historyCount",
         "completionOrigin",
-        "causal",
+        "remainingAgentTurns",
         "requests",
         "evaluations",
         "pendingEvaluation",
@@ -613,7 +607,7 @@ test("Context changes pass the Agent Gate before Pi; user and Task inputs bypass
           source: "/goals/project",
           task: { _tag: "Goal", target: "/goals/project", text: "Follow up" },
           createdAt: "2026-10-01T00:00:00Z",
-          causal: { rootRequestId: "task-direct", remainingAgentTurns: 3 },
+          remainingAgentTurns: 3,
         },
       });
       yield* env.wait(() => env.state().inputs.at(-1)!.status === "completed");
@@ -863,8 +857,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
       );
       assert.equal(gates, 0);
       const feedback = env.state().inputs.findLast((input) => input.kind === "ExecutionFeedback")!;
-      assert.equal(feedback.causal?.rootRequestId, "goal:project:initial");
-      assert.notEqual(feedback.causal?.rootRequestId, "unrelated-user-turn");
+      assert.equal(feedback.remainingAgentTurns, 3);
     }),
   );
 });
@@ -1050,8 +1043,9 @@ test("Goal receipts normalize nested object keys, retain array order and omit du
         source: "/goals/project",
         createdAt: "2026-10-05T00:00:00Z",
         task: { _tag: "Goal" as const, target: "/goals/project", text: "Review" },
-        causal: { rootRequestId: "canonical-task", remainingAgentTurns: 2 },
+        remainingAgentTurns: 2,
         evidence: {
+          revision: 1,
           path: "/source",
           description: "Evidence",
           state: { first: 1, nested: { a: 2, b: 3 }, items: [1, 2] },
@@ -1154,7 +1148,7 @@ test("Goal lifecycle pauses only owned Signals through its ActorContext", async 
             source: `/goals/${slug}`,
             target: `/signals/${slug}--watch`,
             change: { operation: "create", definition },
-            causal: { rootRequestId: "test", remainingAgentTurns: 3 },
+            remainingAgentTurns: 3,
           },
         }));
         assert.equal(reply._tag, "Accepted");

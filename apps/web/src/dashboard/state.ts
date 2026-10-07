@@ -1,4 +1,4 @@
-import type { ApprovalResponse } from "@aster/api-contracts";
+import type { ApprovalResponse } from "@aster/core/contracts";
 import { Atom, AsyncResult } from "effect/reactivity";
 import {
   contextsQuery,

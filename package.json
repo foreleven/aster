@@ -8,8 +8,8 @@
   },
   "scripts": {
     "workspace:list": "pnpm list -r --depth -1",
-    "build": "pnpm --filter @aster/api-contracts build && pnpm --filter @aster/agent build && pnpm --filter @aster/actor build && pnpm --filter @aster/core build && pnpm --filter @aster/infra build && pnpm --filter @aster/integrations build && pnpm --filter @aster/local build && pnpm --filter @aster/web build",
-    "typecheck": "pnpm --filter @aster/api-contracts typecheck && pnpm --filter @aster/agent typecheck && pnpm --filter @aster/actor typecheck && pnpm --filter @aster/core typecheck && pnpm --filter @aster/infra typecheck && pnpm --filter @aster/integrations typecheck && pnpm --filter @aster/local typecheck && pnpm --filter @aster/web typecheck",
+    "build": "pnpm --filter @aster/agent build && pnpm --filter @aster/actor build && pnpm --filter @aster/core build && pnpm --filter @aster/api-contracts build && pnpm --filter @aster/infra build && pnpm --filter @aster/integrations build && pnpm --filter @aster/local build && pnpm --filter @aster/web build",
+    "typecheck": "pnpm --filter @aster/agent typecheck && pnpm --filter @aster/actor typecheck && pnpm --filter @aster/core typecheck && pnpm --filter @aster/api-contracts typecheck && pnpm --filter @aster/infra typecheck && pnpm --filter @aster/integrations typecheck && pnpm --filter @aster/local typecheck && pnpm --filter @aster/web typecheck",
     "test": "pnpm build && pnpm --filter @aster/agent test && pnpm --filter @aster/actor test && pnpm --filter @aster/core test && pnpm --filter @aster/infra test && pnpm --filter @aster/integrations test && pnpm --filter @aster/local test",
     "start": "pnpm --filter @aster/local start",
     "test:web": "pnpm build && pnpm --filter @aster/web test",

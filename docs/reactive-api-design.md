@@ -18,29 +18,29 @@ Actor mailbox -> durable Context commit -> ContextChange
 
 ## Ownership and Layers
 
-| Location                           | Responsibility                                                                                                                                                             |
-| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/api-contracts`           | Browser-safe Schema DTOs, tagged application errors, RpcGroup definitions, query keys and SSE notification Schema. No Node, Actor, storage or core implementation imports. |
-| `packages/core/src/runtime/api.ts` | Transport-independent queries, durable command acknowledgements and normalized query invalidations derived from committed Context changes.                                 |
-| `apps/local/src/rpc-api.ts`        | RpcGroup handlers delegate to ApplicationApi.                                                                                                                              |
-| `apps/local/src/http-api.ts`       | Scoped NodeHttpServer and route composition. Internal legacy-rest, static-assets and http-policy modules own their respective transport responsibilities.                  |
-| `apps/local/src/http-events.ts`    | SSE subscription, readiness, heartbeat and bounded buffering.                                                                                                              |
-| `apps/web/src/api/client.ts`       | AtomRpc service, query/mutation atoms and manual invalidation.                                                                                                             |
-| `apps/web/src/api/events.ts`       | Scoped EventSource bridge and independent telemetry refresh.                                                                                                               |
+| Location                           | Responsibility                                                                                                                                            |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/api-contracts`           | Application response Schemas, RpcGroup definitions, query keys and SSE notifications; imports only the pure core/contracts entry.                         |
+| `packages/core/src/runtime/api.ts` | Transport-independent queries, durable command acknowledgements and scoped Context path/revision notifications.                                           |
+| `apps/local/src/rpc-api.ts`        | RpcGroup handlers delegate to ApplicationApi and validate transport-specific runtime inspection.                                                          |
+| `apps/local/src/http-api.ts`       | Scoped NodeHttpServer and route composition. Internal legacy-rest, static-assets and http-policy modules own their respective transport responsibilities. |
+| `apps/local/src/http-events.ts`    | Maps Context paths to query keys; owns SSE subscription, readiness, heartbeat and bounded buffering.                                                      |
+| `apps/web/src/api/client.ts`       | AtomRpc service, query/mutation atoms and manual invalidation.                                                                                            |
+| `apps/web/src/api/events.ts`       | Scoped EventSource bridge and independent telemetry refresh.                                                                                              |
 
 AsterRuntime continues to construct its own domain services, own root Actors, activate integrations, and manage readiness and shutdown. Externally supplied server Layers remain configuration, stores, models, external agents and integration adapters. The local host owns the HTTP server and supplies NodeFileSystem; it does not assemble core query helpers or domain Actors.
 
 The browser supplies `FetchHttpClient.layer`, `RpcClient.layerProtocolHttp` and `RpcSerialization.layerNdjson`. One root `RegistryProvider` shares the AtomRpc runtime and Reactivity instance. Query values, loading, errors and mutation state come from AsyncResult; React retains only presentation state. The root connection atom owns one EventSource, closed by its Scope. No callback creates a separate Reactivity layer or calls an independent `Effect.runPromise`.
 
-Reactivity is process-local. The server does not need its own Reactivity service merely to relay committed invalidation keys. SSE bridges independent browser registries, including separate tabs. Core's exact ContextChange snapshots and `stateChanged` remain intact for memory capture and domain evaluation; query invalidations do not replace durable events or become another domain event bus.
+Reactivity is process-local. The server does not need its own Reactivity service merely to relay committed invalidation keys. SSE bridges independent browser registries, including separate tabs. Core's exact ContextChange snapshots and durable source events remain intact for memory capture and domain evaluation; query invalidations do not replace durable events or become another domain event bus.
 
 The dashboard feature components and projections are checked as TypeScript, including `App.tsx`. Existing JavaScript UI primitives expose React prop contracts through JSDoc. `dashboard/model.ts` decodes the fields the UI understands while preserving the generic Context record's raw state. Invalid known fields surface a projection error rather than an unsafe cast. `dashboard/state.ts` owns Context indexes, row selection, counts and approval diagnostics as derived atoms; telemetry ticks do not re-decode unchanged Context messages.
 
-Runtime phase is a closed Schema union. AsterRuntime owns a private `Ref` containing that phase and the last 200 typed runtime events. Event and lifecycle fibers update it; inspection reads an immutable snapshot. Shutdown's stopping phase cannot be overwritten by late readiness completion. This does not change the Actor mailbox's single-writer ownership.
+Runtime phase is a closed lifecycle union, validated by the API Schema at the transport boundary. AsterRuntime owns a private `Ref` containing that phase and the last 200 typed runtime events. Event and lifecycle fibers update it; inspection reads an immutable snapshot. Shutdown's stopping phase cannot be overwritten by late readiness completion. This does not change the Actor mailbox's single-writer ownership.
 
 ## Contracts and invalidation
 
-`ApplicationRpcs` exposes `ListContexts`, `GetContext`, `ListGoals`, `GetGoalTimeline`, `ListApprovals`, `InspectRuntime`, `SendGoalMessage`, `EndGoal` and `RespondToApproval`. Schemas validate the public DTOs and ApplicationError values. Clients never import ActorRefs or service implementations. Core retains re-exports of the shared domain records.
+`ApplicationRpcs` exposes `ListContexts`, `GetContext`, `ListGoals`, `GetGoalTimeline`, `ListApprovals`, `InspectRuntime`, `SendGoalMessage`, `EndGoal` and `RespondToApproval`. Schemas validate the public DTOs and ApplicationError values. Clients never import ActorRefs or service implementations. Domain contracts are imported directly from `@aster/core/contracts`; API contracts do not re-export them. Core derives query return types from implementations instead of adding duplicate response models.
 
 | Committed change                      | Keys                                |
 | ------------------------------------- | ----------------------------------- |
@@ -50,7 +50,7 @@ Runtime phase is a closed Schema union. AsterRuntime owns a private `Ref` contai
 | Telemetry refresh                     | `runtime` only                      |
 | SSE ready/reconnect or manual refresh | `all-queries`                       |
 
-`contextQueryKeys` defines the mapping once. Core subscribes to successful Context commits, including background Actor writes; handlers are not the sole source of notifications. Failed persistence and unchanged writes emit nothing. Goal history refresh follows the Goal's Context commit after transcript persistence. An independently writable history service would need its own commit notification before exposing such writes.
+`contextQueryKeys` defines the mapping once in api-contracts; local applies it to `ApplicationApi.subscribeChanges`. Core subscribes to successful Context commits, including background Actor writes; handlers are not the sole source of notifications. Failed persistence and unchanged writes emit nothing. Goal history refresh follows the Goal's Context commit after transcript persistence. An independently writable history service would need its own commit notification before exposing such writes.
 
 Query atoms declare `reactivityKeys`. Successful mutation setters receive `{ payload, reactivityKeys }`; AtomRpc invalidates those keys after acceptance. SSE also refreshes other tabs and background changes. Duplicate invalidations are harmless. Failed mutations retain their typed error, do not invalidate success state and are never automatically resubmitted. A timeout with unknown acceptance still requires the user to inspect current state.
 

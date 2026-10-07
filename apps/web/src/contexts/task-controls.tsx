@@ -2,7 +2,8 @@ import { useState } from "react";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import { Cause, Exit, Schema } from "effect";
-import { ApplicationError, contextQueryKeys, type TaskRecoveryInput } from "@aster/api-contracts";
+import { ApplicationError, type TaskRecoveryInput } from "@aster/core/contracts";
+import { contextQueryKeys } from "@aster/api-contracts";
 import { checkTask, retryTask } from "../api/client";
 import type { ContextView } from "../dashboard/model";
 const pendingRequests = Atom.make<

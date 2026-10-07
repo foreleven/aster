@@ -35,13 +35,13 @@ export const setSignal = (goal: string, origin: (callId: string) => TaskOrigin) 
       }),
     },
     ({ id, change }, callId) => {
-      const { source, requestId, causal } = origin(callId);
+      const { source, requestId, remainingAgentTurns } = origin(callId);
       return ask<SignalRootCommand, SignalCommandReply>("/user/signals", (replyTo) => ({
         _tag: "Change",
         input: {
           source,
           requestId,
-          causal,
+          remainingAgentTurns,
           target: `/signals/${id.startsWith(`${goal}--`) ? id : `${goal}--${id}`}`,
           change,
         },

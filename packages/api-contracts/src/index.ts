@@ -1,28 +1,28 @@
-import { TaskRecoveryInput } from "./task-control.js";
-import { ContextQueryInput, ContextQueryResult, ContextQueryError } from "./context-query.js";
-export * from "./context-query.js";
-import { RecoveryInput, ProcessingOwner, ProcessingSnapshot } from "./recovery.js";
+import {
+  ApplicationError,
+  ApprovalResponse,
+  PublicContext,
+  PublicApprovalEntry,
+  TaskRecoveryInput,
+  ContextQueryInput,
+  ContextQueryResult,
+  ContextQueryError,
+  RecoveryInput,
+  TaskPath,
+  CommandReceipt,
+} from "@aster/core/contracts";
+
+import { ProcessingOwner, ProcessingSnapshot } from "./recovery.js";
 export * from "./recovery.js";
 import { GoalTimelinePage, RetryGoalTurnInput } from "./goal-timeline.js";
 export * from "./goal-timeline.js";
-export * from "./causal.js";
-export * from "./task-control.js";
-export * from "./task-command.js";
 import { TaskInspection } from "./task-inspection.js";
-import { TaskPath } from "./task-control.js";
+
 export * from "./task-inspection.js";
-import { CommandReceipt } from "./command.js";
-export * from "./command.js";
-export * from "./signal-command.js";
+
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
-import {
-  ApplicationError,
-  ApprovalEntry,
-  ApprovalResponse,
-  PublicContext,
-  RuntimeSnapshot,
-} from "./models.js";
+import { RuntimeSnapshot } from "./models.js";
 export * from "./models.js";
 
 export const QueryKeys = {
@@ -99,7 +99,10 @@ export const ApplicationRpcs = RpcGroup.make(
     success: GoalTimelinePage,
     error: ApplicationError,
   }),
-  Rpc.make("ListApprovals", { success: Schema.Array(ApprovalEntry), error: ApplicationError }),
+  Rpc.make("ListApprovals", {
+    success: Schema.Array(PublicApprovalEntry),
+    error: ApplicationError,
+  }),
   Rpc.make("InspectRuntime", { success: RuntimeSnapshot, error: ApplicationError }),
   Rpc.make("SendGoalMessage", {
     payload: {

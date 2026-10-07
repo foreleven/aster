@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 const context = (path, description, state = {}, messages = []) => ({
   path,
+  revision: 1,
   description,
   state,
   messages,
@@ -38,7 +39,6 @@ export function fixture() {
               receivedAt: "2026-09-29T12:30:00Z",
               payload: {
                 _tag: "GoalStarted",
-                pursuit: "initial",
               },
             },
             response:
@@ -362,6 +362,7 @@ export function designFixture() {
   data.contexts.push(
     {
       path: "/signals/holiday",
+      revision: 1,
       description: "Local holiday availability",
       state: {
         owner: "/goals/engine",
@@ -389,6 +390,7 @@ export function designFixture() {
       ["ev", "Explore EV options", "completed"],
     ].map(([slug, description, status]) => ({
       path: `/goals/${slug}`,
+      revision: 1,
       description,
       state: { status },
       messages: [],
@@ -400,12 +402,14 @@ export function designFixture() {
       ["calendar", "Hokkaido Prefectural Calendar"],
     ].map(([slug, description]) => ({
       path: `/sources/${slug}`,
+      revision: 1,
       description,
       state: {},
       messages: [],
     })),
     ...["visa", "hotels"].map((slug) => ({
       path: `/tasks/${createHash("sha256").update(slug).digest("hex")}`,
+      revision: 1,
       description: `Trip ${slug} execution`,
       state: { status: "waiting_input", definition: { goal: "engine" } },
       messages: [],

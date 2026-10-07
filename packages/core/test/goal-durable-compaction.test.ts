@@ -3,14 +3,14 @@ import { CurrentActors } from "../src/services/actors.js";
 import { toolSystem } from "./tool-fixtures.js";
 import { createHash } from "node:crypto";
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations, AgentRunner, Models, type ResolvedModel } from "@aster/agent";
 import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
-import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
+
 import { Effect, Layer, Schema } from "effect";
 import {
   GoalActor,
@@ -140,7 +140,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
           entryId: 0,
           inputId: "review",
           receivedAt: "2026-10-01T00:00:00Z",
-          causal: { rootRequestId: "test", remainingAgentTurns: 4 },
+          remainingAgentTurns: 4,
           status: "pending",
           payload: { _tag: "UserInput", text: "Review the evidence" },
         },

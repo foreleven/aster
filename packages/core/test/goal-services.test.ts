@@ -201,7 +201,7 @@ test("Goal task references recover interrupted attachment and reject unrelated T
                   source,
                   replyTo,
                   agent: "test",
-                  causal: { rootRequestId: id, remainingAgentTurns: 3 },
+                  remainingAgentTurns: 3,
                 },
                 status: "ready",
                 inputs: [
@@ -376,7 +376,7 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
               status: "pending",
               receivedAt: "2026-10-01T00:00:00Z",
               payload: { _tag: "UserInput", text: "Hello" },
-              causal: { rootRequestId: "one", remainingAgentTurns: 4 },
+              remainingAgentTurns: 4,
             },
           })
           .pipe(

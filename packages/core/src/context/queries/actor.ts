@@ -1,6 +1,7 @@
 import { Actor } from "@aster/actor";
 import { AgentConversations } from "@aster/agent";
-import { ApplicationError, ContextQueryInput } from "@aster/api-contracts";
+import { ApplicationError } from "../../operations.js";
+import { ContextQueryInput } from "../contracts.js";
 import { Deferred, Effect, Layer, Match, Schema } from "effect";
 import { ContextRegistry } from "../registry.js";
 import { ContextQueries } from "./routes.js";

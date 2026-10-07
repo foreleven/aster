@@ -1,59 +1,4 @@
 import { Schema } from "effect";
-
-export const InputRequest = Schema.Struct({
-  id: Schema.String,
-  kind: Schema.Literals(["approval", "input"]),
-  prompt: Schema.String,
-  options: Schema.optional(Schema.Array(Schema.String)),
-  questions: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        id: Schema.String,
-        prompt: Schema.String,
-        options: Schema.optional(Schema.Array(Schema.String)),
-        // Providers explicitly opt into custom text or restrict a question to one selection.
-        allowOther: Schema.optional(Schema.Boolean),
-        multiple: Schema.optional(Schema.Boolean),
-      }),
-    ),
-  ),
-  metadata: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
-});
-export type InputRequest = typeof InputRequest.Type;
-export const ApprovalResponse = Schema.Struct({
-  decision: Schema.optional(Schema.Literals(["approve", "reject"])),
-  text: Schema.optional(Schema.String),
-  answers: Schema.optional(Schema.Record(Schema.String, Schema.Array(Schema.String))),
-});
-export type ApprovalResponse = typeof ApprovalResponse.Type;
-
-export const ApprovalEntry = Schema.Struct({
-  id: Schema.String,
-  target: Schema.String,
-  contextPath: Schema.String,
-  kind: Schema.Literals(["confirmation", "approval", "input"]),
-  request: InputRequest,
-  status: Schema.Literals(["pending", "resolved", "acknowledged", "revoked"]),
-  response: Schema.optional(ApprovalResponse),
-});
-export type ApprovalEntry = typeof ApprovalEntry.Type;
-
-export const PublicContext = Schema.Struct({
-  projection: Schema.optional(
-    Schema.Struct({
-      version: Schema.Literal(1),
-      visibility: Schema.Literals(["public", "restricted"]),
-      reason: Schema.optional(Schema.Literals(["missing-policy", "invalid-data"])),
-    }),
-  ),
-  path: Schema.String,
-  /** Absent only on legacy snapshots; the first versioned commit starts at one. */
-  revision: Schema.optional(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
-  description: Schema.String,
-  state: Schema.ObjectKeyword,
-  messages: Schema.Array(Schema.Unknown),
-});
-export type PublicContext = typeof PublicContext.Type;
 const FailureSummary = Schema.Struct({
   message: Schema.String,
   stack: Schema.optional(Schema.String),
@@ -124,7 +69,3 @@ export const RuntimeSnapshot = Schema.Struct({
   events: Schema.Array(RuntimeEvent),
 });
 export type RuntimeSnapshot = typeof RuntimeSnapshot.Type;
-export class ApplicationError extends Schema.TaggedError<ApplicationError>()("ApplicationError", {
-  kind: Schema.Literals(["not-found", "invalid-input", "unavailable", "conflict"]),
-  message: Schema.String,
-}) {}

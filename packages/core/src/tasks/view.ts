@@ -1,14 +1,10 @@
 import { ExecutionCheckpoint } from "./execution/checkpoint.js";
-import { StoredTaskInput } from "./state/snapshot.js";
+import { StoredTaskInput, TaskSnapshot } from "./state/snapshot.js";
 import { Option, Schema, Effect, Match } from "effect";
-import {
-  ApplicationError,
-  TaskInspection,
-  TaskDeliveryInput,
-  TaskPath,
-} from "@aster/api-contracts";
+import { ApplicationError } from "../operations.js";
+import { TaskDeliveryInput, TaskPath } from "./contracts.js";
 import { contextView } from "../context/definition.js";
-import { TaskSnapshot } from "./state/snapshot.js";
+
 import { AgentConversations } from "@aster/agent";
 import { type ContextRegistry } from "../context/registry.js";
 import { approvalEntries } from "../approvals/actor.js";
@@ -40,7 +36,7 @@ export const taskView: import("../context/definition.js").ContextViewPolicy = {
       description: record.description,
       state: publicState.value,
       messages: [],
-      projection: { version: 1, visibility: "public" },
+      projection: { visibility: "public" },
     };
   },
 };
@@ -49,12 +45,12 @@ export const tasksRootView = contextView({
   state: Schema.Struct({}),
 });
 
-export const inspectTask: (
+export const inspectTask = (
   registry: ContextRegistry["Service"],
-  conversations: AgentConversations["Service"],
+  conversations: Pick<AgentConversations["Service"], "read" | "tools">,
   path: string,
-) => Effect.Effect<TaskInspection, ApplicationError> = Effect.fn("Task.inspect")(
-  function* (registry, conversations, path) {
+) =>
+  Effect.gen(function* () {
     yield* Schema.decodeUnknownEffect(TaskPath)(path).pipe(
       Effect.mapError(
         () => new ApplicationError({ kind: "invalid-input", message: "Invalid Task path" }),
@@ -128,7 +124,8 @@ export const inspectTask: (
       sources: [...new Set(admission.task.input.flatMap((item) => item.sources))],
       hasExecution: !!execution?.session || state.admission.agent === "internal",
       messages,
-      ...(state.status === "completed" ? { result: text } : { error: text }),
+      result: state.status === "completed" ? text : undefined,
+      error: state.status === "completed" ? undefined : text,
       requests: approvalEntries(registry)
         .filter((entry) => entry.contextPath === path)
         .map((entry) => ({
@@ -146,8 +143,7 @@ export const inspectTask: (
           ),
         })),
     };
-  },
-);
+  }).pipe(Effect.withSpan("Task.inspect"));
 
 /** Resolve frozen evidence from Pi; later source edits cannot change a capture. */
 export const taskCapture = (messages: AgentConversations["Service"]): CapturePolicy => ({

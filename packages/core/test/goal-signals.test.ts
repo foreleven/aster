@@ -8,8 +8,8 @@ import { test } from "node:test";
 import { Clock, Effect, Fiber, Stream } from "effect";
 import { SignalRootActor, type StoredContext } from "../src/index.js";
 
-import type { SignalCommandReply } from "../src/signals/protocol.js";
-import type { SignalChangeInput } from "../src/signals/protocol.js";
+import { type SignalCommandReply, type SignalChangeInput } from "../src/signals/protocol.js";
+
 const input: SignalChangeInput = {
   requestId: "create",
   source: "/goals/personal",
@@ -21,7 +21,7 @@ const input: SignalChangeInput = {
       trigger: { _tag: "Schedule", schedule: { type: "once", at: "2099-01-01T00:00:00Z" } },
     },
   },
-  causal: { rootRequestId: "user", remainingAgentTurns: 3 },
+  remainingAgentTurns: 3,
 };
 const setup = Effect.fnUntraced(function* (
   records: Map<string, StoredContext>,

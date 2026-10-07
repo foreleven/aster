@@ -6,9 +6,14 @@ import { Field, FieldGroup, FieldLabel, FieldDescription } from "@/components/ui
 import { Alert, AlertTitle, AlertDescription } from "@/components/ui/alert";
 import { Status, Blank } from "./shared";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import { ApplicationError, contextQueryKeys } from "@aster/api-contracts";
+import {
+  ApplicationError,
+  type PublicApprovalEntry,
+  type ApprovalResponse,
+} from "@aster/core/contracts";
+import { contextQueryKeys } from "@aster/api-contracts";
 import { respondToApproval } from "../api/client";
-import type { ApprovalEntry, ApprovalResponse } from "@aster/api-contracts";
+
 import { approvalEntries, approvalDiagnostics, pendingApprovalResponses } from "./state";
 export function Approvals({
   inspect,
@@ -30,7 +35,7 @@ export function Approvals({
   const setPending = useAtomSet(pendingApprovalResponses);
   const busy = useAtomValue(respondToApproval).waiting;
   const inFlight = useRef(false);
-  async function respond(entry: ApprovalEntry, response: ApprovalResponse) {
+  async function respond(entry: PublicApprovalEntry, response: ApprovalResponse) {
     if (inFlight.current) return;
     inFlight.current = true;
     const frozen = pending[entry.id] ?? response;

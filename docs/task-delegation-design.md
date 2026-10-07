@@ -41,7 +41,7 @@ TasksRootActor registers and watches retained children without awaiting their re
 
 ## Admission and messages
 
-`TaskMessage` carries stable request identity, source, creation time, causal budget and optional frozen public Context evidence. Signals retain exact messages and delivery phases in their Pi journal before delivery; Goal tool identities derive from input and tool-call identity. Receivers validate source authority and reject changed identity reuse.
+`TaskMessage` carries stable request identity, source, creation time, remaining Agent-turn budget and optional frozen public Context evidence. Signals retain exact messages and delivery phases in their Pi journal before delivery; Goal tool identities derive from input and tool-call identity. Receivers validate source authority and reject changed identity reuse.
 
 TaskState commits instructions/evidence as `task.admission` in Pi before saving the initial snapshot. Later `task.input` entries contain a typed Message, Answer, Check or Retry and its original receipt. Recovery finishes interrupted Pi-to-snapshot handoffs without losing accepted work. Pi `task.result` entries retain outcomes and their covered input identities. The Actor snapshot stores references, not message bodies.
 

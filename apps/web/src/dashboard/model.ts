@@ -1,12 +1,6 @@
 import { Match, Predicate, Schema } from "effect";
-import {
-  Task,
-  SignalTrigger,
-  PreparedTask,
-  type PublicContext,
-  type RuntimeEvent,
-  type RuntimeSnapshot,
-} from "@aster/api-contracts";
+import { Task, SignalTrigger, PreparedTask, type PublicContext } from "@aster/core/contracts";
+import { type RuntimeEvent, type RuntimeSnapshot } from "@aster/api-contracts";
 
 // Public Contexts stay open-ended. The dashboard only decodes the fields it presents.
 
@@ -102,12 +96,11 @@ const runtimeEventPrefix = /^\[(?:Runtime event, evidence only|运行时事件�
 const goalIntentPrefix = /^\[Goal intent\]\n/;
 const GoalIntentPayload = Schema.Struct({
   intentId: Schema.String,
-  source: Schema.Struct({ actorPath: Schema.String, name: Schema.String }),
-  content: Schema.Struct({ summary: Schema.String, summaryRevision: Schema.String }),
+  source: Schema.Struct({ contextPath: Schema.String, name: Schema.String }),
+  content: Schema.Struct({ summary: Schema.String }),
   relevance: Schema.Struct({
     score: Schema.Number,
     rationale: Schema.String,
-    screeningRecordId: Schema.String,
   }),
 });
 const parseGoalIntent = (content: unknown) => {

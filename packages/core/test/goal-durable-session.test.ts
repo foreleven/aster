@@ -2,14 +2,14 @@ import { GoalState } from "../src/goals/state/model.js";
 import { CurrentActors } from "../src/services/actors.js";
 import { toolSystem } from "./tool-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations, AgentRunner, Models, type ResolvedModel } from "@aster/agent";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
-import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
+
 import { Effect, Layer } from "effect";
 import {
   GoalActor,
@@ -135,7 +135,7 @@ test("reopened Goal sessions keep their policy and history while tools read the 
               entryId: 0,
               inputId: `turn-${turn}`,
               receivedAt: "2026-10-01T00:00:00Z",
-              causal: { rootRequestId: "test", remainingAgentTurns: 4 },
+              remainingAgentTurns: 4,
               status: "pending",
               payload: { _tag: "UserInput", text: "Continue the Goal" },
             },

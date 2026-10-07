@@ -159,7 +159,6 @@ test("application reads project business fields and history without altering can
       assert.equal(delegation.projection?.visibility, "restricted");
       assert.equal(delegation.messages.length, 0);
       assert.deepEqual((yield* api.context("/unknown")).projection, {
-        version: 1,
         visibility: "restricted",
         reason: "missing-policy",
       });
@@ -215,7 +214,6 @@ test("owner policies fail closed and project the original change for reactions a
       assert.ok(captured);
       const invalid = registry.views.project(record("/source", { summary: 42, token: secret }));
       assert.deepEqual(invalid.projection, {
-        version: 1,
         visibility: "restricted",
         reason: "invalid-data",
       });

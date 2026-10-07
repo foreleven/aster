@@ -2,7 +2,8 @@ import type { StoredGoalInput, GoalSnapshot } from "./snapshot.js";
 import { GoalReceipt } from "../protocol.js";
 import type { GoalStore } from "./store.js";
 import { AgentConversations } from "@aster/agent";
-import { CausalChain, GoalInputPayload } from "@aster/api-contracts";
+import { RemainingAgentTurns } from "../../tasks/contracts.js";
+import { GoalInputPayload } from "../contracts.js";
 import { Effect, Schema } from "effect";
 import { createHash } from "node:crypto";
 
@@ -16,7 +17,7 @@ export const goalInputId = (goal: string, kind: string, key: string) =>
     .digest("hex");
 const GoalInputEntry = Schema.Struct({
   payload: GoalInputPayload,
-  causal: CausalChain,
+  remainingAgentTurns: RemainingAgentTurns,
   retryOf: Schema.optional(Schema.String),
   receipt: Schema.optional(GoalReceipt),
 });
@@ -29,7 +30,7 @@ const inputReference = (
   inputId: entry.requestId,
   entryId: entry.id,
   kind: data.payload._tag,
-  causal: data.causal,
+  remainingAgentTurns: data.remainingAgentTurns,
   status: active ? "pending" : "ignored",
   ...(data.retryOf ? { retryOf: data.retryOf } : {}),
 });
@@ -39,7 +40,7 @@ export const goalInputs = (working: GoalStore, messages: AgentConversations["Ser
   const accept = Effect.fn("GoalInputs.accept")(function* (
     payload: typeof GoalInputPayload.Type,
     key: string,
-    causal: CausalChain,
+    remainingAgentTurns: RemainingAgentTurns,
     patch: Partial<GoalSnapshot> = {},
     retryOf?: string,
   ) {
@@ -49,7 +50,7 @@ export const goalInputs = (working: GoalStore, messages: AgentConversations["Ser
     const entry = yield* messages
       .append(`/goals/${state.definition.slug}`, inputId, "goal.input", {
         payload,
-        causal,
+        remainingAgentTurns,
         ...(retryOf ? { retryOf } : {}),
         ...(patch.receipts?.length ? { receipt: patch.receipts.at(-1) } : {}),
       })

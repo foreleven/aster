@@ -1,7 +1,7 @@
 import { CurrentActors } from "../services/actors.js";
 import { ReactionState } from "./model.js";
 import { DurableContext } from "../context/store.js";
-import { RecoveryInput, RecoveryReply } from "@aster/api-contracts";
+import { RecoveryInput, RecoveryReply } from "./contracts.js";
 import { randomUUID } from "node:crypto";
 import { ReplyTo, type ActorContext } from "@aster/actor";
 import { Config, Effect, Layer, Match, Option, Schema, Stream } from "effect";
@@ -58,9 +58,10 @@ export class SystemOneActor extends ContextActor.Service<
         if (Option.isNone(state)) return undefined;
         return {
           ...record,
+          revision: record.revision ?? 0,
           state: { work: state.value.work.map(reactionWorkView) },
           messages: [],
-          projection: { version: 1, visibility: "public" as const },
+          projection: { visibility: "public" as const },
         };
       },
     },

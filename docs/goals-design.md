@@ -22,7 +22,7 @@ Goal conversations and Context gates log provider thinking blocks, text and tool
 
 ## State and recovery
 
-GoalSnapshot contains `definition`, `status`, `summary`, `tasks`, `inputs` and `receipts`. Input records hold Pi references, input kind, delivery status, Context gate decision, causality, retry reference and error. Array order records admission order; timestamps come from Pi entries. Message bodies and response text are not duplicated in Actor state. Receipts retain normalized command fingerprints and the original acceptance revision.
+GoalSnapshot contains `definition`, `status`, `summary`, `tasks`, `inputs` and `receipts`. Input records hold Pi references, input kind, delivery status, Context gate decision, remaining Agent turns, retry reference and error. Array order records admission order; timestamps come from Pi entries. Message bodies and response text are not duplicated in Actor state. Receipts retain normalized command fingerprints and the original acceptance revision.
 
 Admission commits the message and receipt identity to Pi before the Actor saves its references and acknowledges. Startup recovers admitted entries before creating the configured initial pursuit. Exact retries return their existing receipts; changed reuse fails. One input enters the main conversation at a time. Later inputs are durably accepted while execution is in progress. Pending user inputs take priority over ready background inputs; each group retains admission order. An already-started or recovering Pi exchange keeps its turn.
 
@@ -38,7 +38,7 @@ Each Goal has one read-only screening slot independent of its single main-conver
 
 Gate work belongs to the Actor Behavior scope and has its own generation and cancellation signal. End or completion cancels it and ignores pending inputs; late results cannot change an ended Goal. An interrupted gate remains pending and can be screened again after restart without treating a read-only check as an uncertain Pi delivery. Recorded gate decisions are reused. Gate failures settle only their own input and do not release the main-conversation slot.
 
-Execution feedback carries Task path, status at emission and text; Goal resolves the original causal budget from the Task. Automatic feedback retains its original causal budget. A new conversation turn does not replenish it. Exhausted feedback can produce a visible notice without invoking another model.
+Execution feedback carries Task path, status at emission and text; Goal resolves the original remaining Agent-turn budget from the Task. Automatic feedback retains its original remaining Agent-turn budget. A new conversation turn does not replenish it. Exhausted feedback can produce a visible notice without invoking another model.
 
 ## Implementation organization
 
@@ -77,3 +77,9 @@ The snapshot Ref is a committed mirror, not a second persistence system. Context
 Task state lives at `/tasks/<identity>`, Signal state at `/signals/<slug>`, and execution transcripts in Pi. GoalSnapshot.tasks retains unique stable paths for Tasks created by or replying to the Goal, including completed Tasks that may continue. Creation acknowledges its caller only after Task admission and Goal attachment commit. Repeated attachment is idempotent; startup rebuilds the list from Task admission metadata if the cross-Actor handoff was interrupted, and feedback can also repair a missing reference. `goal_current` exposes these references; `task_list` resolves their current public Task views. Task lifecycle and message content remain owned by TaskActor and Pi. Direct messages to another Goal do not create a TaskActor or a synthetic Task reference. Signals freeze exact Task messages in Pi before delivery; receivers acknowledge durable admission. Runtime registers Signal and Task owners before Goal registration and Signal activation. Goal startup only repairs Task references; it never wakes Task execution. Task and Goal recovery proceed independently in their mailboxes; feedback waits for durable Goal admission.
 
 See [conversation design](goal-conversation-design.md), [Tasks](task-delegation-design.md) and [runtime](runtime-design.md). There is no historical-data migration or compatibility protocol.
+
+## Contract ownership
+
+Goal input schemas live in `goals/contracts.ts`; Actor commands remain in `protocol.ts`. Context evidence retains one stable intent identity, source path/name, summary, score/rationale/threshold and timestamp. Routing uses the delivery target. Fingerprints are used to compute identity and retained once in the screening audit, not copied into the conversation. Screening policy metadata remains in the audit. The input carries a scalar `remainingAgentTurns`; there is no propagated root request identifier. A startup input has no redundant pursuit text.
+
+Public conversation messages expose Pi entry ID, role, text and timestamp. Internal input IDs remain in Pi reply links and Goal state. Pagination response schemas belong to api-contracts; projection and Pi reads remain in core.

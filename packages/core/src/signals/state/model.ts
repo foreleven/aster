@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { ApplicationError } from "@aster/api-contracts";
+import { ApplicationError } from "../../operations.js";
 import { Clock, Context, Cron, Effect, Layer, Match, Schema } from "effect";
 import { ContextRegistry } from "../../context/registry.js";
 import { type SignalDefinition, validateSignalTime } from "../../config/schema.js";
@@ -55,11 +55,11 @@ const makeState = Effect.fn("SignalState.make")(function* (
   const setStatus = Effect.fnUntraced(function* (status: SignalSnapshot["status"]) {
     const state = yield* snapshot;
     if (!state || state.status === status || state.status === "deleted") return;
-    const causal = (yield* store.read).causal;
+    const remainingAgentTurns = (yield* store.read).remainingAgentTurns;
     yield* store.append({
       _tag: "Changed",
       snapshot: { ...state, status, version: state.version + 1 },
-      ...(causal ? { causal } : {}),
+      ...(remainingAgentTurns !== undefined ? { remainingAgentTurns } : {}),
     });
   });
   const saved = yield* snapshot;
@@ -143,7 +143,7 @@ const makeState = Effect.fn("SignalState.make")(function* (
     yield* store.append({
       _tag: "Changed",
       snapshot: next,
-      causal: input.causal,
+      remainingAgentTurns: input.remainingAgentTurns,
       receipt: { _tag: "Command", input, receipt },
     });
     return receipt;
@@ -183,7 +183,7 @@ const makeState = Effect.fn("SignalState.make")(function* (
         task: state.task,
         evidence: sourceContext,
         createdAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
-        causal: history.causal ?? { rootRequestId: input.causationId, remainingAgentTurns: 4 },
+        remainingAgentTurns: history.remainingAgentTurns ?? 4,
       },
       receipt: { _tag: "Reaction", input: identity, receipt },
     });
@@ -202,7 +202,8 @@ const makeState = Effect.fn("SignalState.make")(function* (
     )
       return;
     const requestId = `${path}:timer:${version}:${due}`;
-    const causal = state.trigger.schedule.type === "cron" ? undefined : (yield* store.read).causal;
+    const remainingAgentTurns =
+      state.trigger.schedule.type === "cron" ? undefined : (yield* store.read).remainingAgentTurns;
     yield* store.append({
       _tag: "Triggered",
       message: {
@@ -210,7 +211,7 @@ const makeState = Effect.fn("SignalState.make")(function* (
         source: path,
         task: state.task,
         createdAt: due,
-        causal: causal ?? { rootRequestId: requestId, remainingAgentTurns: 4 },
+        remainingAgentTurns: remainingAgentTurns ?? 4,
       },
       nextDue: state.trigger.schedule.type === "once" ? null : nextSignalTime(state.trigger, now),
     });

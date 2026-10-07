@@ -48,6 +48,7 @@ test("interrupted capture waits leave admitted transport work for backend drain"
             records: [
               {
                 path: "/source",
+                revision: 1,
                 description: "Source",
                 state: { value: 1 },
                 messages: [],

@@ -1,5 +1,6 @@
 import { AgentConversations } from "@aster/agent";
-import { ApplicationError, ContextQueryInput } from "@aster/api-contracts";
+import { ApplicationError } from "../../operations.js";
+import { ContextQueryInput } from "../contracts.js";
 import { Effect, Schema } from "effect";
 import { isDeepStrictEqual } from "node:util";
 import type { ContextQueries } from "./routes.js";

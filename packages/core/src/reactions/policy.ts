@@ -2,13 +2,18 @@ import { CurrentActors } from "../services/actors.js";
 import { createHash } from "node:crypto";
 import type { ContextReader } from "../context/registry.js";
 import type { ActorRef } from "@aster/actor";
-import { type PublicContext } from "@aster/api-contracts";
+import { type PublicContext } from "../context/contracts.js";
 import { Clock, Context, Effect, Match, Schema } from "effect";
 import { choice, type SystemOneClient } from "../services/system-one.js";
 import { SignalSnapshot, signalEnabled } from "../signals/state/snapshot.js";
 import type { GoalDefinition } from "../config/schema.js";
-import { matchGoal, goalTitleText, goalSummaryText } from "../goals/screening/decision.js";
-import type { GoalScreeningStore } from "../goals/screening/decision.js";
+import {
+  matchGoal,
+  goalTitleText,
+  goalSummaryText,
+  type GoalScreeningStore,
+} from "../goals/screening/decision.js";
+
 import { makeGoalIntent } from "../goals/screening/intent.js";
 import type { GoalsRootCommand } from "../goals/root.js";
 import type { SignalRootCommand } from "../signals/protocol.js";
@@ -235,7 +240,7 @@ export const makeReactionPolicy = (options: {
           Match.tag("Goal", ({ input }) =>
             (root as ActorRef<GoalsRootCommand>).ask<ReactionReply>((replyTo) => ({
               _tag: "Route",
-              slug: input.intent.goalSlug,
+              slug: input.target.slice("/goals/".length),
               command: {
                 _tag: "SubmitInput",
                 requestId: input.requestId,

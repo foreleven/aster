@@ -333,6 +333,7 @@ test("mobile keeps navigation, composer, and Goal work accessible without overfl
   const data = fixture();
   data.contexts.push({
     path: "/goals/second",
+    revision: 1,
     description: "Another active goal",
     state: { status: "active" },
     messages: [],
@@ -408,6 +409,7 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   await Effect.runPromise(registry.register("/goals/real-http", GoalActor.context));
   const record = {
     path: "/goals/real-http",
+    revision: 1,
     description: "Live HTTP validation Goal",
     state: {
       definition: { slug: "real-http", description: "Live HTTP validation Goal" },
@@ -527,6 +529,7 @@ test("Goal input history loads older messages and displays independent Tasks", a
   goal.state.summary = "Key conclusions saved";
   data.contexts.push({
     path: "/tasks/goal--analysis",
+    revision: 1,
     description: "Analyze compatibility",
     state: {
       sourcePath: goal.path,
@@ -913,6 +916,7 @@ test("Goal completion is confirmed and retains its Context", async ({ page }) =>
   const data = fixture();
   data.contexts.push({
     path: "/goals/other",
+    revision: 1,
     description: "Another goal",
     state: { status: "active" },
     messages: [],
@@ -1186,7 +1190,7 @@ test("restricted Contexts retain navigation and revision without exposing a raw 
     revision: 19,
     state: {},
     messages: [],
-    projection: { version: 1, visibility: "restricted", reason: "missing-policy" },
+    projection: { visibility: "restricted", reason: "missing-policy" },
   });
   data.contexts.push({
     path: "/goals/restricted",
@@ -1194,7 +1198,7 @@ test("restricted Contexts retain navigation and revision without exposing a raw 
     revision: 20,
     state: {},
     messages: [],
-    projection: { version: 1, visibility: "restricted", reason: "invalid-data" },
+    projection: { visibility: "restricted", reason: "invalid-data" },
   });
   const { errors } = await setup(page, data);
   await page.getByRole("button", { name: /Archived Context.*archive\/private/ }).click();

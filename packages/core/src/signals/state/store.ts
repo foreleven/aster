@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { AgentConversations } from "@aster/agent";
-import { CausalChain, CommandReceipt, TaskMessage } from "@aster/api-contracts";
+import { RemainingAgentTurns, TaskMessage } from "../../tasks/contracts.js";
+import { CommandReceipt } from "../../operations.js";
+
 import { Effect, Match, Ref, Schema } from "effect";
 import { ContextRegistry } from "../../context/registry.js";
 import { SignalChangeInput, SignalReactionInput } from "../protocol.js";
@@ -24,7 +26,7 @@ export type SignalDelivery = typeof SignalDelivery.Type;
 const Event = Schema.Union([
   Schema.TaggedStruct("Changed", {
     snapshot: SignalSnapshot,
-    causal: Schema.optional(CausalChain),
+    remainingAgentTurns: Schema.optional(RemainingAgentTurns),
     receipt: Schema.optional(SignalReceipt),
   }),
   Schema.TaggedStruct("Triggered", {
@@ -42,20 +44,20 @@ type Event = typeof Event.Type;
 interface History {
   readonly sequence: number;
   readonly snapshot?: SignalSnapshot;
-  readonly causal?: CausalChain;
+  readonly remainingAgentTurns?: RemainingAgentTurns;
   readonly receipts: readonly (typeof SignalReceipt.Type)[];
   readonly deliveries: readonly SignalDelivery[];
 }
 const empty: History = { sequence: 0, receipts: [], deliveries: [] };
 const apply = (history: History, event: Event): History =>
   Match.value(event).pipe(
-    Match.tag("Changed", ({ snapshot, causal, receipt }) => {
+    Match.tag("Changed", ({ snapshot, remainingAgentTurns, receipt }) => {
       if (snapshot.version !== (history.snapshot?.version ?? 0) + 1)
         throw new Error("Signal definition versions must be consecutive");
       return {
         ...history,
         snapshot,
-        causal,
+        remainingAgentTurns,
         receipts: receipt ? [...history.receipts, receipt] : history.receipts,
         deliveries:
           snapshot.status === "deleted"

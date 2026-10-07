@@ -6,6 +6,7 @@ import { makeSystemOneClient } from "../src/index.js";
 
 const screeningSource = {
   path: "/lark/im/chats/project",
+  revision: 1,
   description: "Project chat",
   state: { summary: "Private launch evidence" },
   messages: [],

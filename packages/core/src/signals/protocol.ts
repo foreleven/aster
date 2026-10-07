@@ -1,11 +1,8 @@
 import { ReplyTo } from "@aster/actor";
-import {
-  ApplicationError,
-  CausalChain,
-  CommandReceipt,
-  GoalPath,
-  PublicContext,
-} from "@aster/api-contracts";
+import { ApplicationError, CommandReceipt } from "../operations.js";
+import { RemainingAgentTurns } from "../tasks/contracts.js";
+import { GoalPath } from "../goals/contracts.js";
+import { PublicContext } from "../context/contracts.js";
 import { Context, Schema } from "effect";
 import { queryReplyTo } from "../services/actors.js";
 import { SignalDefinition } from "../config/schema.js";
@@ -40,7 +37,7 @@ export const SignalChangeInput = Schema.Struct({
   source: GoalPath,
   target: Schema.String.check(Schema.isPattern(/^\/signals\/[a-z0-9][a-z0-9-]*$/)),
   change: SignalChange,
-  causal: CausalChain,
+  remainingAgentTurns: RemainingAgentTurns,
 }).check(
   Schema.makeFilter(
     (input) =>

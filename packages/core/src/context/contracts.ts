@@ -1,4 +1,18 @@
 import { Schema } from "effect";
+export const PublicContext = Schema.Struct({
+  projection: Schema.optional(
+    Schema.Struct({
+      visibility: Schema.Literals(["public", "restricted"]),
+      reason: Schema.optional(Schema.Literals(["missing-policy", "invalid-data"])),
+    }),
+  ),
+  path: Schema.String,
+  revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  description: Schema.String,
+  state: Schema.ObjectKeyword,
+  messages: Schema.Array(Schema.Unknown),
+});
+export type PublicContext = typeof PublicContext.Type;
 
 /** Query adapters accept named scalar arguments, never shell text. */
 export const ContextQueryInput = Schema.Struct({

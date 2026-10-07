@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { ApprovalEntry, ApprovalResponse, InputRequest } from "@aster/api-contracts";
+import { ApprovalEntry, ApprovalResponse, InputRequest } from "./contracts.js";
 import { Clock, Context, Data, Effect, Layer, Match, Ref, Schema } from "effect";
 import { ContextRegistry } from "../context/registry.js";
 

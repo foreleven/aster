@@ -1,11 +1,6 @@
 import { ReplyTo } from "@aster/actor";
-import {
-  ApplicationError,
-  CommandReceipt,
-  TaskDeliveryInput,
-  TaskRecoveryInput,
-  FollowupTaskInput,
-} from "@aster/api-contracts";
+import { ApplicationError, CommandReceipt } from "../operations.js";
+import { TaskDeliveryInput, TaskRecoveryInput, FollowupTaskInput } from "./contracts.js";
 import { Schema } from "effect";
 import { ApprovalResolved } from "../approvals/actor.js";
 import { TaskOutcome } from "./state/snapshot.js";

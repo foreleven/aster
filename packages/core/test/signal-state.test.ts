@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AgentConversations } from "@aster/agent";
-import { ApplicationError } from "@aster/api-contracts";
+import { ApplicationError } from "../src/operations.js";
 import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import {
@@ -27,7 +27,7 @@ const create: SignalChangeInput = {
   requestId: "create",
   source: "/goals/personal",
   target: path,
-  causal: { rootRequestId: "user", remainingAgentTurns: 3 },
+  remainingAgentTurns: 3,
   change: { operation: "create", definition },
 };
 const open = (
@@ -68,6 +68,7 @@ const setup = Effect.fnUntraced(function* () {
       target: path,
       version: Schema.decodeUnknownSync(SignalSnapshot)(registry.get(path)!.state).version,
       sourceContext: {
+        revision: 1,
         path: "/source",
         description: "Evidence",
         state: { text: id },
@@ -85,6 +86,27 @@ const setup = Effect.fnUntraced(function* () {
 });
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>
   Effect.runPromise(Effect.scoped(effect).pipe(Effect.timeout("5 seconds")));
+
+test("Signal pause and recovery preserve an exhausted Agent-turn budget", async () => {
+  await run(
+    Effect.gen(function* () {
+      const env = yield* setup();
+      yield* env.state.change({
+        ...create,
+        requestId: "exhausted",
+        remainingAgentTurns: 0,
+        change: { operation: "update", version: 1, definition },
+      });
+      yield* env.react("zero-budget");
+      assert.equal((yield* env.state.deliveries)[0]!.message.remainingAgentTurns, 0);
+      yield* env.state.pause;
+      const reopened = yield* open(env.registry, env.messages);
+      assert.equal((yield* reopened.snapshot)!.status, "paused");
+      assert.equal((yield* readSignalHistory(env.messages, path)).remainingAgentTurns, 0);
+      assert.equal((yield* reopened.deliveries)[0]!.message.remainingAgentTurns, 0);
+    }),
+  );
+});
 
 test("Signal pause preserves frozen work; edits and resume do not rewrite it; deletion only cancels unstarted deliveries", async () => {
   await run(

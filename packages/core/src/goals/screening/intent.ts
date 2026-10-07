@@ -1,9 +1,10 @@
-import { GoalIntent, type PublicContext as ContextRecord } from "@aster/api-contracts";
+import { GoalIntent } from "../contracts.js";
+import { type PublicContext as ContextRecord } from "../../context/contracts.js";
 import { contextSummaryText, type GoalRelevance } from "./decision.js";
 import { Schema } from "effect";
 import { createHash } from "node:crypto";
 
-export { GoalIntent } from "@aster/api-contracts";
+export { GoalIntent } from "../contracts.js";
 
 /** Frozen System One delivery; acknowledgement refers to the receiver's durable inbox. */
 export const GoalIntentInput = Schema.Struct({
@@ -21,28 +22,22 @@ export const makeGoalIntent = (
   createdAt: string,
 ): GoalIntent => {
   const summary = contextSummaryText(record);
-  const summaryFingerprint = relevance.screening.summaryFingerprint;
-  const summaryRevision = relevance.screening.summaryRevision;
+  const fingerprint = relevance.screening.summaryFingerprint;
   const intentId = createHash("sha256")
-    .update(`${relevance.slug}:${record.path}:${summaryRevision}`)
+    .update(`${relevance.slug}:${record.path}:${fingerprint}`)
     .digest("hex");
   const rawChat = record.state as { chat?: { name?: string } };
   return {
     intentId,
-    goalSlug: relevance.slug,
     source: {
       contextPath: record.path,
-      actorPath: record.path,
       name: rawChat.chat?.name?.trim() || record.description,
-      kind: "context",
     },
-    content: { summary, summaryRevision, summaryFingerprint },
+    content: { summary },
     relevance: {
       score: relevance.score,
       rationale: relevance.rationale,
-      screeningRecordId: relevance.screening.screeningRecordId,
       threshold: relevance.screening.threshold,
-      policyVersion: relevance.screening.policyVersion,
     },
     createdAt,
   };

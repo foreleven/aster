@@ -25,24 +25,17 @@ const input: GoalIntentInput = {
   target: "/goals/project",
   intent: {
     intentId: "intent-one",
-    goalSlug: "project",
     source: {
       contextPath: "/lark/im/chats/release",
-      actorPath: "/lark/im/chats/release",
       name: "Release team",
-      kind: "context",
     },
     content: {
       summary: "Release delayed pending API review",
-      summaryRevision: "1",
-      summaryFingerprint: "fingerprint",
     },
     relevance: {
       score: 0.9,
       rationale: "The release deadline affects this Goal",
-      screeningRecordId: "screen-one",
       threshold: 0.7,
-      policyVersion: "v1",
     },
     createdAt: "2026-10-02T00:00:00.000Z",
   },

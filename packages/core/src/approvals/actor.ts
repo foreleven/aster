@@ -1,5 +1,6 @@
-import { ApprovalEntry, ApprovalResponse, ApplicationError } from "@aster/api-contracts";
-export { ApprovalEntry } from "@aster/api-contracts";
+import { ApprovalEntry, ApprovalResponse } from "./contracts.js";
+import { ApplicationError } from "../operations.js";
+export { ApprovalEntry } from "./contracts.js";
 export { approvalEntries } from "./state.js";
 import { ApprovalState, ApprovalSnapshot, ApprovalEvent } from "./state.js";
 import { ContextActor } from "../context/actor.js";

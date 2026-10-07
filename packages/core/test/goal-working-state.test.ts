@@ -37,7 +37,7 @@ test("Goal keeps message references while public conversation reads Pi history",
             payload: { _tag: "UserInput", text: `Input ${index}` },
           });
         yield* conversations.append(path, "evidence", "goal.input", {
-          payload: { _tag: "GoalStarted", pursuit: "internal" },
+          payload: { _tag: "GoalStarted" },
         });
         yield* conversations.append(path, "reply", "goal.reply", {
           inputId: "input-104",
@@ -79,7 +79,7 @@ test("Goal public error reflects the latest settled input without storing an err
       const definition = { slug: "errors", description: "Observe errors" };
       const first = {
         inputId: "first",
-        causal: { rootRequestId: "first", remainingAgentTurns: 4 },
+        remainingAgentTurns: 4,
         kind: "UserInput",
         entryId: 1,
         status: "failed",

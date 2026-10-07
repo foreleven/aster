@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useAtomValue, useAtomSet } from "@effect/atom-react";
 import { Cause, Exit, Schema } from "effect";
-import { ApplicationError, contextQueryKeys } from "@aster/api-contracts";
+import { ApplicationError } from "@aster/core/contracts";
+import { contextQueryKeys } from "@aster/api-contracts";
 import { pendingTurnRetries } from "../api/timeline";
 import { retryGoalTurn } from "../api/client";
 export function RetryTurn({ slug, turnId }: { slug: string; turnId: string }) {

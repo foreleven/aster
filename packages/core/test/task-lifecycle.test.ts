@@ -1,4 +1,4 @@
-import { TaskDeliveryInput } from "@aster/api-contracts";
+import { TaskDeliveryInput } from "../src/tasks/contracts.js";
 import { SignalRootActor } from "../src/signals/root.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -116,7 +116,7 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
           requestId: "create",
           source: "/goals/personal",
           target,
-          causal: { rootRequestId: "create", remainingAgentTurns: 3 },
+          remainingAgentTurns: 3,
           change: {
             operation: "create",
             definition: {

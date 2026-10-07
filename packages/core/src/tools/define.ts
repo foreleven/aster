@@ -1,5 +1,5 @@
 import { type EffectTool, type AgentTool, type TSchema, rejectedToolResult } from "@aster/agent";
-import { ApplicationError } from "@aster/api-contracts";
+import { ApplicationError } from "../operations.js";
 import { Effect } from "effect";
 import type { CurrentActors } from "../services/actors.js";
 

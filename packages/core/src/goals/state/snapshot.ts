@@ -1,6 +1,8 @@
 import { GoalReceipt } from "../protocol.js";
 import { GoalDefinition } from "../../config/schema.js";
-import { CausalChain, GoalInputPayload, TaskPath } from "@aster/api-contracts";
+import { RemainingAgentTurns, TaskPath } from "../../tasks/contracts.js";
+import { GoalInputPayload } from "../contracts.js";
+
 import { Schema } from "effect";
 
 export const StoredGoalInput = Schema.Struct({
@@ -11,7 +13,7 @@ export const StoredGoalInput = Schema.Struct({
   relevant: Schema.optional(Schema.Boolean),
   error: Schema.optional(Schema.String),
   retryOf: Schema.optional(Schema.String),
-  causal: CausalChain,
+  remainingAgentTurns: RemainingAgentTurns,
 });
 export type StoredGoalInput = typeof StoredGoalInput.Type;
 

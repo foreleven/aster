@@ -2,7 +2,8 @@ import type { AgentConversations } from "@aster/agent";
 import { signalMessage } from "../../signals/state/store.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { ApplicationError, TaskMessage, TaskDeliveryInput, type Task } from "@aster/api-contracts";
+import { ApplicationError } from "../../operations.js";
+import { TaskMessage, TaskDeliveryInput, type Task } from "../contracts.js";
 import { Effect } from "effect";
 import { ContextRegistry } from "../../context/registry.js";
 
@@ -18,7 +19,7 @@ export const delegateInput = (
   source: message.source,
   target: taskPathFor(message.source, message.requestId),
   createdAt: message.createdAt,
-  causal: message.causal,
+  remainingAgentTurns: message.remainingAgentTurns,
   ...(message.evidence ? { evidence: message.evidence } : {}),
   agent: task._tag === "Agent" ? "internal" : task.agent,
   task: task.task,

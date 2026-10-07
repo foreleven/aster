@@ -73,7 +73,6 @@ test("configured routing opens model-free Pi, persists authority, and keeps jour
       screeningRecordId: "s1",
       sourcePath: "/chat",
       goalSlug: "test",
-      summaryRevision: "1",
       summaryFingerprint: "f1",
       input: {
         contextSummary: "Evidence",
@@ -86,7 +85,6 @@ test("configured routing opens model-free Pi, persists authority, and keeps jour
       threshold: 0.8,
       policyVersion: "v1",
       model: "fake",
-      requestId: "r1",
       latencyMs: 0,
       rationale: "Relevant",
       createdAt: "2026-10-02T00:00:00Z",

@@ -1,22 +1,16 @@
-import type { TaskServices } from "./actor.js";
+import { type TaskServices, TaskActor } from "./actor.js";
 import { taskActorPath } from "./delivery.js";
-import {
-  ApplicationError,
-  TaskDeliveryInput,
-  TaskPath,
-  TaskRecoveryInput,
-  FollowupTaskInput,
-} from "@aster/api-contracts";
+import { ApplicationError } from "../operations.js";
+import { TaskDeliveryInput, TaskPath, TaskRecoveryInput, FollowupTaskInput } from "./contracts.js";
 import { Effect, Layer, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ContextRegistry } from "../context/registry.js";
 import { defineContext } from "../context/definition.js";
 import { TaskSnapshot } from "./state/snapshot.js";
 import { taskPathFor } from "./state/admission.js";
-import { TaskActor } from "./actor.js";
-import { StartTask, CheckTask, RetryTask, Input } from "./protocol.js";
+
+import { StartTask, CheckTask, RetryTask, Input, type TaskCommand } from "./protocol.js";
 import type { ActorRef } from "@aster/actor";
-import type { TaskCommand } from "./protocol.js";
 
 const Command = Schema.Union([StartTask, CheckTask, RetryTask, Input]);
 export type TasksRootCommand = typeof Command.Type;

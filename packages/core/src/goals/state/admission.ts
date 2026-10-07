@@ -3,7 +3,9 @@ import { goalRequestFingerprint, type GoalRequestData, type GoalReceipt } from "
 import type { ContextRegistry } from "../../context/registry.js";
 import type { AgentConversations } from "@aster/agent";
 import type { GoalStore } from "./store.js";
-import { ApplicationError, CausalChain, TaskPath } from "@aster/api-contracts";
+import { ApplicationError } from "../../operations.js";
+import { RemainingAgentTurns, TaskPath } from "../../tasks/contracts.js";
+
 import { Effect, Match, Schema } from "effect";
 import { validateTaskMessage } from "../../tasks/state/admission.js";
 
@@ -26,7 +28,7 @@ export const goalAdmission = (
     if (!active && input._tag !== "ExecutionFeedback")
       return yield* new ApplicationError({ kind: "conflict", message: "Goal has ended" });
     const patch = { receipts: [...state.receipts, record] };
-    const causal = { rootRequestId: request.requestId, remainingAgentTurns: 4 };
+    const remainingAgentTurns = 4;
     return yield* Match.value(input).pipe(
       Match.tag("GoalIntent", ({ delivery }) =>
         Effect.gen(function* () {
@@ -36,7 +38,7 @@ export const goalAdmission = (
               message: "Intent identity mismatch",
             });
           const intent = delivery.intent;
-          if (delivery.target !== current.path || intent.goalSlug !== state.definition.slug)
+          if (delivery.target !== current.path)
             return yield* new ApplicationError({
               kind: "invalid-input",
               message: "Goal intent target mismatch",
@@ -65,18 +67,18 @@ export const goalAdmission = (
               kind: "conflict",
               message: "Goal intent ID belongs to another request",
             });
-          yield* inputs.accept(
-            { _tag: "GoalIntent", intent },
-            intent.intentId,
-            { rootRequestId: delivery.causationId, remainingAgentTurns: 4 },
-            patch,
-          );
+          yield* inputs.accept({ _tag: "GoalIntent", intent }, intent.intentId, 4, patch);
           return receipt;
         }),
       ),
       Match.tag("UserInput", ({ text }) =>
         Effect.gen(function* () {
-          yield* inputs.accept({ _tag: "UserInput", text }, request.requestId, causal, patch);
+          yield* inputs.accept(
+            { _tag: "UserInput", text },
+            request.requestId,
+            remainingAgentTurns,
+            patch,
+          );
           return receipt;
         }),
       ),
@@ -103,7 +105,7 @@ export const goalAdmission = (
                 (delivery.evidence ? `\n\nEvidence: ${JSON.stringify(delivery.evidence)}` : ""),
             },
             delivery.requestId,
-            delivery.causal,
+            delivery.remainingAgentTurns,
             patch,
           );
           return receipt;
@@ -120,7 +122,7 @@ export const goalAdmission = (
             Schema.Struct({
               admission: Schema.Struct({
                 replyTo: Schema.String,
-                causal: CausalChain,
+                remainingAgentTurns: RemainingAgentTurns,
               }),
             }),
           )(registry.get(input.taskPath)?.state).pipe(
@@ -137,7 +139,7 @@ export const goalAdmission = (
               kind: "invalid-input",
               message: "Execution feedback does not belong to this Goal",
             });
-          yield* inputs.accept(input, request.requestId, run.admission.causal, {
+          yield* inputs.accept(input, request.requestId, run.admission.remainingAgentTurns, {
             ...patch,
             tasks: state.tasks.includes(input.taskPath)
               ? state.tasks
@@ -193,7 +195,7 @@ export const goalAdmission = (
     yield* inputs.accept(
       original.payload,
       request.requestId,
-      input.causal,
+      input.remainingAgentTurns,
       { receipts: [...state.receipts, record] },
       input.inputId,
     );

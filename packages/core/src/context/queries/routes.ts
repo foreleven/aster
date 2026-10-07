@@ -1,10 +1,6 @@
 import { Context, Effect, Layer, Schema, type Scope } from "effect";
-import {
-  ContextQueryError,
-  ContextQueryInput,
-  type ContextQueryResult,
-} from "@aster/api-contracts";
-export { ContextQueryError, ContextQueryInput, ContextQueryResult } from "@aster/api-contracts";
+import { ContextQueryError, ContextQueryInput, type ContextQueryResult } from "../contracts.js";
+export { ContextQueryError, ContextQueryInput, ContextQueryResult } from "../contracts.js";
 
 type Query = (input: ContextQueryInput) => Effect.Effect<ContextQueryResult, ContextQueryError>;
 

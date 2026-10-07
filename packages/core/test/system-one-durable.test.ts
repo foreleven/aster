@@ -1,8 +1,17 @@
 import { inspectReactions } from "../src/reactions/inspection.js";
 import { DurableContext } from "../src/context/store.js";
-import type { TestContextRegistry } from "../src/testing/context.js";
-import { deliveriesOf, workStatus, targetPath } from "../src/reactions/state.js";
-import { ProcessingSnapshot, type RecoveryReply } from "@aster/api-contracts";
+import { type TestContextRegistry, makeContextRegistry } from "../src/testing/context.js";
+import {
+  deliveriesOf,
+  workStatus,
+  targetPath,
+  ReactionSnapshot,
+  type ReactionWork,
+  type FrozenReaction,
+  type ReactionDeliveryInput,
+  type ReactionPlan,
+} from "../src/reactions/state.js";
+import { type RecoveryReply } from "../src/reactions/contracts.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -16,16 +25,9 @@ import {
   type StoredContext,
   type ContextSnapshot,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+
 import { SystemOneActor } from "../src/reactions/actor.js";
 import { ReactionPolicy, ReactionFailure, makeReactionPolicy } from "../src/reactions/policy.js";
-import {
-  ReactionSnapshot,
-  type ReactionWork,
-  type FrozenReaction,
-  type ReactionDeliveryInput,
-  type ReactionPlan,
-} from "../src/reactions/state.js";
 
 const sourceDefinition = defineContext({
   changes: "durable-state",
@@ -739,8 +741,8 @@ for (const retryMatched of [true, false])
               Stream.take(1),
               Stream.runDrain,
             );
-            const inspection = yield* inspectReactions(registry, "system-one");
-            assert.ok(Schema.is(ProcessingSnapshot)(inspection));
+            const inspection = yield* inspectReactions(registry);
+            assert.equal(inspection.owner, "system-one");
             const matches = inspection.entries.find(
               (entry) => entry.kind === "screening",
             )!.matches!;
@@ -1096,14 +1098,14 @@ test("delivery receipts remain visible during matching retry and survive interru
               Stream.take(1),
               Stream.runDrain,
             );
-            const inspection = yield* inspectReactions(registry, "system-one");
+            const inspection = yield* inspectReactions(registry);
             assert.equal(
               inspection.entries.find((entry) => entry.kind === "screening")!.status,
               "planning",
             );
             assert.equal(
-              inspection.entries.find((entry) => entry.kind === "screening")!.attempts,
-              undefined,
+              "attempts" in inspection.entries.find((entry) => entry.kind === "screening")!,
+              false,
             );
             assert.equal(
               inspection.entries.find((entry) => entry.kind === "reaction-delivery")!.status,
@@ -1151,7 +1153,7 @@ test("an event without eligible targets completes and is not reconsidered on res
               Stream.take(1),
               Stream.runDrain,
             );
-          assert.equal((yield* inspectReactions(registry, "system-one")).entries.length, 1);
+          assert.equal((yield* inspectReactions(registry)).entries.length, 1);
           assert.equal(
             Schema.decodeUnknownSync(ReactionSnapshot)(registry.get("/system-one")!.state).work
               .length,

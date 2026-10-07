@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { PublicContext } from "@aster/api-contracts";
+import { PublicContext } from "./contracts.js";
 import { Schema } from "effect";
 
 export const ContextPath = Schema.String.check(

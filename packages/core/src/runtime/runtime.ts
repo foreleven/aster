@@ -5,15 +5,16 @@ import { coreContextViews } from "./context-views.js";
 import { ContextQueries } from "../context/queries/routes.js";
 import { MemoryActor, memoryView } from "../memory/actor.js";
 import { taskCapture } from "../tasks/view.js";
-import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster/api-contracts";
-import type { ReactionCommand } from "../reactions/actor.js";
+import { ApplicationError } from "../operations.js";
+import { type RecoveryInput, type RecoveryReply } from "../reactions/contracts.js";
+import { type ReactionCommand, SystemOneActor } from "../reactions/actor.js";
 import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
 import { GoalScreeningStore } from "../goals/screening/decision.js";
 import { TasksRootActor } from "../tasks/root.js";
-import type { RuntimeEvent, RuntimePhase } from "@aster/api-contracts";
+import { type ActorSystemEvent, ActorSystem, type ActorRef } from "@aster/actor";
 import { RuntimeConfigurationError } from "./errors.js";
-import { ActorSystem, type ActorRef } from "@aster/actor";
-import { AgentRunner, PiStorageLease } from "@aster/agent";
+
+import { AgentRunner, PiStorageLease, AgentConversations } from "@aster/agent";
 import {
   Cause,
   Clock,
@@ -35,17 +36,17 @@ import { GoalSettings, signalSettings } from "../config/settings.js";
 import { SignalDefinitions } from "../signals/protocol.js";
 import { SignalRootActor } from "../signals/root.js";
 import { SystemOneClient } from "../services/system-one.js";
-import { AgentConversations } from "@aster/agent";
+
 import { GoalsRootActor } from "../goals/root.js";
 import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
-import { SystemOneActor } from "../reactions/actor.js";
+
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
-import { makeApplicationApi, type ApplicationApi } from "./api.js";
+import { makeApplicationApi } from "./api.js";
 
 type RuntimeDiagnostics = {
-  readonly phase: RuntimePhase;
-  readonly events: readonly RuntimeEvent[];
+  readonly phase: "starting" | "ready" | "failed" | "stopping";
+  readonly events: readonly ActorSystemEvent[];
 };
 
 type ActorServices =
@@ -292,10 +293,7 @@ const acquireRuntime = Effect.gen(function* () {
 
 export class AsterRuntime extends Context.Service<
   AsterRuntime,
-  {
-    readonly api: ApplicationApi;
-    readonly ready: Effect.Effect<void, Error>;
-  }
+  Effect.Success<typeof acquireRuntime>
 >()("runtime/Aster") {
   static layer<const Layers extends readonly Layer.Layer<never, any, any>[]>(options: {
     readonly integrations: Layers;

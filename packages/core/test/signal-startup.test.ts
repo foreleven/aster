@@ -111,7 +111,7 @@ for (const operation of ["pause", "delete"] as const)
       requestId: "create",
       source: "/goals/personal",
       target: path,
-      causal: { rootRequestId: "user", remainingAgentTurns: 3 },
+      remainingAgentTurns: 3,
       change: { operation: "create", definition },
     };
     // Simulate a lost sender acknowledgement after the receiver committed admission.

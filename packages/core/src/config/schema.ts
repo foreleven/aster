@@ -1,6 +1,7 @@
 import { Cron, Schema } from "effect";
-import { SignalSchedule, SignalTrigger, Task } from "@aster/api-contracts";
-export { SignalSchedule } from "@aster/api-contracts";
+import { SignalSchedule, SignalTrigger } from "../signals/contracts.js";
+import { Task } from "../tasks/contracts.js";
+export { SignalSchedule } from "../signals/contracts.js";
 
 export const validateSignalTime = (signal: { schedule: SignalSchedule }) => {
   const absolute = (value: string) => {

@@ -1,12 +1,12 @@
 import {
-  CausalChain,
-  CommandReceipt,
-  InputRequest,
-  ApprovalResponse,
+  RemainingAgentTurns,
   TaskDeliveryInput,
   FollowupTaskInput,
   TaskRecoveryInput,
-} from "@aster/api-contracts";
+} from "../contracts.js";
+import { CommandReceipt } from "../../operations.js";
+import { InputRequest, ApprovalResponse } from "../../approvals/contracts.js";
+
 import { Schema } from "effect";
 
 export const TaskInput = Schema.Union([
@@ -44,7 +44,7 @@ export const TaskSnapshot = Schema.Struct({
     source: Schema.String,
     replyTo: Schema.String,
     agent: Schema.String,
-    causal: CausalChain,
+    remainingAgentTurns: RemainingAgentTurns,
   }),
   status: Schema.Literals([
     "ready",

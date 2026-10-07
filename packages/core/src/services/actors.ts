@@ -1,5 +1,5 @@
 import { ReplyTo, type ActorContext } from "@aster/actor";
-import { ApplicationError } from "@aster/api-contracts";
+import { ApplicationError } from "../operations.js";
 import { Context, Deferred, Effect, Schema } from "effect";
 
 /** The current runtime's addressing capability, provided by the owning execution. */

@@ -1,6 +1,6 @@
 import { score, DecisionError, type SystemOneClient } from "../../services/system-one.js";
 import type { GoalDefinition } from "../../config/schema.js";
-import type { PublicContext as ContextRecord } from "@aster/api-contracts";
+import type { PublicContext as ContextRecord } from "../../context/contracts.js";
 import { Clock, Context, Effect, Match, Schema } from "effect";
 import { createHash } from "node:crypto";
 
@@ -16,7 +16,6 @@ export const GoalScreeningRecord = Schema.Struct({
   screeningRecordId: Schema.String,
   sourcePath: Schema.String,
   goalSlug: Schema.String,
-  summaryRevision: Schema.String,
   summaryFingerprint: Schema.String,
   input: GoalScreeningSnapshot,
   score: Schema.Number,
@@ -24,7 +23,6 @@ export const GoalScreeningRecord = Schema.Struct({
   threshold: Schema.Number,
   policyVersion: Schema.String,
   model: Schema.String,
-  requestId: Schema.String,
   latencyMs: Schema.Number,
   rationale: Schema.String,
   error: Schema.optional(Schema.String),
@@ -123,8 +121,6 @@ const screeningDecision = Effect.fn("Goal.screeningDecision")(function* (options
   readonly title: string;
   readonly summary: string;
   readonly screeningRecordId: string;
-  readonly requestId: string;
-  readonly summaryRevision: string;
   readonly summaryFingerprint: string;
   readonly threshold: number;
   readonly policyVersion: string;
@@ -178,14 +174,12 @@ const screeningDecision = Effect.fn("Goal.screeningDecision")(function* (options
     screeningRecordId: options.screeningRecordId,
     sourcePath: options.source.path,
     goalSlug: options.goal.slug,
-    summaryRevision: options.summaryRevision,
     summaryFingerprint: options.summaryFingerprint,
     input,
     ...outcome,
     threshold: options.threshold,
     policyVersion: options.policyVersion,
     model: options.model,
-    requestId: options.requestId,
     latencyMs: Math.max(0, options.now() - started),
     createdAt: new Date(options.now()).toISOString(),
   };
@@ -193,7 +187,7 @@ const screeningDecision = Effect.fn("Goal.screeningDecision")(function* (options
     yield* Effect.logError(
       JSON.stringify({
         event: "goal.screening.failed",
-        requestId: record.requestId,
+        requestId: record.screeningRecordId,
         sourcePath: record.sourcePath,
         goalSlug: record.goalSlug,
         model: record.model,
@@ -245,8 +239,6 @@ export const matchGoal = Effect.fn("Goal.match")(function* (
     title: candidate.title,
     summary: candidate.summary,
     screeningRecordId: requestId,
-    requestId,
-    summaryRevision: fingerprint,
     summaryFingerprint: fingerprint,
     threshold: 0.7,
     policyVersion: "goal-relevance-v3",

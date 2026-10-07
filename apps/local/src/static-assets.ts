@@ -1,7 +1,7 @@
 import { Effect, FileSystem } from "effect";
 import { HttpRouter, HttpServerRequest, HttpServerResponse } from "effect/http";
 import { resolve, extname, sep } from "node:path";
-import { ApplicationError } from "@aster/api-contracts";
+import { ApplicationError } from "@aster/core/contracts";
 import { json } from "./http-policy.js";
 
 const contentTypes: Record<string, string> = {

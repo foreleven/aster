@@ -6,7 +6,8 @@ import { goalAdmission } from "./admission.js";
 import { ContextRegistry } from "../../context/registry.js";
 import type { GoalDefinition } from "../../config/schema.js";
 import { Context, Effect, Layer, Match, Ref, Result, Schema, Semaphore } from "effect";
-import { ApplicationError, TaskPath } from "@aster/api-contracts";
+import { ApplicationError } from "../../operations.js";
+import { TaskPath } from "../../tasks/contracts.js";
 import { AgentConversations, type AgentError } from "@aster/agent";
 
 /** One instance per Actor incarnation. All mutations, including local tools, share its writer. */
@@ -72,12 +73,7 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
   const restore = Effect.gen(function* () {
     yield* inputs.recover();
     if (definition.slug !== "personal" && (yield* read).inputs.length === 0)
-      yield* inputs
-        .accept({ _tag: "GoalStarted", pursuit: "initial" }, "initial", {
-          rootRequestId: `goal:${definition.slug}:initial`,
-          remainingAgentTurns: 4,
-        })
-        .pipe(Effect.orDie);
+      yield* inputs.accept({ _tag: "GoalStarted" }, "initial", 4).pipe(Effect.orDie);
     const recovered = yield* read;
     yield* save({
       definition,

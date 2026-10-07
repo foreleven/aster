@@ -1,10 +1,15 @@
-import { ContextInput, ContextSnapshot, ContextPath, type ContextEntry } from "./model.js";
-import type { PublicContext } from "@aster/api-contracts";
-import { restrictedContext } from "./definition.js";
-import type { ContextViewPolicy } from "./definition.js";
+import {
+  ContextInput,
+  ContextSnapshot,
+  ContextPath,
+  type ContextEntry,
+  type ContextChange,
+} from "./model.js";
+import type { PublicContext } from "./contracts.js";
+import { restrictedContext, type ContextViewPolicy, type ContextDefinition } from "./definition.js";
+
 import { Context, Effect, Layer, Schema, Stream, type Scope } from "effect";
-import { type ContextDefinition } from "./definition.js";
-import { type ContextChange } from "./model.js";
+
 import { ContextCommitError, ContextConflict, ContextValidationError } from "./errors.js";
 
 import { DurableContext, type ContextCommitOptions } from "./store.js";
@@ -90,7 +95,7 @@ export const makeContextRegistryWithBackend = (
     );
     const event =
       definition.changes === "durable-state" && options.mode !== "bootstrap"
-        ? project(validated)
+        ? project({ ...validated, revision: options.expectedRevision + 1 })
         : undefined;
     return yield* backend.commit(validated, {
       expectedRevision: options.expectedRevision,
