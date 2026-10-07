@@ -31,8 +31,8 @@ Context messages can contain source evidence, such as a Lark chat's message wind
 | `context/queries/actor.ts`   | Query Actor and its commands, bounded work and asynchronous result replies             |
 | `context/queries/routes.ts`  | Scoped registration and dispatch of integration queries                                |
 | `context/queries/results.ts` | Pi query evidence, operation identity checks and result pagination                     |
-| `commands/query.ts`          | Shared query replies and cancellation used by Contexts, Memory, Signals and Tools      |
-| `commands/json.ts`           | Shared JSON boundary normalization                                                     |
+| `services/actors.ts`         | Shared query replies and cancellation used by Contexts, Memory, Signals and Tools      |
+| `json.ts`                    | Shared JSON boundary normalization                                                     |
 
 `ContextActor` wraps an owner Actor definition; it is not a separate Actor or a business-state service. `ContextsActor` is the Runtime-owned `/user/contexts` query endpoint and owns no Context snapshots. Tools ask this endpoint; integrations register query routes that dispatch to their own Actors. Runtime uses native `awaitStarted` for query startup, without a Ready command.
 

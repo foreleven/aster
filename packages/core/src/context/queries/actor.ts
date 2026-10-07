@@ -9,7 +9,7 @@ import {
   queryCancelled,
   queryReplyTo,
   cancellableQuery,
-} from "../../commands/query.js";
+} from "../../services/actors.js";
 import { queryResults, textPage } from "./results.js";
 
 export const ContextsCommand = Schema.Union([

@@ -1,10 +1,10 @@
 import { Context, Effect, Layer, Option, Ref, Schema, Match } from "effect";
-import { ApplicationError, type RecoveryInput } from "@aster/api-contracts";
+import { ApplicationError, type RecoveryInput, type RecoveryReceipt } from "@aster/api-contracts";
+import { isDeepStrictEqual } from "node:util";
 import { ContextRegistry } from "../context/registry.js";
 import type { ContextEvent } from "../context/model.js";
 import { reactionTargets } from "./policy.js";
 import { GoalSettings } from "../config/settings.js";
-import { recoveryReplay } from "../commands/recovery.js";
 import {
   ReactionSnapshot,
   deliveriesOf,
@@ -17,6 +17,29 @@ import {
   type ReactionReply,
 } from "./state.js";
 import type { ReactionFailure } from "./policy.js";
+
+/** Mailbox-only preflight. The owner commits the returned authorization with its domain transition. */
+const recoveryReplay = Effect.fn("Recovery.replay")(function* (
+  input: RecoveryInput,
+  revision: number,
+  receipts: readonly RecoveryReceipt[],
+) {
+  const prior = receipts.find((entry) => entry.input.requestId === input.requestId);
+  if (prior) {
+    if (!isDeepStrictEqual(prior.input, input))
+      return yield* new ApplicationError({
+        kind: "conflict",
+        message: "Recovery request identity belongs to another payload",
+      });
+    return Option.some(prior.receipt);
+  }
+  if (revision !== input.expectedRevision)
+    return yield* new ApplicationError({
+      kind: "conflict",
+      message: "Processing state changed; refresh before authorizing recovery",
+    });
+  return Option.none();
+});
 
 type Outcome<A> =
   | { readonly _tag: "Success"; readonly value: A }

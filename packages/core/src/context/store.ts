@@ -11,7 +11,7 @@ import {
   Stream,
   type Scope,
 } from "effect";
-import { publicJson } from "../commands/json.js";
+import { publicJson } from "../json.js";
 import {
   ContextInput,
   ContextEvent,

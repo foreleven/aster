@@ -1159,7 +1159,7 @@ test("Goal lifecycle pauses only owned Signals through its ActorContext", async 
         }));
         assert.equal(reply._tag, "Accepted");
       }
-      const listed = yield* env.signals.ask<import("../src/commands/query.js").QueryReply>(
+      const listed = yield* env.signals.ask<import("../src/services/actors.js").QueryReply>(
         (replyTo) => ({
           _tag: "ListByOwner",
           owner: "/goals/project",

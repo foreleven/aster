@@ -22,7 +22,7 @@ export { ApplicationError } from "@aster/api-contracts";
 import type { ActorRef } from "@aster/actor";
 import { PublicContext as ContextRecord } from "@aster/api-contracts";
 import type { ContextRegistry } from "../context/registry.js";
-import { publicJson } from "../commands/json.js";
+import { publicJson } from "../json.js";
 import { PublicApprovalEntry } from "../approvals/view.js";
 import type { AgentConversations } from "@aster/agent";
 import type { GoalCommand, GoalCommandReply } from "../goals/protocol.js";

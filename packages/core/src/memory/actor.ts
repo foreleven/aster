@@ -1,5 +1,5 @@
 import { ApplicationError } from "@aster/api-contracts";
-import { QueryReply, queryReplyTo, queryCancelled, cancellableQuery } from "../commands/query.js";
+import { QueryReply, queryReplyTo, queryCancelled, cancellableQuery } from "../services/actors.js";
 import { ContextCaptures } from "./capture.js";
 import { ReplyTo, type ActorContext } from "@aster/actor";
 import { Deferred, Effect, HashSet, Layer, Match, Schema, Stream, Schedule } from "effect";

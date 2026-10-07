@@ -1,8 +1,7 @@
 import { type ActorRef, type ReplyTo } from "@aster/actor";
 import { ApplicationError } from "@aster/api-contracts";
 import { Deferred, Effect } from "effect";
-import type { QueryReply } from "../commands/query.js";
-import { CurrentActors } from "../services/actors.js";
+import { CurrentActors, type QueryReply } from "../services/actors.js";
 
 /** Schema-owned local command types are restored only at the dynamic addressing boundary. */
 export const ask = Effect.fn("Tools.ask")(function* <C, A>(

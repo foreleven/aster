@@ -8,7 +8,7 @@ import {
 } from "@aster/api-contracts";
 import { Predicate, Schema } from "effect";
 import { ReplyTo } from "@aster/actor";
-import { publicJson } from "../commands/json.js";
+import { publicJson } from "../json.js";
 import { createHash } from "node:crypto";
 import { AgentError } from "@aster/agent";
 
