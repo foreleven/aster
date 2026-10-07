@@ -1,7 +1,7 @@
 import { taskText } from "../lib/dashboard";
 import { Markdown } from "../components/markdown";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import { contextQueryKeys } from "@aster/api-contracts";
+import { contextQueryKeys } from "@aster/api";
 import { sendGoalMessage, endGoal } from "../api/client";
 import { GoalFeed } from "./goal-feed";
 import { useState } from "react";

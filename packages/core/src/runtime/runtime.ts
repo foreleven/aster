@@ -6,12 +6,11 @@ import { ContextQueries } from "../context/queries/routes.js";
 import { MemoryActor, memoryView } from "../memory/actor.js";
 import { taskCapture } from "../tasks/view.js";
 import { ApplicationError } from "../operations.js";
-import { type RecoveryInput, type RecoveryReply } from "../reactions/contracts.js";
-import { type ReactionCommand, SystemOneActor } from "../reactions/actor.js";
+import { SystemOneActor } from "../reactions/actor.js";
 import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
 import { GoalScreeningStore } from "../goals/screening/decision.js";
 import { TasksRootActor } from "../tasks/root.js";
-import { type ActorSystemEvent, ActorSystem, type ActorRef } from "@aster/actor";
+import { type ActorSystemEvent, ActorSystem } from "@aster/actor";
 import { RuntimeConfigurationError } from "./errors.js";
 
 import { AgentRunner, PiStorageLease, AgentConversations } from "@aster/agent";
@@ -42,7 +41,6 @@ import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
 
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
-import { makeApplicationApi } from "./api.js";
 
 type RuntimeDiagnostics = {
   readonly phase: "starting" | "ready" | "failed" | "stopping";
@@ -187,7 +185,7 @@ const acquireRuntime = Effect.gen(function* () {
       .pipe(Effect.provideService(Scope.Scope, workScope));
     handles.push({ phase: module.phase, handle });
   }
-  const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
+  yield* system.spawn("approvals", ApprovalQueueActor);
   const signalActivation = yield* Deferred.make<void>();
   const signals = yield* system.spawn("signals", SignalRootActor, {
     metadata: { signalActivation },
@@ -236,59 +234,18 @@ const acquireRuntime = Effect.gen(function* () {
     ),
     Effect.forkIn(workScope),
   );
-  const api = makeApplicationApi({
-    recoverProcessing: Effect.fn("Runtime.recoverProcessing")(function* (input: RecoveryInput) {
-      const target = "/user/system-one";
-      const selected = yield* system
-        .select(target)
-        .resolve()
-        .pipe(
-          Effect.catchTag("ActorNotFound", () =>
-            Effect.fail(
-              new ApplicationError({
-                kind: "unavailable",
-                message: "Processing owner unavailable",
-              }),
-            ),
-          ),
-        );
-      const reply = yield* (selected as ActorRef<ReactionCommand>)
-        .ask<RecoveryReply>((replyTo) => ({ _tag: "Recover", input, replyTo }))
-        .pipe(
-          Effect.catchTag("AskTimeoutError", () =>
-            Effect.fail(
-              new ApplicationError({
-                kind: "unavailable",
-                message: "Recovery acknowledgement missing; reuse the same request identity",
-              }),
-            ),
-          ),
-        );
-      if (reply._tag === "Rejected") return yield* reply.error;
-      return reply.receipt;
-    }),
-    registry,
-    queries: yield* ContextQueries,
-    conversations,
-    goals,
-    approvals,
-    tasks,
+  return {
+    actors: system as Pick<ActorSystem, "select">,
+    ready: Deferred.await(ready),
     inspect: Effect.gen(function* () {
-      // The host owns domain metadata and the dashboard contract; actor stays domain-neutral.
-      const actors = (yield* system.inspect({ metadata: ["contextPath"] })).map(
-        ({ metadata, ...actor }) => ({
-          ...actor,
-          contextPath: typeof metadata.contextPath === "string" ? metadata.contextPath : undefined,
-        }),
-      );
+      const actors = yield* system.inspect({ metadata: ["contextPath"] });
       return {
         actors,
         storageOwners: yield* PiStorageLease.inspect,
         ...(yield* Ref.get(diagnostics)),
       };
     }),
-  });
-  return { api, ready: Deferred.await(ready) };
+  };
 });
 
 export class AsterRuntime extends Context.Service<
@@ -312,6 +269,15 @@ export class AsterRuntime extends Context.Service<
       Layer.provideMerge(AgentRunner.layer),
       Layer.provideMerge(contextServices),
     );
-    return Layer.effect(AsterRuntime, acquireRuntime).pipe(Layer.provide(runtimeServices));
+    return Layer.effectContext(
+      Effect.gen(function* () {
+        const services = Context.pick(
+          ContextRegistry,
+          ContextQueries,
+          AgentConversations,
+        )(yield* Effect.context<ContextRegistry | ContextQueries | AgentConversations>());
+        return Context.add(services, AsterRuntime, yield* acquireRuntime);
+      }),
+    ).pipe(Layer.provide(runtimeServices));
   }
 }

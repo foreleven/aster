@@ -59,9 +59,9 @@ importers:
       '@aster/agent':
         specifier: workspace:*
         version: link:../../packages/agent
-      '@aster/api-contracts':
+      '@aster/api':
         specifier: workspace:*
-        version: link:../../packages/api-contracts
+        version: link:../../packages/api
       '@aster/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -84,9 +84,9 @@ importers:
 
   apps/web:
     dependencies:
-      '@aster/api-contracts':
+      '@aster/api':
         specifier: workspace:*
-        version: link:../../packages/api-contracts
+        version: link:../../packages/api
       '@aster/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -170,8 +170,14 @@ importers:
         specifier: 4.0.0
         version: 4.0.0
 
-  packages/api-contracts:
+  packages/api:
     dependencies:
+      '@aster/actor':
+        specifier: workspace:*
+        version: link:../actor
+      '@aster/agent':
+        specifier: workspace:*
+        version: link:../agent
       '@aster/core':
         specifier: workspace:*
         version: link:../core

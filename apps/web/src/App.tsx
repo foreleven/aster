@@ -1,7 +1,7 @@
 import React, { lazy, Suspense, useContext, useState, useSyncExternalStore } from "react";
 import { RegistryContext, useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { AsyncResult } from "effect/reactivity";
-import { QueryKeys } from "@aster/api-contracts";
+import { QueryKeys } from "@aster/api";
 import { connection } from "./api/events";
 import { invalidateQueries } from "./api/client";
 import { contextViews, dashboardStatus, selectedRow } from "./dashboard/state";

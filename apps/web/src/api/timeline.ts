@@ -1,6 +1,6 @@
 import { Effect, Option } from "effect";
 import { AsyncResult, Atom } from "effect/reactivity";
-import { QueryKeys, type GoalTimelinePage, type RetryGoalTurnInput } from "@aster/api-contracts";
+import { QueryKeys, type GoalTimelinePage, type RetryGoalTurnInput } from "@aster/api";
 import { ApplicationClient } from "./client";
 
 type TimelineFeed = GoalTimelinePage & { readonly loadedBefore?: number };

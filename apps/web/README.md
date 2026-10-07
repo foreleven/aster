@@ -24,12 +24,12 @@ On narrow screens the navigation becomes a drawer and related work follows the c
 
 ## Application API
 
-The root Atom registry shares ApplicationClient via AtomRpc. `/api/rpc` serves typed queries/mutations; `/api/events` delivers committed invalidation keys into Reactivity. EventSource lifetime is scoped to subscribers. Query loading/errors use AsyncResult; refresh can recover a failed connection. Display schemas keep arbitrary private state out of rendering logic.
+The root Atom registry shares ApplicationClient via AtomRpc. `/api/rpc` serves typed queries, mutations and SubscribeInvalidations, which delivers committed query keys into the same Reactivity runtime. Client and subscription lifetimes are scoped. Query loading/errors use AsyncResult; refresh can recover a failed connection. Display schemas keep arbitrary private state out of rendering logic.
 
 Feature components live in `src/contexts` and `src/goals`; query adapters, display projections and the inspector live in `src/api` and `src/dashboard`.
 
 ## Validation
 
-`pnpm test:web` builds the workspace and runs Playwright against isolated fixture transports and a real local HTTP/SSE server with fake domain services. It never invokes real models or integrations. Install Chromium with `pnpm --dir apps/web exec playwright install chromium`, or use installed Chrome with `PLAYWRIGHT_CHANNEL=chrome pnpm test:web`.
+`pnpm test:web` builds the workspace and runs Playwright against isolated fixture transports and a real local HTTP/RPC server with fake domain services. It never invokes real models or integrations. Install Chromium with `pnpm --dir apps/web exec playwright install chromium`, or use installed Chrome with `PLAYWRIGHT_CHANNEL=chrome pnpm test:web`.
 
-Tests cover desktop/mobile navigation, natural messages, pagination, Task details, approval/resumption controls, retained uncertain request identities, SSE reconnect and malformed projections. `test/fixtures.js` is test-only visual data.
+Tests cover desktop/mobile navigation, natural messages, pagination, Task details, approval/resumption controls, retained uncertain request identities, streaming RPC reconnect and malformed projections. `test/fixtures.js` is test-only visual data.

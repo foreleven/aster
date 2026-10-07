@@ -1,38 +1,39 @@
-import { Config, Context, Effect, Exit, FileSystem, Layer, Scope } from "effect";
+import { Config, Context, Effect, FileSystem, Layer, Scope } from "effect";
 import { NodeFileSystem, NodeHttpServer } from "@effect/platform-node";
 import { HttpRouter } from "effect/http";
 import { NetAddress } from "effect/net";
 import { RpcSerialization, RpcServer } from "effect/rpc";
-import { ApplicationRpcs } from "@aster/api-contracts";
+import * as ApiServer from "@aster/api/server";
+import { AgentConversations } from "@aster/agent";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
-import { AsterRuntime, ConfigLocation, type ApplicationApi } from "@aster/core";
-import { applicationRpcHandlers } from "./rpc-api.js";
-import { eventResponse } from "./http-events.js";
+import { AsterRuntime, ConfigLocation, ContextRegistry, ContextQueries } from "@aster/core";
 import { withHttpPolicy } from "./http-policy.js";
-import { legacyRest } from "./legacy-rest.js";
 import { staticAssets } from "./static-assets.js";
 import { sourceAssets } from "./source-assets.js";
 
-export interface GoalApi {
-  readonly url: string;
-  close(): Promise<void>;
-}
-interface BoundGoalApi {
+interface BoundHttpApi {
   readonly url: string;
 }
 interface ApiOptions {
-  readonly application: ApplicationApi;
   readonly port?: number;
   readonly webDir?: string;
   readonly webSourceDir?: string;
 }
 
-/** Host owns transport scopes. RPC and legacy REST share the same application operations. */
-export const makeGoalApi = Effect.fn("LocalHttpApi.make")(function* (
+/** Host owns transport scopes. The API package owns all business handlers. */
+export const makeHttpApi = Effect.fn("LocalHttpApi.make")(function* (
   options: ApiOptions,
-): Effect.fn.Return<BoundGoalApi, unknown, Scope.Scope | FileSystem.FileSystem> {
-  const { application } = options;
+): Effect.fn.Return<
+  BoundHttpApi,
+  unknown,
+  | Scope.Scope
+  | FileSystem.FileSystem
+  | AsterRuntime
+  | ContextRegistry
+  | ContextQueries
+  | AgentConversations
+> {
   const nodeServer = createServer();
   const server = yield* NodeHttpServer.make(() => nodeServer, {
     host: "127.0.0.1",
@@ -51,43 +52,21 @@ export const makeGoalApi = Effect.fn("LocalHttpApi.make")(function* (
     }),
   );
   const url = NetAddress.formatUrlUnsafe(server.address);
-  const rpc = RpcServer.layerHttp({
-    group: ApplicationRpcs,
-    path: "/api/rpc",
-    protocol: "http",
-  }).pipe(
-    Layer.provide(applicationRpcHandlers(application)),
+  const rpc = ApiServer.layer.pipe(
+    Layer.provide(RpcServer.layerProtocolHttp({ path: "/api/rpc", streamBufferSize: 64 })),
     Layer.provide(RpcSerialization.layerNdjson),
   );
   const routes = Layer.mergeAll(
     rpc,
-    legacyRest(application, url),
     options.webSourceDir
       ? yield* sourceAssets(options.webSourceDir)
       : staticAssets(options.webDir, url),
-    HttpRouter.addAll([HttpRouter.route("GET", "/api/events", eventResponse(application))]),
   );
   const handler = yield* HttpRouter.toHttpEffect(routes);
   yield* server.serve(withHttpPolicy(url, handler));
   return { url };
 });
 
-/** Promise entry point for embedders/tests. Production composes makeGoalApi directly into its Scope. */
-export const startGoalApi = async (options: ApiOptions): Promise<GoalApi> => {
-  const scope = await Effect.runPromise(Scope.make());
-  try {
-    const api = await Effect.runPromise(
-      makeGoalApi(options).pipe(
-        Effect.provideService(Scope.Scope, scope),
-        Effect.provide(NodeFileSystem.layer),
-      ),
-    );
-    return { ...api, close: () => Effect.runPromise(Scope.close(scope, Exit.void)) };
-  } catch (error) {
-    await Effect.runPromise(Scope.close(scope, Exit.void));
-    throw error;
-  }
-};
 export class LocalHttpApi extends Context.Service<LocalHttpApi, { readonly url: string }>()(
   "local/HttpApi",
 ) {
@@ -95,14 +74,12 @@ export class LocalHttpApi extends Context.Service<LocalHttpApi, { readonly url: 
     Layer.effect(
       LocalHttpApi,
       Effect.gen(function* () {
-        const runtime = yield* AsterRuntime;
         const { projectRoot } = yield* ConfigLocation;
         const port = yield* Config.Port("port").pipe(
           Config.withDefault(4317),
           Config.nested("http"),
         );
-        return yield* makeGoalApi({
-          application: runtime.api,
+        return yield* makeHttpApi({
           port,
           webDir: resolve(projectRoot, "apps/web/dist"),
           ...(options.source ? { webSourceDir: resolve(projectRoot, "apps/web") } : {}),

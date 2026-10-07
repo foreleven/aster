@@ -1,14 +1,12 @@
+import { PublicApprovalEntry } from "../src/approvals/view.js";
+import { approvalEntries } from "../src/approvals/actor.js";
+import { goalTimeline } from "../src/goals/view.js";
 import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { Effect, Schema } from "effect";
-import {
-  contextView,
-  defineContext,
-  makeApplicationApi,
-  type ContextSnapshot,
-} from "../src/index.js";
+import { contextView, defineContext, type ContextSnapshot } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
 const secret = "PRIVATE_PROVIDER_SENTINEL";
@@ -143,26 +141,24 @@ test("application reads project business fields and history without altering can
         isError: false,
         timestamp: 2,
       });
-      const api = makeApplicationApi({
-        registry,
-        conversations: history,
-        inspect: Effect.succeed(null),
-      });
-      assertPublic(yield* api.contexts);
-      assertPublic(yield* api.dashboard);
-      assertPublic(yield* api.goals.list);
-      assertPublic(yield* api.approvals.list);
-      for (const fixture of fixtures) assertPublic(yield* api.context(fixture.path));
-      const delegation = yield* api.context("/delegations/work");
-      const goal = yield* api.context("/goals/project");
+      assertPublic(Object.values(registry.reader.snapshot()));
+      assertPublic(
+        Object.values(registry.reader.snapshot()).filter((r) => /^\/goals\/[^/]+$/.test(r.path)),
+      );
+      assertPublic(
+        Schema.decodeUnknownSync(Schema.Array(PublicApprovalEntry))(approvalEntries(registry)),
+      );
+      for (const fixture of fixtures) assertPublic(registry.reader.get(fixture.path)!);
+      const delegation = registry.reader.get("/delegations/work")!;
+      const goal = registry.reader.get("/goals/project")!;
       assert.equal("evaluations" in goal.state, false);
       assert.equal(delegation.projection?.visibility, "restricted");
       assert.equal(delegation.messages.length, 0);
-      assert.deepEqual((yield* api.context("/unknown")).projection, {
+      assert.deepEqual(registry.reader.get("/unknown")!.projection, {
         visibility: "restricted",
         reason: "missing-policy",
       });
-      const last = yield* api.goals.timeline("project", { limit: 1 });
+      const last = yield* goalTimeline(registry, history, "project", { limit: 1 });
       assert.equal(last.messages.length, 1);
       assert.equal(last.total, 1);
       assert.equal(last.nextBefore, null);

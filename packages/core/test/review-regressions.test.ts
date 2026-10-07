@@ -1,3 +1,4 @@
+import { submitGoal, goalCommand } from "./goal-command-fixtures.js";
 import type { ApprovalReply } from "../src/approvals/actor.js";
 import { AgentConversations } from "@aster/agent";
 import { testConversations } from "./conversation-fixtures.js";
@@ -10,13 +11,11 @@ import { TestClock } from "effect/testing";
 import {
   ApprovalQueueActor,
   approvalEntries,
-  ApplicationError,
   ContextRegistry,
   ExternalAgents,
   GoalsRootActor,
   SignalActor,
   SignalDefinitions,
-  makeApplicationApi,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
@@ -25,7 +24,7 @@ const definition = {
   trigger: { _tag: "Context", when: "now" },
   task: { _tag: "Goal", target: "/goals/personal", text: "Task" },
 } as const;
-test("Goal API waits for durable input and history; stopped roots fail instead of accepting", async () => {
+test("Goal command waits for durable input and history; stopped roots fail instead of accepting", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -59,15 +58,9 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
         const goalActivation = yield* Deferred.make<void>();
         const root = yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } });
         yield* root.awaitStarted;
-        const api = makeApplicationApi({
-          registry,
-          goals: root,
-          conversations: history,
-          inspect: system.inspect(),
-        });
-        const sending = yield* api.goals
-          .sendMessage("project", "Durable input")
-          .pipe(Effect.forkScoped);
+        const sending = yield* submitGoal(system, "project", "Durable input").pipe(
+          Effect.forkScoped,
+        );
         yield* Deferred.await(entered);
         assert.equal(sending.pollUnsafe(), undefined);
         assert.equal(
@@ -90,22 +83,23 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
           ),
           true,
         );
-        yield* api.goals.end("project");
+        yield* goalCommand(system, "project", { _tag: "End", requestId: "end" });
         assert.equal(
           (registry.get("/goals/project")!.state as { status: string }).status,
           "completed",
         );
         yield* system.stop(root);
         const clock = yield* TestClock.make();
-        const missing = yield* api.goals
-          .sendMessage("project", "Lost")
-          .pipe(Effect.provideService(Clock.Clock, clock), Effect.result, Effect.forkScoped);
+        const missing = yield* submitGoal(system, "project", "Lost").pipe(
+          Effect.provideService(Clock.Clock, clock),
+          Effect.result,
+          Effect.forkScoped,
+        );
         yield* clock.adjust("31 seconds");
         const result = yield* Fiber.join(missing);
         assert.equal(result._tag, "Failure");
         if (result._tag === "Failure") {
-          assert.ok(result.failure instanceof ApplicationError);
-          assert.equal(result.failure.kind, "unavailable");
+          assert.equal(result.failure._tag, "ActorNotFound");
         }
       }),
     ),

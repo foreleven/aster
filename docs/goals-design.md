@@ -82,4 +82,4 @@ See [conversation design](goal-conversation-design.md), [Tasks](task-delegation-
 
 Goal input schemas live in `goals/contracts.ts`; Actor commands remain in `protocol.ts`. Context evidence retains one stable intent identity, source path/name, summary, score/rationale/threshold and timestamp. Routing uses the delivery target. Fingerprints are used to compute identity and retained once in the screening audit, not copied into the conversation. Screening policy metadata remains in the audit. The input carries a scalar `remainingAgentTurns`; there is no propagated root request identifier. A startup input has no redundant pursuit text.
 
-Public conversation messages expose Pi entry ID, role, text and timestamp. Internal input IDs remain in Pi reply links and Goal state. Pagination response schemas belong to api-contracts; projection and Pi reads remain in core.
+Public conversation messages expose Pi entry ID, role, text and timestamp. Internal input IDs remain in Pi reply links and Goal state. Pagination response schemas belong to @aster/api; projection and Pi reads remain in core.

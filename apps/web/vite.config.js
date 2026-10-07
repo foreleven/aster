@@ -9,7 +9,7 @@ export default defineConfig(({ command }) => ({
     conditions:
       command === "serve" ? ["aster-source", ...defaultClientConditions] : defaultClientConditions,
   },
-  optimizeDeps: { exclude: ["@aster/api-contracts"] },
+  optimizeDeps: { exclude: ["@aster/api"] },
   server: {
     proxy: {
       "/api": {

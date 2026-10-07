@@ -3,7 +3,7 @@ import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import { Cause, Exit, Schema } from "effect";
 import { ApplicationError, type TaskRecoveryInput } from "@aster/core/contracts";
-import { contextQueryKeys } from "@aster/api-contracts";
+import { contextQueryKeys } from "@aster/api";
 import { checkTask, retryTask } from "../api/client";
 import type { ContextView } from "../dashboard/model";
 const pendingRequests = Atom.make<

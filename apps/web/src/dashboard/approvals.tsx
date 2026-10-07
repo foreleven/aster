@@ -11,7 +11,7 @@ import {
   type PublicApprovalEntry,
   type ApprovalResponse,
 } from "@aster/core/contracts";
-import { contextQueryKeys } from "@aster/api-contracts";
+import { contextQueryKeys } from "@aster/api";
 import { respondToApproval } from "../api/client";
 
 import { approvalEntries, approvalDiagnostics, pendingApprovalResponses } from "./state";

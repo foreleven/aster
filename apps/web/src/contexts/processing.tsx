@@ -8,7 +8,7 @@ import {
   contextQueryKeys,
   type ProcessingOwner,
   type ProcessingSnapshot,
-} from "@aster/api-contracts";
+} from "@aster/api";
 import { ApplicationClient, resultError, resultValue } from "../api/client";
 
 const queries = Atom.family((owner: ProcessingOwner) =>

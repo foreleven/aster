@@ -1,8 +1,6 @@
-import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect } from "effect";
-import { makeApplicationApi } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import { larkContextViews, makeImSummaryGate } from "@aster/integrations";
 
@@ -49,12 +47,7 @@ test("archived Lark contexts remain readable through integration family policies
         save: () => {},
       });
       yield* registry.views.register(larkContextViews);
-      const api = makeApplicationApi({
-        registry,
-        conversations: testConversations(),
-        inspect: Effect.succeed(null),
-      });
-      const views = yield* api.contexts;
+      const views = Object.values(registry.reader.snapshot());
       assert.equal(JSON.stringify(views).includes(secret), false);
       assert.ok(views.every((record) => record.projection?.visibility === "public"));
       assert.deepEqual(views[0]!.messages, [{ ...message, sender: { id: "user", name: "Alice" } }]);

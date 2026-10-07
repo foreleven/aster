@@ -1,12 +1,12 @@
 # Aster local application
 
-The local application observes Lark mail and work IM, evaluates Signals, pursues YAML-defined Goals through pi, and executes auto Signals in DoubaoWork. It manages agentmemory and persists public Contexts through configurable Local/Pi durable storage. The independent Goal web client uses HTTP and SSE.
+The local application observes Lark mail and work IM, evaluates Signals, pursues YAML-defined Goals through pi, and executes auto Signals in DoubaoWork. It manages agentmemory and persists public Contexts through configurable Local/Pi durable storage. The independent Goal web client uses streaming RPC over HTTP.
 
 ## Application composition
 
 `src/cli.ts` parses commands. `src/services.ts` selects `LarkIntegration.layer`, `MailIntegration.layer` from `@aster/integrations` and concrete Layers from `@aster/infra` for `AsterRuntime.layer`. `src/application.ts` installs the configuration provider, owns process signals and the store lock, and runs the HTTP/runtime graph in a Scope. Cancellation covers Layer acquisition as well as the running application.
 
-`AsterRuntime` in core owns domain service construction, root Actors, Context reactions, integration activation, readiness and shutdown. Lark owns IM readiness; memory owns its capture consumer. Local does not inspect IM state, bind ActorRefs, select Signals or initialize Goals. HTTP calls `runtime.api` use cases and maps their errors; it does not construct domain Commands or assemble history. The API remains available while integrations catch up. During shutdown HTTP closes first, then runtime stops sources, subscriptions and Actors, drains captures and releases infrastructure. The process lock remains held until cleanup completes.
+`AsterRuntime` in core owns domain service construction, root Actors, Context reactions, integration activation, readiness and shutdown. Lark owns IM readiness; memory owns its capture consumer. Local does not inspect IM state, bind ActorRefs, select Signals or initialize Goals. The host mounts `@aster/api/server` with HTTP/NDJSON; that package injects Runtime/domain services, constructs typed Actor commands and adapts replies. The API remains available while integrations catch up. During shutdown HTTP closes first, then runtime stops sources, subscriptions and Actors, drains captures and releases infrastructure. The process lock remains held until cleanup completes.
 
 External Layers are `ConfiguredDurableInfrastructure.layer`, `FileGoalScreening.layer`, `Models.configured`, `SystemOneClientLive.layer` and `AgentMemoryBackend.layer`. Runtime builds `ContextRegistry`, internal reasoning, Pi conversations, Tasks and Goal services. Tests replace these capability Layers with isolated implementations. See [runtime design](../../docs/runtime-design.md) for the graph and contracts.
 
@@ -34,12 +34,7 @@ Open **http://127.0.0.1:4317** after `pnpm start`. Local start serves the Vite f
 
 Public loopback API:
 
-- `GET /api/goals`: public Goal business snapshots; use GetGoalTimeline for conversation messages.
-- `GET /api/context?path=...`: a public Context, including source and execution evidence.
-- `POST /api/goals/{slug}/messages`: JSON `{ "text": "..." }`, accepted into the Goal mailbox.
-- `POST /api/goals/{slug}/end`: JSON `{}`, end an ongoing Goal.
-- `POST /api/rpc`: typed queries and mutations from `@aster/api-contracts`, served as NDJSON RPC.
-- `GET /api/events`: SSE `ready` and `invalidate` events. Invalidation payloads contain `{_tag: "Invalidate", keys: string[]}`. The browser refreshes matching AtomRpc queries; every ready/reconnect refreshes all mounted queries.
+- `POST /api/rpc`: typed queries, commands and SubscribeInvalidations from `@aster/api`, served as NDJSON RPC. The first subscription frame invalidates all queries; subsequent frames invalidate affected keys. Legacy REST and SSE endpoints are removed.
 
 The server binds only loopback and checks Host/Origin. Model credentials are not exposed. The React/Vite frontend uses the public application API and imports no Actor or persistence internals. Browser tests use fake transports.
 
@@ -57,7 +52,7 @@ The app supplies `Models.configured` from `@aster/agent`. Lark summarization and
 
 TaskActor owns `/tasks/<identity>`, execution handles, follow-up delivery and results. Internal Tasks use the Goal reasoning model; external Tasks select a configured executor. `InspectTask` returns typed business details and available tool records without provider metadata. `CheckTask` observes the original execution; `RetryTask` explicitly retries known failed work. Both retain request identity and revision; unknown submissions are never repeated automatically.
 
-The local UI includes ApprovalQueue. Confirmation, permission and information requests use `GET /api/approvals` and `POST /api/approvals/respond`, or their typed RPC counterparts. Responses include `{ decision: "approve" | "reject" }`, `{ text }`, or question answers keyed by question ID. Queue admission and response delivery persist before acknowledgement. An empty queue only means that no human decision is pending.
+The local UI includes ApprovalQueue. Confirmation, permission and information requests use the ListApprovals and RespondToApproval RPCs. Responses include `{ decision: "approve" | "reject" }`, `{ text }`, or question answers keyed by question ID. Queue admission and response delivery persist before acknowledgement. An empty queue only means that no human decision is pending.
 
 Codex uses app-server; busy follow-ups steer the current turn and completed work continues in the same thread. Pi continues its retained conversation. The Doubao adapter supports initial work and native decision responses but explicitly rejects general follow-up instructions because continuation is not implemented. Adapters own scheduling and uncertain delivery behavior; core does not simulate continuation with replacement submissions.
 
@@ -96,9 +91,9 @@ All chats share a FIFO Agent queue, with at least ten seconds between starts and
 
 While continuously running, successful retrieval of yesterday's final interval triggers its pending day-end summaries, including batches deferred by System One. They still use the shared Agent queue. Failed retrieval delays the flush. Restart does not revive missed prior-day work.
 
-See [Reactive application API](../../docs/reactive-api-design.md) for the scoped HTTP/SSE implementation and browser query ownership.
+See [Reactive application API](../../docs/reactive-api-design.md) for the scoped HTTP/RPC implementation and browser query ownership.
 
-The HTTP host composes internal `legacy-rest`, `static-assets`, `http-policy`, RPC and SSE modules. These are implementation modules, not new externally supplied Layers. Host/Origin and body-size checks wrap every route through the same policy.
+The HTTP host composes `@aster/api/server`, `static-assets`, `source-assets` and `http-policy`. These are implementation modules, not new externally supplied Layers. Host/Origin and body-size checks wrap every route through the same policy.
 
 ## Context backend migration
 

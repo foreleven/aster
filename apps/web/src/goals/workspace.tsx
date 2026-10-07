@@ -14,7 +14,7 @@ import {
   Pencil,
   Send,
 } from "lucide-react";
-import { contextQueryKeys } from "@aster/api-contracts";
+import { contextQueryKeys } from "@aster/api";
 import { sendGoalMessage, endGoal } from "../api/client";
 import { summaryText, type ContextView } from "../dashboard/model";
 import { references } from "../lib/dashboard";

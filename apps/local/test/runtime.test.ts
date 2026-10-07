@@ -1,3 +1,4 @@
+import { ContextQueries } from "@aster/core";
 import { AgentConversations } from "@aster/agent";
 import { IntegrationError } from "@aster/core";
 import assert from "node:assert/strict";
@@ -168,20 +169,17 @@ test("runtime installs multiple sources, captures first changes, exposes API bef
         yield* Effect.scoped(
           Effect.gen(function* () {
             const runtime = yield* AsterRuntime;
-            assert.equal(
-              (yield* runtime.api.dashboard).runtime && events.includes("start:two"),
-              true,
-            );
-            assert.equal((yield* runtime.api.inspect).phase, "starting");
+            assert.equal((yield* runtime.inspect) && events.includes("start:two"), true);
+            assert.equal((yield* runtime.inspect).phase, "starting");
             const pending = yield* runtime.ready.pipe(Effect.forkScoped);
             yield* Deferred.succeed(ready, undefined);
             yield* Fiber.join(pending);
-            assert.equal((yield* runtime.api.inspect).phase, "ready");
+            assert.equal((yield* runtime.inspect).phase, "ready");
             yield* Effect.gen(function* () {
               while (!events.includes("capture:/one") || !events.includes("capture:/two"))
                 yield* Effect.sleep(1);
             }).pipe(Effect.timeout("2 seconds"));
-            assert.deepEqual((yield* runtime.api.context("/one")).state, { value: 1 });
+            assert.deepEqual((yield* ContextRegistry).reader.get("/one")!.state, { value: 1 });
           }).pipe(Effect.provide(live)),
         );
       }),
@@ -353,14 +351,14 @@ test("runtime activates generic mail and exposes its tree through ListContexts b
         yield* Effect.gen(function* () {
           const runtime = yield* AsterRuntime;
           yield* Deferred.await(entered);
-          const contexts = yield* runtime.api.contexts;
+          const contexts = Object.values((yield* ContextRegistry).reader.snapshot());
           assert.ok(contexts.some((context) => context.path === "/mail"));
           assert.ok(contexts.some((context) => context.path === "/mail/work"));
           assert.ok(!JSON.stringify(contexts).includes("secret"));
-          assert.equal((yield* runtime.api.inspect).phase, "starting");
+          assert.equal((yield* runtime.inspect).phase, "starting");
           yield* Deferred.succeed(release, undefined);
           yield* runtime.ready;
-          assert.equal((yield* runtime.api.inspect).phase, "ready");
+          assert.equal((yield* runtime.inspect).phase, "ready");
         }).pipe(
           Effect.provide(
             AsterRuntime.layer({ integrations: [mail] }).pipe(
@@ -400,8 +398,12 @@ test("runtime owns Apps activation and exposes query commands after readiness", 
         const runtime = yield* AsterRuntime;
         yield* runtime.ready;
         assert.equal(calls, 0);
-        assert.ok((yield* runtime.api.contexts).some((record) => record.path === "/apps/ctrip"));
-        const result = yield* runtime.api.queryContext({
+        assert.ok(
+          Object.values((yield* ContextRegistry).reader.snapshot()).some(
+            (record) => record.path === "/apps/ctrip",
+          ),
+        );
+        const result = yield* (yield* ContextQueries).query({
           path: "/apps/ctrip",
           command: "search",
           args: { query: "Sanya" },

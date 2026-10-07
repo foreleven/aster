@@ -1,6 +1,6 @@
 import { Match, Predicate, Schema } from "effect";
 import { Task, SignalTrigger, PreparedTask, type PublicContext } from "@aster/core/contracts";
-import { type RuntimeEvent, type RuntimeSnapshot } from "@aster/api-contracts";
+import { type RuntimeEvent, type RuntimeSnapshot } from "@aster/api";
 
 // Public Contexts stay open-ended. The dashboard only decodes the fields it presents.
 

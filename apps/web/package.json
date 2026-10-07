@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@aster/api-contracts": "workspace:*",
+    "@aster/api": "workspace:*",
     "@effect/atom-react": "4.0.0",
     "@tailwindcss/vite": "^4.3.3",
     "class-variance-authority": "^0.7.1",

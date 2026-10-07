@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
-import { AgentConversations } from "@aster/agent";
 import { ActorSystem } from "@aster/actor";
 import {
   ContextQueries,
   ContextRegistry,
   ContextQueryError,
-  makeApplicationApi,
   ProcessEnvironment,
   RuntimeIntegrations,
 } from "@aster/core";
@@ -58,12 +56,7 @@ const launch = Effect.fnUntraced(function* (
       system,
       handle,
       queries,
-      api: makeApplicationApi({
-        registry,
-        queries,
-        conversations: yield* AgentConversations.makeMemory(),
-        inspect: Effect.succeed({}),
-      }),
+      reader: registry.reader,
     };
   }).pipe(
     Effect.provide(Layer.merge(RuntimeIntegrations.layer, ContextQueries.layer)),
@@ -103,16 +96,16 @@ test("apps register discoverable query-only Contexts without running OpenCLI; qu
           controlled,
         );
         assert.equal(mutableCalls.length, 0);
-        const contexts = yield* runtime.api.contexts;
+        const contexts = Object.values(runtime.reader.snapshot());
         assert.deepEqual(contexts.map((c) => c.path).sort(), [
           "/apps",
           "/apps/ctrip",
           "/apps/xiaohongshu",
         ]);
-        const ctrip = yield* runtime.api.context(input.path);
+        const ctrip = runtime.reader.get(input.path)!;
         assert.equal(Schema.decodeUnknownSync(AppState)(ctrip.state).mode, "query-only");
         assert.ok(JSON.stringify(ctrip.state).includes("hotel-search"));
-        const query = yield* runtime.api.queryContext(input).pipe(Effect.forkScoped);
+        const query = yield* runtime.queries.query(input).pipe(Effect.forkScoped);
         yield* Deferred.await(saving);
         assert.equal(
           Schema.decodeUnknownSync(AppState)(registry.get(input.path)!.state).lastResult,

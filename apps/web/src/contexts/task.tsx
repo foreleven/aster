@@ -1,6 +1,6 @@
 import { useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
-import { QueryKeys } from "@aster/api-contracts";
+import { QueryKeys } from "@aster/api";
 import { ApplicationClient, resultError, resultValue } from "../api/client";
 
 const inspection = Atom.family((path: string) =>

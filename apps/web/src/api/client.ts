@@ -2,12 +2,14 @@ import { Cause, Layer, Option } from "effect";
 import { FetchHttpClient } from "effect/http";
 import { AsyncResult, AtomRpc, Reactivity } from "effect/reactivity";
 import { RpcClient, RpcSerialization } from "effect/rpc";
-import { ApplicationRpcs, QueryKeys } from "@aster/api-contracts";
+import { ApplicationRpcs, QueryKeys } from "@aster/api";
+import * as ApiClient from "@aster/api/client";
 
 export class ApplicationClient extends AtomRpc.Service<ApplicationClient>()(
   "web/ApplicationClient",
   {
     group: ApplicationRpcs,
+    makeEffect: ApiClient.make,
     protocol: RpcClient.layerProtocolHttp({ url: "/api/rpc" }).pipe(
       Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
     ),

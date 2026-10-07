@@ -1,3 +1,5 @@
+import { ContextRegistry } from "../src/context/registry.js";
+import { submitGoal } from "./goal-command-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { AgentConversations, AgentRunner } from "@aster/agent";
 import assert from "node:assert/strict";
@@ -81,18 +83,19 @@ test("runtime readiness includes the built-in Goal assistant and ordinary Goal c
     Effect.gen(function* () {
       const runtime = yield* AsterRuntime;
       yield* runtime.ready;
-      const accepted = yield* runtime.api.goals.sendMessage(
+      const accepted = yield* submitGoal(
+        runtime.actors,
         "personal",
         "Track my work",
         "runtime-input",
       );
-      const personal = yield* runtime.api.context("/goals/personal");
+      const personal = (yield* ContextRegistry).reader.get("/goals/personal")!;
       assert.equal(personal.path, "/goals/personal");
       assert.deepEqual(
-        yield* runtime.api.goals.sendMessage("personal", "Track my work", "runtime-input"),
+        yield* submitGoal(runtime.actors, "personal", "Track my work", "runtime-input"),
         accepted,
       );
-      const paths = (yield* runtime.api.inspect).actors.map((actor) => actor.path);
+      const paths = (yield* runtime.inspect).actors.map((actor) => actor.path);
       assert.ok(paths.includes("/user/goals/personal"));
       assert.ok(!paths.includes("/user/personal") && !paths.includes("/user/notifications"));
     }).pipe(Effect.provide(live)),
@@ -110,7 +113,7 @@ test("a readiness defect settles runtime.ready with its original cause", async (
       const exit = yield* Effect.exit(runtime.ready.pipe(Effect.timeout("200 millis")));
       assert.ok(Exit.isFailure(exit));
       assert.equal(Cause.squash(exit.cause), defect);
-      assert.equal(((yield* runtime.api.dashboard).runtime as { phase: string }).phase, "failed");
+      assert.equal((yield* runtime.inspect).phase, "failed");
     }).pipe(Effect.provide(live)),
   );
 });
@@ -165,7 +168,7 @@ test("runtime inspection exposes current storage ownership without local filesys
       const token = yield* Effect.scoped(
         Effect.gen(function* () {
           const lease = yield* PiStorageLease.acquire(directory, "goal:test");
-          const view = (yield* runtime.api.inspect).storageOwners?.find(
+          const view = (yield* runtime.inspect).storageOwners?.find(
             (owner) => owner.leaseId === lease.identity.token,
           );
           assert.equal(view?.ownerId, "goal:test");
@@ -176,7 +179,7 @@ test("runtime inspection exposes current storage ownership without local filesys
         }),
       );
       assert.equal(
-        (yield* runtime.api.inspect).storageOwners?.some((owner) => owner.leaseId === token),
+        (yield* runtime.inspect).storageOwners?.some((owner) => owner.leaseId === token),
         false,
       );
     }).pipe(Effect.provide(live)),
@@ -205,8 +208,10 @@ test("restored Goals admit input while integration readiness gates execution", a
         yield* Effect.gen(function* () {
           const runtime = yield* AsterRuntime;
           const readiness = yield* runtime.ready.pipe(Effect.forkScoped);
-          yield* runtime.api.goals.sendMessage("personal", "Hello", "before-ready");
-          const goals = yield* runtime.api.goals.list;
+          yield* submitGoal(runtime.actors, "personal", "Hello", "before-ready");
+          const goals = Object.values((yield* ContextRegistry).reader.snapshot()).filter((r) =>
+            /^\/goals\/[^/]+$/.test(r.path),
+          );
           assert.deepEqual(
             goals.map((goal) => goal.path),
             ["/goals/personal"],
@@ -266,9 +271,12 @@ test("runtime becomes ready while a Goal restores; its mailbox resumes after res
           yield* Deferred.await(reading);
           yield* runtime.ready;
           assert.equal(yield* Deferred.isDone(called), false);
-          const sending = yield* runtime.api.goals
-            .sendMessage("personal", "Hello", "during-restore")
-            .pipe(Effect.forkScoped);
+          const sending = yield* submitGoal(
+            runtime.actors,
+            "personal",
+            "Hello",
+            "during-restore",
+          ).pipe(Effect.forkScoped);
           yield* Effect.yieldNow;
           assert.equal(sending.pollUnsafe(), undefined);
           yield* Deferred.succeed(release, undefined);
@@ -309,7 +317,7 @@ test("a stopped core owner makes runtime health failed after readiness", async (
       const runtime = yield* AsterRuntime;
       yield* runtime.ready;
       yield* yield* Deferred.await(stopMemory);
-      const snapshot = yield* runtime.api.inspect.pipe(
+      const snapshot = yield* runtime.inspect.pipe(
         Effect.repeat({ until: (snapshot) => snapshot.phase === "failed" }),
         Effect.timeout("2 seconds"),
       );

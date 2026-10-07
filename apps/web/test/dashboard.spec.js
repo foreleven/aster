@@ -9,29 +9,57 @@ async function setup(page, data = fixture()) {
   const writes = [];
   const reads = [];
   const historyRequests = [];
-  // Keep transport callbacks deterministic; the real-server test covers native EventSource.
+  // Mock only the streaming RPC; the real-server case exercises the native HTTP path.
   await page.addInitScript(() => {
+    const nativeFetch = window.fetch.bind(window);
     window.testEvents = { opened: 0, closed: 0 };
-    window.EventSource = class extends EventTarget {
-      constructor() {
-        super();
-        window.testEvents.opened++;
-        window.testEvents.emit = (type, data = {}) =>
-          this.dispatchEvent(new MessageEvent(type, { data: JSON.stringify(data) }));
-        queueMicrotask(() => window.testEvents.emit("ready"));
-      }
-      close() {
-        window.testEvents.closed++;
-      }
+    window.fetch = async (input, init) => {
+      const request = new Request(input, init);
+      if (new URL(request.url).pathname.replace(/\/$/, "") !== "/api/rpc")
+        return nativeFetch(input, init);
+      const rpc = JSON.parse(await request.clone().text());
+      if (rpc.tag !== "SubscribeInvalidations") return nativeFetch(input, init);
+      window.testEvents.opened++;
+      let closed = false;
+      const close = () => {
+        if (!closed) {
+          closed = true;
+          window.testEvents.closed++;
+        }
+      };
+      const body = new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder();
+          window.testEvents.emit = (type, data = {}) => {
+            if (closed) return;
+            const value = type === "ready" ? { _tag: "Invalidate", keys: ["all-queries"] } : data;
+            controller.enqueue(
+              encoder.encode(
+                JSON.stringify({ _tag: "Chunk", requestId: rpc.id, values: [value] }) + "\n",
+              ),
+            );
+          };
+          window.testEvents.disconnect = () => {
+            close();
+            controller.error(new TypeError("Network disconnected"));
+          };
+          request.signal.addEventListener("abort", () => {
+            if (!closed) {
+              close();
+              controller.error(new DOMException("Aborted", "AbortError"));
+            }
+          });
+          queueMicrotask(() => window.testEvents.emit("ready"));
+        },
+        cancel() {
+          close();
+        },
+      });
+      return new Response(body, { headers: { "content-type": "application/ndjson" } });
     };
   });
   await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname === "/api/events")
-      return route.fulfill({
-        contentType: "text/event-stream",
-        body: "event: ready\ndata: {}\n\n",
-      });
     if (url.pathname.replace(/\/$/, "") === "/api/rpc") {
       const rpc = JSON.parse(route.request().postData().trim());
       const body = rpc.payload;
@@ -213,6 +241,7 @@ test("Goals workspace links executions, accepts notes, and handles approvals", a
   ).toBeVisible();
   await page.getByLabel("Which environment should receive the release?").fill("Test");
   await page.getByRole("button", { name: "Submit response" }).click();
+  await expect.poll(() => writes.length).toBe(2);
   expect(writes[1].body.response.answers).toEqual({ scope: ["Test"] });
   await page.getByLabel("Add information to Goal").fill("Prioritize frontend validation");
   await page.getByRole("button", { name: "Send", exact: true }).click();
@@ -401,9 +430,10 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   const { fileURLToPath } = await import("node:url");
   const requireLocal = createRequire(new URL("../../local/package.json", import.meta.url));
   const { Effect, Layer, Schema } = await import(requireLocal.resolve("effect"));
-  const { makeApplicationApi, GoalActor } = await import("../../../packages/core/dist/index.js");
+  const { AsterRuntime, ContextRegistry, ContextQueries, GoalActor } =
+    await import("../../../packages/core/dist/index.js");
   const { ActorSystem, Actor } = await import("../../../packages/actor/dist/index.js");
-  const { startGoalApi } = await import("../../local/dist/http-api.js");
+  const { makeHttpApi } = await import("../../local/dist/http-api.js");
   const { makeContextRegistry } = await import("../../../packages/core/dist/testing/context.js");
   const registry = await Effect.runPromise(makeContextRegistry());
   await Effect.runPromise(registry.register("/goals/real-http", GoalActor.context));
@@ -446,24 +476,33 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   const history = await Effect.runPromise(
     AgentConversations.makeMemory().pipe(Effect.provideService(Scope.Scope, scope)),
   );
-  const api = await startGoalApi({
-    application: makeApplicationApi({
-      registry,
-      conversations: history,
-      inspect: system.inspect({ metadata: ["contextPath"] }).pipe(
-        Effect.map((actors) => ({
-          actors: actors.map(({ metadata, ...actor }) => ({
-            ...actor,
-            contextPath: metadata.contextPath,
-          })),
-          events: [],
-          phase: "ready",
-        })),
+  const { NodeFileSystem } = await import(requireLocal.resolve("@effect/platform-node"));
+  const bound = await Effect.runPromise(
+    makeHttpApi({
+      port: 0,
+      webDir: fileURLToPath(new URL("../dist", import.meta.url)),
+    }).pipe(
+      Effect.provide(
+        Layer.mergeAll(
+          Layer.succeed(AsterRuntime, {
+            actors: system,
+            ready: Effect.void,
+            inspect: system
+              .inspect({ metadata: ["contextPath"] })
+              .pipe(
+                Effect.map((actors) => ({ actors, events: [], phase: "ready", storageOwners: [] })),
+              ),
+          }),
+          Layer.succeed(ContextRegistry, registry),
+          Layer.succeed(AgentConversations, history),
+          ContextQueries.layer,
+          NodeFileSystem.layer,
+        ),
       ),
-    }),
-    port: 0,
-    webDir: fileURLToPath(new URL("../dist", import.meta.url)),
-  });
+      Effect.provideService(Scope.Scope, scope),
+    ),
+  );
+  const api = { ...bound, close: () => Effect.runPromise(Scope.close(scope, Exit.void)) };
   try {
     await page.goto(api.url);
     await expect(page).toHaveTitle("Aster · Workspace");
@@ -476,7 +515,7 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
     await Effect.runPromise(
       history.append("/goals/real-http", "reply", "goal.reply", {
         inputId: "input",
-        text: "Live HTTP and SSE updates received",
+        text: "Live HTTP and streaming RPC updates received",
       }),
     );
     const updated = {
@@ -484,7 +523,7 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
       messages: [
         {
           type: "assistant",
-          text: "Live HTTP and SSE updates received",
+          text: "Live HTTP and streaming RPC updates received",
           references: [],
           at,
         },
@@ -494,7 +533,7 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
       registry.commit(updated, { expectedRevision: registry.get(updated.path)?.revision ?? 0 }),
     );
     await expect(
-      page.getByRole("dialog").getByText("Live HTTP and SSE updates received"),
+      page.getByRole("dialog").getByText("Live HTTP and streaming RPC updates received"),
     ).toBeVisible();
     expect(errors).toEqual([]);
   } finally {
@@ -612,7 +651,7 @@ test("Goal input history loads older messages and displays independent Tasks", a
   expect(errors).toEqual([]);
 });
 
-test("SSE keys isolate queries, reconnect refreshes all, and invalidation cancels stale reads", async ({
+test("streaming RPC keys isolate queries, reconnect refreshes all, and invalidation cancels stale reads", async ({
   page,
 }) => {
   const data = fixture();
@@ -674,14 +713,15 @@ test("SSE keys isolate queries, reconnect refreshes all, and invalidation cancel
   expect(errors).toEqual([]);
 });
 
-test("malformed SSE releases its connection and Refresh reconnects", async ({ page }) => {
+test("malformed streaming RPC releases its connection and Refresh reconnects", async ({ page }) => {
   const { errors } = await setup(page);
   await page.evaluate(() => window.testEvents.emit("invalidate", { keys: 42 }));
-  await expect(page.getByRole("alert")).toContainText("Invalid live update");
+  await expect.poll(() => page.evaluate(() => window.testEvents.closed)).toBeGreaterThan(0);
+  await expect(page.getByRole("alert")).toBeVisible();
   await expect.poll(() => page.evaluate(() => window.testEvents.closed)).toBe(1);
   await page.getByRole("button", { name: "Refresh data" }).click();
   await expect(page.getByText("Live", { exact: true })).toBeVisible();
-  expect(await page.evaluate(() => window.testEvents.opened)).toBe(2);
+  await expect.poll(() => page.evaluate(() => window.testEvents.opened)).toBe(2);
   expect(errors).toEqual([]);
 });
 
@@ -1302,7 +1342,7 @@ test("Goal turn retry retains its request identity after an unknown acknowledgem
   await page.evaluate(() => window.testEvents.emit("ready"));
   await page.getByRole("button", { name: "Retry turn", exact: true }).click();
   await expect(page.getByRole("button", { name: "Retry turn", exact: true })).toHaveCount(0);
-  expect(requests).toHaveLength(2);
+  await expect.poll(() => requests.length).toBe(2);
   expect(requests[1]).toEqual(requests[0]);
   expect(requests[0].turnId).toBe(group.requestId);
   expect(errors).toEqual([]);
@@ -1314,10 +1354,12 @@ test("built-in personal assistant uses the ordinary Goal conversation", async ({
   await page.getByLabel("Add information to Goal").fill("Review my priorities");
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByText("Review my priorities", { exact: true })).toBeVisible();
-  expect(writes.at(-1)).toMatchObject({
-    tag: "SendGoalMessage",
-    body: { slug: "personal", text: "Review my priorities" },
-  });
+  await expect
+    .poll(() => writes.at(-1))
+    .toMatchObject({
+      tag: "SendGoalMessage",
+      body: { slug: "personal", text: "Review my priorities" },
+    });
   expect(errors).toEqual([]);
 });
 
@@ -1363,5 +1405,21 @@ test("processing displays per-target negative decisions without offering recover
   await expect(page.getByRole("button", { name: "Retry screening", exact: true })).toHaveCount(0);
   await results.getByRole("button", { name: "/goals/engine", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Goal Timeline" })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("streaming RPC reconnects after transport failure and refreshes current state", async ({
+  page,
+}) => {
+  const data = fixture();
+  const { reads, errors } = await setup(page, data);
+  const before = reads.filter((tag) => tag === "ListContexts").length;
+  await page.evaluate(() => window.testEvents.disconnect());
+  await expect.poll(() => page.evaluate(() => window.testEvents.closed)).toBe(1);
+  await expect.poll(() => page.evaluate(() => window.testEvents.opened)).toBe(2);
+  await expect(page.getByText("Live", { exact: true })).toBeVisible();
+  await expect
+    .poll(() => reads.filter((tag) => tag === "ListContexts").length)
+    .toBeGreaterThan(before);
   expect(errors).toEqual([]);
 });

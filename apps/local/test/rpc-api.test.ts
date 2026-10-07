@@ -1,26 +1,32 @@
-import { AgentConversations, AgentRunner } from "@aster/agent";
-import { testConversations } from "./conversation-fixtures.js";
-
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Layer, Schema, Stream } from "effect";
-import { FetchHttpClient } from "effect/http";
-import { RpcClient, RpcSerialization } from "effect/rpc";
-import { ApplicationRpcs } from "@aster/api-contracts";
-import { ActorSystem } from "@aster/actor";
+import { createServer } from "node:http";
+import { Actor, ActorSystem } from "@aster/actor";
+import { AgentConversations, AgentRunner } from "@aster/agent";
 import {
   ApplicationError,
-  defineContext,
-  contextView,
-  makeApplicationApi,
   ContextRegistry,
   GoalsRootActor,
+  GoalsRootCommand,
   GoalSettings,
   MemoryRecall,
   ExternalAgents,
+  goalTimeline,
+  defineContext,
+  contextView,
+  GoalActor,
+  ApprovalCommand,
 } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
-import { startGoalApi } from "../src/http-api.js";
+import { NodeHttpServer, NodeSocket } from "@effect/platform-node";
+import { Deferred, Effect, Exit, Layer, Queue, Schema, Scope, Stream } from "effect";
+import { FetchHttpClient, HttpRouter } from "effect/http";
+import { NetAddress } from "effect/net";
+import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
+import * as ApiServer from "@aster/api/server";
+import * as ApiClient from "@aster/api/client";
+import { apiServices, startTestHttp, rpcRequest } from "./api-fixtures.js";
+import { testConversations } from "./conversation-fixtures.js";
 
 const definition = defineContext({
   view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
@@ -65,14 +71,8 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
           metadata: { goalActivation },
         });
         yield* goals.awaitStarted;
-        const application = makeApplicationApi({
-          conversations,
-          registry,
-          goals,
-          inspect: Effect.succeed(null),
-        });
         const api = yield* Effect.acquireRelease(
-          Effect.promise(() => startGoalApi({ port: 0, application })),
+          Effect.promise(() => startTestHttp({ registry, conversations, actors: system })),
           (api) => Effect.promise(() => api.close()),
         );
         const call = (id: number, tag: string, payload: unknown) =>
@@ -97,91 +97,13 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
         assert.equal(first.exit._tag, "Success");
         assert.equal(first.exit.value, null);
         assert.deepEqual(duplicate.exit, first.exit);
-        assert.equal((yield* application.goals.timeline("personal", {})).messages.length, 1);
+        assert.equal(
+          (yield* goalTimeline(registry, conversations, "personal", {})).messages.length,
+          1,
+        );
       }),
     ),
   );
-});
-
-test("RPC shares typed query contracts and propagates application failures without retrying mutations", async () => {
-  const registry = await Effect.runPromise(makeContextRegistry());
-  await Effect.runPromise(registry.register(record.path, definition));
-  await Effect.runPromise(
-    registry.commit(record, { expectedRevision: registry.get(record.path)?.revision ?? 0 }),
-  );
-  let submissions = 0;
-  const application = makeApplicationApi({
-    conversations: testConversations(),
-    registry,
-    inspect: Effect.succeed({ phase: "ready", actors: [], events: [] }),
-  });
-  const api = await startGoalApi({
-    port: 0,
-    application: {
-      ...application,
-      goals: {
-        ...application.goals,
-        sendMessage: () =>
-          Effect.gen(function* () {
-            submissions++;
-            return yield* new ApplicationError({ kind: "conflict", message: "Revision changed" });
-          }),
-      },
-    },
-  });
-  try {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const client = yield* RpcClient.make(ApplicationRpcs, { flatten: true });
-          assert.deepEqual(yield* client("ListContexts", undefined), [
-            { ...record, revision: 1, projection: { visibility: "public" } },
-          ]);
-          assert.deepEqual(yield* client("GetContext", { path: record.path }), {
-            ...record,
-            revision: 1,
-            projection: { visibility: "public" },
-          });
-          assert.deepEqual(yield* client("InspectRuntime", undefined), {
-            phase: "ready",
-            actors: [],
-            events: [],
-          });
-          const failure = yield* Effect.result(
-            client("SendGoalMessage", { slug: "test", text: "hello" }),
-          );
-          assert.equal(failure._tag, "Failure");
-          if (failure._tag === "Failure") {
-            assert.ok(failure.failure instanceof ApplicationError);
-            assert.equal(failure.failure.message, "Revision changed");
-          }
-          assert.equal(submissions, 1);
-        }),
-      ).pipe(
-        Effect.provide(
-          RpcClient.layerProtocolHttp({ url: `${api.url}/api/rpc` }).pipe(
-            Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
-          ),
-        ),
-      ),
-    );
-    const denied = await fetch(`${api.url}/api/rpc`, {
-      method: "POST",
-      headers: { Origin: "https://other.example", "content-type": "application/ndjson" },
-      body:
-        JSON.stringify({
-          _tag: "Request",
-          id: "1",
-          tag: "SendGoalMessage",
-          payload: { slug: "test", text: "no" },
-          headers: [],
-        }) + "\n",
-    });
-    assert.equal(denied.status, 403);
-    assert.equal(submissions, 1);
-  } finally {
-    await api.close();
-  }
 });
 
 test("ListContexts encodes cleared optional fields in public state and nested messages", async () => {
@@ -221,13 +143,9 @@ test("ListContexts encodes cleared optional fields in public state and nested me
       { expectedRevision: registry.get(path)?.revision ?? 0 },
     ),
   );
-  const api = await startGoalApi({
+  const api = await startTestHttp({
     port: 0,
-    application: makeApplicationApi({
-      registry,
-      conversations: testConversations(),
-      inspect: Effect.succeed(null),
-    }),
+    registry,
   });
   try {
     const response = await fetch(`${api.url}/api/rpc`, {
@@ -257,67 +175,6 @@ test("ListContexts encodes cleared optional fields in public state and nested me
   }
 });
 
-test(
-  "SSE subscribes before ready, broadcasts committed keys, and releases disconnected subscribers",
-  { timeout: 5000 },
-  async () => {
-    const registry = await Effect.runPromise(makeContextRegistry());
-    await Effect.runPromise(registry.register(record.path, definition));
-    const application = makeApplicationApi({
-      registry,
-      conversations: testConversations(),
-      inspect: Effect.succeed(null),
-    });
-    let active = 0;
-    const released = Promise.withResolvers<void>();
-    const api = await startGoalApi({
-      port: 0,
-      application: {
-        ...application,
-        subscribeChanges: Effect.acquireRelease(
-          Effect.sync(() => {
-            active++;
-          }),
-          () =>
-            Effect.sync(() => {
-              if (--active === 0) released.resolve();
-            }),
-        ).pipe(Effect.andThen(application.subscribeChanges)),
-      },
-    });
-    const controllers = [new AbortController(), new AbortController()];
-    try {
-      const readers = await Promise.all(
-        controllers.map(async (controller) => {
-          const response = await fetch(`${api.url}/api/events`, { signal: controller.signal });
-          const reader = response.body!.getReader();
-          const first = await reader.read();
-          assert.match(new TextDecoder().decode(first.value), /event: ready/);
-          return reader;
-        }),
-      );
-      assert.equal(active, 2);
-      await Effect.runPromise(
-        registry.commit(record, { expectedRevision: registry.get(record.path)?.revision ?? 0 }),
-      );
-      for (const reader of readers) {
-        const frame = new TextDecoder().decode((await reader.read()).value);
-        assert.match(frame, /event: invalidate/);
-        assert.deepEqual(JSON.parse(frame.split("data: ")[1]!.trim()), {
-          _tag: "Invalidate",
-          keys: ["contexts", "context:/goals/test", "goals", "goal-history:test"],
-        });
-      }
-      controllers.forEach((controller) => controller.abort());
-      await released.promise;
-      assert.equal(active, 0);
-    } finally {
-      controllers.forEach((controller) => controller.abort());
-      await api.close();
-    }
-  },
-);
-
 test("failed persistence and unchanged writes do not invalidate application queries", async () => {
   await Effect.runPromise(
     Effect.scoped(
@@ -330,12 +187,7 @@ test("failed persistence and unchanged writes do not invalidate application quer
           },
         });
         yield* registry.register(record.path, definition);
-        const api = makeApplicationApi({
-          registry,
-          conversations: testConversations(),
-          inspect: Effect.succeed(null),
-        });
-        const changes = yield* api.subscribeChanges;
+        const changes = yield* registry.reader.subscribe;
         const received: unknown[] = [];
         yield* Stream.runForEach(changes, (change) =>
           Effect.sync(() => {
@@ -364,56 +216,320 @@ test("failed persistence and unchanged writes do not invalidate application quer
   );
 });
 
-test(
-  "HTTP shutdown interrupts an active RPC and awaits its cleanup",
-  { timeout: 3000 },
-  async () => {
-    const registry = await Effect.runPromise(makeContextRegistry());
-    const entered = Promise.withResolvers<void>();
-    let finalized = false;
-    const application = makeApplicationApi({
-      registry,
-      conversations: testConversations(),
-      inspect: Effect.succeed(null),
-    });
-    const api = await startGoalApi({
-      port: 0,
-      application: {
-        ...application,
-        contexts: Effect.sync(() => entered.resolve()).pipe(
-          Effect.andThen(Effect.never),
-          Effect.ensuring(
-            Effect.sync(() => {
-              finalized = true;
-            }),
+for (const protocol of ["http", "websocket"] as const) {
+  test(
+    `${protocol}: shared client queries, Actor replies, and scoped streaming RPC`,
+    { timeout: 10000 },
+    async () => {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const registry = yield* makeContextRegistry();
+            yield* registry.register(record.path, definition);
+            yield* registry.commit(record, { expectedRevision: 0 });
+            let submissions = 0;
+            class Goals extends Actor.Service<Goals>()("test/RpcGoals", {
+              command: GoalsRootCommand,
+            }) {
+              static readonly layer = Layer.succeed(
+                Goals,
+                Goals.of({
+                  receive: (command) =>
+                    Effect.gen(function* () {
+                      submissions++;
+                      yield* command.command.replyTo.tell({
+                        _tag: "Rejected",
+                        error: new ApplicationError({
+                          kind: "conflict",
+                          message: "Rejected input",
+                        }),
+                      });
+                    }),
+                }),
+              );
+            }
+            const system = yield* ActorSystem.make();
+            yield* (yield* system.spawn("goals", Goals)).awaitStarted;
+            let active = 0;
+            const released = yield* Deferred.make<void>();
+            const services = apiServices({
+              actors: system,
+              registry: {
+                ...registry,
+                reader: {
+                  ...registry.reader,
+                  subscribe: Effect.acquireRelease(
+                    Effect.sync(() => {
+                      active++;
+                    }),
+                    () =>
+                      Effect.gen(function* () {
+                        active--;
+                        if (!active) yield* Deferred.succeed(released, undefined);
+                      }),
+                  ).pipe(Effect.andThen(registry.reader.subscribe)),
+                },
+              },
+            });
+            const server = yield* NodeHttpServer.make(createServer, { host: "127.0.0.1", port: 0 });
+            const url = NetAddress.formatUrlUnsafe(server.address);
+            const handler = yield* HttpRouter.toHttpEffect(
+              ApiServer.layer.pipe(
+                Layer.provide(
+                  protocol === "http"
+                    ? RpcServer.layerProtocolHttp({ path: "/rpc", streamBufferSize: 4 })
+                    : RpcServer.layerProtocolWebsocket({ path: "/rpc" }),
+                ),
+                Layer.provide(RpcSerialization.layerNdjson),
+                Layer.provide(services),
+              ),
+            );
+            yield* server.serve(handler);
+            const clientProtocol =
+              protocol === "http"
+                ? RpcClient.layerProtocolHttp({ url: `${url}/rpc` }).pipe(
+                    Layer.provide(FetchHttpClient.layer),
+                  )
+                : RpcClient.layerProtocolSocket().pipe(
+                    Layer.provide(NodeSocket.layerWebSocket(`${url.replace("http:", "ws:")}/rpc`)),
+                  );
+            yield* Effect.gen(function* () {
+              const client = yield* ApiClient.make;
+              assert.equal((yield* client("ListContexts", undefined))[0]!.path, record.path);
+              const missing = yield* client("GetContext", { path: "/missing" }).pipe(Effect.flip);
+              assert.equal(missing._tag, "ApplicationError");
+              const rejected = yield* client("SendGoalMessage", {
+                slug: "test",
+                text: "Hello",
+                requestId: "one",
+              }).pipe(Effect.flip);
+              assert.equal(rejected._tag, "ApplicationError");
+              assert.equal(submissions, 1);
+              const scope = yield* Scope.make();
+              const subscriptions = yield* Effect.forEach([1, 2], () =>
+                client("SubscribeInvalidations", undefined, { asQueue: true }).pipe(
+                  Effect.provideService(Scope.Scope, scope),
+                ),
+              );
+              for (const queue of subscriptions)
+                assert.deepEqual(yield* Queue.take(queue), {
+                  _tag: "Invalidate",
+                  keys: ["all-queries"],
+                });
+              assert.equal(active, 2);
+              yield* registry.commit({ ...record, state: { value: 2 } }, { expectedRevision: 1 });
+              for (const queue of subscriptions)
+                assert.deepEqual(yield* Queue.take(queue), {
+                  _tag: "Invalidate",
+                  keys: ["contexts", "context:/goals/test", "goals", "goal-history:test"],
+                });
+              yield* Scope.close(scope, Exit.void);
+              yield* Deferred.await(released);
+              assert.equal(active, 0);
+            }).pipe(
+              Effect.provide(clientProtocol.pipe(Layer.provide(RpcSerialization.layerNdjson))),
+            );
+          }),
+        ),
+      );
+    },
+  );
+}
+
+test("RPC host rejects cross-origin and oversized input; removed endpoints return 404", async () => {
+  const registry = await Effect.runPromise(makeContextRegistry());
+  const server = await startTestHttp({ registry });
+  try {
+    const call = rpcRequest("SendGoalMessage", { slug: "personal", text: "hello" });
+    assert.equal(
+      (
+        await fetch(`${server.url}/api/rpc`, {
+          ...call,
+          headers: { ...call.headers, origin: "https://other.example" },
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await fetch(
+          `${server.url}/api/rpc`,
+          rpcRequest("SendGoalMessage", { slug: "personal", text: "x".repeat(33 * 1024) }),
+        )
+      ).status,
+      413,
+    );
+    const missing = (await (await fetch(`${server.url}/api/rpc`, call)).json()) as {
+      exit: { _tag: string };
+    };
+    assert.equal(missing.exit._tag, "Failure");
+    for (const path of ["/api/goals", "/api/events", "/api/dashboard", "/api/approvals"])
+      assert.equal((await fetch(`${server.url}${path}`)).status, 404);
+  } finally {
+    await server.close();
+  }
+});
+
+test("Goal RPC paginates persisted public conversation entries", async () => {
+  const registry = await Effect.runPromise(makeContextRegistry());
+  const conversations = testConversations();
+  await Effect.runPromise(registry.register("/goals/feed", GoalActor.context));
+  await Effect.runPromise(
+    registry.commit(
+      {
+        path: "/goals/feed",
+        description: "Feed",
+        messages: [],
+        state: {
+          definition: { slug: "feed", description: "Feed" },
+          status: "active",
+          summary: "",
+          inputs: [],
+          receipts: [],
+          tasks: [],
+        },
+      },
+      { expectedRevision: 0 },
+    ),
+  );
+  for (let i = 0; i < 65; i++)
+    await Effect.runPromise(
+      conversations.append("/goals/feed", `input-${i}`, "goal.input", {
+        payload: { _tag: "UserInput", text: `Record ${i}` },
+      }),
+    );
+  const server = await startTestHttp({ registry, conversations });
+  try {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const client = yield* ApiClient.make;
+          const page = yield* client("GetGoalTimeline", { slug: "feed" });
+          assert.equal(page.messages.length, 30);
+          assert.equal(page.messages[0]!.text, "Record 35");
+          const older = yield* client("GetGoalTimeline", {
+            slug: "feed",
+            before: page.nextBefore!,
+          });
+          assert.equal(older.messages.at(-1)!.text, "Record 34");
+          const invalid = yield* client("GetGoalTimeline", { slug: "feed", limit: 200 }).pipe(
+            Effect.flip,
+          );
+          assert.equal(invalid._tag, "ApplicationError");
+        }),
+      ).pipe(
+        Effect.provide(
+          RpcClient.layerProtocolHttp({ url: `${server.url}/api/rpc` }).pipe(
+            Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
           ),
         ),
+      ),
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test("Approval RPC decodes payloads before sending commands and preserves rejection", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeContextRegistry();
+        let submissions = 0;
+        class Approvals extends Actor.Service<Approvals>()("test/RpcApprovals", {
+          command: ApprovalCommand,
+        }) {
+          static readonly layer = Layer.succeed(
+            Approvals,
+            Approvals.of({
+              receive: (command) =>
+                Effect.gen(function* () {
+                  if (command._tag !== "Resolve") return;
+                  submissions++;
+                  yield* command.replyTo.tell({
+                    _tag: "Rejected",
+                    error: new ApplicationError({
+                      kind: "conflict",
+                      message: "Approval not found",
+                    }),
+                  });
+                }),
+            }),
+          );
+        }
+        const system = yield* ActorSystem.make();
+        yield* (yield* system.spawn("approvals", Approvals)).awaitStarted;
+        const server = yield* Effect.acquireRelease(
+          Effect.promise(() => startTestHttp({ registry, actors: system })),
+          (s) => Effect.promise(() => s.close()),
+        );
+        const send = (response: unknown) =>
+          Effect.promise(async () => {
+            const r = await fetch(
+              `${server.url}/api/rpc`,
+              rpcRequest("RespondToApproval", { id: "one", response }),
+            );
+            return await r.text();
+          });
+        assert.match(yield* send({ decision: "invalid" }), /Failure|Defect/);
+        assert.equal(submissions, 0);
+        assert.match(yield* send({ decision: "approve" }), /Approval not found/);
+        assert.equal(submissions, 1);
+      }),
+    ),
+  );
+});
+
+test(
+  "bounded invalidation capture reports overflow and releases the source",
+  { timeout: 5000 },
+  async () => {
+    const registry = await Effect.runPromise(makeContextRegistry());
+    let released = false;
+    const server = await startTestHttp({
+      registry: {
+        ...registry,
+        reader: {
+          ...registry.reader,
+          subscribe: Effect.acquireRelease(
+            Effect.succeed(
+              Stream.fromIterable(
+                Array.from({ length: 1000 }, (_, revision) => ({
+                  record: { ...record, revision },
+                })),
+              ),
+            ),
+            () =>
+              Effect.sync(() => {
+                released = true;
+              }),
+          ),
+        },
       },
     });
-    const controller = new AbortController();
-    const response = fetch(`${api.url}/api/rpc`, {
-      method: "POST",
-      headers: { "content-type": "application/ndjson" },
-      signal: controller.signal,
-      body:
-        JSON.stringify({
-          _tag: "Request",
-          id: "1",
-          tag: "ListContexts",
-          payload: null,
-          headers: [],
-        }) + "\n",
-    })
-      .then((response) => response.text())
-      .catch(() => undefined);
     try {
-      await entered.promise;
-      await api.close();
-      assert.equal(finalized, true);
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const client = yield* ApiClient.make;
+            const error = yield* client("SubscribeInvalidations", undefined).pipe(
+              Stream.runDrain,
+              Effect.flip,
+            );
+            assert.equal(error._tag, "ApplicationError");
+            assert.match(error.message, /fell behind/);
+          }),
+        ).pipe(
+          Effect.provide(
+            RpcClient.layerProtocolHttp({ url: `${server.url}/api/rpc` }).pipe(
+              Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
+            ),
+          ),
+        ),
+      );
+      assert.equal(released, true);
     } finally {
-      controller.abort();
-      await api.close();
-      await response;
+      await server.close();
     }
   },
 );

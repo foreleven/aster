@@ -1,8 +1,9 @@
+import { goalTimeline } from "../src/goals/view.js";
 import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
-import { GoalActor, makeApplicationApi } from "../src/index.js";
+import { GoalActor } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { makeGoalStore } from "../src/goals/state/store.js";
 import { ContextRegistry } from "../src/context/registry.js";
@@ -49,13 +50,14 @@ test("Goal keeps message references while public conversation reads Pi history",
         ).pipe(Effect.provideService(ContextRegistry, registry));
         yield* store.save({ summary: "Current understanding" });
         assert.deepEqual(registry.get(path)!.messages, []);
-        const api = makeApplicationApi({ registry, conversations, inspect: Effect.succeed(null) });
-        const page = yield* api.goals.timeline("demo", { limit: 100 });
+        const page = yield* goalTimeline(registry, conversations, "demo", { limit: 100 });
         assert.equal(page.total, 106);
         assert.equal(page.messages.length, 100);
         assert.equal(page.messages.at(-1)?.text, "Here is the result");
         assert.ok(page.nextBefore !== null);
-        const previous = yield* api.goals.timeline("demo", { before: page.nextBefore! });
+        const previous = yield* goalTimeline(registry, conversations, "demo", {
+          before: page.nextBefore!,
+        });
         assert.equal(previous.messages.length, 6);
         assert.ok(
           page.messages.every((message) => message.role === "user" || message.role === "assistant"),
@@ -71,11 +73,6 @@ test("Goal public error reflects the latest settled input without storing an err
       const registry = yield* makeContextRegistry();
       const path = "/goals/errors";
       yield* registry.register(path, GoalActor.context);
-      const api = makeApplicationApi({
-        registry,
-        conversations: testConversations(),
-        inspect: Effect.succeed(null),
-      });
       const definition = { slug: "errors", description: "Observe errors" };
       const first = {
         inputId: "first",
@@ -114,7 +111,7 @@ test("Goal public error reflects the latest settled input without storing an err
           },
           { expectedRevision: current?.revision ?? 0 },
         );
-        const view = yield* api.context(path);
+        const view = registry.reader.get(path)!;
         const projected = view.state as { lastError?: string };
         assert.equal(projected.lastError, status === "completed" ? undefined : "Model failed");
         assert.equal("lastError" in registry.get(path)!.state, false);

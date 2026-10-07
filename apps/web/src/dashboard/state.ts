@@ -45,7 +45,7 @@ export const dashboardStatus = Atom.make((get) => {
   const live = get(connection);
   return {
     loaded: resultValue(contexts) !== undefined,
-    connected: resultValue(live) === true,
+    connected: AsyncResult.isSuccess(live) && live.value === true,
     loading: AsyncResult.isWaiting(contexts) || AsyncResult.isWaiting(runtime),
     at: AsyncResult.isSuccess(contexts) ? contexts.timestamp : undefined,
     error:

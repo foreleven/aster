@@ -1,84 +1,128 @@
 # Reactive application API
 
-Status: implemented with Effect `4.0.0`. AtomRpc supplies typed queries and mutations over HTTP; SSE carries query invalidation keys. REST routes and RPC share application operations. Goal conversation reads use `GetGoalTimeline` or `/api/goals/:slug/timeline`; there is no separate history endpoint. The SSE event is now `invalidate`, replacing the old `context` event.
+The application boundary is `@aster/api`, implemented with Effect `4.0.0`. It exports shared RPC definitions and separate server/client entries. Applications select the Protocol and serialization. Local and Web use HTTP with NDJSON; the same handlers and client are tested with WebSocket. There are no legacy REST business endpoints or separate SSE channel.
 
 ```text
-Actor mailbox -> durable Context commit -> ContextChange
-                                             |
-                          Application query invalidation keys
-                                             |
-                           GET /api/events (SSE)
-                                             |
-                    browser AtomRpc runtime / Reactivity
-                                             |
-                      refresh affected query atoms
-                                             |
-                      POST /api/rpc -> ApplicationApi
+app composition -> Runtime Layer + selected transport
+                         |
+                  @aster/api/server
+                   /             \
+          Actor commands      domain reads
+                |                  |
+        durable admission     public projections
+                \                  /
+                    typed RPC
+                        |
+                @aster/api/client
+                        |
+              Web AtomRpc runtime
 ```
 
-## Ownership and Layers
+## Ownership
 
-| Location                           | Responsibility                                                                                                                                            |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `packages/api-contracts`           | Application response Schemas, RpcGroup definitions, query keys and SSE notifications; imports only the pure core/contracts entry.                         |
-| `packages/core/src/runtime/api.ts` | Transport-independent queries, durable command acknowledgements and scoped Context path/revision notifications.                                           |
-| `apps/local/src/rpc-api.ts`        | RpcGroup handlers delegate to ApplicationApi and validate transport-specific runtime inspection.                                                          |
-| `apps/local/src/http-api.ts`       | Scoped NodeHttpServer and route composition. Internal legacy-rest, static-assets and http-policy modules own their respective transport responsibilities. |
-| `apps/local/src/http-events.ts`    | Maps Context paths to query keys; owns SSE subscription, readiness, heartbeat and bounded buffering.                                                      |
-| `apps/web/src/api/client.ts`       | AtomRpc service, query/mutation atoms and manual invalidation.                                                                                            |
-| `apps/web/src/api/events.ts`       | Scoped EventSource bridge and independent telemetry refresh.                                                                                              |
+| Owner                        | Responsibility                                                                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `core/runtime`               | Assemble services, own root Actors, integration activation, readiness and shutdown; expose Actor addressing and native diagnostics.    |
+| Core domain modules          | Actor commands, state transitions, deduplication, durable admission and domain read projections.                                       |
+| `api/src/rpc.ts`             | RPC definitions and API-only response schemas.                                                                                         |
+| `api/src/changes.ts`         | Query keys, notification schema and Context-to-query invalidation mapping.                                                             |
+| `api/src/server.ts`          | Inject Runtime/domain services, construct commands, ask Actors, translate replies/errors, normalize wire data and serve subscriptions. |
+| `api/src/client.ts`          | Construct the native scoped client without selecting a Protocol.                                                                       |
+| `apps/local/src/http-api.ts` | HTTP Protocol, serialization, assets, host policy, Node server and scoped shutdown.                                                    |
+| `apps/web/src/api`           | Browser Protocol, AtomRpc queries/mutations, notification consumption and UI connection state.                                         |
 
-AsterRuntime continues to construct its own domain services, own root Actors, activate integrations, and manage readiness and shutdown. Externally supplied server Layers remain configuration, stores, models, external agents and integration adapters. The local host owns the HTTP server and supplies NodeFileSystem; it does not assemble core query helpers or domain Actors.
+AsterRuntime has no `api` property or application facade. Its value exposes `actors` (Actor selection only), `ready` and `inspect`. Its Layer publishes the same ContextRegistry, ContextQueries and AgentConversations instances used by the running domain. Local does not reconstruct these services. `makeApplicationApi`, `ApplicationApi` and `core/runtime/api.ts` are removed.
 
-The browser supplies `FetchHttpClient.layer`, `RpcClient.layerProtocolHttp` and `RpcSerialization.layerNdjson`. One root `RegistryProvider` shares the AtomRpc runtime and Reactivity instance. Query values, loading, errors and mutation state come from AsyncResult; React retains only presentation state. The root connection atom owns one EventSource, closed by its Scope. No callback creates a separate Reactivity layer or calls an independent `Effect.runPromise`.
+RPC-only command adapters stay in server. For example, SendGoalMessage trims ingress text, assigns an identity when omitted, selects the Goal root, sends Route/SubmitInput and translates the reply. There is no core sendGoalMessage wrapper. The Goal Actor remains responsible for admission, deduplication, state changes and persistence before acknowledgement. An accepted request is not a completed conversation; a transport timeout does not prove that the operation was cancelled. RPC handlers never automatically replay uncertain submissions.
 
-Reactivity is process-local. The server does not need its own Reactivity service merely to relay committed invalidation keys. SSE bridges independent browser registries, including separate tabs. Core's exact ContextChange snapshots and durable source events remain intact for memory capture and domain evaluation; query invalidations do not replace durable events or become another domain event bus.
+Core remains independent of api. Domain schemas are imported directly from `@aster/core/contracts`, without compatibility re-exports. The shared/client entries are browser-safe and never import the server entry. API response schemas do not dictate core's internal model.
 
-The dashboard feature components and projections are checked as TypeScript, including `App.tsx`. Existing JavaScript UI primitives expose React prop contracts through JSDoc. `dashboard/model.ts` decodes the fields the UI understands while preserving the generic Context record's raw state. Invalid known fields surface a projection error rather than an unsafe cast. `dashboard/state.ts` owns Context indexes, row selection, counts and approval diagnostics as derived atoms; telemetry ticks do not re-decode unchanged Context messages.
+## Protocol and injection
 
-Runtime phase is a closed lifecycle union, validated by the API Schema at the transport boundary. AsterRuntime owns a private `Ref` containing that phase and the last 200 typed runtime events. Event and lifecycle fibers update it; inspection reads an immutable snapshot. Shutdown's stopping phase cannot be overwritten by late readiness completion. This does not change the Actor mailbox's single-writer ownership.
+Server composition:
 
-## Contracts and invalidation
+```ts
+import * as ApiServer from "@aster/api/server";
 
-`ApplicationRpcs` exposes `ListContexts`, `GetContext`, `ListGoals`, `GetGoalTimeline`, `ListApprovals`, `InspectRuntime`, `SendGoalMessage`, `EndGoal` and `RespondToApproval`. Schemas validate the public DTOs and ApplicationError values. Clients never import ActorRefs or service implementations. Domain contracts are imported directly from `@aster/core/contracts`; API contracts do not re-export them. Core derives query return types from implementations instead of adding duplicate response models.
+const rpcRoutes = ApiServer.layer.pipe(
+  Layer.provide(
+    RpcServer.layerProtocolHttp({
+      path: "/api/rpc",
+      streamBufferSize: 64,
+    }),
+  ),
+  Layer.provide(RpcSerialization.layerNdjson),
+);
+// Runtime and its published services come from the host's existing Runtime Layer.
+```
 
-| Committed change                      | Keys                                |
-| ------------------------------------- | ----------------------------------- |
-| Any public Context write              | `contexts`, `context:<path>`        |
-| Direct Goal Context write             | Also `goals`, `goal-history:<slug>` |
-| Approval Context write                | Also `approvals`                    |
-| Telemetry refresh                     | `runtime` only                      |
-| SSE ready/reconnect or manual refresh | `all-queries`                       |
+Client composition:
 
-`contextQueryKeys` defines the mapping once in api-contracts; local applies it to `ApplicationApi.subscribeChanges`. Core subscribes to successful Context commits, including background Actor writes; handlers are not the sole source of notifications. Failed persistence and unchanged writes emit nothing. Goal history refresh follows the Goal's Context commit after transcript persistence. An independently writable history service would need its own commit notification before exposing such writes.
+```ts
+import { ApplicationRpcs } from "@aster/api";
+import * as ApiClient from "@aster/api/client";
 
-Query atoms declare `reactivityKeys`. Successful mutation setters receive `{ payload, reactivityKeys }`; AtomRpc invalidates those keys after acceptance. SSE also refreshes other tabs and background changes. Duplicate invalidations are harmless. Failed mutations retain their typed error, do not invalidate success state and are never automatically resubmitted. A timeout with unknown acceptance still requires the user to inspect current state.
+class ApplicationClient extends AtomRpc.Service<ApplicationClient>()("web/ApplicationClient", {
+  group: ApplicationRpcs,
+  makeEffect: ApiClient.make,
+  protocol: RpcClient.layerProtocolHttp({ url: "/api/rpc" }).pipe(
+    Layer.provide([FetchHttpClient.layer, RpcSerialization.layerNdjson]),
+  ),
+}) {}
+```
 
-The EventSource callback only enqueues notifications into a scoped Effect Stream. `ready` invalidates all queries, `invalidate` decodes `QueryInvalidation` then calls Reactivity.invalidate in the same runtime, and transport errors update connection status while native EventSource reconnects. Invalid protocol data terminates the stream, releases the connection and presents a refresh action. Telemetry has a separate scoped three-second tick; it does not reload Contexts or history.
+`ApiClient.make` is an Effect value requiring RpcClient.Protocol and Scope, not a function that starts an independent runtime. Ordinary Effect consumers can acquire it in their own Scope. Calls return the operation's typed Effect or Stream. Web's AtomRpc Service owns one client shared by queries, mutations and its notification listener. A shared client does not imply a single HTTP connection.
 
-`api/timeline.ts` retains loaded immutable history pages. Its reactive AtomRpc tail query is independent of the backward pagination cursor: loading an older page does not refetch the tail or previously loaded pages. On invalidation it fetches the latest page, reads backward only until the cached newest entry ID, and merges the new entries by entry ID. A tail update during an older-page request interrupts and restarts that merge with both dependencies intact. Cache updates become visible only after the complete read succeeds; a smaller server count discards a truncated store's stale cache. The component retains its Atom.family bundle with useMemo because the family cache uses weak references; its hooks alone retain only individual atoms.
+Changing transports uses Effect's existing Protocol Layers. A WebSocket host supplies RpcServer.layerProtocolWebsocket; its client supplies RpcClient.layerProtocolSocket and a platform WebSocket Layer. No custom Protocol interface or invoker is introduced.
 
-## Transport lifecycle
+## RPC inventory
 
-The server acquires its Context subscription before emitting `ready`; the subsequent query observes the latest committed state. Reconnect invalidates all queries because this SSE channel has no durable cursor or replay. It must not be used as an audit log.
+One ApplicationRpcs group contains 17 operations: nine queries, seven commands and one stream. The categories below do not create separate clients or servers.
 
-Each SSE response owns a scoped producer, a 64-frame queue and a heartbeat stream. A full queue fails the response so the browser reconnects and refreshes. Disconnect and HTTP shutdown interrupt subscriptions and await cleanup. Native HTTP socket and EventSource boundaries are isolated; request handlers and background streams stay in Effect.
+| Area          | Operations                                                          |
+| ------------- | ------------------------------------------------------------------- |
+| Context       | ListContexts, GetContext, QueryContext                              |
+| Goal          | ListGoals, GetGoalTimeline, SendGoalMessage, RetryGoalTurn, EndGoal |
+| Task          | InspectTask, CheckTask, RetryTask                                   |
+| Approval      | ListApprovals, RespondToApproval                                    |
+| Reaction      | InspectProcessing, RecoverProcessing                                |
+| Runtime       | InspectRuntime                                                      |
+| Notifications | SubscribeInvalidations                                              |
 
-RPC uses `RpcServer.layerHttp` with explicit `protocol: "http"` and NDJSON serialization. Effect 4.0.0 has no SSE RPC serializer: native GET EventSource frames and the POST RPC protocol are distinct. Loopback binding, same-origin checks and durable mutation acknowledgement remain in place. The host rejects advertised oversized bodies before parsing, and the platform enforces its 32 KiB body limit while reading.
+EndGoal retains its existing semantics in this migration. There is no dedicated Signal RPC or agent-execution stream. Actor commands and private Pi records are never sent verbatim to the browser. Goal timeline reads project user/assistant messages; Task inspection applies its existing domain filtering.
 
-## Future server-side reactive snapshots
+## Live queries
 
-Add runtime-owned `ApplicationQueries` only when a consumer needs pushed snapshots. It should own one Reactivity instance, invalidate it from committed changes, and expose scoped `Reactivity.stream(queryEffect, keys)` queries. AsterRuntime constructs it internally; apps/local only provides transports. A new Reactivity layer per request would isolate subscribers from the runtime's invalidations.
+SubscribeInvalidations returns a stream of `{ _tag: "Invalidate", keys: string[] }`. Each subscription acquires its Context reader before emitting `["all-queries"]`. This first frame establishes readiness and refreshes current state without a second Ready wire variant. Notifications are not an audit log and have no replay cursor.
 
-AtomRpc stream queries in 4.0.0 use `runtime.pull`: subsequent chunks require pulls and accumulate by default. For endless pushed snapshots, consume the raw RPC Stream through `ApplicationClient.runtime.atom(...)` to retain the latest value and scope its lifetime to the mounted view. Use supported NDJSON HTTP or WebSocket transport explicitly if replacing SSE.
+| Committed change             | Invalidated keys              |
+| ---------------------------- | ----------------------------- |
+| Any Context write            | contexts, context:path        |
+| Direct Goal Context write    | Also goals, goal-history:slug |
+| Approval Context write       | Also approvals                |
+| New subscription / reconnect | all-queries                   |
+| Independent telemetry tick   | runtime                       |
 
-## Verification
+Notifications follow successful Context commits, including background Actor writes; failed persistence and unchanged writes emit nothing. Goal history invalidation follows the Context commit after Pi transcript persistence. Mutation success also invalidates the initiating UI's keys; failures retain their error and do not trigger success invalidation. Duplicate invalidations are harmless.
 
-Backend tests exercise typed RPC errors, failed mutation submission counts, multiple SSE subscribers, failed/no-op persistence, disconnect cleanup and active request interruption during shutdown. Playwright covers the production HTTP/RPC/SSE path, query-key isolation, telemetry isolation, invalidation during an in-flight read, reconnect refresh, malformed event cleanup/recovery, mutation rejection, history pagination across bursts with request-count assertions, invalidation during an older-page request, and malformed display fields with raw-state inspection. All transports and domain fixtures are local; no live model or external agent is invoked.
+Each subscription owns a capture fiber and a 64-entry outgoing queue. Overflow releases the upstream Context subscription immediately and fails the RPC with a typed unavailable error instead of silently dropping keys. HTTP streaming buffers are bounded separately. Disconnect and shutdown release subscription scopes. Web consumes the raw stream continuously, since AtomRpc's stream-query helper has explicit pull semantics.
+
+Web marks a failed connection disconnected, then retries only recoverable subscription failures with an Effect Schedule capped at 30 seconds. The next subscription's first frame refreshes all queries. Malformed protocol data surfaces as an error and can be restarted by manual refresh; defects and interruption are not converted into retryable business errors. Queries and commands are not wrapped in this retry policy. Telemetry retains a separate three-second refresh of the runtime query.
+
+The Atom registry owns client/subscription lifetimes. The notification listener invalidates Reactivity in the same runtime, without an independent runPromise or EventSource bridge. UI state comes from AsyncResult; React retains presentation state. Goal timeline pagination retains immutable older pages, merges invalidated tail reads by entry ID, and handles invalidation during a concurrent page request.
+
+## HTTP lifetime and policy
+
+Local binds loopback, enforces Host/Origin and request body limits, and serves static/source assets alongside `/api/rpc`. HTTP shuts down before Runtime. Active request fibers are interrupted and their finalizers drain before remaining sockets close, including requests arriving after the platform request handler is removed. Runtime then stops sources, consumers and Actors, drains memory capture and releases infrastructure under the process lock.
+
+## Validation
+
+Backend integration tests use injected services and real Actor/HTTP infrastructure, without external models or agents. They cover typed query errors, durable command admission, duplicate identities, non-replayed rejection, invalid payloads, optional-field encoding, Goal pagination, subscription acquisition order, multiple subscribers, disconnect cleanup, failed/no-op persistence, removed endpoints, origin/body policy and request shutdown. The same RPC layer and generated client are exercised over HTTP and WebSocket.
+
+Playwright uses RPC fixtures plus a real HTTP host with fake domain services. It covers desktop/mobile flows, query isolation, subscription recovery, malformed notifications, mutation rejection, timeline pagination during bursts and private-field projections. No runtime data or credentials are modified for validation.
 
 ## Source references
 
-- [AtomRpc implementation](../repos/effect/packages/effect/src/unstable/reactivity/AtomRpc.ts) and [tests](../repos/effect/packages/effect/test/reactivity/AtomRpc.test.ts)
-- [Atom runtime](../repos/effect/packages/effect/src/unstable/reactivity/Atom.ts) and [Reactivity](../repos/effect/packages/effect/src/unstable/reactivity/Reactivity.ts)
-- [RPC HTTP server](../repos/effect/packages/effect/src/unstable/rpc/RpcServer.ts), [client](../repos/effect/packages/effect/src/unstable/rpc/RpcClient.ts) and [serialization](../repos/effect/packages/effect/src/unstable/rpc/RpcSerialization.ts)
-- [React registry and hooks](../repos/effect/packages/atom/react/src/Hooks.ts)
+- [RpcServer](../repos/effect/packages/effect/src/rpc/RpcServer.ts), [RpcClient](../repos/effect/packages/effect/src/rpc/RpcClient.ts), [serialization](../repos/effect/packages/effect/src/rpc/RpcSerialization.ts)
+- [AtomRpc](../repos/effect/packages/effect/src/reactivity/AtomRpc.ts), [Reactivity](../repos/effect/packages/effect/src/reactivity/Reactivity.ts)
+- [Upstream transport tests](../repos/effect/packages/platform/node/test/RpcServer.test.ts)

@@ -11,7 +11,6 @@ import {
   GoalSettings,
   GoalSnapshot,
   GoalsRootActor,
-  makeApplicationApi,
   type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
@@ -126,12 +125,7 @@ test("Goal startup refreshes the entire definition without losing work", async (
           });
           yield* root.awaitStarted;
           yield* (yield* system.select("/user/goals/project").resolve()).awaitStarted;
-          const api = makeApplicationApi({
-            registry,
-            conversations: history,
-            inspect: Effect.succeed(null),
-          });
-          const record = yield* api.context("/goals/project");
+          const record = registry.reader.get("/goals/project")!;
           const canonical = registry.get(record.path)!;
           const state = Schema.decodeUnknownSync(GoalSnapshot)(canonical.state);
           assert.deepEqual(state.definition, definition);
@@ -141,7 +135,12 @@ test("Goal startup refreshes the entire definition without losing work", async (
           );
           assert.equal(record.description, description);
           assert.deepEqual(saved?.snapshot, canonical);
-          assert.deepEqual(yield* api.goals.list, [record]);
+          assert.deepEqual(
+            Object.values(registry.reader.snapshot()).filter((r) =>
+              /^\/goals\/[^/]+$/.test(r.path),
+            ),
+            [record],
+          );
           if (previous) {
             assert.deepEqual(canonical, {
               ...previous.snapshot,

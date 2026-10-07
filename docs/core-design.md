@@ -24,7 +24,7 @@ Each active Goal and each eligible Context Signal is matched independently. A fa
 | `tasks/`     | Persistent Task admission, internal/external execution, follow-up and recovery                                            |
 | `approvals/` | Durable human decisions and delivery to the Actor that requested them                                                     |
 | `memory/`    | Backend-independent recall and durable capture orchestration                                                              |
-| `runtime/`   | Assembly, source activation, root readiness, application API and shutdown                                                 |
+| `runtime/`   | Assembly, source activation, root readiness, native diagnostics and shutdown                                              |
 | `services/`  | Shared decision transport, Actor addressing and query communication contracts                                             |
 
 `services/` holds capabilities shared across domains without one domain owner. `SystemOneClient` is implemented by infra and consumed by Goal screening, Signal matching and integration gates. `CurrentActors` exposes only the current execution's Actor addressing capability; Goal, Task, Reaction and tools depend on this contract directly. Shared query replies and cancellation live alongside CurrentActors in `services/actors.ts`; tool-specific ask/error handling remains in `tools/actors.ts`. Reaction recovery validation stays private to `reactions/model.ts`, while `json.ts` owns pure public JSON normalization. Domain state, persistence, execution services stay next to their owning modules. Services are injected through Effect Context; this directory introduces no service registry or additional forwarding Layers.

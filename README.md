@@ -9,9 +9,10 @@ Runtime ownership, integration installation and Effect configuration are specifi
 - `packages/agent` — thin Effect wrapper around pi with named models and isolated runs.
 - `packages/actor` — the Effect 4 RC Actor runtime, SQLite persistence, and tests.
 - `packages/core` — configuration, Contexts, Signals, Goals, decision processing, Memory capture workflows, and durable domain state.
+- `packages/api` — shared RPC definitions and protocol-independent server/client entries.
 - `packages/infra` — configuration sources, storage, System One, Pi/Codex/Doubao executors, and the agentmemory backend.
 - `packages/integrations` — external business connections: Lark account/IM/mail and generic mail.
-- `apps/local` — CLI, startup composition, process lifecycle, and the local HTTP/SSE interface.
+- `apps/local` — CLI, startup composition, process lifecycle, and the local HTTP/RPC interface.
 - `apps/web` — independently replaceable React/Vite Goal conversation client.
 
 Use Node 24 or later. Run `pnpm install`, `pnpm typecheck`, and `pnpm test` from the repository root. For local configuration and startup, see [apps/local/README.md](apps/local/README.md).

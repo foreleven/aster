@@ -2,9 +2,9 @@
 
 Aster's domain and application runtime, implemented with Effect 4. Concrete storage/model/executor adapters live in `@aster/infra`; external business connections live in `@aster/integrations`.
 
-`@aster/core/contracts` is the browser-safe, explicitly exported domain schema entry. Definitions stay with their domain owners; internal delivery envelopes and inbox records are not public exports. Core has no dependency on `@aster/api-contracts`. API-only response schemas, RPC and query keys belong to that package.
+`@aster/core/contracts` is the browser-safe, explicitly exported domain schema entry. Definitions stay with their domain owners; internal delivery envelopes and inbox records are not public exports. Core has no dependency on `@aster/api`. API-only response schemas, RPC and query keys belong to that package.
 
-`AsterRuntime.layer({ integrations })` assembles shared services and owns root Actors. The host supplies infrastructure Layers and ConfigProvider, then uses `runtime.api` and `runtime.ready`. It does not assemble internal domain services or start integrations separately.
+`AsterRuntime.layer({ integrations })` assembles shared services and owns root Actors. The host supplies infrastructure Layers and ConfigProvider, then consumes `runtime.ready`, `runtime.inspect`, Actor addressing and the domain services published by that Layer. RPC adaptation belongs to `@aster/api/server`; Runtime has no application API facade. It does not assemble internal domain services or start integrations separately.
 
 Startup starts public Context queries and the independent Memory consumer before activating source integrations, registers Signal, Task and Goal owners, then starts durable reaction processing. Signal execution starts after Goal routing registration; each Signal, Task and Goal restores independently and queues incoming messages in its mailbox. Required source readiness precedes Goal activation. Shutdown stops producers, cancels scoped processing, stops Actors and drains accepted capture work before infrastructure release.
 

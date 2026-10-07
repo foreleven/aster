@@ -6,7 +6,7 @@ Status: implemented. See [ADR 0040](adr/0040-compose-aster-runtime-with-effect-l
 
 | Owner                   | Responsibilities                                                                                                       |
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| local                   | CLI arguments, configuration locations, adapter selection, process signals, HTTP/SSE and static assets                 |
+| local                   | CLI arguments, configuration locations, adapter selection, process signals, HTTP/RPC and static assets                 |
 | core runtime            | shared Layer graph, domain roots, integration installation/activation, subscriptions, readiness coordination, shutdown |
 | core domain modules     | Context reactions, Signal eligibility, Goal operations/history, internal reasoning and Task delivery                   |
 | integrations            | private settings and clients, root/child Actors, initial readiness and cleanup                                         |
@@ -77,7 +77,7 @@ Use one credential resolver for exact `${ENV_VAR}` references and memory `apiKey
 
 ## Application interface
 
-Runtime exposes Context reads and scoped path/revision notifications, Goal list/history/sendMessage/end, approvals list/respond, and native runtime diagnostics. Domain schemas live in `@aster/core/contracts`; API response schemas and RPC live in `packages/api-contracts`. Local maps Context notifications to query invalidations and validates runtime diagnostics at the RPC boundary. HTTP validates transport inputs and maps application errors to responses; it does not inspect domain paths to identify entities, compute history pages or send Actor Commands.
+Runtime exposes Actor addressing, readiness and native diagnostics, and its Layer publishes the existing ContextRegistry, ContextQueries and AgentConversations services. It has no application API facade. `@aster/api/server` consumes those services, adapts requests into typed Actor commands, awaits admission replies and projects query results. Core owns domain rules and pure contracts; API schemas, wire normalization and query invalidations belong to `@aster/api`. Local selects Protocol/serialization and owns HTTP resources, without assembling core services or implementing RPC handlers.
 
 ## Refactoring and acceptance
 

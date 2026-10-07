@@ -1,12 +1,8 @@
+import { inspectTask } from "../src/tasks/view.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Option, Schema } from "effect";
-import {
-  TaskSnapshot,
-  type TaskAdmissionReply,
-  ExternalAgentError,
-  makeApplicationApi,
-} from "../src/index.js";
+import { TaskSnapshot, type TaskAdmissionReply, ExternalAgentError } from "../src/index.js";
 import {
   taskFixture,
   taskInput,
@@ -101,18 +97,18 @@ test("Task inspection excludes provider metadata and performs no execution", asy
           records: new Map([[record.snapshot.path, record]]),
           agents: {},
         });
-        const api = makeApplicationApi({
-          registry: env.registry,
-          conversations,
-          inspect: Effect.succeed(null),
-        });
-        const view = yield* api.inspectTask(record.snapshot.path);
+        const view = yield* inspectTask(env.registry, conversations, record.snapshot.path);
         assert.equal(view.instructions, taskInput().task.instructions);
         assert.equal(view.result, "Original result");
         assert.doesNotMatch(JSON.stringify(view), /private-token|metadata|sessionId/);
-        assert.equal((yield* api.inspectTask("/personal").pipe(Effect.flip)).kind, "invalid-input");
         assert.equal(
-          (yield* api.inspectTask(`/tasks/${"0".repeat(64)}`).pipe(Effect.flip)).kind,
+          (yield* inspectTask(env.registry, conversations, "/personal").pipe(Effect.flip)).kind,
+          "invalid-input",
+        );
+        assert.equal(
+          (yield* inspectTask(env.registry, conversations, `/tasks/${"0".repeat(64)}`).pipe(
+            Effect.flip,
+          )).kind,
           "not-found",
         );
       }),
