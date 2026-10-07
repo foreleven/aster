@@ -1,7 +1,6 @@
 import { Schema } from "effect";
 import { CausalChain } from "./causal.js";
 import { CommandIdentifier, CommandReceipt } from "./command.js";
-import { TaskAction } from "./writeback.js";
 import { PublicContext } from "./models.js";
 
 export const GoalPath = Schema.String.check(Schema.isPattern(/^\/goals\/[a-z0-9][a-z0-9-]*$/));
@@ -20,7 +19,6 @@ export const Task = Schema.Union([
     agent: Schema.NonEmptyString,
     task: PreparedTask,
     replyTo: GoalPath,
-    action: Schema.optional(TaskAction),
   }),
 ]);
 export type Task = typeof Task.Type;
@@ -43,7 +41,6 @@ export const TaskDeliveryInput = Schema.Struct({
   task: PreparedTask,
   replyTo: GoalPath,
   causal: CausalChain,
-  action: Schema.optional(TaskAction),
   evidence: Schema.optional(PublicContext),
 });
 export type TaskDeliveryInput = typeof TaskDeliveryInput.Type;

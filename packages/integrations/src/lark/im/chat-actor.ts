@@ -1,5 +1,4 @@
 import { chatView } from "../public-views.js";
-import { isLarkWritebackEcho } from "./writeback.js";
 import { randomUUID } from "node:crypto";
 import { ReplyTo, type ActorContext } from "@aster/actor";
 import { ImSummaryError } from "../shared/errors.js";
@@ -276,7 +275,6 @@ export class LarkChatActor extends ContextActor.Service<
         );
         yield* context.pipeToSelf(
           prepareChatSummary({
-            isExternalInput: (message) => !isLarkWritebackEcho(registry, path, message),
             path,
             date,
             id,

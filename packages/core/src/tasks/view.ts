@@ -1,4 +1,3 @@
-import { publications } from "../publications/actor.js";
 import { ExecutionCheckpoint } from "./execution/checkpoint.js";
 import { StoredTaskInput } from "./state/snapshot.js";
 import { Option, Schema, Effect, Match } from "effect";
@@ -128,7 +127,6 @@ export const inspectTask: (
       instructions: admission.task.instructions,
       sources: [...new Set(admission.task.input.flatMap((item) => item.sources))],
       hasExecution: !!execution?.session || state.admission.agent === "internal",
-      publication: publications(registry).find((operation) => operation.request.source === path),
       messages,
       ...(state.status === "completed" ? { result: text } : { error: text }),
       requests: approvalEntries(registry)

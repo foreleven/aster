@@ -33,7 +33,6 @@ export const prepareChatSummary = Effect.fn("prepareChatSummary")(function* (inp
   admission: AgentAdmission;
   summarizer: ChatSummarizer["Service"];
   previous: () => ChatSummary | undefined;
-  isExternalInput?: (message: ImMessage) => boolean;
   checkpoint: (change: SummaryCheckpoint) => Effect.Effect<ChatDay, ImSummaryError>;
 }) {
   const { storage, date, id, path } = input;
@@ -42,7 +41,7 @@ export const prepareChatSummary = Effect.fn("prepareChatSummary")(function* (inp
   if (!day.stage && !day.flush && !day.assessment?.needed) {
     const fingerprint = batchFingerprint(day.pending);
     if (day.assessment?.fingerprint === fingerprint) return undefined;
-    const messages = day.pending.filter(input.isExternalInput ?? (() => true));
+    const messages = day.pending;
     const needed =
       messages.length > 0 &&
       (yield* input.gate.needed({
@@ -111,7 +110,7 @@ export const prepareChatSummary = Effect.fn("prepareChatSummary")(function* (inp
         batch: stage.batch,
         daily: stage.daily,
         rolling,
-        evaluate: stage.batch.some(input.isExternalInput ?? (() => true)),
+        evaluate: stage.batch.length > 0,
         updatedAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
       };
     }),

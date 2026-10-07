@@ -1,5 +1,7 @@
 # Personal Agent implementation and acceptance
 
+Current architecture note: The dedicated Task-result publication chain described in historical entries below has been removed, including its approval flow, Lark writeback adapter and UI. Task results return to Goals. See `task-delegation-design.md` for the current contract.
+
 Status: first implementation complete under the current scope. This tracks [Aster Personal Agent design](https://chatgpt.com/space/page_d4e3e5db4d3c8191949f1614f7364478), rechecked at sequence 5 on 2026-10-03. Existing-data migration is explicitly excluded. The final acceptance audit and supported capability boundaries appear at the end; earlier sections retain historical checkpoints.
 
 Latest verified baseline (2026-10-03): 404 backend tests, 37 browser tests, workspace build/check, and zero errors/warnings from Agent, API Contracts, Core, Lark Integration, Integrations, Local and Web Effect diagnostics. The publication browser test also passed with desktop/mobile screenshot inspection.

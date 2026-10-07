@@ -63,9 +63,6 @@ async function setup(page, data = fixture()) {
             hasExecution: !!state.session,
             result: state.result ?? state.outcomeText,
             error: state.error,
-            publication: data.publications?.find(
-              (operation) => operation.request.source === record.path,
-            ),
             messages: [],
             requests: Object.entries(state.requests ?? {}).map(([id, request]) => ({
               id,
@@ -1250,98 +1247,6 @@ test("Timeline refreshes older deliveries after reconnect and displays newly acc
   await page.getByRole("tab", { name: "Notes", exact: true }).click();
   await expect(page.getByText("Please verify the release date", { exact: true })).toBeVisible();
   await expect(page.getByText("Response 11", { exact: true })).toHaveCount(0);
-  expect(errors).toEqual([]);
-});
-
-test("Run publication shows separate approval and retained unknown outcome after reconnect", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  const source = "/tasks/cb4e6fd93a8701d7e1020404e479c56377824d8bf23e8426fb3943480e9d7534";
-  const operation = {
-    request: {
-      requestId: "publish-one",
-      source,
-      taskSource: "/signals/report",
-      causationId: "user-one",
-      createdAt: at,
-      action: { _tag: "PublishResult", channelPath: "/lark/im/chats/oc_test", identity: "user" },
-      content: "Release blockers resolved; ready for the launch review.",
-      causal: { rootRequestId: "user-one", remainingAgentTurns: 0 },
-    },
-    status: "waiting-approval",
-  };
-  const run = {
-    path: source,
-    description: "Report publication",
-    revision: 1,
-    state: {
-      status: "completed",
-      outcomeText: operation.request.content,
-      task: {
-        instructions: "Summarize launch readiness for the release channel",
-        input: [{ content: "Release blockers are resolved.", sources: ["/goals/engine"] }],
-      },
-    },
-    messages: [
-      { type: "TaskPrepared", at },
-      { type: "Delegating", at },
-      { type: "Completed", at },
-    ],
-  };
-  data.contexts.push(run);
-  data.publications = [operation];
-  const { errors } = await setup(page, data);
-  await page.getByLabel("Find context").fill("Report publication");
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Report publication/ })
-    .click();
-  const publication = page.getByRole("article", { name: "External publication" });
-  await expect(publication.getByText("Status: waiting-approval")).toBeVisible();
-  await expect(publication.getByText("Sending as: user")).toBeVisible();
-  await expect(
-    publication.getByText("Release blockers resolved; ready for the launch review.", {
-      exact: true,
-    }),
-  ).toBeVisible();
-  await publication.getByRole("button", { name: "Review publication approval" }).click();
-  await page.getByLabel("Find context").fill("Report publication");
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Report publication/ })
-    .click();
-  data.publications[0] = {
-    ...operation,
-    status: "unknown",
-    submittedAt: at,
-    authorization: {
-      approvalId: `${source}:writeback:publish-one`,
-      approvalsRevision: 2,
-      approvedAt: at,
-    },
-    error: "Acknowledgement unavailable",
-  };
-  run.revision = 2;
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await expect(publication.getByText("Status: unknown")).toBeVisible();
-  await expect(publication.getByText(/Automatic resend is disabled/)).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Result", exact: true })).toBeVisible();
-  await expect(page.getByText(operation.request.content, { exact: true })).toHaveCount(2);
-  await expect(publication.getByRole("button", { name: /retry|resend/i })).toHaveCount(0);
-  data.publications[0] = { ...data.publications[0], status: "published", externalId: "om_receipt" };
-  delete data.publications[0].error;
-  await page.evaluate(() =>
-    window.testEvents.emit("invalidate", {
-      _tag: "Invalidate",
-      keys: ["context:/publications"],
-    }),
-  );
-  await expect(publication.getByText("Receipt: om_receipt")).toBeVisible();
-  await page.screenshot({ path: "/tmp/aster-publication-desktop.png", fullPage: true });
-  await page.setViewportSize({ width: 390, height: 844 });
-  await expect(publication.getByText("Receipt: om_receipt")).toBeVisible();
-  await page.screenshot({ path: "/tmp/aster-publication-mobile.png", fullPage: true });
   expect(errors).toEqual([]);
 });
 

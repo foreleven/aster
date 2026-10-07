@@ -2,12 +2,7 @@ import { useState } from "react";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
 import { Cause, Exit, Schema } from "effect";
-import {
-  ApplicationError,
-  contextQueryKeys,
-  type TaskRecoveryInput,
-  type WritebackOperation,
-} from "@aster/api-contracts";
+import { ApplicationError, contextQueryKeys, type TaskRecoveryInput } from "@aster/api-contracts";
 import { checkTask, retryTask } from "../api/client";
 import type { ContextView } from "../dashboard/model";
 const pendingRequests = Atom.make<
@@ -78,46 +73,5 @@ export function TaskControls({
       )}
       {error && <p role="alert">{error}</p>}
     </section>
-  );
-}
-export function PublicationDetails({
-  publication,
-  navigate,
-}: {
-  publication: WritebackOperation;
-  navigate: (path: string) => void;
-}) {
-  return (
-    <article className="context-work-card" aria-label="External publication">
-      <h2>External publication</h2>
-      <p>Status: {publication.status}</p>
-      <button
-        className="outline-action"
-        onClick={() => navigate(publication.request.action.channelPath)}
-      >
-        {publication.request.action.channelPath}
-      </button>
-      <p>Sending as: {publication.request.action.identity}</p>
-      <p className="whitespace-pre-wrap">{publication.request.content}</p>
-      {publication.status === "waiting-approval" && (
-        <>
-          <p>
-            The local result is complete. Publishing this exact content requires separate approval.
-          </p>
-          <button className="outline-action" onClick={() => navigate("/approvals")}>
-            Review publication approval
-          </button>
-        </>
-      )}
-      {publication.status === "unknown" && (
-        <p>
-          Delivery is unconfirmed. Automatic resend is disabled; inspect the destination before
-          taking further action.
-        </p>
-      )}
-      {publication.externalId && <p>Receipt: {publication.externalId}</p>}
-      {publication.error && <p className="context-failure">{publication.error}</p>}
-      <small>Operation: {publication.request.requestId}</small>
-    </article>
   );
 }

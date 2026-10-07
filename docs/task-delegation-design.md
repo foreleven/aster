@@ -24,9 +24,6 @@ tasks/
     contracts.ts            # Executor capabilities/errors
     agent.ts                # Internal Agent invocation
     external.ts             # External confirmation and executor prompts
-publications/
-  actor.ts                  # Independent publication state, approval and transport
-  contracts.ts              # Channel write capability and errors
 ```
 
 TaskState has four business operations:
@@ -72,16 +69,10 @@ ApprovalQueue owns confirmation, permission and information requests. Resolve co
 
 Local interruption does not prove external cancellation. Internal cancellation interrupts the scoped invocation; external cancellation requires a provider capability that confirms the operation stopped. An unsupported cancellation leaves the Task running. Ending a Goal cancels unstarted work; already-submitted work retains its Task owner.
 
-## Publication and inspection
+## Result delivery and inspection
 
-An explicit `PublishResult` action requests a separate handoff to PublicationsActor at `/publications`. That owner freezes one publication per Task from its committed result and original action. Later Task instructions cannot silently replace reviewed content. Execution confirmation never authorizes publication.
+Completed Tasks return their persisted results to the reply Goal. Task completion has no external publishing action or independent publication owner. Further actions belong to the Goal conversation and the relevant integration's supported Context commands; no generic Context write command is currently exposed.
 
-PublicationsActor owns its own snapshot and Pi journal, approval, authorization, sending marker and transport callback. Pi submission intent commits before transport I/O; recovery reconciles Pi-to-Context handoffs and never repeats sending/unknown operations. Published, rejected and unknown publication outcomes do not change Task completion. ChannelWrites and infrastructure Layers own transport capabilities and resource release.
+`InspectTask` joins the Task snapshot, Pi messages, executor checkpoint and approvals. It returns instructions, follow-ups, outcomes, available tool records and source references without private provider metadata. The web Task detail subscribes to Task and approval invalidations. External providers retain ownership of their private transcripts.
 
-`InspectTask` joins the Task snapshot, Pi messages, executor checkpoint, approvals and publication record. It returns instructions, follow-ups, outcomes, available tool records and source references without private provider metadata. The web Task detail subscribes to Task, approval and publication invalidations. External providers retain ownership of their private transcripts.
-
-Tests use fake transports, real Actor mailboxes, Deferred and temporary Pi stores. They cover responsive follow-up, reactivation, handoff recovery, late completions, confirmation authority, separate check/retry semantics, cancellation confirmation and publication recovery. No historical-data compatibility path is provided.
-
-## Publication handoff
-
-Tasks construct a frozen `WritebackRequest` from their admitted input and completed Pi result. Publications accept that request without reading Task state or decoding Task conversation entries. Their own Pi journal remains authoritative for publication intent and outcomes; interrupted sends stay unknown and never resubmit automatically. Human decisions use the shared approval queue, with typed replies and immediate delivery after the decision commits.
+Tests use fake transports, real Actor mailboxes, Deferred and temporary Pi stores. They cover responsive follow-up, reactivation, handoff recovery, late completions, confirmation authority, separate check/retry semantics and cancellation confirmation. No historical-data compatibility path is provided.

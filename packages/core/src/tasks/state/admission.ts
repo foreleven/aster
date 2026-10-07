@@ -23,7 +23,6 @@ export const delegateInput = (
   agent: task._tag === "Agent" ? "internal" : task.agent,
   task: task.task,
   replyTo: task.replyTo,
-  ...(task._tag === "Delegate" && task.action ? { action: task.action } : {}),
 });
 /** A Signal may only deliver its frozen occurrence; Goal tools run in the active owner's scope. */
 export const sourceTask: (

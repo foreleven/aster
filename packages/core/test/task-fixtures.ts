@@ -10,12 +10,10 @@ import { Actor, ActorSystem } from "@aster/actor";
 import { Clock, Effect, Layer, Schema, Stream } from "effect";
 import {
   ApprovalQueueActor,
-  ChannelWrites,
   SignalDefinitions,
   ContextRegistry,
   ExternalAgents,
   TasksRootActor,
-  PublicationsActor,
   TaskSnapshot,
   defineContext,
   type StoredContext,
@@ -45,7 +43,6 @@ export const taskFixture = Effect.fnUntraced(function* (
     agents?: ExternalAgents["Service"];
     runner?: AgentRunner["Service"];
     clock?: Clock.Clock;
-    publish?: ChannelWrites["Service"]["publish"];
     conversations?: AgentConversations["Service"];
     saved?: (record: StoredContext) => void;
   } = {},
@@ -120,14 +117,10 @@ export const taskFixture = Effect.fnUntraced(function* (
       Layer.succeed(ExternalAgents, options.agents ?? { test: options.agent ?? fakeAgent() }),
       Layer.succeed(SignalDefinitions, []),
       Layer.succeed(Clock.Clock, options.clock ?? (yield* Clock.Clock)),
-      Layer.succeed(ChannelWrites, {
-        publish: options.publish ?? (() => Effect.die("Unexpected publication")),
-      }),
     ),
   );
   yield* system.spawn("goals", GoalRoot);
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
-  yield* (yield* system.spawn("publications", PublicationsActor)).awaitStarted;
   const tasks = yield* system.spawn("tasks", TasksRootActor);
   yield* tasks.awaitStarted;
   // Tests inspecting recovery wait only for their pre-existing subjects.

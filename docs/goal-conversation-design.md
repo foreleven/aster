@@ -58,6 +58,6 @@ The implementation replaces the old contracts without migration or compatibility
 
 ### Validation
 
-Use fake models and external executors with temporary Pi storage. Cover main-conversation responsiveness, internal Task execution, busy follow-up, completed-Task reactivation, concurrent independent Tasks, Context gating, public-message filtering, compaction history reads and restart recovery. Inject crashes at message admission, Actor handoff and result delivery boundaries. Retain approval, unknown external outcome and publication tests.
+Use fake models and external executors with temporary Pi storage. Cover main-conversation responsiveness, internal Task execution, busy follow-up, completed-Task reactivation, concurrent independent Tasks, Context gating, public-message filtering, compaction history reads and restart recovery. Inject crashes at message admission, Actor handoff and result delivery boundaries. Retain approval and unknown external outcome tests.
 
 Run the affected package tests during implementation, then `pnpm build`, `pnpm check`, cross-package `pnpm test`, `pnpm test:web`, and Effect diagnostics for affected packages. No real external Agent, model or messaging service is needed for verification. Update the Goal, Task, runtime and agent design documents to describe the final replacement.

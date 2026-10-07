@@ -1,4 +1,3 @@
-import { WritebackOperation } from "./writeback.js";
 import { Schema } from "effect";
 import { ContextRevision } from "./command.js";
 
@@ -22,7 +21,6 @@ export const TaskInspection = Schema.Struct({
   hasExecution: Schema.Boolean,
   result: Schema.optional(Schema.String),
   error: Schema.optional(Schema.String),
-  publication: Schema.optional(WritebackOperation),
   messages: Schema.Array(
     Schema.Struct({ id: Schema.Int, kind: Schema.String, text: Schema.String, at: Schema.String }),
   ),

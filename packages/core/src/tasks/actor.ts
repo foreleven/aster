@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { TaskDeliveryInput } from "@aster/api-contracts";
 import { AgentConversations, AgentRunner } from "@aster/agent";
 import { Context, Deferred, Effect, Fiber, Layer, Match, Option, Ref, Schema, Scope } from "effect";
 import type { ActorContext } from "@aster/actor";
@@ -9,8 +8,6 @@ import { ContextRegistry } from "../context/registry.js";
 import { GoalSettings } from "../config/settings.js";
 import { CurrentActors } from "../services/actors.js";
 import { approvalEntries, sendApproval } from "../approvals/actor.js";
-import { taskPublication } from "./delivery.js";
-import { requestPublication } from "../publications/actor.js";
 import { ExternalAgents } from "./execution/contracts.js";
 import { TaskExecution } from "./execution/service.js";
 import { TaskSnapshot, TaskOutcome, type TaskInput } from "./state/snapshot.js";
@@ -38,7 +35,7 @@ const makeHandlers = Effect.gen(function* () {
       }),
     );
   });
-  const publish = Effect.fnUntraced(function* (owner: Owner) {
+  const reportOutcome = Effect.fnUntraced(function* (owner: Owner) {
     const snapshot = yield* state.snapshot;
     if (snapshot.outcomeEntryId === undefined) return;
     const entry = yield* messages.get(state.path, snapshot.outcomeEntryId).pipe(Effect.orDie);
@@ -58,15 +55,6 @@ const makeHandlers = Effect.gen(function* () {
         _tag: "Enqueue",
         entry: { ...request, contextPath: state.path, target: owner.path, status: "pending" },
       });
-    const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(
-      (yield* messages.get(state.path, snapshot.inputs[0]!.entryId).pipe(Effect.orDie)).data,
-    );
-    const publication = taskPublication(admission, result, entry.at);
-    if (snapshot.status === "completed" && publication)
-      yield* owner.pipeToSelf(requestPublication(owner, publication), (result) => ({
-        _tag: "DeliverySettled",
-        ...(result._tag === "Failure" ? { error: result.error.message } : {}),
-      }));
   });
   const drive = Effect.fnUntraced(function* (owner: Owner) {
     if (yield* Ref.get(running)) return;
@@ -76,7 +64,7 @@ const makeHandlers = Effect.gen(function* () {
         ?.status !== "active" &&
       snapshot.status === "ready"
     ) {
-      if (yield* state.cancel("The owning Goal has ended")) yield* publish(owner);
+      if (yield* state.cancel("The owning Goal has ended")) yield* reportOutcome(owner);
       return;
     }
     const work = yield* state.start;
@@ -118,7 +106,7 @@ const makeHandlers = Effect.gen(function* () {
   return {
     restore: Effect.fnUntraced(function* (owner: Owner) {
       if (!(yield* state.exists)) return;
-      yield* publish(owner);
+      yield* reportOutcome(owner);
       if (["ready", "running"].includes((yield* state.snapshot).status)) yield* drive(owner);
     }),
     receive: (command: TaskCommand, owner: Owner) =>
@@ -144,7 +132,7 @@ const makeHandlers = Effect.gen(function* () {
             if (generation !== completed?.generation) return;
             yield* Ref.set(running, undefined);
             if (!(yield* state.settle(outcome))) return;
-            yield* publish(owner);
+            yield* reportOutcome(owner);
             const snapshot = yield* state.snapshot;
             if (
               snapshot.status === "ready" ||
@@ -164,7 +152,7 @@ const makeHandlers = Effect.gen(function* () {
           Effect.gen(function* () {
             const active = yield* Ref.get(running);
             if (!active) {
-              if (yield* state.cancel(reason)) yield* publish(owner);
+              if (yield* state.cancel(reason)) yield* reportOutcome(owner);
               if (replyTo) yield* replyTo.tell(undefined);
               return;
             }
@@ -190,7 +178,7 @@ const makeHandlers = Effect.gen(function* () {
                 text: reason,
                 covered: snapshot.inputs.map((input) => input.requestId),
               });
-              yield* publish(owner);
+              yield* reportOutcome(owner);
             }
             if (replyTo) yield* replyTo.tell(undefined);
           }),

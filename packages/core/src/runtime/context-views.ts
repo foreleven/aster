@@ -1,4 +1,3 @@
-import { publicationView } from "../publications/actor.js";
 import { goalView, goalsRootView } from "../goals/view.js";
 import { signalView, signalsRootView } from "../signals/state/snapshot.js";
 import { taskView, tasksRootView } from "../tasks/view.js";
@@ -10,7 +9,6 @@ export const coreContextViews = [
   taskView,
   signalView,
   approvalView,
-  publicationView,
   goalsRootView,
   signalsRootView,
   tasksRootView,

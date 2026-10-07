@@ -9,7 +9,6 @@ import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster
 import type { ReactionCommand } from "../reactions/actor.js";
 import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
 import { GoalScreeningStore } from "../goals/screening/decision.js";
-import { PublicationsActor } from "../publications/actor.js";
 import { TasksRootActor } from "../tasks/root.js";
 import type { RuntimeEvent, RuntimePhase } from "@aster/api-contracts";
 import { RuntimeConfigurationError } from "./errors.js";
@@ -157,7 +156,6 @@ const acquireRuntime = Effect.gen(function* () {
     "/user/signals",
     "/user/tasks",
     "/user/goals",
-    "/user/publications",
   ]);
   yield* Stream.runForEach(system.events, (event) =>
     Effect.gen(function* () {
@@ -200,7 +198,6 @@ const acquireRuntime = Effect.gen(function* () {
       .pipe(Effect.provideService(Scope.Scope, workScope));
     handles.push({ phase: module.phase, handle });
   }
-  yield* (yield* system.spawn("publications", PublicationsActor)).awaitStarted;
   const tasks = yield* system.spawn("tasks", TasksRootActor);
   yield* tasks.awaitStarted;
   const goalActivation = yield* Deferred.make<void>();

@@ -10,7 +10,7 @@ The Timeline shows actual user messages and selected assistant replies from Pi. 
 
 The composer sends instructions through the public Goal API. Failed sends retain their text. Known failed conversation inputs expose explicit retry; uncertain retry admission retains the original identity and payload across navigation and reconnect within the app instance. Browser-only pending identities do not survive full document reload.
 
-Simple exchanges stay in the main conversation. Related Tasks show sustained work, including internal Agent execution and external delegation. Typed Task details include instructions, follow-ups, results, available tools, sources and approval requests. Failed or uncertain execution supports explicit resumption. Publication displays its exact destination, identity, content and delivery status separately from Task completion. Unknown delivery never triggers automatic resend.
+Simple exchanges stay in the main conversation. Related Tasks show sustained work, including internal Agent execution and external delegation. Typed Task details include instructions, follow-ups, results, available tools, sources and approval requests. Failed or uncertain execution supports explicit resumption.
 
 Goal End requires confirmation, marks the Goal complete and stops future owned Signal triggering. Submitted work may still finish. Completed Goals remain selectable. Edit, Pause and Archive remain disabled because the API does not implement them; Goal creation uses configuration.
 
@@ -32,4 +32,4 @@ Feature components live in `src/contexts` and `src/goals`; query adapters, displ
 
 `pnpm test:web` builds the workspace and runs Playwright against isolated fixture transports and a real local HTTP/SSE server with fake domain services. It never invokes real models or integrations. Install Chromium with `pnpm --dir apps/web exec playwright install chromium`, or use installed Chrome with `PLAYWRIGHT_CHANNEL=chrome pnpm test:web`.
 
-Tests cover desktop/mobile navigation, natural messages, pagination, Task details, approval/resumption/publication controls, retained uncertain request identities, SSE reconnect and malformed projections. `test/fixtures.js` is test-only visual data.
+Tests cover desktop/mobile navigation, natural messages, pagination, Task details, approval/resumption controls, retained uncertain request identities, SSE reconnect and malformed projections. `test/fixtures.js` is test-only visual data.

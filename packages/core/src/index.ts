@@ -10,15 +10,6 @@ export * from "./tasks/actor.js";
 export * from "./tasks/protocol.js";
 export * from "./services/system-one.js";
 export * from "./tasks/execution/contracts.js";
-export * from "./publications/contracts.js";
-export {
-  TaskAction,
-  WritebackOperation,
-  WritebackRequest,
-  WritebackAuthorization,
-  writebackApprovalId,
-  writebackPrompt,
-} from "@aster/api-contracts";
 export * from "./approvals/actor.js";
 export * from "./goals/screening/intent.js";
 export * from "./goals/screening/decision.js";
@@ -50,5 +41,3 @@ export * from "./goals/agent.js";
 export * from "./context/definition.js";
 
 export * from "./memory/capture.js";
-
-export { PublicationsActor, publications } from "./publications/actor.js";
