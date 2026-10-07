@@ -13,7 +13,7 @@ import { Context, Deferred, Effect, Layer, Match, Ref, Result, Schema } from "ef
 import { AgentConversations } from "@aster/agent";
 import type { ActorContext, ActorRef } from "@aster/actor";
 import { randomUUID } from "node:crypto";
-import { CurrentActors } from "../tools/actors.js";
+import { CurrentActors } from "../services/actors.js";
 
 type Services = ExternalAgents | Layer.Services<typeof GoalAgent.layer> | AgentConversations;
 type Owner = ActorContext<GoalMailbox, Services | ContextRegistry>;

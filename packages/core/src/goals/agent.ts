@@ -8,7 +8,7 @@ import type { GoalDefinition } from "../config/schema.js";
 import { GoalSettings } from "../config/settings.js";
 import { Effect, Clock, Context, Layer, Schema, Match } from "effect";
 import { AgentRunner, type AgentMessage, AgentError, type AssistantMessage } from "@aster/agent";
-import type { CurrentActors } from "../tools/actors.js";
+import type { CurrentActors } from "../services/actors.js";
 import { createHash } from "node:crypto";
 import { output } from "../tools/define.js";
 

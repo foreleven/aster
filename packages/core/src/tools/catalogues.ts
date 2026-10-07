@@ -1,5 +1,5 @@
 import type { GoalState } from "../goals/state/model.js";
-import type { CurrentActors } from "./actors.js";
+import type { CurrentActors } from "../services/actors.js";
 import type { CoreTool } from "./define.js";
 import { searchContexts } from "./context/search-contexts.js";
 import { readContext } from "./context/read-context.js";

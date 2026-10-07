@@ -35,7 +35,7 @@ import { MemoryBackend } from "../memory/contracts.js";
 import { GoalSettings, signalSettings } from "../config/settings.js";
 import { SignalDefinitions } from "../signals/protocol.js";
 import { SignalRootActor } from "../signals/root.js";
-import { SystemOneClient } from "../decisions/system-one.js";
+import { SystemOneClient } from "../services/system-one.js";
 import { AgentConversations } from "@aster/agent";
 import { GoalsRootActor } from "../goals/root.js";
 import { ExternalAgents } from "../tasks/execution/contracts.js";

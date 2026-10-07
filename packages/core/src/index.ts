@@ -8,7 +8,7 @@ export { GoalCommand, GoalCommandReply } from "./goals/protocol.js";
 export * from "./signals/protocol.js";
 export * from "./tasks/actor.js";
 export * from "./tasks/protocol.js";
-export * from "./decisions/system-one.js";
+export * from "./services/system-one.js";
 export * from "./tasks/execution/contracts.js";
 export * from "./publications/contracts.js";
 export {

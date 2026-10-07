@@ -50,4 +50,4 @@ export interface SystemOneClient {
 }
 
 /** Global decision transport; each domain owns its questions and policy. */
-export const SystemOneClient = Context.Service<SystemOneClient>("decisions/SystemOneClient");
+export const SystemOneClient = Context.Service<SystemOneClient>("services/SystemOneClient");

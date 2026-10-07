@@ -1,4 +1,4 @@
-import { CurrentActors } from "../src/tools/actors.js";
+import { CurrentActors } from "../src/services/actors.js";
 import type { CoreTool } from "../src/tools/define.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";

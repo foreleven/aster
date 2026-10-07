@@ -1,4 +1,4 @@
-import { CurrentActors } from "../src/tools/actors.js";
+import { CurrentActors } from "../src/services/actors.js";
 import type { CoreTool } from "../src/tools/define.js";
 import { toolSystem } from "./tool-fixtures.js";
 import { ContextsActor } from "../src/context/queries/actor.js";

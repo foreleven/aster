@@ -1,4 +1,4 @@
-import { CurrentActors } from "../tools/actors.js";
+import { CurrentActors } from "../services/actors.js";
 import { ReactionState } from "./model.js";
 import { DurableContext } from "../context/store.js";
 import { RecoveryInput, RecoveryReply } from "@aster/api-contracts";

@@ -1,5 +1,5 @@
 import { Effect } from "effect";
-import { CurrentActors } from "../actors.js";
+import { CurrentActors } from "../../services/actors.js";
 import { Type } from "@aster/agent";
 import { followupTask } from "../../tasks/delivery.js";
 import { commandTool } from "../define.js";

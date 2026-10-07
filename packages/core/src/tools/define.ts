@@ -1,7 +1,7 @@
 import { type EffectTool, type AgentTool, type TSchema, rejectedToolResult } from "@aster/agent";
 import { ApplicationError } from "@aster/api-contracts";
 import { Effect } from "effect";
-import type { CurrentActors } from "./actors.js";
+import type { CurrentActors } from "../services/actors.js";
 
 export type CoreTool<R = CurrentActors> = EffectTool<TSchema, ApplicationError, R>;
 export const output = (value: unknown) => ({

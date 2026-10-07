@@ -1,13 +1,8 @@
-import { type ActorContext, type ActorRef, type ReplyTo } from "@aster/actor";
+import { type ActorRef, type ReplyTo } from "@aster/actor";
 import { ApplicationError } from "@aster/api-contracts";
-import { Context, Deferred, Effect } from "effect";
+import { Deferred, Effect } from "effect";
 import type { QueryReply } from "../commands/query.js";
-
-/** The current runtime's addressing capability, provided by the owning execution. */
-export class CurrentActors extends Context.Service<
-  CurrentActors,
-  Pick<ActorContext<unknown>, "select">
->()("tools/CurrentActors") {}
+import { CurrentActors } from "../services/actors.js";
 
 /** Schema-owned local command types are restored only at the dynamic addressing boundary. */
 export const ask = Effect.fn("Tools.ask")(function* <C, A>(

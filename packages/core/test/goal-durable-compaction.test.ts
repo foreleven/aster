@@ -1,5 +1,5 @@
 import { GoalState } from "../src/goals/state/model.js";
-import { CurrentActors } from "../src/tools/actors.js";
+import { CurrentActors } from "../src/services/actors.js";
 import { toolSystem } from "./tool-fixtures.js";
 import { createHash } from "node:crypto";
 import { testConversations } from "./conversation-fixtures.js";

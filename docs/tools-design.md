@@ -6,7 +6,7 @@ Shared Context, Memory, Goal, Task and Signal operation tools live in `packages/
 
 Tools own model-facing names, descriptions, schemas, replay declarations, Effect-native execution, Actor asks and result presentation. Domain owners own validation, public projections, persistence and backend work. A Goal exposes local business operations through its Actor-scoped GoalState service. Runtime owns root registration and readiness.
 
-`CurrentActors` is an Effect Context service exposing only the current Actor system's `select` capability. Goal and Task executions provide it from their owning ActorContext; runtime reasoning provides its existing ActorSystem. Tool Effects resolve this dependency when executed. Factories bind the current Goal or Pi owner only where needed. Local Goal tools additionally resolve the current GoalState business service. No tool receives a callback invoker, Registry, Memory backend, raw storage service or global system singleton.
+`CurrentActors`, defined in `services/actors.ts`, is an Effect Context service exposing only the current Actor system's `select` capability. Goal and Task executions provide it from their owning ActorContext; runtime reasoning provides its existing ActorSystem. Tool Effects resolve this dependency when executed. Factories bind the current Goal or Pi owner only where needed. Local Goal tools additionally resolve the current GoalState business service. No tool receives a callback invoker, Registry, Memory backend, raw storage service or global system singleton.
 
 `EffectTool<T, E, R>` and `AgentRequest<E, R>` in `packages/agent` preserve tool and hook dependencies in the runner's Effect requirement. Tools return Effects; `AgentRunner.run` accepts a request directly. The agent package captures the caller's Context and adapts all tools, response/message hooks and context transforms to native SDK callbacks within one invocation scope. Promise conversion and AbortSignal handling remain private to that SDK boundary.
 
@@ -18,7 +18,7 @@ The summary tool calls the injected GoalState.updateSummary directly. That metho
 
 ```text
 packages/core/src/tools/
-  actors.ts                  # Injected CurrentActors capability and typed ask transport
+  actors.ts                  # Typed tool ask transport using services/actors.ts
   define.ts                  # Effect tool construction and domain error/result shaping
   catalogues.ts              # Explicit Goal and Task tool sets
   context/

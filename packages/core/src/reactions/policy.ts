@@ -1,10 +1,10 @@
-import { CurrentActors } from "../tools/actors.js";
+import { CurrentActors } from "../services/actors.js";
 import { createHash } from "node:crypto";
 import type { ContextReader } from "../context/registry.js";
 import type { ActorRef } from "@aster/actor";
 import { type PublicContext } from "@aster/api-contracts";
 import { Clock, Context, Effect, Match, Schema } from "effect";
-import { choice, type SystemOneClient } from "../decisions/system-one.js";
+import { choice, type SystemOneClient } from "../services/system-one.js";
 import { SignalSnapshot, signalEnabled } from "../signals/state/snapshot.js";
 import type { GoalDefinition } from "../config/schema.js";
 import { matchGoal, goalTitleText, goalSummaryText } from "../goals/screening/decision.js";

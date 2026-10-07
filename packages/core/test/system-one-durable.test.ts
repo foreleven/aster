@@ -653,7 +653,7 @@ for (const retryMatched of [true, false])
                 systemOne: (request) =>
                   Effect.suspend(
                     (): ReturnType<
-                      import("../src/decisions/system-one.js").SystemOneClient["systemOne"]
+                      import("../src/services/system-one.js").SystemOneClient["systemOne"]
                     > => {
                       if (request.questions.matches) {
                         calls.signals++;

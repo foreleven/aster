@@ -1,4 +1,4 @@
-import { score, DecisionError, type SystemOneClient } from "../../decisions/system-one.js";
+import { score, DecisionError, type SystemOneClient } from "../../services/system-one.js";
 import type { GoalDefinition } from "../../config/schema.js";
 import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { Clock, Context, Effect, Match, Schema } from "effect";

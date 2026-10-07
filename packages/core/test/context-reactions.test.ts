@@ -1,5 +1,5 @@
 import type { FrozenReaction } from "../src/reactions/state.js";
-import { CurrentActors } from "../src/tools/actors.js";
+import { CurrentActors } from "../src/services/actors.js";
 import { SystemOneActor } from "../src/reactions/actor.js";
 import { DurableContext } from "../src/context/store.js";
 import { reasoningConfig, emptyRecall, modelReplyLayer, agentResult } from "./workflow-fixtures.js";

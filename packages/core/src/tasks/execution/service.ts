@@ -2,7 +2,7 @@ import { AgentConversations, AgentError, AgentRunner } from "@aster/agent";
 import { ApplicationError, TaskDeliveryInput, type PreparedTask } from "@aster/api-contracts";
 import { Context, Deferred, Effect, Layer, Option, Ref, Schedule, Schema, Semaphore } from "effect";
 import { GoalSettings } from "../../config/settings.js";
-import { CurrentActors } from "../../tools/actors.js";
+import { CurrentActors } from "../../services/actors.js";
 import { sendApproval } from "../../approvals/actor.js";
 import {
   TaskInput,

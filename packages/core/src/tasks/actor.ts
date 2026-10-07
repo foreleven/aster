@@ -7,7 +7,7 @@ import { ContextActor, contextPath } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
 import { GoalSettings } from "../config/settings.js";
-import { CurrentActors } from "../tools/actors.js";
+import { CurrentActors } from "../services/actors.js";
 import { approvalEntries, sendApproval } from "../approvals/actor.js";
 import { taskPublication } from "./delivery.js";
 import { requestPublication } from "../publications/actor.js";
