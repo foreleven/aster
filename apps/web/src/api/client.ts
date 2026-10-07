@@ -19,15 +19,11 @@ export class ApplicationClient extends AtomRpc.Service<ApplicationClient>()(
 export const contextsQuery = ApplicationClient.query("ListContexts", undefined, {
   reactivityKeys: [QueryKeys.all, QueryKeys.contexts],
 });
-export const runtimeQuery = ApplicationClient.query("InspectRuntime", undefined, {
-  reactivityKeys: [QueryKeys.all, QueryKeys.runtime],
-});
 export const approvalsQuery = ApplicationClient.query("ListApprovals", undefined, {
   reactivityKeys: [QueryKeys.all, QueryKeys.approvals],
 });
 export const retryGoalTurn = ApplicationClient.mutation("RetryGoalTurn");
 export const sendGoalMessage = ApplicationClient.mutation("SendGoalMessage");
-export const endGoal = ApplicationClient.mutation("EndGoal");
 export const respondToApproval = ApplicationClient.mutation("RespondToApproval");
 export const invalidateQueries = ApplicationClient.runtime.fn<readonly string[]>()((keys) =>
   Reactivity.invalidate(keys),

@@ -1,1425 +1,405 @@
 import { test, expect } from "@playwright/test";
-import { at, fixture, designFixture } from "./fixtures.js";
-async function setup(page, data = fixture()) {
-  const errors = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  page.on("console", (message) => {
-    if (message.type() === "error" || message.type() === "warning") errors.push(message.text());
-  });
-  const writes = [];
-  const reads = [];
-  const historyRequests = [];
-  // Mock only the streaming RPC; the real-server case exercises the native HTTP path.
-  await page.addInitScript(() => {
-    const nativeFetch = window.fetch.bind(window);
-    window.testEvents = { opened: 0, closed: 0 };
-    window.fetch = async (input, init) => {
-      const request = new Request(input, init);
-      if (new URL(request.url).pathname.replace(/\/$/, "") !== "/api/rpc")
-        return nativeFetch(input, init);
-      const rpc = JSON.parse(await request.clone().text());
-      if (rpc.tag !== "SubscribeInvalidations") return nativeFetch(input, init);
-      window.testEvents.opened++;
-      let closed = false;
-      const close = () => {
-        if (!closed) {
-          closed = true;
-          window.testEvents.closed++;
-        }
-      };
-      const body = new ReadableStream({
-        start(controller) {
-          const encoder = new TextEncoder();
-          window.testEvents.emit = (type, data = {}) => {
-            if (closed) return;
-            const value = type === "ready" ? { _tag: "Invalidate", keys: ["all-queries"] } : data;
-            controller.enqueue(
-              encoder.encode(
-                JSON.stringify({ _tag: "Chunk", requestId: rpc.id, values: [value] }) + "\n",
-              ),
-            );
-          };
-          window.testEvents.disconnect = () => {
-            close();
-            controller.error(new TypeError("Network disconnected"));
-          };
-          request.signal.addEventListener("abort", () => {
-            if (!closed) {
-              close();
-              controller.error(new DOMException("Aborted", "AbortError"));
-            }
-          });
-          queueMicrotask(() => window.testEvents.emit("ready"));
-        },
-        cancel() {
-          close();
-        },
-      });
-      return new Response(body, { headers: { "content-type": "application/ndjson" } });
-    };
-  });
-  await page.route(/^https?:\/\/[^/]+\/api\//, async (route) => {
-    const url = new URL(route.request().url());
-    if (url.pathname.replace(/\/$/, "") === "/api/rpc") {
-      const rpc = JSON.parse(route.request().postData().trim());
-      const body = rpc.payload;
-      reads.push(rpc.tag);
-      let value;
-      switch (rpc.tag) {
-        case "ListContexts":
-          value = data.contexts;
-          break;
-        case "InspectRuntime":
-          value = data.runtime;
-          break;
-        case "ListApprovals":
-          value = data.contexts.find((c) => c.path === "/approvals")?.state.entries ?? [];
-          break;
-        case "InspectTask": {
-          const record = data.contexts.find((item) => item.path === body.path);
-          const state = record.state;
-          const task = state.task ??
-            state.request?.task ?? { instructions: record.description, input: [] };
-          value = {
-            path: record.path,
-            revision: record.revision ?? 0,
-            taskPath: record.path,
-            agent: state.agent ?? state.request?.agent ?? "test",
-            status: state.status,
-            instructions: task.instructions,
-            sources: task.input.flatMap((item) => item.sources),
-            hasExecution: !!state.session,
-            result: state.result ?? state.outcomeText,
-            error: state.error,
-            messages: [],
-            requests: Object.entries(state.requests ?? {}).map(([id, request]) => ({
-              id,
-              kind: request.kind,
-              prompt: request.prompt,
-              responseStatus: state.responses?.[id]?.status ?? "pending",
-            })),
-          };
-          break;
-        }
-        case "InspectProcessing": {
-          value = data.processing?.[body.owner] ?? { owner: body.owner, revision: 0, entries: [] };
-          break;
-        }
-        case "GetGoalTimeline": {
-          historyRequests.push(body);
-          const timeline = data.timelines?.[body.slug] ?? { groups: [] };
-          const all =
-            timeline.messages ??
-            timeline.groups.flatMap((group) => [
-              ...(group.input.payload._tag === "UserInput"
-                ? [
-                    {
-                      id: group.ordinal * 2 - 1,
-                      inputId: group.requestId,
-                      role: "user",
-                      text: group.input.payload.text,
-                      at: group.input.receivedAt,
-                    },
-                  ]
-                : []),
-              ...(group.response
-                ? [
-                    {
-                      id: group.ordinal * 2,
-                      inputId: group.requestId,
-                      role: "assistant",
-                      text: group.response,
-                      at: group.input.receivedAt,
-                    },
-                  ]
-                : []),
-            ]);
-          const messages = all
-            .filter((message) => message.id < (body.before ?? Infinity))
-            .slice(-30);
-          value = {
-            messages,
-            total: all.length,
-            nextBefore: all.some((message) => message.id < messages[0]?.id) ? messages[0].id : null,
-          };
-          break;
-        }
-        case "RespondToApproval":
-          writes.push({ tag: rpc.tag, body });
-          data.contexts
-            .find((c) => c.path === "/approvals")
-            .state.entries.find((e) => e.id === body.id).status = "acknowledged";
-          break;
-        case "SendGoalMessage": {
-          writes.push({ tag: rpc.tag, body });
-          const goal = data.contexts.find((c) => c.path === `/goals/${body.slug}`);
-          goal.messages.push({ role: "user", content: body.text, timestamp: Date.parse(at) });
-          data.timelines ??= {};
-          const timeline = (data.timelines[body.slug] ??= { groups: [] });
-          if (!timeline.groups.some((group) => group.requestId === body.requestId))
-            timeline.groups.push({
-              requestId: body.requestId,
-              ordinal: timeline.groups.length + 1,
-              status: "pending",
-              input: {
-                inputId: body.requestId,
-                goalSlug: body.slug,
-                ordinal: timeline.groups.length + 1,
-                receivedAt: at,
-                payload: { _tag: "UserInput", text: body.text },
-              },
-            });
-          break;
-        }
-        case "CheckTask":
-        case "RetryTask": {
-          writes.push({ tag: rpc.tag, body });
-          const run = data.contexts.find((item) => item.path === body.target);
-          run.revision++;
-          value = { requestId: body.requestId, revision: run.revision };
-          break;
-        }
-        case "EndGoal":
-          writes.push({ tag: rpc.tag, body });
-          data.contexts.find((c) => c.path === `/goals/${body.slug}`).state.status = "completed";
-          break;
-        default:
-          throw new Error(`Unhandled test RPC: ${rpc.tag}`);
-      }
-      return route.fulfill({
-        contentType: "application/ndjson",
-        body:
-          JSON.stringify({
-            _tag: "Exit",
-            requestId: rpc.id,
-            exit: { _tag: "Success", value: value ?? null },
-          }) + "\n",
-      });
-    }
-    return route.fulfill({ status: 404, json: { error: "Not found" } });
-  });
-  await page.goto("/");
-  const firstGoal =
-    data.contexts.find((context) => context.path === "/goals/personal") ??
-    data.contexts.find((context) => /^\/goals\/[^/]+$/.test(context.path)) ??
-    data.contexts[0];
-  await expect(
-    page.getByRole("heading", {
-      name:
-        firstGoal?.path === "/goals/personal"
-          ? "Personal assistant"
-          : firstGoal?.state.title || firstGoal?.description || "No Contexts yet",
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(page.getByText("Live", { exact: true })).toHaveCount(1);
-  await expect(
-    page.getByRole("button", { name: "Refresh data", includeHidden: true }),
-  ).toBeEnabled();
-  return { errors, writes, reads, historyRequests };
-}
-test("Goals workspace links executions, accepts notes, and handles approvals", async ({ page }) => {
-  const { errors, writes } = await setup(page);
-  await expect(page.getByRole("heading", { name: "Goal Timeline" })).toBeVisible();
-  for (const name of ["Home", "Search", "Library", "Settings", "Overview", "Actors"]) {
-    await expect(
-      page.getByRole("navigation").getByRole("button", { name, exact: true }),
-    ).toHaveCount(0);
-  }
-  await page.getByRole("button", { name: /^View execution:/ }).click();
-  await expect(page.getByRole("dialog")).toContainText("Awaiting input");
-  await expect(page.getByRole("dialog").getByText("Current stage")).toHaveCount(0);
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "/lark/im/chats/chat-1", exact: true })
+import { fixture, at, taskPath } from "./fixtures.js";
+import { setup, failRpc } from "./setup.js";
+
+const composer = (page) => page.getByRole("textbox", { name: "Message your assistant" });
+const navigate = async (page, name) =>
+  page
+    .getByRole("navigation", { name: "Workspace" })
+    .getByRole("button", { name, exact: true })
     .click();
-  await expect(page.getByRole("dialog")).toContainText("Core workflow integration is complete");
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Approve execution", exact: true }).click();
+
+test("assistant uses shadcn conversation components and accepts consecutive inputs", async ({
+  page,
+}) => {
+  const { data, reads, writes, errors } = await setup(page);
+  await expect(page.getByRole("heading", { name: "A little less to carry." })).toBeVisible();
+  await page.evaluate(() => document.fonts.ready);
+  await page.screenshot({ path: "/tmp/aster-shadcn-home.png", animations: "disabled" });
+  await page.getByRole("button", { name: "Catch me up" }).click();
+  await expect(composer(page)).toHaveValue(/What changed across my goals/);
+  expect(writes).toEqual([]);
+  await composer(page).fill("What should I focus on?");
+  await composer(page).press("Enter");
+  await expect(page.locator('[data-slot="bubble"]')).toHaveCount(1);
+  await expect(composer(page)).toBeFocused();
+  await composer(page).fill("Also review my release.");
+  await composer(page).press("Enter");
+  await expect.poll(() => writes.length).toBe(2);
+  expect(writes[0].body.requestId).not.toBe(writes[1].body.requestId);
+  data.timelines.personal.push({
+    id: 3,
+    role: "assistant",
+    text: "Let’s start with **release verification**.",
+    at,
+  });
+  await page.evaluate(() => window.testEvents.emit("ready"));
+  await expect(page.locator('[data-slot="bubble"] strong')).toHaveText("release verification");
+  await page.screenshot({ path: "/tmp/aster-shadcn-conversation.png", animations: "disabled" });
+  expect(reads).not.toContain("InspectRuntime");
+  await expect(page.getByText("Awaiting a reply", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /End Goal|Notes/ })).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test("Activity and Tasks open the same current Task details and Goal tasks are authoritative", async ({
+  page,
+}) => {
+  const { data, reads, errors } = await setup(page);
+  data.tasks[taskPath].result = "Release evidence is ready.";
+  await navigate(page, "Knowledge Engine");
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  const activity = page.getByRole("dialog");
+  await expect(activity.getByRole("heading", { name: "Tasks · 1" })).toBeVisible();
+  await page.screenshot({ path: "/tmp/aster-shadcn-activity.png", animations: "disabled" });
+  await activity.getByRole("button", { name: "Review the release", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Instructions" })).toBeVisible();
+  await expect(page.getByText("Release evidence is ready.", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Execution records" }).click();
+  await expect(page.getByText("Read public release context", { exact: true })).toBeVisible();
+  await navigate(page, "Tasks");
+  await page.getByRole("button", { name: "Review the release", exact: true }).click();
+  await expect(page.getByText("Release evidence is ready.", { exact: true })).toBeVisible();
+  expect(reads).toContain("InspectTask");
+  expect(errors).toEqual([]);
+});
+
+test("collections use domain filters and exclude deleted signals and system records", async ({
+  page,
+}) => {
+  const { errors } = await setup(page);
+  await navigate(page, "Following");
+  await expect(page.getByRole("button", { name: "Removed reminder", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("radio", { name: "needs input" })).toHaveCount(0);
+  await page.getByRole("radio", { name: "paused", exact: true }).click();
   await expect(
-    page.getByText("The task has received your decision. View its records for execution results."),
+    page.getByRole("button", { name: "Watch release changes", exact: true }),
   ).toBeVisible();
-  await page.getByLabel("Which environment should receive the release?").fill("Test");
+  await expect(page.getByRole("button", { name: "Daily release check", exact: true })).toHaveCount(
+    0,
+  );
+  await page.getByRole("radio", { name: "active", exact: true }).click();
+  await page.getByRole("button", { name: "Daily release check", exact: true }).click();
+  await expect(page.getByText("0 9 * * * · Asia/Shanghai", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "What it does" })).toBeVisible();
+  await navigate(page, "Sources");
+  await expect(page.getByRole("button", { name: "Context matching", exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Approvals", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Release notes", exact: true }).click();
+  await expect(
+    page.getByText("Integration is complete. Validation starts this week.", { exact: true }),
+  ).toBeVisible();
+  await page.goBack();
+  await expect(page).toHaveURL(/view=sources/);
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Sources", exact: true })).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("approval decisions and answers are submitted through the public API", async ({ page }) => {
+  const { writes, errors } = await setup(page);
+  await navigate(page, "Needs you");
+  await page.getByRole("button", { name: "Approve execution", exact: true }).click();
+  await page.getByLabel("Which environment?").fill("Test");
   await page.getByRole("button", { name: "Submit response" }).click();
   await expect.poll(() => writes.length).toBe(2);
-  expect(writes[1].body.response.answers).toEqual({ scope: ["Test"] });
-  await page.getByLabel("Add information to Goal").fill("Prioritize frontend validation");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.getByText("Prioritize frontend validation", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Notes", exact: true }).click();
-  await expect(page.getByText("Prioritize frontend validation", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText("Monitoring project progress. Next, track integration and validation results.", {
-      exact: true,
-    }),
-  ).toHaveCount(0);
-  await page.getByRole("tab", { name: "Related", exact: true }).click();
-  await expect(
-    page
-      .getByRole("tabpanel", { name: "Related", exact: true })
-      .getByRole("button", { name: /Significant change in project progress/ }),
-  ).toBeVisible();
-  await page.getByRole("tab", { name: "Details", exact: true }).click();
-  await expect(
-    page
-      .getByRole("tabpanel", { name: "Details", exact: true })
-      .getByText("Awaiting test feedback", { exact: true }),
-  ).toBeVisible();
+  expect(writes[0].body.response).toEqual({ decision: "approve" });
+  expect(writes[1].body.response).toEqual({ answers: { environment: ["Test"] } });
   expect(errors).toEqual([]);
 });
 
-test("Goal title appears in navigation and inspector while Details keeps the description", async ({
+test("unknown message acceptance preserves its identity and draft across navigation", async ({
   page,
 }) => {
-  const data = fixture();
-  const goal = data.contexts.find((context) => context.path === "/goals/engine");
-  goal.state.title = "Knowledge Engine";
-  const { errors } = await setup(page, data);
-  await expect(page.locator(".breadcrumb-title")).toHaveText("Knowledge Engine");
-  await expect(
-    page.getByRole("navigation").getByText("Knowledge Engine", { exact: true }),
-  ).toHaveText("Knowledge Engine");
-  await page.getByRole("tab", { name: "Details", exact: true }).click();
-  await expect(
-    page.getByRole("tabpanel").getByText(goal.description, { exact: true }),
-  ).toBeVisible();
-  await page.getByRole("button", { name: "Inspect stored state" }).click();
-  await expect(
-    page.getByRole("dialog").getByRole("heading", { name: "Knowledge Engine" }),
-  ).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
-test("Goal summaries and responses render Markdown", async ({ page }) => {
-  const data = fixture();
-  const markdown = [
-    "## Travel options",
-    "",
-    "**Family trip** with a [reference](https://example.com/travel).",
-    "",
-    "- Compare destinations",
-    "- Check `flight` prices",
-    "",
-    "| Destination | Fare |",
-    "| --- | --- |",
-    "| Xiamen | 1300 |",
-    "| Sanya | 3920 |",
-  ].join("\n");
-  const goal = data.contexts.find((context) => context.path === "/goals/engine");
-  goal.state.summary = markdown;
-  data.timelines.engine.groups[0].response = markdown;
-  const { errors } = await setup(page, data);
-  await page.goto("/?context=%2Fgoals%2Fengine");
-
-  for (const selector of [".goal-description", ".conversation-assistant"]) {
-    const content = page.locator(selector);
-    await expect(content.getByRole("heading", { name: "Travel options" })).toBeVisible();
-    await expect(content.locator("strong").filter({ hasText: "Family trip" })).toBeVisible();
-    await expect(content.getByRole("link", { name: "reference" })).toHaveAttribute(
-      "href",
-      "https://example.com/travel",
-    );
-    await expect(content.getByRole("listitem")).toHaveCount(2);
-    await expect(content.locator("code")).toHaveText("flight");
-    await expect(content.getByRole("table").getByRole("row")).toHaveCount(3);
-  }
-
-  await page.getByRole("tab", { name: "Details", exact: true }).click();
-  await expect(page.getByRole("tabpanel", { name: "Details" }).getByRole("table")).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
-test("Goal timeline omits internal Agent tool exchanges", async ({ page }) => {
-  const data = fixture();
-  const goal = data.contexts.find((context) => context.path === "/goals/engine");
-  goal.messages.push(
-    {
-      role: "assistant",
-      content: [
-        { type: "text", text: "I will inspect the latest contexts." },
-        { type: "toolCall", id: "tool-1", name: "search_contexts", arguments: { query: "lark" } },
-      ],
-      timestamp: Date.parse(at),
-    },
-    {
-      role: "toolResult",
-      toolCallId: "tool-1",
-      toolName: "search_contexts",
-      content: [{ type: "text", text: '{"items":[{"path":"/lark/im/chats/unrelated"}]}' }],
-      timestamp: Date.parse(at),
-    },
-  );
-  const { errors } = await setup(page, data);
-  await expect(page.locator(".goal-timeline .conversation-entry")).toHaveCount(1);
-  await expect(page.getByText("search_contexts", { exact: true })).toHaveCount(0);
-  expect(errors).toEqual([]);
-});
-
-test("mobile keeps navigation, composer, and Goal work accessible without overflow", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  const data = fixture();
-  data.contexts.push({
-    path: "/goals/second",
-    revision: 1,
-    description: "Another active goal",
-    state: { status: "active" },
-    messages: [],
-  });
-  const { errors } = await setup(page, data);
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
-    true,
-  );
-  await page.getByRole("button", { name: "Choose goal" }).click();
-  await page
-    .getByRole("navigation", { name: "Contexts" })
-    .getByRole("button", { name: /Another active goal/ })
-    .click();
-  await expect(
-    page.getByRole("heading", { name: "Another active goal", exact: true }),
-  ).toBeVisible();
-  await expect(page.getByRole("heading", { name: "No conversation yet" })).toBeVisible();
-  await page.getByRole("link", { name: "View tasks and signals" }).click();
-  await expect(page.getByRole("complementary", { name: "Goal work" })).toBeVisible();
-  await page.screenshot({ path: "/tmp/aster-goals-mobile.png", fullPage: true });
-  expect(errors).toEqual([]);
-});
-
-test("empty runtime and API failures are explicit", async ({ page }) => {
-  const { errors } = await setup(page, {
-    at,
-    contexts: [],
-    runtime: { phase: "ready", actors: [], events: [] },
-  });
-  await expect(page.getByText("No Contexts yet", { exact: true })).toBeVisible();
-  await page.route("**/api/rpc{,/}", async (route) => {
-    const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "ListContexts") return route.fallback();
-    return route.fulfill({
-      contentType: "application/ndjson",
-      body:
-        JSON.stringify({
-          _tag: "Exit",
-          requestId: rpc.id,
-          exit: {
-            _tag: "Failure",
-            cause: [
-              {
-                _tag: "Fail",
-                error: {
-                  _tag: "ApplicationError",
-                  kind: "unavailable",
-                  message: "Test connection failed",
-                },
-              },
-            ],
-          },
-        }) + "\n",
-    });
-  });
-  await page.getByRole("button", { name: "Refresh data" }).click();
-  await expect(page.getByRole("alert")).toContainText("Test connection failed");
-  expect(errors).toEqual([]);
-});
-
-test("built dashboard reads real HTTP runtime and refreshes public Context changes", async ({
-  page,
-}) => {
-  const { createRequire } = await import("node:module");
-  const { fileURLToPath } = await import("node:url");
-  const requireLocal = createRequire(new URL("../../local/package.json", import.meta.url));
-  const { Effect, Layer, Schema } = await import(requireLocal.resolve("effect"));
-  const { AsterRuntime, ContextRegistry, ContextQueries, GoalActor } =
-    await import("../../../packages/core/dist/index.js");
-  const { ActorSystem, Actor } = await import("../../../packages/actor/dist/index.js");
-  const { makeHttpApi } = await import("../../local/dist/http-api.js");
-  const { makeContextRegistry } = await import("../../../packages/core/dist/testing/context.js");
-  const registry = await Effect.runPromise(makeContextRegistry());
-  await Effect.runPromise(registry.register("/goals/real-http", GoalActor.context));
-  const record = {
-    path: "/goals/real-http",
-    revision: 1,
-    description: "Live HTTP validation Goal",
-    state: {
-      definition: { slug: "real-http", description: "Live HTTP validation Goal" },
-      status: "active",
-      summary: "",
-      tasks: [],
-      inputs: [],
-      receipts: [],
-    },
-    messages: [],
-  };
-  await Effect.runPromise(registry.commit(record, { expectedRevision: 0 }));
-  const { Scope, Exit } = await import(requireLocal.resolve("effect"));
-  const scope = await Effect.runPromise(Scope.make());
-  const system = await Effect.runPromise(
-    ActorSystem.make().pipe(Effect.provideService(Scope.Scope, scope)),
-  );
-  class Preview extends Actor.Service()("dashboard/Preview", {
-    command: Schema.String,
-  }) {}
-  Preview.layer = Layer.succeed(Preview, Preview.of({ receive: () => Effect.void }));
-  const ref = await Effect.runPromise(
-    system.spawn("preview", Preview, {
-      metadata: { contextPath: record.path },
-    }),
-  );
-  await Effect.runPromise(ref.tell("inspect"));
-  const errors = [];
-  page.on("pageerror", (e) => errors.push(e.message));
-  page.on("console", (message) => {
-    if (message.type() === "error" || message.type() === "warning") errors.push(message.text());
-  });
-  const { AgentConversations } = await import("../../../packages/agent/dist/index.js");
-  const history = await Effect.runPromise(
-    AgentConversations.makeMemory().pipe(Effect.provideService(Scope.Scope, scope)),
-  );
-  const { NodeFileSystem } = await import(requireLocal.resolve("@effect/platform-node"));
-  const bound = await Effect.runPromise(
-    makeHttpApi({
-      port: 0,
-      webDir: fileURLToPath(new URL("../dist", import.meta.url)),
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.succeed(AsterRuntime, {
-            actors: system,
-            ready: Effect.void,
-            inspect: system
-              .inspect({ metadata: ["contextPath"] })
-              .pipe(
-                Effect.map((actors) => ({ actors, events: [], phase: "ready", storageOwners: [] })),
-              ),
-          }),
-          Layer.succeed(ContextRegistry, registry),
-          Layer.succeed(AgentConversations, history),
-          ContextQueries.layer,
-          NodeFileSystem.layer,
-        ),
-      ),
-      Effect.provideService(Scope.Scope, scope),
-    ),
-  );
-  const api = { ...bound, close: () => Effect.runPromise(Scope.close(scope, Exit.void)) };
-  try {
-    await page.goto(api.url);
-    await expect(page).toHaveTitle("Aster · Workspace");
-    await expect(page.getByText("Live", { exact: true })).toBeVisible();
-    await page.getByRole("button", { name: "Goal actions" }).click();
-    await page.getByRole("menuitem", { name: "Inspect goal" }).click();
-    await expect(
-      page.getByRole("dialog").getByText("No messages yet", { exact: true }),
-    ).toBeVisible();
-    await Effect.runPromise(
-      history.append("/goals/real-http", "reply", "goal.reply", {
-        inputId: "input",
-        text: "Live HTTP and streaming RPC updates received",
-      }),
-    );
-    const updated = {
-      ...record,
-      messages: [
-        {
-          type: "assistant",
-          text: "Live HTTP and streaming RPC updates received",
-          references: [],
-          at,
-        },
-      ],
-    };
-    await Effect.runPromise(
-      registry.commit(updated, { expectedRevision: registry.get(updated.path)?.revision ?? 0 }),
-    );
-    await expect(
-      page.getByRole("dialog").getByText("Live HTTP and streaming RPC updates received"),
-    ).toBeVisible();
-    expect(errors).toEqual([]);
-  } finally {
-    try {
-      if (!page.isClosed()) await page.goto("about:blank");
-    } finally {
-      try {
-        await api.close();
-      } finally {
-        await Effect.runPromise(Scope.close(scope, Exit.void));
-      }
-    }
-  }
-});
-
-test("Goal errors and absent runs remain explicit", async ({ page }) => {
-  const data = fixture();
-  data.contexts = data.contexts.filter((context) => !context.path.includes("/tasks/"));
-  data.contexts.find((context) => context.path === "/approvals").state.entries = [];
-  data.contexts.find((context) => context.path === "/goals/engine").messages = [
-    { type: "error", text: "Goal conversation failed", at, references: [] },
-  ];
-  data.timelines.engine.groups[0].response = "Goal conversation failed";
-  await setup(page, data);
-  await expect(page.getByText("Goal conversation failed", { exact: true })).toBeVisible();
-  await expect(page.getByText("No tasks yet. Planned work will appear here.")).toBeVisible();
-});
-
-test("Goal input history loads older messages and displays independent Tasks", async ({ page }) => {
-  const data = fixture();
-  const goal = data.contexts.find((c) => c.path === "/goals/engine");
-  goal.state.summary = "Key conclusions saved";
-  data.contexts.push({
-    path: "/tasks/goal--analysis",
-    revision: 1,
-    description: "Analyze compatibility",
-    state: {
-      sourcePath: goal.path,
-      status: "running",
-      task: { instructions: "Check existing evidence", input: [] },
-    },
-    messages: [],
-  });
-  goal.messages = Array.from({ length: 65 }, (_, i) => ({
-    role: "user",
-    content: `Historical observation ${i + 1}`,
-    timestamp: Date.parse(at),
-  }));
-  // Both persisted legacy events and new English events keep their progress presentation.
-  goal.messages[63].content = "[运行时事件，仅作为证据]\nHistorical observation 64";
-  goal.messages[64].content = "[Runtime event, evidence only]\nHistorical observation 65";
-  data.timelines.engine = {
-    get messages() {
-      return goal.messages.map((message, index) => ({
-        id: index + 1,
-        inputId: `input-${index}`,
-        role: message.role,
-        text: message.content,
-        at,
-      }));
-    },
-  };
-  const { errors, historyRequests } = await setup(page, data);
-  await page.getByRole("button", { name: "Goal actions" }).click();
-  await page.getByRole("menuitem", { name: "Inspect goal" }).click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog.getByText("Key conclusions saved", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("Historical observation 65", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("Historical observation 64", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("Progress", { exact: true })).toHaveCount(2);
-  await dialog.getByRole("button", { name: "Load earlier records" }).click();
-  await expect(dialog.getByText("Historical observation 6", { exact: true })).toBeVisible();
-  goal.messages.push(
-    ...Array.from({ length: 70 }, (_, i) => ({
-      role: "user",
-      content: `New observation ${i + 1}`,
-      timestamp: Date.parse(at),
-    })),
-  );
-  await page.evaluate(() =>
-    window.testEvents.emit("invalidate", {
-      _tag: "Invalidate",
-      keys: ["goal-history:engine"],
-    }),
-  );
-  await expect(dialog.getByText("New observation 70", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("Historical observation 6", { exact: true })).toBeVisible();
-  await expect(dialog.locator("article.message")).toHaveCount(130);
-  goal.messages.push(
-    ...Array.from({ length: 46 }, (_, i) => ({
-      role: "user",
-      content: `Later observation ${i + 1}`,
-      timestamp: Date.parse(at),
-    })),
-  );
-  await page.evaluate(() =>
-    window.testEvents.emit("invalidate", {
-      _tag: "Invalidate",
-      keys: ["goal-history:engine"],
-    }),
-  );
-  await expect(dialog.getByText("Later observation 46", { exact: true })).toBeVisible();
-  await expect(dialog.locator("article.message")).toHaveCount(176);
-  await dialog.getByRole("tab", { name: "Tasks · 1" }).click();
-  await expect(dialog.getByText("Analyze compatibility", { exact: true })).toBeVisible();
-  expect(historyRequests.map((request) => request.before)).toEqual([
-    undefined,
-    36,
-    undefined,
-    106,
-    76,
-    undefined,
-    152,
-  ]);
-  expect(errors).toEqual([]);
-});
-
-test("streaming RPC keys isolate queries, reconnect refreshes all, and invalidation cancels stale reads", async ({
-  page,
-}) => {
-  const data = fixture();
-  const { reads, errors } = await setup(page, data);
-  const contextsBefore = reads.filter((tag) => tag === "ListContexts").length;
-  expect(reads.filter((tag) => tag === "ListContexts").length).toBe(contextsBefore);
-  const approvalsBefore = reads.filter((tag) => tag === "ListApprovals").length;
-  await page.evaluate(() =>
-    window.testEvents.emit("invalidate", { _tag: "Invalidate", keys: ["approvals"] }),
-  );
-  await expect
-    .poll(() => reads.filter((tag) => tag === "ListApprovals").length)
-    .toBeGreaterThan(approvalsBefore);
-  expect(reads.filter((tag) => tag === "ListContexts").length).toBe(contextsBefore);
-
-  let delayed;
-  await page.route("**/api/rpc{,/}", async (route) => {
-    const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "ListContexts" || delayed) return route.fallback();
-    delayed = { route, rpc, value: structuredClone(data.contexts) };
-  });
-  await page.evaluate(() =>
-    window.testEvents.emit("invalidate", { _tag: "Invalidate", keys: ["contexts"] }),
-  );
-  await expect.poll(() => Boolean(delayed)).toBe(true);
-  data.contexts.find((c) => c.path === "/goals/engine").state.summary = "Latest committed progress";
-  await page.getByRole("tab", { name: "Details", exact: true }).click();
-  await page.evaluate(() =>
-    window.testEvents.emit("invalidate", { _tag: "Invalidate", keys: ["contexts"] }),
-  );
-  await expect(
-    page
-      .getByRole("tabpanel", { name: "Details", exact: true })
-      .getByText("Latest committed progress", { exact: true }),
-  ).toBeVisible();
-  await delayed.route.fulfill({
-    contentType: "application/ndjson",
-    body:
-      JSON.stringify({
-        _tag: "Exit",
-        requestId: delayed.rpc.id,
-        exit: { _tag: "Success", value: delayed.value },
-      }) + "\n",
-  });
-  await expect(
-    page
-      .getByRole("tabpanel", { name: "Details", exact: true })
-      .getByText("Latest committed progress", { exact: true }),
-  ).toBeVisible();
-
-  const beforeReconnect = [...reads];
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  for (const tag of ["ListContexts", "ListApprovals", "InspectRuntime"]) {
-    await expect
-      .poll(() => reads.filter((t) => t === tag).length)
-      .toBeGreaterThan(beforeReconnect.filter((t) => t === tag).length);
-  }
-  expect(await page.evaluate(() => window.testEvents.opened)).toBe(1);
-  expect(errors).toEqual([]);
-});
-
-test("malformed streaming RPC releases its connection and Refresh reconnects", async ({ page }) => {
   const { errors } = await setup(page);
-  await page.evaluate(() => window.testEvents.emit("invalidate", { keys: 42 }));
-  await expect.poll(() => page.evaluate(() => window.testEvents.closed)).toBeGreaterThan(0);
-  await expect(page.getByRole("alert")).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.testEvents.closed)).toBe(1);
-  await page.getByRole("button", { name: "Refresh data" }).click();
-  await expect(page.getByText("Live", { exact: true })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => window.testEvents.opened)).toBe(2);
-  expect(errors).toEqual([]);
-});
-
-test("rejected approval preserves pending state and is not resubmitted", async ({ page }) => {
-  const { reads, errors } = await setup(page);
-  let attempts = 0;
+  const attempts = [];
   await page.route("**/api/rpc{,/}", async (route) => {
     const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "RespondToApproval") return route.fallback();
-    attempts++;
-    return route.fulfill({
-      contentType: "application/ndjson",
-      body:
-        JSON.stringify({
-          _tag: "Exit",
-          requestId: rpc.id,
-          exit: {
-            _tag: "Failure",
-            cause: [
-              {
-                _tag: "Fail",
-                error: {
-                  _tag: "ApplicationError",
-                  kind: "conflict",
-                  message: "Approval no longer accepts this response",
-                },
-              },
-            ],
-          },
-        }) + "\n",
-    });
+    if (rpc.tag !== "SendGoalMessage") return route.fallback();
+    attempts.push(rpc.payload);
+    await failRpc(route, rpc);
   });
-  const before = reads.filter((tag) => tag === "ListApprovals").length;
-  await page.getByRole("button", { name: "Approve execution", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Approval no longer accepts this response");
-  await expect(page.getByRole("button", { name: "Approve execution", exact: true })).toBeEnabled();
-  expect(attempts).toBe(1);
-  expect(reads.filter((tag) => tag === "ListApprovals").length).toBe(before);
+  await composer(page).fill("Keep the original message");
+  await composer(page).press("Enter");
+  await expect(page.getByRole("alert")).toContainText("Acknowledgement missing");
+  await navigate(page, "Knowledge Engine");
+  await navigate(page, "Your assistant");
+  await expect(composer(page)).toHaveValue("Keep the original message");
+  await page.evaluate(() => window.testEvents.emit("ready"));
+  expect(attempts).toHaveLength(1);
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect.poll(() => attempts.length).toBe(2);
+  expect(attempts[1]).toEqual(attempts[0]);
   expect(errors).toEqual([]);
 });
 
-test("uncertain approval keeps its exact decision across navigation and reconnect", async ({
-  page,
-}) => {
+for (const [tag, button] of [
+  ["CheckTask", "Check original execution"],
+  ["RetryTask", "Retry failed execution"],
+]) {
+  test(`${tag} preserves the original revision through uncertain admission`, async ({ page }) => {
+    const data = fixture();
+    data.contexts.find((context) => context.path === taskPath).state.status = "failed";
+    const { writes, errors } = await setup(page, data);
+    let frozen;
+    await page.route("**/api/rpc{,/}", async (route) => {
+      const rpc = JSON.parse(route.request().postData().trim());
+      if (rpc.tag !== tag || frozen) return route.fallback();
+      frozen = rpc.payload;
+      await failRpc(route, rpc);
+    });
+    await navigate(page, "Tasks");
+    await page.getByRole("button", { name: "Review the release", exact: true }).click();
+    await page.getByRole("button", { name: button, exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText("Acknowledgement missing");
+    await navigate(page, "Your assistant");
+    data.contexts.find((context) => context.path === taskPath).revision = 9;
+    await page.evaluate(() => window.testEvents.emit("ready"));
+    await navigate(page, "Tasks");
+    await page.getByRole("button", { name: "Review the release", exact: true }).click();
+    await page.getByRole("button", { name: "Check request receipt", exact: true }).click();
+    await expect.poll(() => writes.length).toBe(1);
+    expect(writes[0]).toEqual({ tag, body: frozen });
+    expect(frozen.expectedRevision).toBe(1);
+    expect(errors).toEqual([]);
+  });
+}
+
+test("unknown approval keeps the original answer after leaving the page", async ({ page }) => {
   const { writes, errors } = await setup(page);
   const attempts = [];
   await page.route("**/api/rpc{,/}", async (route) => {
     const rpc = JSON.parse(route.request().postData().trim());
     if (rpc.tag !== "RespondToApproval") return route.fallback();
     attempts.push(rpc.payload);
-    if (attempts.length > 1) return route.fallback();
-    return route.fulfill({
-      contentType: "application/ndjson",
-      body:
-        JSON.stringify({
-          _tag: "Exit",
-          requestId: rpc.id,
-          exit: {
-            _tag: "Failure",
-            cause: [
-              {
-                _tag: "Fail",
-                error: {
-                  _tag: "ApplicationError",
-                  kind: "unavailable",
-                  message: "Approval acknowledgement missing",
-                },
-              },
-            ],
-          },
-        }) + "\n",
-    });
+    if (attempts.length === 1) return failRpc(route, rpc);
+    return route.fallback();
   });
+  await navigate(page, "Needs you");
   await page.getByRole("button", { name: "Approve execution", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Approval acknowledgement missing");
-  await expect(page.getByRole("button", { name: "Reject", exact: true })).toHaveCount(0);
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Summarize Knowledge Engine project progress/ })
-    .first()
-    .click();
+  await expect(page.getByRole("alert")).toContainText("Acknowledgement missing");
+  await navigate(page, "Your assistant");
   await page.evaluate(() => window.testEvents.emit("ready"));
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Monitor Knowledge Engine project progress/ })
-    .click();
-  await expect(
-    page.getByRole("button", { name: "Reconcile saved decision", exact: true }),
-  ).toBeVisible();
-  expect(attempts).toHaveLength(1);
-  await page.getByRole("button", { name: "Reconcile saved decision", exact: true }).click();
+  await navigate(page, "Needs you");
+  await page.getByRole("button", { name: "Reconcile saved decision" }).click();
   await expect.poll(() => writes.length).toBe(1);
   expect(attempts[1]).toEqual(attempts[0]);
-  expect(writes[0]).toEqual({ tag: "RespondToApproval", body: attempts[0] });
   expect(errors).toEqual([]);
 });
 
-test("history invalidation during an older-page request retains both ends without refetching cached pages", async ({
+test("history pagination retains loaded messages across invalidation and uses MessageScroller", async ({
   page,
 }) => {
   const data = fixture();
-  const goal = data.contexts.find((c) => c.path === "/goals/engine");
-  goal.messages = Array.from({ length: 65 }, (_, i) => ({
-    role: "user",
-    content: `Entry ${i + 1}`,
-    timestamp: Date.parse(at),
-  }));
-  data.timelines.engine = {
-    get messages() {
-      return goal.messages.map((message, index) => ({
-        id: index + 1,
-        inputId: `input-${index}`,
-        role: message.role,
-        text: message.content,
-        at,
-      }));
-    },
-  };
-  const { errors } = await setup(page, data);
-  await page.getByRole("button", { name: "Goal actions" }).click();
-  await page.getByRole("menuitem", { name: "Inspect goal" }).click();
-  const dialog = page.getByRole("dialog");
-  await expect(dialog.getByText("Entry 65", { exact: true })).toBeVisible();
-  let delayed;
-  await page.route("**/api/rpc{,/}", async (route) => {
-    const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "GetGoalTimeline" || rpc.payload.before !== 36 || delayed)
-      return route.fallback();
-    delayed = { route, rpc };
-  });
-  await dialog.getByRole("button", { name: "Load earlier records" }).click();
-  await expect.poll(() => Boolean(delayed)).toBe(true);
-  goal.messages.push(
-    { role: "user", content: "Entry 66", timestamp: Date.parse(at) },
-    { role: "user", content: "Entry 67", timestamp: Date.parse(at) },
-  );
-  await page.evaluate(() =>
-    window.testEvents.emit("invalidate", { _tag: "Invalidate", keys: ["goal-history:engine"] }),
-  );
-  await expect(dialog.getByText("Entry 67", { exact: true })).toBeVisible();
-  await expect(dialog.getByText("Entry 6", { exact: true })).toBeVisible();
-  await expect(dialog.locator("article.message")).toHaveCount(62);
-  await delayed.route.fulfill({
-    contentType: "application/ndjson",
-    body:
-      JSON.stringify({
-        _tag: "Exit",
-        requestId: delayed.rpc.id,
-        exit: {
-          _tag: "Success",
-          value: {
-            entries: goal.messages.slice(5, 35).map((message, i) => ({ seq: i + 6, at, message })),
-            total: 65,
-            nextBefore: 6,
-          },
-        },
-      }) + "\n",
-  });
-  await expect(dialog.getByText("Entry 67", { exact: true })).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
-test("invalid dashboard fields report a projection error while preserving raw Context inspection", async ({
-  page,
-}) => {
-  const data = fixture();
-  data.contexts.find((c) => c.path === "/goals/engine").state = {
-    status: "active",
-    summary: 42,
-    customEvidence: { source: "kept verbatim" },
-  };
-  const { errors } = await setup(page, data);
-  await expect(page.getByRole("alert")).toContainText(
-    "Unsupported dashboard fields in /goals/engine",
-  );
-  await page.getByRole("button", { name: "Goal actions" }).click();
-  await page.getByRole("menuitem", { name: "Inspect goal" }).click();
-  await page.getByRole("dialog").getByRole("tab", { name: "State", exact: true }).click();
-  await expect(page.getByRole("dialog").locator("pre")).toContainText("42");
-  await expect(page.getByRole("dialog").locator("pre")).toContainText("kept verbatim");
-  expect(errors).toEqual([]);
-});
-
-test("reference layout has a fixed composer, scoped work, and separate user notes", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1487, height: 1058 });
-  const data = designFixture();
-  const exhausted = data.contexts.find((context) => context.path === "/signals/holiday");
-  exhausted.state.trigger = {
-    _tag: "Schedule",
-    schedule: { type: "once", at: "2025-01-15T09:00:00+09:00" },
-  };
-  exhausted.state.nextDue = null;
-  const { errors } = await setup(page, data);
-  await expect(page).toHaveTitle(/Aster/);
-  await expect(page).toHaveURL(/127\.0\.0\.1:4329/);
-  await expect(page.locator("vite-error-overlay")).toHaveCount(0);
-  await expect(page.locator(".goal-timeline .conversation-entry")).toHaveCount(5);
-  await expect(
-    page.getByRole("button", { name: "View signal: Flight price drops below ¥4,000", exact: true }),
-  ).toBeVisible();
-  await expect(page.locator(".signal-card").getByText("Next check", { exact: true })).toHaveCount(
-    1,
-  );
-  await expect(page.locator(".signal-card")).not.toContainText(["Invalid Date"]);
-  await expect(
-    page
-      .locator(".signal-card")
-      .getByRole("button", { name: "Google Flights – HND to CTS", exact: true }),
-  ).toHaveCount(0);
-  await page.screenshot({ path: "/tmp/aster-goals-reference-desktop.png" });
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
-    true,
-  );
-  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeInViewport();
-  await page.getByRole("tab", { name: "Notes", exact: true }).click();
-  await expect(page.locator(".goal-timeline .conversation-entry")).toHaveCount(2);
-  await page.getByRole("tab", { name: "Timeline", exact: true }).click();
-  await page
-    .getByRole("button", { name: "View signal: Flight price drops below ¥4,000", exact: true })
-    .click();
-  await expect(page.getByRole("dialog")).toContainText("Flight price drops below ¥4,000");
-  await page.keyboard.press("Escape");
-  await page.getByRole("button", { name: "Add context reference" }).click();
-  await page.getByRole("menuitem", { name: "Google Flights – HND to CTS", exact: true }).click();
-  await expect(page.getByLabel("Add information to Goal")).toHaveValue("/sources/flights");
-  expect(errors).toEqual([]);
-});
-
-test("Goal completion is confirmed and retains its Context", async ({ page }) => {
-  const data = fixture();
-  data.contexts.push({
-    path: "/goals/other",
-    revision: 1,
-    description: "Another goal",
-    state: { status: "active" },
-    messages: [],
-  });
-  const { writes, errors } = await setup(page, data);
-  await page.getByRole("button", { name: "Goal actions" }).click();
-  await page.getByRole("menuitem", { name: "End Goal", exact: true }).click();
-  await expect(page.getByRole("alertdialog")).toContainText(
-    "Work already submitted may still finish",
-  );
-  await page.getByRole("button", { name: "Keep Goal active" }).click();
-  expect(writes).toEqual([]);
-  await page.getByRole("button", { name: "Goal actions" }).click();
-  await page.getByRole("menuitem", { name: "End Goal", exact: true }).click();
-  await page.getByRole("button", { name: "Confirm ending Goal" }).click();
-  await expect(page.getByRole("alertdialog")).toHaveCount(0);
-  expect(writes).toEqual([{ tag: "EndGoal", body: { slug: "engine" } }]);
-  await expect(page.getByLabel("Add information to Goal")).toHaveCount(0);
-  await expect(
-    page.getByRole("navigation").getByRole("button", { name: /Monitor Knowledge Engine/ }),
-  ).toBeVisible();
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Another goal/ })
-    .click();
-  await expect(page.getByLabel("Add information to Goal")).toBeEnabled();
-  expect(errors).toEqual([]);
-});
-
-test("failed message submission preserves the draft and never retries automatically", async ({
-  page,
-}) => {
-  const { errors } = await setup(page);
-  let attempts = 0;
-  const requestIds = [];
-  await page.route("**/api/rpc{,/}", async (route) => {
-    const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "SendGoalMessage") return route.fallback();
-    attempts++;
-    requestIds.push(rpc.payload.requestId);
-    await route.fulfill({
-      contentType: "application/ndjson",
-      body:
-        JSON.stringify({
-          _tag: "Exit",
-          requestId: rpc.id,
-          exit: {
-            _tag: "Failure",
-            cause: [
-              {
-                _tag: "Fail",
-                error: {
-                  _tag: "ApplicationError",
-                  kind: "unavailable",
-                  message: "Message not accepted",
-                },
-              },
-            ],
-          },
-        }) + "\n",
-    });
-  });
-  await page.getByLabel("Add information to Goal").fill("Keep this draft");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText("Message not accepted");
-  await expect(page.getByLabel("Add information to Goal")).toHaveValue("Keep this draft");
-  expect(attempts).toBe(1);
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect.poll(() => attempts).toBe(2);
-  expect(requestIds[0]).toBeTruthy();
-  expect(requestIds[1]).toBe(requestIds[0]);
-  expect(errors).toEqual([]);
-});
-
-test("populated responsive layouts retain all Goal work and wrap long content", async ({
-  page,
-}) => {
-  const data = designFixture();
-  const goal = data.contexts.find((context) => context.path === "/goals/engine");
-  goal.description = "Plan our Hokkaido trip and compare every transport and accommodation option";
-  const { errors } = await setup(page, data);
-  for (const width of [1280, 1024, 390]) {
-    await page.setViewportSize({ width, height: 844 });
-    expect(
-      await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
-    ).toBe(true);
-    await expect(page.getByLabel("Add information to Goal")).toBeVisible();
-    await expect(page.getByRole("complementary", { name: "Goal work" })).toBeVisible();
-    await page.screenshot({ path: `/tmp/aster-goals-responsive-${width}.png`, fullPage: true });
-    if (width === 390) await page.screenshot({ path: "/tmp/aster-goals-timeline-mobile.png" });
-  }
-  await page.getByRole("button", { name: "Choose goal" }).click();
-  await page.getByRole("button", { name: "Close contexts", exact: true }).click();
-  await expect(page.getByRole("navigation", { name: "Contexts" })).toBeHidden();
-  expect(errors).toEqual([]);
-});
-
-function personalFixture() {
-  const data = fixture();
-  data.contexts.unshift({
-    path: "/goals/personal",
-    description: "Personal assistant",
-    revision: 4,
-    state: {
-      slug: "personal",
-      title: "Personal assistant",
-      status: "active",
-      summary: "Ready to help",
-    },
-    messages: [],
-  });
-  data.timelines.personal = { groups: [] };
-  return data;
-}
-
-test("Context tree navigates existing paths, search, history and missing selections", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  const { errors } = await setup(page, data);
-  await page.getByLabel("Find context").fill("chat-1");
-  const target = page
-    .getByRole("navigation")
-    .getByRole("button", { name: /\/lark\/im\/chats\/chat-1/ });
-  await target.click();
-  await expect(page.getByRole("main")).toContainText("Core workflow integration is complete");
-  await expect(page).toHaveURL(/context=%2Flark%2Fim%2Fchats%2Fchat-1/);
-  await page.goBack();
-  await expect(
-    page.getByRole("heading", { name: "Personal assistant", exact: true }),
-  ).toBeVisible();
-  await page.goForward();
-  await expect(page.getByRole("main")).toContainText("Core workflow integration is complete");
-  await page.reload();
-  await expect(page.getByRole("main")).toContainText("Core workflow integration is complete");
-  data.contexts = data.contexts.filter((context) => context.path !== "/lark/im/chats/chat-1");
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await expect(page.getByRole("heading", { name: "Context unavailable" })).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
-test("Delegation workspace uses business inspection and refreshes after committed changes", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  const record = {
-    path: `/tasks/${"a".repeat(64)}`,
-    revision: 3,
-    description: "Release execution",
-    state: {
-      request: {
-        taskPath: "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
-        agent: "pi",
-        task: {
-          instructions: "Analyze release evidence",
-          input: [{ content: "Evidence", sources: ["/lark/im/chats/chat-1"] }],
-        },
-      },
-      status: "uncertain",
-      error: "Handle acknowledgement was lost",
-      requests: {},
-      responses: {},
-      metadata: { token: "private-provider-token" },
-    },
-    messages: [{ role: "system", content: "native-provider-frame" }],
-  };
-  data.contexts.push(record);
-  const { reads, errors } = await setup(page, data);
-  await page.getByLabel("Find context").fill("Release execution");
-  await page
-    .getByRole("navigation")
-    .getByRole("button", { name: /Release execution/ })
-    .click();
-  await expect(
-    page.getByText("No execution handle is recorded. The task has not been resubmitted."),
-  ).toBeVisible();
-  await expect(page.getByText("Analyze release evidence", { exact: true })).toBeVisible();
-  await expect(page.getByText("private-provider-token", { exact: false })).toHaveCount(0);
-  await expect(page.getByText("native-provider-frame", { exact: false })).toHaveCount(0);
-  record.state.status = "completed";
-  record.state.session = { sessionId: "existing" };
-  record.state.result = "Release review completed";
-  delete record.state.error;
-  record.revision = 4;
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await expect(page.getByText("Release review completed", { exact: true })).toBeVisible();
-  expect(reads.filter((tag) => tag === "InspectTask").length).toBeGreaterThan(1);
-  expect(errors).toEqual([]);
-});
-
-for (const [action, label] of [
-  ["CheckTask", "Check original execution"],
-  ["RetryTask", "Retry failed execution"],
-]) {
-  test(`${action} preserves uncertain admission across navigation and reconnect`, async ({
-    page,
-  }) => {
-    const data = personalFixture();
-    const personal = data.contexts.find((item) => item.path === "/goals/personal");
-    const run = data.contexts.find(
-      (item) =>
-        item.path === "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
-    );
-    run.revision = 7;
-    run.state.status = "failed";
-    run.state.task = { instructions: "Continue original work", input: [] };
-    const { writes, errors } = await setup(page, data);
-    let frozen;
-    await page.route("**/api/rpc{,/}", async (route) => {
-      const rpc = JSON.parse(route.request().postData().trim());
-      if (rpc.tag !== action || frozen) return route.fallback();
-      frozen = rpc.payload;
-      await route.fulfill({
-        contentType: "application/ndjson",
-        body:
-          JSON.stringify({
-            _tag: "Exit",
-            requestId: rpc.id,
-            exit: {
-              _tag: "Failure",
-              cause: [
-                {
-                  _tag: "Fail",
-                  error: {
-                    _tag: "ApplicationError",
-                    kind: "unavailable",
-                    message: "Check acknowledgement missing",
-                  },
-                },
-              ],
-            },
-          }) + "\n",
-      });
-    });
-    await page
-      .getByRole("navigation")
-      .getByRole("button", { name: /Summarize Knowledge Engine project progress/ })
-      .first()
-      .click();
-    await page.getByRole("button", { name: label, exact: true }).click();
-    await expect(page.getByRole("alert")).toContainText("Check acknowledgement missing");
-    await page
-      .getByRole("navigation")
-      .getByRole("button", { name: /Personal assistant/ })
-      .click();
-    personal.revision = 10;
-    run.revision = 9;
-    await page.evaluate(() => window.testEvents.emit("ready"));
-    await page
-      .getByRole("navigation")
-      .getByRole("button", { name: /Summarize Knowledge Engine project progress/ })
-      .first()
-      .click();
-    await page.getByRole("button", { name: "Check request receipt", exact: true }).click();
-    await expect(
-      page.getByRole("button", { name: "Check original execution", exact: true }),
-    ).toBeVisible();
-    expect(writes.at(-1)).toEqual({ tag: action, body: frozen });
-    expect(frozen).toMatchObject({ expectedRevision: 7, target: run.path });
-    expect(errors).toEqual([]);
-  });
-}
-
-test("restricted Contexts retain navigation and revision without exposing a raw state panel", async ({
-  page,
-}) => {
-  const data = personalFixture();
-  data.contexts.push({
-    path: "/archive/private",
-    description: "Archived Context",
-    revision: 19,
-    state: {},
-    messages: [],
-    projection: { visibility: "restricted", reason: "missing-policy" },
-  });
-  data.contexts.push({
-    path: "/goals/restricted",
-    description: "Restricted Goal",
-    revision: 20,
-    state: {},
-    messages: [],
-    projection: { visibility: "restricted", reason: "invalid-data" },
-  });
-  const { errors } = await setup(page, data);
-  await page.getByRole("button", { name: /Archived Context.*archive\/private/ }).click();
-  await expect(page.getByText("Revision 19", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText(
-      "This Context exposes its path and revision only. Its contents are not available in the public view.",
-    ),
-  ).toBeVisible();
-  await expect(page.getByText("View Context state", { exact: true })).toHaveCount(0);
-  await page.getByRole("button", { name: /Restricted Goal.*goals\/restricted/ }).click();
-  await expect(page.getByText("Revision 20", { exact: true })).toBeVisible();
-  await expect(
-    page.getByText(
-      "This Context exposes its path and revision only. Its contents are not available in the public view.",
-    ),
-  ).toBeVisible();
-  await expect(page.getByRole("textbox", { name: /Message|information/ })).toHaveCount(0);
-  expect(errors).toEqual([]);
-});
-
-test("Timeline refreshes older deliveries after reconnect and displays newly accepted notes", async ({
-  page,
-}) => {
-  const data = fixture();
-  data.timelines.engine.messages = Array.from({ length: 65 }, (_, i) => ({
+  data.timelines.personal = Array.from({ length: 65 }, (_, i) => ({
     id: i + 1,
-    inputId: `input-${i + 1}`,
     role: "assistant",
     text: `Response ${i + 1}`,
     at,
   }));
   const { errors } = await setup(page, data);
-  await expect(page.locator(".conversation-entry")).toHaveCount(30);
+  await expect(page.locator('[data-slot="message"]')).toHaveCount(30);
   await page.getByRole("button", { name: "Load earlier messages" }).click();
-  await expect(page.locator(".conversation-entry")).toHaveCount(60);
-  await expect(page.getByText("Response 11", { exact: true })).toBeVisible();
-  data.timelines.engine.messages.push({
-    id: 66,
-    inputId: "pending-note",
-    role: "user",
-    text: "Please verify the release date",
-    at,
-  });
+  await expect(page.locator('[data-slot="message"]')).toHaveCount(60);
+  data.timelines.personal.push({ id: 66, role: "assistant", text: "Latest update", at });
   await page.evaluate(() => window.testEvents.emit("ready"));
-  await expect(page.getByText("Response 11", { exact: true })).toBeVisible();
-  await expect(page.getByText("Please verify the release date", { exact: true })).toBeVisible();
+  await expect(page.locator('[data-slot="message"]')).toHaveCount(61);
+  await expect(page.getByText("Response 6", { exact: true })).toBeAttached();
   await page.getByRole("button", { name: "Load earlier messages" }).click();
-  await expect(page.locator(".conversation-entry")).toHaveCount(66);
-  await page.getByRole("tab", { name: "Notes", exact: true }).click();
-  await expect(page.getByText("Please verify the release date", { exact: true })).toBeVisible();
-  await expect(page.getByText("Response 11", { exact: true })).toHaveCount(0);
+  await expect(page.locator('[data-slot="message"]')).toHaveCount(66);
   expect(errors).toEqual([]);
 });
 
-test("Goal turn retry retains its request identity after an unknown acknowledgement", async ({
+test("a failed Goal turn exposes retry without confusing it with task execution", async ({
   page,
 }) => {
-  const data = designFixture();
-  const group = data.timelines.engine.groups[1];
-  group.status = "failed";
-  group.error = "Provider failed before producing a result";
-  const goal = data.contexts.find((context) => context.path === "/goals/engine");
-  goal.state.retryableInputId = group.requestId;
-  const { errors } = await setup(page, data);
-  const requests = [];
-  await page.route("**/api/rpc{,/}", async (route) => {
-    const rpc = JSON.parse(route.request().postData().trim());
-    if (rpc.tag !== "RetryGoalTurn") return route.fallback();
-    requests.push(rpc.payload);
-    const first = requests.length === 1;
-    if (!first) delete goal.state.retryableInputId;
-    await route.fulfill({
-      contentType: "application/ndjson",
-      body:
-        JSON.stringify({
-          _tag: "Exit",
-          requestId: rpc.id,
-          exit: first
-            ? {
-                _tag: "Failure",
-                cause: [
-                  {
-                    _tag: "Fail",
-                    error: {
-                      _tag: "ApplicationError",
-                      kind: "unavailable",
-                      message: "Turn retry acknowledgement missing",
-                    },
-                  },
-                ],
-              }
-            : { _tag: "Success", value: { requestId: rpc.payload.requestId, revision: 42 } },
-        }) + "\n",
-    });
-  });
-  await page.getByRole("button", { name: "Retry turn", exact: true }).click();
-  await expect(page.getByText("Turn retry acknowledgement missing", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "Notes", exact: true }).click();
-  await page.getByRole("tab", { name: "Timeline", exact: true }).click();
-  await page.evaluate(() => window.testEvents.emit("ready"));
-  await page.getByRole("button", { name: "Retry turn", exact: true }).click();
-  await expect(page.getByRole("button", { name: "Retry turn", exact: true })).toHaveCount(0);
-  await expect.poll(() => requests.length).toBe(2);
-  expect(requests[1]).toEqual(requests[0]);
-  expect(requests[0].turnId).toBe(group.requestId);
-  expect(errors).toEqual([]);
-});
-
-test("built-in personal assistant uses the ordinary Goal conversation", async ({ page }) => {
-  const data = personalFixture();
+  const data = fixture();
+  data.contexts[0].state.retryableInputId = "failed-turn";
+  data.contexts[0].state.lastError = "Provider failed";
   const { writes, errors } = await setup(page, data);
-  await page.getByLabel("Add information to Goal").fill("Review my priorities");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.getByText("Review my priorities", { exact: true })).toBeVisible();
-  await expect
-    .poll(() => writes.at(-1))
-    .toMatchObject({
-      tag: "SendGoalMessage",
-      body: { slug: "personal", text: "Review my priorities" },
-    });
+  await expect(page.getByRole("alert")).toContainText("Provider failed");
+  await page.getByRole("button", { name: "Retry turn", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0].body.turnId).toBe("failed-turn");
   expect(errors).toEqual([]);
 });
 
-test("processing displays per-target negative decisions without offering recovery for them", async ({
-  page,
-}) => {
+test("restricted and missing contexts remain explicit", async ({ page }) => {
   const data = fixture();
   data.contexts.push({
-    path: "/system-one",
-    description: "Context reaction processing",
-    revision: 3,
-    state: { work: [] },
+    path: "/private",
+    description: "Private record",
+    revision: 9,
+    state: {},
     messages: [],
+    projection: { visibility: "restricted", reason: "missing-policy" },
   });
-  data.processing = {
-    "system-one": {
-      owner: "system-one",
-      revision: 3,
-      entries: [
-        {
-          id: "evidence-1",
-          kind: "screening",
-          workId: "evidence-1",
-          source: "/source",
-          target: "/system-one",
-          status: "completed",
-          matches: [
-            {
-              _tag: "NotMatched",
-              target: "/goals/engine",
-              reason: "Evidence concerns a different project.",
-            },
-          ],
-        },
-      ],
-    },
-  };
   const { errors } = await setup(page, data);
-  await page.getByRole("button", { name: /Context reaction processing.*system-one/ }).click();
-  await expect(page.getByText(/\d+ attempts/)).toHaveCount(0);
-  const results = page.getByRole("list", { name: "Target matching results" });
-  await expect(results).toContainText("NotMatched: Evidence concerns a different project.");
-  await expect(page.getByRole("button", { name: "Retry screening", exact: true })).toHaveCount(0);
-  await results.getByRole("button", { name: "/goals/engine", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Goal Timeline" })).toBeVisible();
+  await page.getByLabel("Find context").fill("Private record");
+  await page.getByRole("button", { name: "Private record", exact: true }).click();
+  await expect(
+    page.getByText("Only this record’s name, path and revision are available."),
+  ).toBeVisible();
+  await expect(page.getByText("Public context data", { exact: true })).toHaveCount(0);
+  data.contexts = data.contexts.filter((context) => context.path !== "/private");
+  await page.evaluate(() => window.testEvents.emit("ready"));
+  await expect(page.getByText("Context unavailable", { exact: true })).toBeVisible();
   expect(errors).toEqual([]);
 });
 
-test("streaming RPC reconnects after transport failure and refreshes current state", async ({
+test("mobile sidebar, composer and activity remain keyboard accessible without overflow", async ({
   page,
 }) => {
-  const data = fixture();
-  const { reads, errors } = await setup(page, data);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  const { errors } = await setup(page);
+  await expect(composer(page)).toBeInViewport();
+  await page.screenshot({ path: "/tmp/aster-shadcn-mobile.png", animations: "disabled" });
+  await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  await expect(page.getByRole("dialog")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("button", { name: "Activity", exact: true })).toBeFocused();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  expect(errors).toEqual([]);
+});
+
+test("read subscription reconnects and refreshes without resending commands", async ({ page }) => {
+  const { reads, writes, errors } = await setup(page);
   const before = reads.filter((tag) => tag === "ListContexts").length;
   await page.evaluate(() => window.testEvents.disconnect());
-  await expect.poll(() => page.evaluate(() => window.testEvents.closed)).toBe(1);
   await expect.poll(() => page.evaluate(() => window.testEvents.opened)).toBe(2);
-  await expect(page.getByText("Live", { exact: true })).toBeVisible();
   await expect
     .poll(() => reads.filter((tag) => tag === "ListContexts").length)
     .toBeGreaterThan(before);
+  expect(writes).toEqual([]);
+  expect(errors).toEqual([]);
+});
+
+test("approval query failures remain visible instead of appearing empty", async ({ page }) => {
+  await setup(page);
+  await page.route("**/api/rpc{,/}", async (route) => {
+    const rpc = JSON.parse(route.request().postData().trim());
+    if (rpc.tag !== "ListApprovals") return route.fallback();
+    return failRpc(route, rpc, "Approvals unavailable");
+  });
+  await page.evaluate(() => window.testEvents.emit("ready"));
+  await navigate(page, "Needs you");
+  await expect(page.getByRole("alert")).toContainText("Approvals unavailable");
+  await expect(page.getByText("Nothing needs your input")).toHaveCount(0);
+});
+
+test("context references and multiline drafts stay editable until explicitly sent", async ({
+  page,
+}) => {
+  const { writes, errors } = await setup(page);
+  await composer(page).fill("Use this context:");
+  await composer(page).press("Shift+Enter");
+  expect(writes).toEqual([]);
+  await page.getByRole("button", { name: "Add context", exact: true }).click();
+  const picker = page.getByRole("dialog", { name: "Add context" });
+  await expect(picker.getByRole("button", { name: "Personal assistant", exact: true })).toHaveCount(
+    0,
+  );
+  await picker.getByRole("button", { name: "Release notes", exact: true }).click();
+  await expect(composer(page)).toHaveValue("Use this context:\n\n/sources/release");
+  expect(writes).toEqual([]);
+  await composer(page).press("Enter");
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0].body.text).toBe("Use this context:\n\n/sources/release");
+  expect(errors).toEqual([]);
+});
+
+test("source messages and email bodies are readable while unfamiliar records stay expandable", async ({
+  page,
+}) => {
+  const data = fixture();
+  data.contexts
+    .find((context) => context.path === "/sources/release")
+    .messages.push(
+      { content: "The release is approved.", sender: { name: "Morgan" }, at },
+      { content: "Removed content", deleted: true },
+      { metrics: { builds: 3 } },
+    );
+  data.contexts.push({
+    path: "/lark/mail/inbox/one",
+    description: "Email",
+    revision: 1,
+    messages: [],
+    projection: { visibility: "public" },
+    state: {
+      subject: "Release sign-off",
+      from: "morgan@example.com",
+      bodyPlainText: "Please verify the release tomorrow.",
+    },
+  });
+  const { errors } = await setup(page, data);
+  await navigate(page, "Sources");
+  await page.getByRole("button", { name: "Release notes", exact: true }).click();
+  await expect(page.getByText("Frontend checks are ready.", { exact: true })).toBeVisible();
+  await expect(page.getByText("The release is approved.", { exact: true })).toBeVisible();
+  await expect(page.getByText("Morgan", { exact: true })).toBeVisible();
+  await expect(page.getByText("Removed content", { exact: true })).toHaveCount(0);
+  await page.getByText("Structured record", { exact: true }).click();
+  await expect(page.locator("pre").filter({ hasText: '"builds": 3' })).toBeVisible();
+  await navigate(page, "Sources");
+  await page.getByRole("button", { name: "Release sign-off", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Release sign-off", exact: true })).toBeVisible();
+  await expect(
+    page.getByText("Please verify the release tomorrow.", { exact: true }),
+  ).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test("malformed display fields affect only their own record", async ({ page }) => {
+  const data = fixture();
+  data.contexts.find((context) => context.path === "/sources/release").state.summary = 42;
+  const { errors } = await setup(page, data);
+  await navigate(page, "Sources");
+  await page.getByRole("button", { name: "Release notes", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText(
+    "Cannot display the public fields of /sources/release",
+  );
+  await navigate(page, "Your assistant");
+  await expect(composer(page)).toBeEnabled();
+  expect(errors).toEqual([]);
+});
+
+test("processing inspection keeps negative matches and explicit recovery", async ({ page }) => {
+  const { data, writes, errors } = await setup(page);
+  await page.getByLabel("Find context").fill("Context matching");
+  await page.getByRole("button", { name: "Context matching", exact: true }).click();
+  await expect(page.getByRole("list", { name: "Target matching results" })).toContainText(
+    "NotMatched: Already handled",
+  );
+  data.processing.entries[0].status = "failed";
+  data.processing.entries[0].error = "Decision unavailable";
+  await page.evaluate(() => window.testEvents.emit("ready"));
+  await page.getByRole("button", { name: "Retry screening", exact: true }).click();
+  await expect.poll(() => writes.length).toBe(1);
+  expect(writes[0].body._tag).toBe("RetryScreening");
+  expect(writes[0].body.workId).toBe("evidence");
+  expect(errors).toEqual([]);
+});
+
+test("long titles and approval content fit mobile sheets and lists", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const data = fixture();
+  data.contexts.find((context) => context.path === taskPath).description = "Verification".repeat(
+    25,
+  );
+  const { errors } = await setup(page, data);
+  await page.getByRole("button", { name: "Toggle Sidebar" }).click();
+  await navigate(page, "Knowledge Engine");
+  await page.getByRole("button", { name: "Activity", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(
+    dialog.getByRole("button", { name: "Approve execution", exact: true }),
+  ).toBeVisible();
+  expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
+  await page.screenshot({ path: "/tmp/aster-shadcn-mobile-activity.png", animations: "disabled" });
   expect(errors).toEqual([]);
 });

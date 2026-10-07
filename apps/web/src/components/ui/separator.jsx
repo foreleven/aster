@@ -4,6 +4,7 @@ import * as React from "react";
 import { cn } from "@/lib/utils";
 import { Separator as SeparatorPrimitive } from "radix-ui";
 
+/** @param {import("react").ComponentProps<typeof SeparatorPrimitive.Root>} props */
 function Separator({ className, orientation = "horizontal", decorative = true, ...props }) {
   return (
     <SeparatorPrimitive.Root

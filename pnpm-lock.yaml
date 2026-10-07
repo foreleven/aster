@@ -93,6 +93,9 @@ importers:
       '@effect/atom-react':
         specifier: 4.0.0
         version: 4.0.0(effect@4.0.0)(react@19.2.4)(scheduler@0.27.0)
+      '@shadcn/react':
+        specifier: ^0.3.1
+        version: 0.3.1(@types/react@19.3.0)(react@19.2.4)
       '@tailwindcss/vite':
         specifier: ^4.3.3
         version: 4.3.3(vite@7.3.6(@types/node@24.13.6)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.15)(yaml@2.9.0))
@@ -2162,6 +2165,17 @@ packages:
     resolution: {integrity: sha512-oELmoyA6ML9jDRMV3kgcMQFKxUfBU0yFVn6yTctVaLT5ygXnxH52I3TZEgV9EhXJC68/uFvE5Daj1/25c0Xa/A==}
     peerDependencies:
       selderee: ~0.12.0
+
+  '@shadcn/react@0.3.1':
+    resolution: {integrity: sha512-2gOR0HDMtWeRsCZfNDaU0YDFdgH3zsDQ6lz67Fv/y/qjY9y+R8kJqAn6q56phqv7/zHi0wqURjntrNO9zL7vnQ==}
+    peerDependencies:
+      '@types/react': '>=19'
+      react: '>=19'
+    peerDependenciesMeta:
+      '@types/react':
+        optional: true
+      react:
+        optional: true
 
   '@smithy/core@3.35.0':
     resolution: {integrity: sha512-zRMhfkByhT2snNdr1si24vJitU6Cr9ix2MikUfWmkAgp4jrNP0GcKSP5YvwQ+TlI8AZXER5QOGJn3JsVtSD9/A==}
@@ -6110,6 +6124,11 @@ snapshots:
       domelementtype: 2.3.0
       domhandler: 5.0.3
       selderee: 0.12.0
+
+  '@shadcn/react@0.3.1(@types/react@19.3.0)(react@19.2.4)':
+    optionalDependencies:
+      '@types/react': 19.3.0
+      react: 19.2.4
 
   '@smithy/core@3.35.0':
     dependencies:

@@ -1,3 +1,5 @@
+import { Button } from "../components/ui/button";
+import { ErrorNotice } from "../components/feedback";
 import { useState } from "react";
 import { useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Atom } from "effect/reactivity";
@@ -5,16 +7,11 @@ import { Cause, Exit, Schema } from "effect";
 import { ApplicationError, type TaskRecoveryInput } from "@aster/core/contracts";
 import { contextQueryKeys } from "@aster/api";
 import { checkTask, retryTask } from "../api/client";
-import type { ContextView } from "../dashboard/model";
+import type { ContextView } from "../contexts/model";
 const pendingRequests = Atom.make<
   Record<string, { input: TaskRecoveryInput; action: "check" | "retry" }>
 >({}).pipe(Atom.keepAlive);
-export function TaskControls({
-  context,
-}: {
-  context: ContextView;
-  navigate: (path: string) => void;
-}) {
+export function TaskControls({ context }: { context: ContextView }) {
   const pending = useAtomValue(pendingRequests);
   const setPending = useAtomSet(pendingRequests);
   const check = useAtomSet(checkTask, { mode: "promiseExit" });
@@ -48,31 +45,31 @@ export function TaskControls({
     );
   }
   return (
-    <section className="context-summary" aria-label="Task controls">
+    <section className="flex flex-wrap items-center gap-3" aria-label="Task controls">
       {(["failed", "uncertain"].includes(context.state.status ?? "") || pending[context.path]) && (
         <>
-          <button
-            className="outline-action"
+          <Button
+            variant="outline"
             disabled={checking || retrying}
             onClick={() => void submit("check")}
           >
             {pending[context.path] ? "Check request receipt" : "Check original execution"}
-          </button>
+          </Button>
           {!pending[context.path] && context.state.status === "failed" && (
-            <button
-              className="outline-action"
+            <Button
+              variant="outline"
               disabled={checking || retrying}
               onClick={() => void submit("retry")}
             >
               Retry failed execution
-            </button>
+            </Button>
           )}
           <p>
             Checking does not submit the work again. Retry is available only for confirmed failures.
           </p>
         </>
       )}
-      {error && <p role="alert">{error}</p>}
+      <ErrorNotice error={error} />
     </section>
   );
 }

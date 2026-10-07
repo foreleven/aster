@@ -1,6 +1,5 @@
 import { Duration, Effect, Queue, Schedule, Stream } from "effect";
 import { Atom, Reactivity } from "effect/reactivity";
-import { QueryKeys } from "@aster/api";
 import { ApplicationError } from "@aster/core/contracts";
 import type { RpcClientError } from "effect/rpc/RpcClientError";
 import { ApplicationClient } from "./client";
@@ -55,9 +54,4 @@ export const connection = ApplicationClient.runtime
       { bufferSize: 1, strategy: "sliding" },
     ),
   )
-  .pipe(Atom.setIdleTTL(0));
-
-/** Telemetry has no Context commit; refresh only its query while mounted. */
-export const telemetryRefresh = ApplicationClient.runtime
-  .atom(Stream.tick("3 seconds").pipe(Stream.tap(() => Reactivity.invalidate([QueryKeys.runtime]))))
   .pipe(Atom.setIdleTTL(0));

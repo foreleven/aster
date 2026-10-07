@@ -1,355 +1,148 @@
-import React, { useRef, useState } from "react";
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
-import { AlertDialog, DropdownMenu } from "radix-ui";
+import { useMemo } from "react";
+import { useAtomValue } from "@effect/atom-react";
+import { Asterisk, PanelRight } from "lucide-react";
+import { goalTimeline } from "../api/timeline";
+import { resultValue } from "../api/client";
+import { contextTitle, kindOf, summaryText, type ContextView } from "../contexts/model";
+import { Button } from "../components/ui/button";
 import {
-  Archive,
-  ChevronRight,
-  Clock3,
-  Ellipsis,
-  ExternalLink,
-  Menu,
-  Orbit,
-  Paperclip,
-  Pause,
-  Pencil,
-  Send,
-} from "lucide-react";
-import { contextQueryKeys } from "@aster/api";
-import { sendGoalMessage, endGoal } from "../api/client";
-import { summaryText, type ContextView } from "../dashboard/model";
-import { references } from "../lib/dashboard";
+  Sheet,
+  SheetTrigger,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetDescription,
+} from "../components/ui/sheet";
+import { Separator } from "../components/ui/separator";
+import { ErrorNotice, Status } from "../components/feedback";
 import { Markdown } from "../components/markdown";
-import { Tabs, TabsList, TabsTrigger, TabsContent } from "../components/ui/tabs";
-import { RetryTurn } from "./retry-turn";
+import { Composer } from "../assistant/composer";
+import { ContextList } from "../contexts/list";
 import { Timeline } from "./timeline";
-import { WorkPanel } from "./work-panel";
-import { dateLabel, EmptyState, lastActivity, Pill, slugFor, titleFor } from "./presentation";
+import { RetryTurn } from "./retry-turn";
+import { Approvals } from "../approvals/panel";
+import { useState } from "react";
 
 export function GoalWorkspace({
   goal,
   contexts,
-  inspect,
-  showGoals,
+  navigate,
 }: {
   goal: ContextView;
   contexts: readonly ContextView[];
-  inspect: (path: string) => void;
-  showGoals: () => void;
+  navigate: (path: string) => void;
 }) {
-  const pendingSubmission = useRef<{ text: string; requestId: string } | undefined>(undefined);
-  const [text, setText] = useState("");
-  const [error, setError] = useState("");
-  const [tab, setTab] = useState("timeline");
-  const [confirmEnd, setConfirmEnd] = useState(false);
-  const send = useAtomSet(sendGoalMessage, { mode: "promise" });
-  const end = useAtomSet(endGoal, { mode: "promise" });
-  const sending = useAtomValue(sendGoalMessage).waiting;
-  const ending = useAtomValue(endGoal).waiting;
-  const busy = sending || ending;
+  const slug = goal.path.split("/")[2]!;
+  const atoms = useMemo(() => goalTimeline(slug), [slug]);
+  const page = resultValue(useAtomValue(atoms.feed));
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [approvalError, setApprovalError] = useState("");
+  const empty = page?.total === 0;
   const canWrite = goal.state.status === "active" && !goal.projectionError;
-  const slug = slugFor(goal);
-  const related = contexts.filter(
-    (context) =>
-      context.path !== goal.path &&
-      !context.state.deleted &&
-      (context.state.owner === goal.path ||
-        context.state.goal === slug ||
-        context.state.definition?.goal === slug ||
-        context.state.sourcePath === goal.path ||
-        context.state.replyTo === goal.path),
+  const tasks = contexts.filter((context) => goal.state.tasks?.includes(context.path));
+  const signals = contexts.filter(
+    (context) => kindOf(context.path) === "signal" && context.state.owner === goal.path,
   );
-  const relatedPaths = [
-    ...new Set([...references(goal), ...related.map((context) => context.path)]),
-  ];
-  const activity = lastActivity(goal);
-  const summary = summaryText(goal.state.summary);
-
-  // React is the imperative boundary; typed AtomRpc mutations own transport and invalidation.
-  async function submit(kind: "message" | "end") {
-    if (!canWrite || busy || (kind === "message" && !text.trim())) return;
-    setError("");
-    try {
-      const reactivityKeys = contextQueryKeys(goal.path);
-      if (kind === "message") {
-        const message = text.trim();
-        if (pendingSubmission.current?.text !== message) {
-          pendingSubmission.current = { text: message, requestId: crypto.randomUUID() };
-        }
-        await send({ payload: { slug, ...pendingSubmission.current }, reactivityKeys });
-        pendingSubmission.current = undefined;
-        setText("");
-      } else {
-        await end({ payload: { slug }, reactivityKeys });
-        setConfirmEnd(false);
-      }
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    }
-  }
-
+  const spaces = contexts
+    .filter((context) => kindOf(context.path) === "goal" && context.path !== goal.path)
+    .slice(0, 3);
+  const open = (path: string) => {
+    setActivityOpen(false);
+    navigate(path);
+  };
   return (
-    <>
-      <main className="goal-main">
-        <header className="breadcrumbs">
-          <button
-            className="icon-button mobile-goals-toggle"
-            aria-label="Choose goal"
-            onClick={showGoals}
-          >
-            <Menu size={18} />
-          </button>
-          <span>Goals</span>
-          <ChevronRight size={14} />
-          <span className="breadcrumb-title">{titleFor(goal)}</span>
-          <div className="breadcrumb-actions">
-            <DropdownMenu.Root>
-              <DropdownMenu.Trigger className="icon-button" aria-label="Goal actions">
-                <Ellipsis size={17} />
-              </DropdownMenu.Trigger>
-              <DropdownMenu.Portal>
-                <DropdownMenu.Content className="goals-menu" align="end" sideOffset={6}>
-                  <DropdownMenu.Item onSelect={() => inspect(goal.path)}>
-                    Inspect goal
-                  </DropdownMenu.Item>
-                  <DropdownMenu.Item
-                    disabled={!canWrite || busy}
-                    onSelect={() => setConfirmEnd(true)}
-                  >
-                    End Goal
-                  </DropdownMenu.Item>
-                </DropdownMenu.Content>
-              </DropdownMenu.Portal>
-            </DropdownMenu.Root>
-            <span title="Direct editing is not available yet. Send an instruction to adjust this goal.">
-              <button className="outline-action" disabled>
-                <Pencil size={15} />
-                Edit goal
-              </button>
-            </span>
+    <section className="flex min-h-0 flex-1 flex-col" aria-label="Goal conversation">
+      <header className="flex shrink-0 items-center justify-between gap-3 px-5 py-4 md:px-8">
+        <div className="min-w-0">
+          <h1 className="truncate font-medium">{contextTitle(goal)}</h1>
+        </div>
+        <Sheet open={activityOpen} onOpenChange={setActivityOpen}>
+          <SheetTrigger asChild>
+            <Button variant="outline" size="sm">
+              <PanelRight data-icon="inline-start" />
+              Activity
+            </Button>
+          </SheetTrigger>
+          <SheetContent className="overflow-y-auto sm:max-w-lg">
+            <SheetHeader>
+              <SheetTitle>Activity</SheetTitle>
+              <SheetDescription>Work and decisions for this conversation.</SheetDescription>
+            </SheetHeader>
+            <div className="flex flex-col gap-6 p-5">
+              <section className="flex flex-col gap-3">
+                <h2 className="font-medium">About this space</h2>
+                <p className="text-sm text-muted-foreground">{goal.description}</p>
+                <Status value={goal.state.status} />
+                {goal.state.summary && <Markdown>{summaryText(goal.state.summary) ?? ""}</Markdown>}
+              </section>
+              <Separator />
+              <section className="flex flex-col gap-3">
+                <h2 className="font-medium">Needs you</h2>
+                <ErrorNotice error={approvalError} />
+                <Approvals
+                  contextPaths={goal.state.tasks ?? []}
+                  inspect={open}
+                  report={setApprovalError}
+                />
+              </section>
+              <Separator />
+              <section className="flex flex-col gap-3">
+                <h2 className="font-medium">Tasks · {tasks.length}</h2>
+                <ContextList contexts={tasks} navigate={open} />
+                {!tasks.length && <p className="text-sm text-muted-foreground">No tasks yet.</p>}
+              </section>
+              <Separator />
+              <section className="flex flex-col gap-3">
+                <h2 className="font-medium">Following · {signals.length}</h2>
+                <ContextList contexts={signals} navigate={open} />
+                {!signals.length && (
+                  <p className="text-sm text-muted-foreground">No reminders or watches yet.</p>
+                )}
+              </section>
+            </div>
+          </SheetContent>
+        </Sheet>
+      </header>
+      {(goal.projectionError || goal.state.lastError) && (
+        <div className="px-5 pb-3">
+          <ErrorNotice error={goal.projectionError || goal.state.lastError || ""} />
+        </div>
+      )}
+      {goal.state.retryableInputId && (
+        <div className="px-5 pb-3">
+          <RetryTurn slug={slug} turnId={goal.state.retryableInputId} />
+        </div>
+      )}
+      {empty ? (
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-6 overflow-y-auto px-5 py-8">
+          <div className="assistant-mark">
+            <Asterisk aria-hidden="true" />
           </div>
-        </header>
-        <div className="goal-body">
-          <a className="mobile-work-link" href="#goal-work">
-            View tasks and signals <ChevronRight size={14} />
-          </a>
-          <section className="goal-header">
-            <div className="goal-title-row">
-              <Orbit className="goal-title-icon" size={26} />
-              <h1>{titleFor(goal)}</h1>
-              <Pill status={goal.state.status} />
-            </div>
-            <div className="goal-header-actions">
-              <span title="Pausing goals is not available yet.">
-                <button className="outline-action" disabled>
-                  <Pause size={14} />
-                  Pause
-                </button>
-              </span>
-              <span title="Archiving goals separately from completion is not available yet. Use Goal actions to end this goal.">
-                <button className="outline-action" disabled>
-                  <Archive size={14} />
-                  Archive
-                </button>
-              </span>
-            </div>
-            {activity !== undefined && (
-              <div className="goal-meta">
-                <Clock3 size={14} />
-                Last activity {dateLabel(activity)}
-              </div>
-            )}
-            {summary && (
-              <div className="goal-description">
-                <Markdown>{summary}</Markdown>
-              </div>
-            )}
-          </section>
-          <Tabs value={tab} onValueChange={setTab} className="goal-tabs">
-            <TabsList variant="line" className="goal-tab-list" aria-label="Goal sections">
-              <TabsTrigger value="timeline">Timeline</TabsTrigger>
-              <TabsTrigger value="notes">Notes</TabsTrigger>
-              <TabsTrigger value="related">Related</TabsTrigger>
-              <TabsTrigger value="details">Details</TabsTrigger>
-            </TabsList>
-            <TabsContent value="timeline">
-              <div className="timeline-heading">
-                <h2>Goal Timeline</h2>
-              </div>
-              {goal.state.retryableInputId && (
-                <RetryTurn slug={slug} turnId={goal.state.retryableInputId} />
-              )}
-              <Timeline slug={slug} />
-            </TabsContent>
-            <TabsContent value="notes">
-              <div className="timeline-heading">
-                <h2>Notes</h2>
-              </div>
-              <Timeline slug={slug} userOnly />
-            </TabsContent>
-            <TabsContent value="related">
-              <div className="timeline-heading">
-                <h2>Related context</h2>
-              </div>
-              {relatedPaths.length ? (
-                <div className="related-contexts">
-                  {relatedPaths.map((path) => (
-                    <button key={path} onClick={() => inspect(path)}>
-                      <span>
-                        <strong>
-                          {contexts.find((context) => context.path === path)?.description || path}
-                        </strong>
-                        <small>{path}</small>
-                      </span>
-                      <ExternalLink size={16} />
-                    </button>
-                  ))}
-                </div>
-              ) : (
-                <EmptyState title="No related context yet">
-                  Evidence and linked records for this goal will appear here.
-                </EmptyState>
-              )}
-            </TabsContent>
-            <TabsContent value="details">
-              <div className="timeline-heading">
-                <h2>Goal details</h2>
-              </div>
-              <dl className="goal-details">
-                <dt>Status</dt>
-                <dd>
-                  <Pill status={goal.state.status} />
-                </dd>
-                <dt>Description</dt>
-                <dd>{goal.description}</dd>
-                <dt>Progress</dt>
-                <dd>
-                  <Markdown>{summary || "No progress recorded yet."}</Markdown>
-                </dd>
-                <dt>Completion criteria</dt>
-                <dd>
-                  {goal.state.completionCriteria || "This goal stays active until you end it."}
-                </dd>
-              </dl>
-              <p className="quiet-message">
-                Send an instruction below to add context or adjust priorities. Direct editing,
-                pausing, and separate archiving are not available yet.
-              </p>
-              <button className="text-link" onClick={() => inspect(goal.path)}>
-                Inspect stored state <ExternalLink size={14} />
-              </button>
-            </TabsContent>
-          </Tabs>
-        </div>
-        <div className="composer-area">
-          {error && (
-            <p className="goals-error" role="alert">
-              {error}
+          <div className="text-center">
+            <h2 className="text-3xl font-medium tracking-tight md:text-4xl">
+              A little less to carry.
+            </h2>
+            <p className="mt-3 text-sm text-muted-foreground">
+              Think it through. Make a plan. Take the next step.
             </p>
-          )}
-          {canWrite ? (
-            <form
-              className="goal-composer"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void submit("message");
-              }}
-            >
-              <DropdownMenu.Root>
-                <DropdownMenu.Trigger
-                  className="attach-context"
-                  aria-label="Add context reference"
-                  disabled={busy}
-                >
-                  <Paperclip size={18} />
-                </DropdownMenu.Trigger>
-                <DropdownMenu.Portal>
-                  <DropdownMenu.Content
-                    className="goals-menu context-menu"
-                    align="start"
-                    sideOffset={8}
-                  >
-                    {contexts
-                      .filter((context) => context.path !== goal.path && !context.state.deleted)
-                      .map((context) => (
-                        <DropdownMenu.Item
-                          key={context.path}
-                          onSelect={() =>
-                            setText((draft) => `${draft}${draft ? "\n" : ""}${context.path}`)
-                          }
-                        >
-                          {context.description || context.path}
-                        </DropdownMenu.Item>
-                      ))}
-                    {contexts.length <= 1 && (
-                      <DropdownMenu.Item disabled>No other context available</DropdownMenu.Item>
-                    )}
-                  </DropdownMenu.Content>
-                </DropdownMenu.Portal>
-              </DropdownMenu.Root>
-              <textarea
-                aria-label="Add information to Goal"
-                value={text}
-                maxLength={8000}
-                rows={1}
-                disabled={busy}
-                onChange={(event) => setText(event.target.value)}
-                placeholder="Add a note or give Aster an instruction for this goal…"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                    event.preventDefault();
-                    void submit("message");
-                  }
-                }}
-              />
-              <button
-                className="send-button"
-                aria-label="Send"
-                type="submit"
-                disabled={!text.trim() || busy}
-              >
-                <Send size={17} />
-              </button>
-            </form>
-          ) : (
-            <p className="closed-goal">
-              {goal.projectionError
-                ? "This goal cannot be edited until its data can be read."
-                : "This goal is not active. Its history remains available."}
-            </p>
+          </div>
+          {spaces.length > 0 && (
+            <div className="mt-3 w-full max-w-xl">
+              <p className="mb-3 text-xs text-muted-foreground">YOUR SPACES</p>
+              <ContextList contexts={spaces} navigate={navigate} />
+            </div>
           )}
         </div>
-        <AlertDialog.Root open={confirmEnd} onOpenChange={setConfirmEnd}>
-          <AlertDialog.Portal>
-            <AlertDialog.Overlay className="goal-dialog-overlay" />
-            <AlertDialog.Content className="goal-dialog">
-              <AlertDialog.Title>End this goal?</AlertDialog.Title>
-              <AlertDialog.Description>
-                This marks the goal complete and deactivates its generated signals. Work already
-                submitted may still finish. The conversation will remain available in the Context
-                tree.
-              </AlertDialog.Description>
-              {error && (
-                <p role="alert" className="goals-error">
-                  {error}
-                </p>
-              )}
-              <div className="dialog-actions">
-                <AlertDialog.Cancel className="outline-action" disabled={busy}>
-                  Keep Goal active
-                </AlertDialog.Cancel>
-                <button
-                  className="primary-action"
-                  disabled={busy}
-                  onClick={() => void submit("end")}
-                >
-                  {ending ? "Ending…" : "Confirm ending Goal"}
-                </button>
-              </div>
-            </AlertDialog.Content>
-          </AlertDialog.Portal>
-        </AlertDialog.Root>
-      </main>
-      <WorkPanel goal={goal} related={related} contexts={contexts} inspect={inspect} />
-    </>
+      ) : (
+        <Timeline slug={slug} />
+      )}
+      <div className="mx-auto w-full max-w-3xl shrink-0 px-5 pb-5 pt-3 md:px-8">
+        {canWrite ? (
+          <Composer slug={slug} contexts={contexts} suggestions={empty} />
+        ) : (
+          <p className="text-sm text-muted-foreground">This conversation is read-only.</p>
+        )}
+      </div>
+    </section>
   );
 }

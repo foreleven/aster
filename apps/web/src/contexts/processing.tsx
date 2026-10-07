@@ -1,3 +1,5 @@
+import { Button } from "../components/ui/button";
+import { ErrorNotice } from "../components/feedback";
 import { useMemo, useState } from "react";
 import { useAtomRefresh, useAtomSet, useAtomValue } from "@effect/atom-react";
 import { Cause, Exit, Match, Schema } from "effect";
@@ -86,18 +88,14 @@ function RecoveryAction({
   }
   return (
     <div>
-      <button className="outline-action" disabled={busy} onClick={() => void submit()}>
+      <Button variant="outline" disabled={busy} onClick={() => void submit()}>
         {inputs[key]
           ? "Check recovery receipt"
           : entry.kind === "screening"
             ? "Retry screening"
             : "Retry delivery"}
-      </button>
-      {error && (
-        <p className="goals-error" role="alert">
-          {error}
-        </p>
-      )}
+      </Button>
+      <ErrorNotice error={error} />
     </div>
   );
 }
@@ -115,44 +113,54 @@ export function ProcessingDetails({
   const snapshot = resultValue(result);
   const error = resultError(result);
   return (
-    <section aria-label="Processing recovery" aria-busy={result.waiting}>
+    <section
+      className="flex min-w-0 flex-col gap-4"
+      aria-label="Processing recovery"
+      aria-busy={result.waiting}
+    >
       <h2>Screening and delivery</h2>
-      <p className="quiet-message">
+      <p className="text-sm text-muted-foreground">
         Recovery reuses saved evidence and commands. It does not replace an existing decision.
       </p>
-      {error && (
-        <p className="goals-error" role="alert">
-          {error}
-          <button onClick={refresh}>Refresh processing</button>
-        </p>
-      )}
+      <ErrorNotice error={error} retry={refresh} />
       {!snapshot && !error && <p role="status">Loading processing…</p>}
       {snapshot?.entries.length === 0 && <p>No processing records yet.</p>}
       {snapshot?.entries.toReversed().map((entry) => (
-        <article className="evaluation-card" key={`${entry.kind}:${entry.id}`}>
-          <header className="evaluation-header">
+        <article
+          className="flex flex-col gap-3 rounded-lg border p-4"
+          key={`${entry.kind}:${entry.id}`}
+        >
+          <header className="flex justify-between gap-3">
             <strong>
               {entry.kind === "screening" ? "Screening" : "Delivery"} · {entry.status}
             </strong>
             {entry.attempts !== undefined && <span>{entry.attempts} attempts</span>}
           </header>
-          <p>
-            <button className="text-link" onClick={() => navigate(entry.source)}>
+          <p className="flex flex-wrap items-center gap-2">
+            <Button
+              className="h-auto px-0 whitespace-normal [overflow-wrap:anywhere]"
+              variant="link"
+              onClick={() => navigate(entry.source)}
+            >
               {entry.source}
-            </button>{" "}
+            </Button>{" "}
             →{" "}
-            <button className="text-link" onClick={() => navigate(entry.target)}>
+            <Button
+              className="h-auto px-0 whitespace-normal [overflow-wrap:anywhere]"
+              variant="link"
+              onClick={() => navigate(entry.target)}
+            >
               {entry.target}
-            </button>
+            </Button>
           </p>
-          {entry.error && <p className="goals-error">{entry.error}</p>}
+          {entry.error && <p className="text-sm text-destructive">{entry.error}</p>}
           {entry.matches && entry.matches.length > 0 && (
             <ul aria-label="Target matching results">
               {entry.matches.map((match) => (
                 <li key={match.target}>
-                  <button className="text-link" onClick={() => navigate(match.target)}>
+                  <Button variant="link" onClick={() => navigate(match.target)}>
                     {match.target}
-                  </button>{" "}
+                  </Button>{" "}
                   · {match._tag}: {match._tag === "Failed" ? match.error : match.reason}
                 </li>
               ))}
@@ -166,7 +174,7 @@ export function ProcessingDetails({
           />
           <details>
             <summary>Record identity</summary>
-            <p>{entry.id}</p>
+            <p className="break-all">{entry.id}</p>
           </details>
         </article>
       ))}

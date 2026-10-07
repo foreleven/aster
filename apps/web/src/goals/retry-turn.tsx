@@ -1,3 +1,5 @@
+import { Button } from "../components/ui/button";
+import { ErrorNotice } from "../components/feedback";
 import { useState } from "react";
 import { useAtomValue, useAtomSet } from "@effect/atom-react";
 import { Cause, Exit, Schema } from "effect";
@@ -34,10 +36,10 @@ export function RetryTurn({ slug, turnId }: { slug: string; turnId: string }) {
   }
   return (
     <div>
-      <button className="outline-action" disabled={busy} onClick={() => void submit()}>
+      <Button variant="outline" disabled={busy} onClick={() => void submit()}>
         {busy ? "Retrying…" : "Retry turn"}
-      </button>
-      {error && <p className="goals-error">{error}</p>}
+      </Button>
+      <ErrorNotice error={error} />
     </div>
   );
 }

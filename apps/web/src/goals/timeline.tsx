@@ -1,41 +1,83 @@
 import { useMemo } from "react";
-import { useAtomSet, useAtomValue } from "@effect/atom-react";
+import { useAtomValue, useAtomSet, useAtomRefresh } from "@effect/atom-react";
 import { goalTimeline } from "../api/timeline";
 import { resultError, resultValue } from "../api/client";
-import { clockLabel, dateLabel, EmptyState } from "./presentation";
+import { Button } from "../components/ui/button";
+import { Message, MessageContent, MessageHeader, MessageFooter } from "../components/ui/message";
+import { Bubble, BubbleContent } from "../components/ui/bubble";
+import {
+  MessageScroller,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+  MessageScrollerContent,
+  MessageScrollerItem,
+  MessageScrollerButton,
+} from "../components/ui/message-scroller";
 import { Markdown } from "../components/markdown";
+import { ErrorNotice, Loading } from "../components/feedback";
+import { dateTime } from "../contexts/model";
 
-export function Timeline({ slug, userOnly = false }: { slug: string; userOnly?: boolean }) {
+export function Timeline({ slug }: { slug: string }) {
   const atoms = useMemo(() => goalTimeline(slug), [slug]);
   const result = useAtomValue(atoms.feed);
   const more = useAtomSet(atoms.before);
+  const refresh = useAtomRefresh(atoms.latest);
+  const refreshFeed = useAtomRefresh(atoms.feed);
   const page = resultValue(result);
   const error = resultError(result);
-  if (error) return <p className="goals-error">{error}</p>;
-  if (!page) return <p className="quiet-message">Loading conversation…</p>;
+  if (!page && !error) return <Loading />;
   return (
-    <div className="timeline-list goal-timeline">
-      {page.nextBefore !== null && (
-        <button className="outline-action" onClick={() => more(page.nextBefore!)}>
-          Load earlier messages
-        </button>
-      )}
-      {!page.messages.length && (
-        <EmptyState title="No conversation yet">Send a message to get started.</EmptyState>
-      )}
-      {page.messages
-        .filter((message) => !userOnly || message.role === "user")
-        .map((message) => (
-          <article key={message.id} className={`conversation-entry conversation-${message.role}`}>
-            <header>
-              <strong>{message.role === "user" ? "You" : "Assistant"}</strong>
-              <time dateTime={message.at}>
-                {dateLabel(message.at)} · {clockLabel(message.at)}
-              </time>
-            </header>
-            <Markdown>{message.text}</Markdown>
-          </article>
-        ))}
-    </div>
+    <MessageScrollerProvider autoScroll defaultScrollPosition="end">
+      <MessageScroller>
+        <MessageScrollerViewport>
+          <MessageScrollerContent className="mx-auto max-w-3xl gap-8 px-5 py-8 md:px-8">
+            {error && (
+              <ErrorNotice
+                error={error}
+                retry={() => {
+                  refresh();
+                  refreshFeed();
+                }}
+              />
+            )}
+            {page?.nextBefore !== null && page?.nextBefore !== undefined && (
+              <Button
+                className="self-center"
+                variant="outline"
+                size="sm"
+                disabled={result.waiting}
+                onClick={() => more(page.nextBefore ?? undefined)}
+              >
+                Load earlier messages
+              </Button>
+            )}
+            {page?.messages.map((message) => (
+              <MessageScrollerItem key={message.id} messageId={String(message.id)}>
+                <Message
+                  align={message.role === "user" ? "end" : "start"}
+                  aria-label={`${message.role} message`}
+                >
+                  <MessageContent>
+                    <MessageHeader>{message.role === "user" ? "You" : "Aster"}</MessageHeader>
+                    <Bubble
+                      align={message.role === "user" ? "end" : "start"}
+                      variant={message.role === "user" ? "secondary" : "ghost"}
+                    >
+                      <BubbleContent>
+                        <Markdown>{message.text}</Markdown>
+                      </BubbleContent>
+                    </Bubble>
+                    <MessageFooter>
+                      <time dateTime={message.at}>{dateTime(message.at)}</time>
+                    </MessageFooter>
+                  </MessageContent>
+                </Message>
+              </MessageScrollerItem>
+            ))}
+          </MessageScrollerContent>
+        </MessageScrollerViewport>
+        <MessageScrollerButton />
+      </MessageScroller>
+    </MessageScrollerProvider>
   );
 }
