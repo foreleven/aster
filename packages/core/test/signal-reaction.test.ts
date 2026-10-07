@@ -6,7 +6,7 @@ import {
   ContextRegistry,
   SignalDefinitions,
   SignalRootActor,
-  type ContextRecord,
+  type StoredContext,
   type SignalCommandReply,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
@@ -21,7 +21,7 @@ const definition = {
 };
 
 test("Signal freezes one Task and evidence with its receipt; restart reuses the original envelope", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const messages = testConversations();
   let input: SignalReactionInput | undefined;
   let first: unknown;
@@ -32,7 +32,7 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
           const registry = yield* makeContextRegistry({
             loadAll: () => [...records.values()],
             save: (record) => {
-              records.set(record.path, structuredClone(record));
+              records.set(record.snapshot.path, structuredClone(record));
             },
           });
           const system = yield* ActorSystem.make().pipe(
@@ -120,7 +120,13 @@ test("scheduled Signals reject Context reactions", async () => {
             source: "/system-one",
             target: "/signals/review",
             expectedRevision: registry.get("/signals/review")!.revision!,
-            sourceContext: { path: "/source", description: "Source", state: {}, messages: [] },
+            sourceContext: {
+              revision: 0,
+              path: "/source",
+              description: "Source",
+              state: {},
+              messages: [],
+            },
           },
         }));
         assert.equal(result._tag, "Rejected");

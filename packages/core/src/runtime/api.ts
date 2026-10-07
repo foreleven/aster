@@ -3,7 +3,11 @@ import type { TasksRootCommand } from "../tasks/root.js";
 import type { TaskAdmissionReply } from "../tasks/protocol.js";
 import { TaskRecoveryInput } from "@aster/api-contracts";
 import { randomUUID } from "node:crypto";
-import { ContextQueries, ContextQueryError, type ContextQueryInput } from "../context/queries.js";
+import {
+  ContextQueries,
+  ContextQueryError,
+  type ContextQueryInput,
+} from "../context/queries/routes.js";
 import { inspectProcessing } from "./processing.js";
 import { RecoveryInput, type ProcessingOwner, type CommandReceipt } from "@aster/api-contracts";
 import { goalTimeline } from "../goals/view.js";
@@ -18,7 +22,7 @@ export { ApplicationError } from "@aster/api-contracts";
 import type { ActorRef } from "@aster/actor";
 import { PublicContext as ContextRecord } from "@aster/api-contracts";
 import type { ContextRegistry } from "../context/registry.js";
-import { publicJson } from "../context/json.js";
+import { publicJson } from "../commands/json.js";
 import { PublicApprovalEntry } from "../approvals/view.js";
 import type { AgentConversations } from "@aster/agent";
 import type { GoalCommand, GoalCommandReply } from "../goals/protocol.js";

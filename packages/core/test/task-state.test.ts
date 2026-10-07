@@ -28,7 +28,7 @@ test("TaskState drains committed storage into its Ref despite interruption", asy
         const history = testConversations();
         const retained = yield* retainedTask(history, "running");
         const registry = yield* makeContextRegistry({ loadAll: () => [retained], save: () => {} });
-        yield* registry.register(retained.path, TaskActor.context);
+        yield* registry.register(retained.snapshot.path, TaskActor.context);
         const stored = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         const task = yield* openTask(
@@ -52,7 +52,8 @@ test("TaskState drains committed storage into its Ref despite interruption", asy
           .pipe(Effect.forkScoped);
         yield* Deferred.await(stored);
         assert.equal(
-          Schema.decodeUnknownSync(TaskSnapshot)(registry.get(retained.path)!.state).status,
+          Schema.decodeUnknownSync(TaskSnapshot)(registry.get(retained.snapshot.path)!.state)
+            .status,
           "waiting_input",
         );
         assert.equal((yield* task.snapshot).status, "running");
@@ -77,7 +78,7 @@ test("failed Task persistence leaves the committed Ref unchanged", async () => {
             throw new Error("Injected storage failure");
           },
         });
-        yield* registry.register(retained.path, TaskActor.context);
+        yield* registry.register(retained.snapshot.path, TaskActor.context);
         const task = yield* openTask(registry, history);
         const result = yield* task
           .settle({ roundId: "task", status: "waiting_input", text: "Need input", covered: [] })
@@ -85,7 +86,8 @@ test("failed Task persistence leaves the committed Ref unchanged", async () => {
         assert.ok(Exit.hasDies(result));
         assert.equal((yield* task.snapshot).status, "running");
         assert.equal(
-          Schema.decodeUnknownSync(TaskSnapshot)(registry.get(retained.path)!.state).status,
+          Schema.decodeUnknownSync(TaskSnapshot)(registry.get(retained.snapshot.path)!.state)
+            .status,
           "running",
         );
       }),
@@ -100,7 +102,7 @@ test("settlement covers only the executed inputs and leaves later input ready", 
         const history = testConversations();
         const retained = yield* retainedTask(history, "running");
         const registry = yield* makeContextRegistry({ loadAll: () => [retained], save: () => {} });
-        yield* registry.register(retained.path, TaskActor.context);
+        yield* registry.register(retained.snapshot.path, TaskActor.context);
         const task = yield* openTask(registry, history);
         const state = yield* task.snapshot;
         // A persisted input not covered by this execution survives its result.
@@ -123,7 +125,7 @@ test("settlement covers only the executed inputs and leaves later input ready", 
         assert.equal((yield* task.snapshot).inputs[0]!.status, "completed");
         assert.deepEqual(
           yield* task.snapshot,
-          Schema.decodeUnknownSync(TaskSnapshot)(registry.get(retained.path)!.state),
+          Schema.decodeUnknownSync(TaskSnapshot)(registry.get(retained.snapshot.path)!.state),
         );
       }),
     ),

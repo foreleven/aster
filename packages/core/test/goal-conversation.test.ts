@@ -1,4 +1,4 @@
-import { ContextsActor } from "../src/context/queries-actor.js";
+import { ContextsActor } from "../src/context/queries/actor.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { AgentConversations } from "@aster/agent";
 import assert from "node:assert/strict";
@@ -24,7 +24,7 @@ import {
   SignalSnapshot,
   ApprovalQueueActor,
   approvalEntries,
-  type ContextRecord,
+  type StoredContext,
   type GoalCommandReply,
 } from "../src/index.js";
 import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
@@ -439,11 +439,11 @@ test("ending a Goal cancels its read-only gate without marking delivery uncertai
 });
 
 test("an interrupted read-only gate reruns on restart without reconciling a Pi delivery", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const store: ContextStore = {
     loadAll: () => [...records.values()],
     save: (record) => {
-      records.set(record.path, structuredClone(record));
+      records.set(record.snapshot.path, structuredClone(record));
     },
   };
   const history = testConversations();
@@ -492,11 +492,11 @@ test("an interrupted read-only gate reruns on restart without reconciling a Pi d
 });
 
 test("Goal persists input before acknowledgement, serializes delivery, and starts its conversation once", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const store: ContextStore = {
     loadAll: () => [...records.values()],
     save: (record) => {
-      records.set(record.path, structuredClone(record));
+      records.set(record.snapshot.path, structuredClone(record));
     },
   };
   const history = testConversations();
@@ -525,7 +525,7 @@ test("Goal persists input before acknowledgement, serializes delivery, and start
       const accepted = yield* env.submit("user-1", input);
       assert.equal(accepted._tag, "Accepted");
       assert.equal(
-        (records.get("/goals/project")!.state as GoalSnapshot).inputs.at(-1)!.status,
+        (records.get("/goals/project")!.snapshot.state as GoalSnapshot).inputs.at(-1)!.status,
         "pending",
       );
       assert.deepEqual(yield* env.submit("user-1", input), accepted);
@@ -652,11 +652,11 @@ test("End interrupts Pi without waiting, rejects late writes and leaves accepted
 });
 
 test("known failures can retry once; uncertain delivery blocks new work and resumes the same Pi identity on restart", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const store: ContextStore = {
     loadAll: () => [...records.values()],
     save: (record) => {
-      records.set(record.path, structuredClone(record));
+      records.set(record.snapshot.path, structuredClone(record));
     },
   };
   const history = testConversations();
@@ -869,7 +869,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
 });
 
 test("a lost delivery-commit acknowledgement reopens the same Pi exchange without duplicating accepted input", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   let loseAck = true;
   const calls: AgentInvocation[] = [];
   await run(
@@ -884,11 +884,11 @@ test("a lost delivery-commit acknowledgement reopens the same Pi exchange withou
           store: {
             loadAll: () => [...records.values()],
             save: (record) => {
-              records.set(record.path, structuredClone(record));
+              records.set(record.snapshot.path, structuredClone(record));
               if (
                 loseAck &&
-                record.path === "/goals/project" &&
-                (record.state as GoalSnapshot).inputs[0]?.status === "running"
+                record.snapshot.path === "/goals/project" &&
+                (record.snapshot.state as GoalSnapshot).inputs[0]?.status === "running"
               ) {
                 loseAck = false;
                 throw new Error("Persisted before acknowledgement loss");
@@ -907,11 +907,11 @@ test("a lost delivery-commit acknowledgement reopens the same Pi exchange withou
 });
 
 test("Task recovery reconnects its Goal and delivers the result without resubmitting external work", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const store: ContextStore = {
     loadAll: () => [...records.values()],
     save: (record) => {
-      records.set(record.path, structuredClone(record));
+      records.set(record.snapshot.path, structuredClone(record));
     },
   };
   const history = testConversations();
@@ -1000,11 +1000,11 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
 });
 
 test("an ended Goal retains uncertain delivery on restart without restarting Pi", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const store: ContextStore = {
     loadAll: () => [...records.values()],
     save: (record) => {
-      records.set(record.path, structuredClone(record));
+      records.set(record.snapshot.path, structuredClone(record));
     },
   };
   const history = testConversations();
@@ -1158,7 +1158,7 @@ test("Goal lifecycle pauses only owned Signals through its ActorContext", async 
         }));
         assert.equal(reply._tag, "Accepted");
       }
-      const listed = yield* env.signals.ask<import("../src/context/query-protocol.js").QueryReply>(
+      const listed = yield* env.signals.ask<import("../src/commands/query.js").QueryReply>(
         (replyTo) => ({
           _tag: "ListByOwner",
           owner: "/goals/project",

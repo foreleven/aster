@@ -3,16 +3,20 @@ import { test } from "node:test";
 import { Effect, Fiber, Stream } from "effect";
 import { LocalDurableContext } from "../src/storage/local-durable.js";
 import { RoutedDurableContext, contextBackendFor } from "../src/storage/routed-durable.js";
-import { type ContextRecord } from "@aster/core";
+import { type ContextSnapshot } from "@aster/core";
 
-const record: ContextRecord = {
+const record: ContextSnapshot = {
+  revision: 0,
   path: "/personal",
   description: "Personal",
   state: { value: 1 },
   messages: [],
 };
-const seeded = (records: readonly ContextRecord[]) =>
-  LocalDurableContext.fromStore({ loadAll: () => [...records], save: () => {} });
+const seeded = (records: readonly ContextSnapshot[]) =>
+  LocalDurableContext.fromStore({
+    loadAll: () => records.map((snapshot) => ({ snapshot, events: [] })),
+    save: () => {},
+  });
 const routes = [{ prefix: "/personal", backend: "pi" as const }];
 
 test("Context routes use longest segment prefixes", () => {
@@ -72,9 +76,9 @@ test("router refuses missing, regressed or divergent selected state and invalid 
       const pi = yield* seeded([{ ...record, revision: 3 }]);
       const router = yield* RoutedDurableContext.make({ local, pi }, routes);
       assert.equal(router.get(record.path)?.revision, 3);
-      const legacy = yield* seeded([record]);
+      const same = yield* seeded([record]);
       const zero = yield* seeded([{ ...record, revision: 0 }]);
-      yield* RoutedDurableContext.make({ local: legacy, pi: zero }, routes);
+      yield* RoutedDurableContext.make({ local: same, pi: zero }, routes);
     }),
   );
 });

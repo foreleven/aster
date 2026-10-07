@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { Clock, Effect, Fiber, Stream } from "effect";
-import { SignalRootActor, type ContextRecord } from "../src/index.js";
+import { SignalRootActor, type StoredContext } from "../src/index.js";
 
 import type { SignalCommandReply } from "../src/signals/protocol.js";
 import type { SignalChangeInput } from "../src/signals/protocol.js";
@@ -24,7 +24,7 @@ const input: SignalChangeInput = {
   causal: { rootRequestId: "user", remainingAgentTurns: 3 },
 };
 const setup = Effect.fnUntraced(function* (
-  records: Map<string, ContextRecord>,
+  records: Map<string, StoredContext>,
   clock?: Clock.Clock,
   conversations = testConversations(),
 ) {
@@ -39,7 +39,7 @@ const setup = Effect.fnUntraced(function* (
   return { ...env, command };
 });
 test("Signal owns direct command receipts across restarts, rejects stale changes and preserves ownership", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const conversations = testConversations();
   for (const restart of [false, true])
     await Effect.runPromise(

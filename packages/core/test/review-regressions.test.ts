@@ -176,7 +176,7 @@ test("malformed Signal delivery state stops before recovery writes or execution"
           messages: [],
         };
         const registry = yield* makeContextRegistry({
-          loadAll: () => [malformed],
+          loadAll: () => [{ snapshot: { ...malformed, revision: 0 }, events: [] }],
           save: () => {
             saves++;
           },

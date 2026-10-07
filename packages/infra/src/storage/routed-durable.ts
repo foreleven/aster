@@ -1,11 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { Effect, Schema, Stream } from "effect";
-import { DurableContext, DurableContextSnapshot } from "@aster/core";
+import { DurableContext, ContextPath } from "@aster/core";
 import { ContextRecoveryError } from "@aster/core";
-import type { ContextRecord } from "@aster/core";
 
 export const ContextRoute = Schema.Struct({
-  prefix: DurableContextSnapshot.fields.path,
+  prefix: ContextPath,
   backend: Schema.Literals(["local", "pi"]),
 });
 export type ContextRoute = typeof ContextRoute.Type;
@@ -22,11 +21,6 @@ export const contextBackendFor = (
   }
   return selected?.backend ?? "local";
 };
-
-export const normalizeContextRevision = (record: ContextRecord): ContextRecord => ({
-  ...record,
-  revision: record.revision ?? 0,
-});
 
 /** The unselected store is validation evidence only. Missing/stale selected data
  * must be migrated offline, never silently copied by a running domain owner. */
@@ -49,13 +43,15 @@ const make = Effect.fn("RoutedDurableContext.make")(function* (
   const entries = Object.entries(backends).filter((entry) => entry[1] !== undefined);
   const snapshots = entries.map(([name, backend]) => ({
     name,
-    snapshot: Object.fromEntries(backend!.exportRecords().map((record) => [record.path, record])),
+    snapshot: Object.fromEntries(
+      backend!.exportRecords().map((record) => [record.snapshot.path, record]),
+    ),
   }));
   const paths = new Set(snapshots.flatMap(({ snapshot }) => Object.keys(snapshot)));
   for (const path of paths) {
     const authoritative = selected(path)
       .exportRecords()
-      .find((record) => record.path === path);
+      .find((record) => record.snapshot.path === path);
     if (!authoritative)
       return yield* new ContextRecoveryError({
         path,
@@ -65,11 +61,10 @@ const make = Effect.fn("RoutedDurableContext.make")(function* (
     for (const { name, snapshot } of snapshots) {
       const shadow = snapshot[path];
       if (name === owner(path) || !shadow) continue;
-      const active = normalizeContextRevision(authoritative);
-      const other = normalizeContextRevision(shadow);
       if (
-        other.revision! > active.revision! ||
-        (other.revision === active.revision && !isDeepStrictEqual(other, active))
+        shadow.snapshot.revision > authoritative.snapshot.revision ||
+        (shadow.snapshot.revision === authoritative.snapshot.revision &&
+          !isDeepStrictEqual(shadow, authoritative))
       )
         return yield* new ContextRecoveryError({
           path,
@@ -85,11 +80,15 @@ const make = Effect.fn("RoutedDurableContext.make")(function* (
       ),
     exportRecords: () =>
       entries.flatMap(([name, backend]) =>
-        backend!.exportRecords().filter((record) => owner(record.path) === name),
+        backend!.exportRecords().filter((record) => owner(record.snapshot.path) === name),
       ),
     commit: (record, options) => selected(record.path).commit(record, options),
     recover: (path, validate) => selected(path).recover(path, validate),
     get: (path) => selected(path).get(path),
+    directory: () =>
+      entries.flatMap(([name, backend]) =>
+        backend!.directory().filter((entry) => owner(entry.path) === name),
+      ),
     snapshot: () =>
       Object.fromEntries(
         entries.flatMap(([name, backend]) =>

@@ -47,7 +47,7 @@ test("configured mail installs a runtime source without opening connections", as
 import { ActorSystem } from "@aster/actor";
 import { Clock, Deferred, Logger, Queue, Redacted, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
-import { type ContextRecord } from "@aster/core";
+import { type StoredContext } from "@aster/core";
 import { MailFetcher } from "../src/mail/client.js";
 import { MailSettings } from "../src/mail/config.js";
 import { MailFetchError } from "../src/mail/errors.js";
@@ -263,11 +263,11 @@ test("mail retries retrieval errors, isolates mailboxes, and interrupts active p
 });
 
 test("mail restart preserves email revisions and waits for a fresh initial poll", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const store = {
     loadAll: () => [...records.values()],
-    save: (record: ContextRecord) => {
-      records.set(record.path, structuredClone(record));
+    save: (record: StoredContext) => {
+      records.set(record.snapshot.path, structuredClone(record));
     },
   };
   for (let run = 0; run < 2; run++) {

@@ -108,6 +108,10 @@ export const initializeContextDescription = Effect.fn("ContextDescription.initia
     parentDescription: registry.get(ancestor)?.description ?? "",
   });
   const latest = registry.get(record.path);
-  if (latest) yield* registry.describe(record.path, description, latest.revision);
-  return { ...record, description };
+  if (latest)
+    yield* registry.initializeDescription(record.path, description, latest.revision).pipe(
+      // An owner update wins over optional generated metadata; its notification is already queued.
+      Effect.catchTag("ContextConflict", () => Effect.void),
+    );
+  return { ...record, description: registry.get(record.path)?.description || description };
 });

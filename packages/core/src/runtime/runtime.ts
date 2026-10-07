@@ -1,10 +1,10 @@
-import { ContextsActor } from "../context/queries-actor.js";
+import { ContextsActor } from "../context/queries/actor.js";
 import { ContextCaptures } from "../memory/capture.js";
 import { ContextDescriptions } from "../reasoning/context-description.js";
 import { coreDescriptions } from "./context-descriptions.js";
-import { DurableContext } from "../context/persistence.js";
+import { DurableContext } from "../context/store.js";
 import { coreContextViews } from "./context-views.js";
-import { ContextQueries } from "../context/queries.js";
+import { ContextQueries } from "../context/queries/routes.js";
 import { memoryLayer } from "../memory/services.js";
 import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster/api-contracts";
 import type { ReactionCommand } from "../reactions/actor.js";
@@ -162,7 +162,7 @@ const acquireRuntime = Effect.gen(function* () {
     handles.push({ phase: module.phase, handle });
   }
   const contexts = yield* system.spawn("contexts", ContextsActor);
-  yield* contexts.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+  yield* contexts.awaitStarted;
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
   const signalActivation = yield* Deferred.make<void>();
   const signals = yield* system.spawn("signals", SignalRootActor, {

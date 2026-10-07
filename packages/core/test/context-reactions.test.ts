@@ -1,4 +1,4 @@
-import { DurableContext } from "../src/context/persistence.js";
+import { DurableContext } from "../src/context/store.js";
 import { ContextCaptures } from "../src/memory/capture.js";
 import { ContextDescriptions } from "../src/reasoning/context-description.js";
 import { reasoningConfig, emptyRecall, modelReplyLayer, agentResult } from "./workflow-fixtures.js";
@@ -18,11 +18,11 @@ import {
   sourceSignals,
   type SignalRootCommand,
   type GoalsRootCommand,
-  type ContextRecord,
+  type ContextInput,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
-const record = (path: string, state: object): ContextRecord => ({
+const record = (path: string, state: object): ContextInput => ({
   path,
   description: path,
   state: path.startsWith("/goals/")

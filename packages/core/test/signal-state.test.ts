@@ -9,7 +9,7 @@ import {
   SignalActor,
   SignalSnapshot,
   SignalTime,
-  type ContextRecord,
+  type ContextInput,
 } from "../src/index.js";
 import { SignalState, nextSignalTime } from "../src/signals/state/model.js";
 import { readSignalHistory, signalMessage } from "../src/signals/state/store.js";
@@ -45,10 +45,14 @@ const setup = Effect.fnUntraced(function* () {
   const registry = yield* makeContextRegistry({
     loadAll: () => [
       {
-        path: "/goals/personal",
-        description: "Assistant",
-        state: { status: "active" },
-        messages: [],
+        snapshot: {
+          revision: 0,
+          path: "/goals/personal",
+          description: "Assistant",
+          state: { status: "active" },
+          messages: [],
+        },
+        events: [],
       },
     ],
     save: () => {},
@@ -235,7 +239,7 @@ test("Signal commit drains to the Ref after durable projection despite interrupt
       const state = yield* open(
         {
           ...env.registry,
-          commit: (record: ContextRecord, options) =>
+          commit: (record: ContextInput, options) =>
             env.registry
               .commit(record, options)
               .pipe(

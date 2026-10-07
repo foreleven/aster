@@ -102,17 +102,21 @@ test("reopened Goal sessions keep their policy and history while tools read the 
         const registry = yield* makeContextRegistry({
           loadAll: () => [
             {
-              path: "/goals/test",
-              description: "Goal",
-              state: {
-                definition: { slug: "test", description: `PRIVATE_goal_${turn}` },
-                status: "active",
-                inputs: [],
-                receipts: [],
-                tasks: [],
-                summary: `PRIVATE_summary_${turn}`,
+              snapshot: {
+                revision: 0,
+                path: "/goals/test",
+                description: "Goal",
+                state: {
+                  definition: { slug: "test", description: `PRIVATE_goal_${turn}` },
+                  status: "active",
+                  inputs: [],
+                  receipts: [],
+                  tasks: [],
+                  summary: `PRIVATE_summary_${turn}`,
+                },
+                messages: [],
               },
-              messages: [],
+              events: [],
             },
           ],
           save: () => {},

@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Schema, Stream } from "effect";
+import { Deferred, Effect, Fiber, Schema, Stream } from "effect";
 import {
+  makeDurableContext,
   ContextCommitError,
   ContextConflict,
   ContextValidationError,
   defineContext,
-  type ContextRecord,
+  type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
@@ -19,7 +20,7 @@ const initial = { path: "/versioned", description: "Stable", state: { value: 1 }
 test("competing Context commits have one winner and stale identical writes conflict", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
-      const saved: ContextRecord[] = [];
+      const saved: StoredContext[] = [];
       const registry = yield* makeContextRegistry({
         loadAll: () => [],
         save: (record) => {
@@ -61,7 +62,7 @@ test("commit notifications follow durable writes; an uncertain storage failure f
     Effect.scoped(
       Effect.gen(function* () {
         let attempts = 0;
-        const saved: ContextRecord[] = [];
+        const saved: StoredContext[] = [];
         const registry = yield* makeContextRegistry({
           loadAll: () => [],
           save: (record) => {
@@ -75,7 +76,7 @@ test("commit notifications follow durable writes; an uncertain storage failure f
         const observed: number[] = [];
         yield* Stream.runForEach(changes, (change) =>
           Effect.sync(() => {
-            assert.deepEqual(saved.at(-1), change.record);
+            assert.deepEqual(saved.at(-1)?.snapshot, change.record);
             observed.push(change.record.revision!);
           }),
         ).pipe(Effect.forkScoped);
@@ -97,11 +98,11 @@ test("commit notifications follow durable writes; an uncertain storage failure f
   );
 });
 
-test("legacy revision zero is upgraded on change and recovered revision guards the next writer", async () => {
-  let persisted: ContextRecord = initial;
+test("explicit revision zero is upgraded on change and recovered revision guards the next writer", async () => {
+  let persisted: StoredContext = { snapshot: { ...initial, revision: 0 }, events: [] };
   const store = {
     loadAll: () => [persisted],
-    save: (record: ContextRecord) => {
+    save: (record: StoredContext) => {
       persisted = record;
     },
   };
@@ -124,13 +125,13 @@ test("legacy revision zero is upgraded on change and recovered revision guards t
       assert.equal(second.revision, 2);
       const stale = yield* recovered.commit(first, { expectedRevision: 1 }).pipe(Effect.result);
       assert.ok(stale._tag === "Failure" && stale.failure instanceof ContextConflict);
-      assert.deepEqual(persisted.messages, ["first", "second"]);
+      assert.deepEqual(persisted.snapshot.messages, ["first", "second"]);
     }),
   );
 });
 
 test("owner restart reconciles a commit persisted before its acknowledgement failed", async () => {
-  let persisted: ContextRecord = initial;
+  let persisted: StoredContext = { snapshot: { ...initial, revision: 0 }, events: [] };
   let fail = true;
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -151,11 +152,11 @@ test("owner restart reconciles a commit persisted before its acknowledgement fai
       assert.ok(failed._tag === "Failure" && failed.failure instanceof ContextCommitError);
       assert.deepEqual(registry.get(initial.path), { ...initial, revision: 0 });
       yield* registry.register(initial.path, definition);
-      assert.deepEqual(registry.get(initial.path), persisted);
+      assert.deepEqual(registry.get(initial.path), persisted.snapshot);
       const stale = yield* registry.commit(initial, { expectedRevision: 0 }).pipe(Effect.result);
       assert.ok(stale._tag === "Failure" && stale.failure instanceof ContextConflict);
       const next = yield* registry.commit(
-        { ...persisted, messages: [...persisted.messages, "next"] },
+        { ...persisted.snapshot, messages: [...persisted.snapshot.messages, "next"] },
         { expectedRevision: 1 },
       );
       assert.equal(next.revision, 2);
@@ -177,15 +178,67 @@ test("description initialization requires its observed revision and never overwr
         { ...first, state: { value: 2 }, messages: ["new"] },
         { expectedRevision: 1 },
       );
-      const conflict = yield* registry.describe(initial.path, "Identity", 1).pipe(Effect.flip);
+      const conflict = yield* registry
+        .initializeDescription(initial.path, "Identity", 1)
+        .pipe(Effect.flip);
       assert.equal(conflict._tag, "ContextConflict");
       assert.deepEqual(registry.get(initial.path), newer);
-      yield* registry.describe(initial.path, "Identity", 2);
+      yield* registry.initializeDescription(initial.path, "Identity", 2);
       assert.deepEqual(registry.get(initial.path), {
         ...newer,
         description: "Identity",
         revision: 3,
       });
+    }),
+  );
+});
+
+test("a slow Context commit does not block another path; admitted writes publish only after persistence", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        const backend = yield* makeDurableContext({
+          load: Effect.succeed([]),
+          save: (record) =>
+            record.snapshot.path === "/slow"
+              ? Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release)))
+              : Effect.void,
+        });
+        const slow = yield* backend
+          .commit({ ...initial, path: "/slow" }, { expectedRevision: 0 })
+          .pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* Effect.gen(function* () {
+          const fast = yield* backend.commit(
+            { ...initial, path: "/fast" },
+            { expectedRevision: 0 },
+          );
+          assert.equal(fast.revision, 1);
+          assert.equal(backend.get("/slow"), undefined);
+          assert.equal(backend.get("/fast")?.revision, 1);
+        }).pipe(Effect.timeout("2 seconds"), Effect.ensuring(Deferred.succeed(release, undefined)));
+        yield* Fiber.join(slow);
+        assert.equal(backend.get("/slow")?.revision, 1);
+      }),
+    ),
+  );
+});
+
+test("owner commits update descriptions while initialization remains conditional", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const registry = yield* makeContextRegistry();
+      yield* registry.register(initial.path, definition);
+      yield* registry.commit(initial, { expectedRevision: 0 });
+      const changed = yield* registry.commit(
+        { ...initial, description: "Updated by owner" },
+        { expectedRevision: 1 },
+      );
+      yield* registry.initializeDescription(initial.path, "Generated fallback", changed.revision);
+      assert.equal(registry.get(initial.path)?.description, "Updated by owner");
+      assert.equal(registry.get(initial.path)?.revision, 2);
     }),
   );
 });

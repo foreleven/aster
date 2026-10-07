@@ -62,7 +62,7 @@ for (const fails of [false, true]) {
               ...history,
               read: (path) =>
                 Effect.gen(function* () {
-                  if (path === retained.path) {
+                  if (path === retained.snapshot.path) {
                     yield* Deferred.succeed(entered, undefined);
                     yield* Deferred.await(release);
                     if (fails) return yield* Effect.die(new Error("Task recovery failed"));
@@ -108,7 +108,7 @@ for (const fails of [false, true]) {
           if (fails) {
             yield* clock.adjust("10 seconds");
             const log = yield* Deferred.await(noticed);
-            assert.equal(log.actorPath, `/user${retained.path}`);
+            assert.equal(log.actorPath, `/user${retained.snapshot.path}`);
             assert.match(log.cause.message, /Task recovery failed/);
             yield* Fiber.interrupt(queued);
           } else {
@@ -137,7 +137,7 @@ test("Task root restart retains existing child ownership", async () => {
           {
             ...registry,
             get: (path) => {
-              if (failNextRead && path === retained.path) {
+              if (failNextRead && path === retained.snapshot.path) {
                 failNextRead = false;
                 throw new Error("Injected root routing failure");
               }
@@ -149,7 +149,7 @@ test("Task root restart retains existing child ownership", async () => {
         );
         const root = yield* system.spawn("tasks", TasksRootActor);
         yield* root.awaitStarted;
-        const child = yield* system.select(`/user${retained.path}`).resolve();
+        const child = yield* system.select(`/user${retained.snapshot.path}`).resolve();
         yield* child.awaitStarted;
         const restarting = yield* Stream.runHead(
           Stream.filter(
@@ -161,7 +161,7 @@ test("Task root restart retains existing child ownership", async () => {
         const failed = yield* root
           .ask((replyTo) => ({
             _tag: "CheckTask",
-            input: { requestId: "restart", target: retained.path, expectedRevision: 2 },
+            input: { requestId: "restart", target: retained.snapshot.path, expectedRevision: 2 },
             replyTo,
           }))
           .pipe(Effect.forkScoped);

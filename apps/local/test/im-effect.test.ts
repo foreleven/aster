@@ -308,32 +308,35 @@ for (const status of ["published", "unknown", "sending"] as const) {
           const registry = yield* makeContextRegistry({
             loadAll: () => [
               {
-                path: source,
-                revision: 1,
-                description: "Published Run",
-                messages: [],
-                state: {
-                  writeback: {
-                    status,
-                    submittedAt: at,
-                    ...(status === "published" ? { externalId: echo.id } : {}),
-                    authorization: {
-                      approvalId: `${source}:writeback:publish-1`,
-                      approvalsRevision: 2,
-                      approvedAt: at,
-                    },
-                    request: {
-                      requestId: "publish-1",
-                      source,
-                      taskSource: "/signals/report",
-                      causationId: "user-1",
-                      createdAt: at,
-                      action: { _tag: "PublishResult", channelPath: path, identity: "user" },
-                      content: echo.content,
-                      causal: { rootRequestId: "user-1", remainingAgentTurns: 0 },
+                snapshot: {
+                  path: source,
+                  revision: 1,
+                  description: "Published Run",
+                  messages: [],
+                  state: {
+                    writeback: {
+                      status,
+                      submittedAt: at,
+                      ...(status === "published" ? { externalId: echo.id } : {}),
+                      authorization: {
+                        approvalId: `${source}:writeback:publish-1`,
+                        approvalsRevision: 2,
+                        approvedAt: at,
+                      },
+                      request: {
+                        requestId: "publish-1",
+                        source,
+                        taskSource: "/signals/report",
+                        causationId: "user-1",
+                        createdAt: at,
+                        action: { _tag: "PublishResult", channelPath: path, identity: "user" },
+                        content: echo.content,
+                        causal: { rootRequestId: "user-1", remainingAgentTurns: 0 },
+                      },
                     },
                   },
                 },
+                events: [],
               },
             ],
             save: () => {},

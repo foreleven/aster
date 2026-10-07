@@ -20,7 +20,7 @@ for (const status of ["completed", "failed", "cancelled", "uncertain"] as const)
           const record = yield* retainedTask(conversations, status);
           const env = yield* taskFixture({
             conversations,
-            records: new Map([[record.path, record]]),
+            records: new Map([[record.snapshot.path, record]]),
             agents: {},
           });
           // The readiness ask runs after restoration, while feedback is acknowledged asynchronously.
@@ -32,10 +32,11 @@ for (const status of ["completed", "failed", "cancelled", "uncertain"] as const)
             assert.equal(feedback.input.text, "Original result");
             assert.equal(feedback.input.status, status);
           }
-          assert.deepEqual(env.registry.get(record.path), record);
+          assert.deepEqual(env.registry.get(record.snapshot.path), record.snapshot);
           assert.equal(
-            (yield* conversations.read(record.path)).filter((entry) => entry.kind === "task.result")
-              .length,
+            (yield* conversations.read(record.snapshot.path)).filter(
+              (entry) => entry.kind === "task.result",
+            ).length,
             1,
           );
         }),
@@ -54,7 +55,9 @@ test("malformed restored Task fails closed before execution or recovery writes",
           messages: [],
           state: { status: "checking" },
         };
-        const env = yield* taskFixture({ records: new Map([[record.path, record]]) });
+        const env = yield* taskFixture({
+          records: new Map([[record.path, { snapshot: { ...record, revision: 0 }, events: [] }]]),
+        });
         const before = env.registry.get(record.path);
         const stopped = yield* env.system.events.pipe(
           Stream.filter((event) => event._tag === "ActorStopped" && event.path === "/user/broken"),

@@ -11,7 +11,7 @@ import {
   ExternalAgents,
   GoalSnapshot,
   GoalsRootActor,
-  type ContextRecord,
+  type StoredContext,
   type GoalCommandReply,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
@@ -51,7 +51,7 @@ const input: GoalIntentInput = {
 
 for (const fault of ["pi-ack", "actor-ack"] as const) {
   test(`Goal recovers ${fault} loss with one Pi input and its original receipt`, async () => {
-    const records = new Map<string, ContextRecord>();
+    const records = new Map<string, StoredContext>();
     const history = testConversations();
     let fail = true;
     let firstInput = input;
@@ -63,12 +63,13 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
             const registry = yield* makeContextRegistry({
               loadAll: () => [...records.values()],
               save: (record) => {
-                records.set(record.path, structuredClone(record));
+                records.set(record.snapshot.path, structuredClone(record));
                 if (
                   fail &&
                   fault === "actor-ack" &&
-                  record.path === "/goals/project" &&
-                  goalIntentRecords(Schema.decodeUnknownSync(GoalSnapshot)(record.state)).length
+                  record.snapshot.path === "/goals/project" &&
+                  goalIntentRecords(Schema.decodeUnknownSync(GoalSnapshot)(record.snapshot.state))
+                    .length
                 ) {
                   fail = false;
                   Effect.runSync(Deferred.succeed(cut, undefined));
@@ -94,7 +95,9 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
                         ) {
                           assert.equal(
                             goalIntentRecords(
-                              Schema.decodeUnknownSync(GoalSnapshot)(records.get(owner)!.state),
+                              Schema.decodeUnknownSync(GoalSnapshot)(
+                                records.get(owner)!.snapshot.state,
+                              ),
                             ).length,
                             0,
                           );

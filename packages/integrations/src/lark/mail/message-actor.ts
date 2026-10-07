@@ -32,15 +32,16 @@ export class LarkMailMessageActor extends ContextActor.Service<LarkMailMessageAc
           Match.value(command).pipe(
             Match.tag("SetEmail", ({ email, replyTo }) => {
               const path = `/lark/mail/${email.mailbox}/${email.messageId}`;
+              const previous = registry.get(path);
               return registry
                 .commit(
                   {
                     path,
-                    description: "",
+                    description: previous?.description ?? "",
                     state: email,
                     messages: [],
                   },
-                  { expectedRevision: registry.get(path)?.revision ?? 0 },
+                  { expectedRevision: previous?.revision ?? 0 },
                 )
                 .pipe(Effect.orDie, Effect.andThen(replyTo.tell(undefined)));
             }),

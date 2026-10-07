@@ -45,23 +45,17 @@ export { SignalRootActor } from "./signals/root.js";
 export * from "./goals/state/snapshot.js";
 export * from "./goals/state/model.js";
 
-export * from "./context/persistence.js";
-export * from "./context/kernel.js";
+export * from "./context/store.js";
 
 export * from "./tasks/root.js";
 
-export { contextView } from "./context/view.js";
-export type { ContextViewPolicy } from "./context/definition.js";
-
 export * from "./memory/actor.js";
 
-export * from "./context/queries.js";
+export * from "./context/queries/routes.js";
 export * from "./goals/agent.js";
 
 export * from "./context/definition.js";
 
 export * from "./memory/capture.js";
-
-export * from "./context/storage-format.js";
 
 export { PublicationsActor, publications } from "./publications/actor.js";

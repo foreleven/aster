@@ -8,7 +8,7 @@ Startup subscribes to Context changes before registering/activating source integ
 
 ## Domain modules
 
-- `context/`: validated snapshots, revisioned persistence, public views and durable source events.
+- `context/`: validated snapshots, public views and durable source events. `store.ts` owns per-path commits and recovery using `{ snapshot, events }`; `queries/` groups Actor queries, integration routes and retained Pi evidence. Shared reply/cancellation and JSON helpers live in `commands/`.
 - `reactions/`: System One matching of each active Goal and Context Signal, frozen decisions and receipt-based delivery.
 - `goals/`: durable conversation, Context-only Agent gate, user and Task inputs, business summaries and public Pi conversation projection. `/goals/personal` is the default assistant using the ordinary GoalActor.
 - `signals/`: `protocol.ts` defines commands and reaction inputs; `root.ts` registers and watches owners; `actor.ts` schedules triggers and delivery; `state/snapshot.ts` defines state, eligibility and public views; `state/model.ts` owns business operations; `state/store.ts` owns Pi persistence and the committed Ref. Signal candidate selection and System One matching live in `reactions/policy.ts`. Both trigger kinds deliver frozen Task messages. Schedule cursors are timezone-qualified ISO strings, with `null` marking exhaustion.

@@ -3,7 +3,7 @@ import { AgentConversations } from "@aster/agent";
 import { AgentRunner, AgentError, type AgentInvocation, type AgentResult } from "@aster/agent";
 import { Context, ConfigProvider, Effect, Layer, Option, Schema } from "effect";
 
-import { MemoryRecall, GoalSettings, type ContextRecord } from "../src/index.js";
+import { MemoryRecall, GoalSettings, type ContextInput } from "../src/index.js";
 
 export const emptyRecall = Layer.succeed(MemoryRecall, {
   search: () => Effect.succeed({ results: [] }),
@@ -69,7 +69,7 @@ export interface GoalScenario {
   readonly definitions: GoalSettings["Service"]["definitions"];
   readonly reasoner: {
     readonly plan: (input: {
-      current: ContextRecord;
+      current: ContextInput;
       messages: readonly import("@aster/agent").AgentMessage[];
     }) => Effect.Effect<
       { progress: string; completed: boolean; evidence: readonly string[] },

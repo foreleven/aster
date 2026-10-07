@@ -36,8 +36,38 @@ export const ContextEvent = Schema.Struct({
 });
 export type ContextEvent = typeof ContextEvent.Type;
 
-/** Preserve the v1 identity namespace even though consumers no longer own event creation. */
+/** Stable identity for one committed source revision. */
 export const contextEventId = (path: string, revision: number): string =>
   createHash("sha256")
-    .update(JSON.stringify(["context-reaction-v1", path, revision]))
+    .update(JSON.stringify(["context-event", path, revision]))
     .digest("hex");
+
+/** Directory reads never copy owner state or messages. */
+export type ContextEntry = Pick<ContextSnapshot, "path" | "description">;
+
+/** One atomic record: owner content and its durable public source evidence. */
+export const StoredContext = Schema.Struct({
+  snapshot: ContextSnapshot,
+  events: Schema.Array(ContextEvent),
+}).check(
+  Schema.makeFilter(
+    ({ snapshot, events }) => {
+      let previousRevision = 0;
+      for (const event of events) {
+        const revision = event.record.revision;
+        if (
+          event.record.path !== snapshot.path ||
+          revision <= previousRevision ||
+          revision > snapshot.revision
+        )
+          return false;
+        if (event.id !== contextEventId(snapshot.path, revision)) return false;
+        if (!Number.isFinite(Date.parse(event.createdAt))) return false;
+        previousRevision = revision;
+      }
+      return true;
+    },
+    { expected: "Ordered Context events matching their snapshot and stable identity" },
+  ),
+);
+export type StoredContext = typeof StoredContext.Type;

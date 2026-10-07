@@ -2,7 +2,7 @@ import { AgentConversations } from "@aster/agent";
 import { ApplicationError, ContextQueryInput } from "@aster/api-contracts";
 import { Effect, Schema } from "effect";
 import { isDeepStrictEqual } from "node:util";
-import type { ContextQueries } from "./queries.js";
+import type { ContextQueries } from "./routes.js";
 
 const SavedResult = Schema.Struct({ input: ContextQueryInput, text: Schema.String });
 const queryError = (error: { message: string; kind?: string }) =>

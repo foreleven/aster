@@ -1,6 +1,6 @@
 import { askQuery } from "../actors.js";
 import { Type } from "@aster/agent";
-import type { ContextsCommand } from "../../context/protocol.js";
+import type { ContextsCommand } from "../../context/queries/actor.js";
 import { queryTool } from "../define.js";
 
 export const readContext = (pageCharacters = 12000) =>

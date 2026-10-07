@@ -1,4 +1,4 @@
-import { DurableContext } from "../src/context/persistence.js";
+import { DurableContext } from "../src/context/store.js";
 import type { TestContextRegistry } from "../src/testing/context.js";
 import { deliveriesOf } from "../src/reactions/state.js";
 import type { RecoveryReply } from "@aster/api-contracts";
@@ -11,7 +11,8 @@ import {
   GoalSettings,
   contextView,
   defineContext,
-  type ContextRecord,
+  type StoredContext,
+  type ContextSnapshot,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { SystemOneActor } from "../src/reactions/actor.js";
@@ -46,16 +47,16 @@ const proposed = (work: ReactionWork): Extract<ReactionDeliveryInput, { _tag: "S
     sourceContext: work.event.record,
   },
 });
-const completed = (record: ContextRecord) =>
+const completed = (record: ContextSnapshot) =>
   record.path === "/system-one" &&
   Schema.decodeUnknownSync(ReactionState)(record.state).work.length > 0 &&
   Schema.decodeUnknownSync(ReactionState)(record.state).work.every(
     (work) => work.status === "completed",
   );
-const storeFor = (records: Map<string, ContextRecord>) => ({
+const storeFor = (records: Map<string, StoredContext>) => ({
   loadAll: () => [...records.values()],
-  save: (record: ContextRecord) => {
-    records.set(record.path, structuredClone(record));
+  save: (record: StoredContext) => {
+    records.set(record.snapshot.path, structuredClone(record));
   },
 });
 const layerFor = (registry: TestContextRegistry, policy: Omit<ReactionPolicy["Service"], "bind">) =>
@@ -67,7 +68,7 @@ const layerFor = (registry: TestContextRegistry, policy: Omit<ReactionPolicy["Se
   );
 
 test("System One recovers every retained source version without source Actors or live change replay", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   await Effect.runPromise(
     Effect.gen(function* () {
       const registry = yield* makeContextRegistry(storeFor(records));
@@ -114,7 +115,7 @@ test("System One recovers every retained source version without source Actors or
             Schema.decodeUnknownSync(ReactionState)(registry.get("/system-one")!.state).work.length,
             2,
           );
-          assert.equal("reactionEvents" in registry.get("/system-one")!, false);
+          assert.equal("events" in registry.get("/system-one")!, false);
           const view = JSON.stringify(registry.views.project(registry.get("/system-one")!));
           assert.equal(
             view.includes("First evidence"),
@@ -128,7 +129,7 @@ test("System One recovers every retained source version without source Actors or
 });
 
 test("a persisted decision survives lost commit acknowledgement without re-screening or duplicate delivery", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   let loseDecisionAck = true;
   let planned = 0;
   let delivered = 0;
@@ -138,11 +139,12 @@ test("a persisted decision survives lost commit acknowledgement without re-scree
         const registry = yield* makeContextRegistry({
           ...storeFor(records),
           save: (record) => {
-            records.set(record.path, structuredClone(record));
+            records.set(record.snapshot.path, structuredClone(record));
             if (
-              record.path === "/system-one" &&
+              record.snapshot.path === "/system-one" &&
               loseDecisionAck &&
-              Schema.decodeUnknownSync(ReactionState)(record.state).work[0]?.status === "ready"
+              Schema.decodeUnknownSync(ReactionState)(record.snapshot.state).work[0]?.status ===
+                "ready"
             ) {
               loseDecisionAck = false;
               throw new Error("Decision committed; response lost");
@@ -164,7 +166,7 @@ test("a persisted decision survives lost commit acknowledgement without re-scree
                 Effect.sync(() => {
                   delivered++;
                   const durable = Schema.decodeUnknownSync(ReactionState)(
-                    records.get("/system-one")!.state,
+                    records.get("/system-one")!.snapshot.state,
                   ).work[0]!;
                   assert.equal(deliveriesOf(durable)[0]?.status, "sending");
                   assert.equal(deliveriesOf(durable)[0]?.attempts, 1);
@@ -192,7 +194,7 @@ test("a persisted decision survives lost commit acknowledgement without re-scree
 });
 
 test("lost receiver acknowledgement replays the frozen decision after restart with one receiver effect", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const receipts = new Map<string, ReactionDeliveryInput>();
   let planned = 0;
   let delivered = 0;
@@ -256,7 +258,7 @@ test("lost receiver acknowledgement replays the frozen decision after restart wi
 });
 
 test("interrupted planning reuses its admitted source and catalogue despite later source updates", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   let original: ReactionPlanning | undefined;
   for (const restart of [false, true]) {
     await Effect.runPromise(
@@ -440,11 +442,14 @@ test("System One rejects corrupted recovered work before any planning or deliver
         const recovered = yield* makeContextRegistry({
           loadAll: () => [
             {
-              path: "/system-one",
-              description: "Reactions",
-              revision: 1,
-              state: { work: invalid },
-              messages: [],
+              snapshot: {
+                path: "/system-one",
+                description: "Reactions",
+                revision: 1,
+                state: { work: invalid },
+                messages: [],
+              },
+              events: [],
             },
           ],
           save: () => assert.fail("Corrupted recovery must never rewrite stored state"),
@@ -459,7 +464,7 @@ test("System One rejects corrupted recovered work before any planning or deliver
 });
 
 test("interrupted delivery attempts stay bounded across restarts and explicit retry preserves the command", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   let delivered = 0;
   let original: ReactionDeliveryInput | undefined;
   for (let restart = 0; restart < 4; restart++) {

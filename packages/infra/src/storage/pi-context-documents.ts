@@ -1,11 +1,11 @@
 import { defineDoc, defineEntry } from "@earendil-works/pi-durable";
 import type { JsonValue } from "@earendil-works/chord";
-import { DurableContextSnapshot } from "@aster/core";
+import { StoredContext, ContextPath } from "@aster/core";
 import { Schema } from "effect";
 
 const PositiveId = Schema.Int.check(Schema.isGreaterThan(0));
 export const PiContextMapping = Schema.Struct({
-  path: DurableContextSnapshot.fields.path,
+  path: ContextPath,
   conversationId: PositiveId,
   revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   entryId: PositiveId,
@@ -18,10 +18,7 @@ export const PiContextIndexSchema = Schema.Struct({
 export const PiContextDocumentSchema = Schema.Struct({
   mappingVersion: Schema.Literal(1),
   entryId: PositiveId,
-  record: Schema.Struct({
-    ...DurableContextSnapshot.fields,
-    revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
-  }),
+  record: StoredContext,
 });
 export const PiContextCommitSchema = Schema.Struct({
   mappingVersion: Schema.Literal(1),

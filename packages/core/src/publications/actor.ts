@@ -13,7 +13,7 @@ import { Clock, Effect, Layer, Match, Option, Schedule, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ContextRegistry } from "../context/registry.js";
 import { defineContext } from "../context/definition.js";
-import { contextView } from "../context/view.js";
+import { contextView } from "../context/definition.js";
 import { ApprovalResolved, approvalEntries, sendApproval } from "../approvals/actor.js";
 import { ChannelWrites, ChannelWriteError } from "./contracts.js";
 import { TaskSnapshot, TaskOutcome } from "../tasks/state/snapshot.js";

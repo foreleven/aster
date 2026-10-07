@@ -1,9 +1,9 @@
-import type { ContextRecord } from "@aster/core";
+import type { StoredContext } from "@aster/core";
 import { Context } from "effect";
 
 export interface ContextStore {
-  readonly loadAll: () => ReadonlyArray<ContextRecord>;
-  readonly save: (record: ContextRecord) => void;
+  readonly loadAll: () => ReadonlyArray<StoredContext>;
+  readonly save: (record: StoredContext) => void;
 }
 
 export const ContextStore = Context.Service<ContextStore>("context/Store");

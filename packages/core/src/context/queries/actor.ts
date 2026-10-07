@@ -1,12 +1,47 @@
 import { Actor } from "@aster/actor";
 import { AgentConversations } from "@aster/agent";
-import { ApplicationError } from "@aster/api-contracts";
-import { Deferred, Effect, Layer, Match } from "effect";
-import { ContextRegistry } from "./registry.js";
-import { ContextQueries } from "./queries.js";
-import { ContextsCommand } from "./protocol.js";
-import { cancellableQuery } from "./query-protocol.js";
-import { queryResults, textPage } from "./query-results.js";
+import { ApplicationError, ContextQueryInput } from "@aster/api-contracts";
+import { Deferred, Effect, Layer, Match, Schema } from "effect";
+import { ContextRegistry } from "../registry.js";
+import { ContextQueries } from "./routes.js";
+import {
+  QueryReply,
+  queryCancelled,
+  queryReplyTo,
+  cancellableQuery,
+} from "../../commands/query.js";
+import { queryResults, textPage } from "./results.js";
+
+export const ContextsCommand = Schema.Union([
+  Schema.TaggedStruct("SearchContexts", {
+    query: Schema.String,
+    offset: Schema.Int,
+    replyTo: queryReplyTo,
+  }),
+  Schema.TaggedStruct("ReadContext", {
+    path: Schema.String,
+    offset: Schema.Int,
+    pageCharacters: Schema.Int,
+    revision: Schema.optional(Schema.Int),
+    replyTo: queryReplyTo,
+  }),
+  Schema.TaggedStruct("QueryContext", {
+    input: ContextQueryInput,
+    owner: Schema.String,
+    requestId: Schema.String,
+    cancelled: queryCancelled,
+    replyTo: queryReplyTo,
+  }),
+  Schema.TaggedStruct("ReadQueryResult", {
+    owner: Schema.String,
+    resultId: Schema.Int,
+    offset: Schema.Int,
+    cancelled: queryCancelled,
+    replyTo: queryReplyTo,
+  }),
+  Schema.TaggedStruct("QuerySettled", { id: Schema.String, result: QueryReply }),
+]);
+export type ContextsCommand = typeof ContextsCommand.Type;
 
 type Pending = Extract<ContextsCommand, { _tag: "QueryContext" | "ReadQueryResult" }>;
 
@@ -24,11 +59,11 @@ export class ContextsActor extends Actor.Service<
       return ContextsActor.of({
         receive: (command, actor) =>
           Match.value(command).pipe(
-            Match.tag("Ready", ({ replyTo }) => replyTo.tell(undefined)),
             Match.tag("SearchContexts", ({ query, offset, replyTo }) =>
               Effect.gen(function* () {
                 const words = query.toLowerCase().split(/\s+/).filter(Boolean);
-                const matches = Object.values(reader.snapshot())
+                const matches = reader
+                  .directory()
                   .filter((record) =>
                     words.every((word) =>
                       `${record.path} ${record.description}`.toLowerCase().includes(word),

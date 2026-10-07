@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Fiber, Schema, Stream } from "effect";
 import {
+  type StoredContext,
   childActorName,
   childContextPath,
   defineContext,
@@ -20,7 +21,7 @@ test("virtual Context path segments map to a direct Actor name", () => {
   assert.equal(childActorName("email"), "email");
 });
 
-test("only public Schema fields notify automatically; snapshots and descriptions are isolated", async () => {
+test("only schema fields notify automatically and owner snapshots are detached", async () => {
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -50,7 +51,6 @@ test("only public Schema fields notify automatically; snapshots and descriptions
         yield* registry.commit(
           {
             ...input,
-            description: "changed",
             state: { value: 1, cursor: "another cursor" },
           },
           { expectedRevision: registry.get(input.path)?.revision ?? 0 },
@@ -90,8 +90,16 @@ test("dynamic description initializes once and preserves content updated during 
           },
           { expectedRevision: registry.get("/x")?.revision ?? 0 },
         );
-        yield* registry.describe("/x", "Fixed identity", registry.get("/x")?.revision ?? 0);
-        yield* registry.describe("/x", "Must not overwrite", registry.get("/x")?.revision ?? 0);
+        yield* registry.initializeDescription(
+          "/x",
+          "Fixed identity",
+          registry.get("/x")?.revision ?? 0,
+        );
+        yield* registry.initializeDescription(
+          "/x",
+          "Must not overwrite",
+          registry.get("/x")?.revision ?? 0,
+        );
         return registry.get("/x");
       }),
     ),
@@ -148,7 +156,11 @@ test("every changed commit publishes its detached revision", async () => {
           { ...record, messages: ["new message"] },
           { expectedRevision: registry.get(record.path)?.revision ?? 0 },
         );
-        yield* registry.describe("/x", "Fixed description", registry.get("/x")?.revision ?? 0);
+        yield* registry.initializeDescription(
+          "/x",
+          "Fixed description",
+          registry.get("/x")?.revision ?? 0,
+        );
         yield* registry.commit(
           { ...registry.get("/x")!, state: { value: 2 } },
           { expectedRevision: registry.get("/x")?.revision ?? 0 },
@@ -163,12 +175,12 @@ test("every changed commit publishes its detached revision", async () => {
 
 test("storage adapters cannot mutate the registry through loaded or saved record references", async () => {
   const loaded = { path: "/x", description: "x", state: { value: 1 }, messages: [] };
-  let saved: typeof loaded | undefined;
+  let saved: StoredContext | undefined;
   const registry = await Effect.runPromise(
     makeContextRegistry({
-      loadAll: () => [loaded],
+      loadAll: () => [{ snapshot: { ...loaded, revision: 0 }, events: [] }],
       save: (record) => {
-        saved = record as typeof loaded;
+        saved = record;
       },
     }),
   );
@@ -181,7 +193,7 @@ test("storage adapters cannot mutate the registry through loaded or saved record
       { expectedRevision: registry.get(loaded.path)?.revision ?? 0 },
     ),
   );
-  saved!.state.value = 100;
+  (saved!.snapshot.state as { value: number }).value = 100;
   assert.deepEqual(registry.get("/x")?.state, { value: 2 });
 });
 

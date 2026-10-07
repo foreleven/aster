@@ -1,0 +1,50 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { ActorSystem } from "@aster/actor";
+import { ContextRegistry } from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
+import { Effect, Layer } from "effect";
+import { LarkMailMessageActor } from "../src/lark/mail/message-actor.js";
+
+test("email updates retain the generated Context description and identical replay stays unchanged", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeContextRegistry();
+        const system = yield* ActorSystem.make().pipe(
+          ActorSystem.provide(Layer.succeed(ContextRegistry, registry)),
+        );
+        const path = "/lark/mail/me/message";
+        const actor = yield* system.spawn("mail", LarkMailMessageActor, {
+          metadata: { contextPath: path },
+        });
+        const email = {
+          messageId: "message",
+          mailbox: "me",
+          from: "Alice",
+          subject: "First",
+          bodyPlainText: "Evidence",
+          attachments: [],
+        };
+        yield* actor.ask<void>((replyTo) => ({ _tag: "SetEmail", email, replyTo }));
+        yield* registry.initializeDescription(
+          path,
+          "Generated email identity",
+          registry.get(path)!.revision,
+        );
+        const initialized = registry.get(path)!;
+        yield* actor.ask<void>((replyTo) => ({ _tag: "SetEmail", email, replyTo }));
+        assert.deepEqual(registry.get(path), initialized);
+        yield* actor.ask<void>((replyTo) => ({
+          _tag: "SetEmail",
+          email: { ...email, subject: "Updated" },
+          replyTo,
+        }));
+        const updated = registry.get(path)!;
+        assert.equal(updated.description, initialized.description);
+        assert.equal(updated.revision, initialized.revision + 1);
+        assert.deepEqual(updated.state, { ...email, subject: "Updated" });
+      }),
+    ),
+  );
+});

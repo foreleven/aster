@@ -12,7 +12,7 @@ import {
   approvalEntries,
   writebackApprovalId,
   WritebackOperation,
-  type ContextRecord,
+  type StoredContext,
 } from "../src/index.js";
 
 import { TaskSnapshot } from "../src/tasks/state/snapshot.js";
@@ -22,11 +22,11 @@ const definition: TaskDeliveryInput = {
   action: { _tag: "PublishResult", channelPath: "/lark/im/chats/oc_test", identity: "user" },
 };
 const fixture = (options: {
-  records: Map<string, ContextRecord>;
+  records: Map<string, StoredContext>;
   conversations?: ReturnType<typeof testConversations>;
   publish: ChannelWrites["Service"]["publish"];
   definition?: TaskDeliveryInput;
-  saved?: (record: ContextRecord) => void;
+  saved?: (record: StoredContext) => void;
 }) =>
   Effect.gen(function* () {
     const env = yield* taskFixture(options);
@@ -69,7 +69,7 @@ test("Run persists the result and exact writeback before a separate approval; fo
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const records = new Map<string, ContextRecord>();
+        const records = new Map<string, StoredContext>();
         const conversations = testConversations();
         const env = yield* fixture({
           records,
@@ -78,12 +78,12 @@ test("Run persists the result and exact writeback before a separate approval; fo
             Effect.sync(() => {
               calls++;
               const retained = Schema.decodeUnknownSync(TaskSnapshot)(
-                records.get(request.source)!.state,
+                records.get(request.source)!.snapshot.state,
               );
               assert.equal(retained.status, "completed");
               const publication = Schema.decodeUnknownSync(
                 Schema.Struct({ operations: Schema.Array(WritebackOperation) }),
-              )(records.get("/publications")!.state).operations[0]!;
+              )(records.get("/publications")!.snapshot.state).operations[0]!;
               assert.equal(publication.status, "sending");
               assert.deepEqual(publication.request, request);
               assert.equal(authorization.approvalId, writebackApprovalId(request));
@@ -147,7 +147,7 @@ test("Run persists the result and exact writeback before a separate approval; fo
 
 for (const outcome of ["published", "unknown", "rejected"] as const) {
   test(`writeback ${outcome} survives restart without another external submission`, async () => {
-    const records = new Map<string, ContextRecord>();
+    const records = new Map<string, StoredContext>();
     const conversations = testConversations();
     let calls = 0;
     for (let restart = 0; restart < 2; restart++) {
@@ -190,7 +190,7 @@ for (const outcome of ["published", "unknown", "rejected"] as const) {
 }
 
 test("interrupted publication remains unknown on recovery, even when the external call might have completed", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const conversations = testConversations();
   const entered = Deferred.makeUnsafe<void>();
   let calls = 0;
@@ -281,11 +281,11 @@ test("a completed Run without an explicit Signal action stays local", async () =
 for (const phase of ["sending", "published"] as const) {
   for (const handoff of ["committed", "pi-only"] as const) {
     test(`lost ${phase} ${handoff} acknowledgement does not repeat publication after owner restart`, async () => {
-      const records = new Map<string, ContextRecord>();
+      const records = new Map<string, StoredContext>();
       const conversations = testConversations();
       let calls = 0;
       let lost = false;
-      let previous: ContextRecord | undefined;
+      let previous: StoredContext | undefined;
       const acknowledgementLost = Deferred.makeUnsafe<void>();
       await Effect.runPromise(
         Effect.scoped(
@@ -296,17 +296,17 @@ for (const phase of ["sending", "published"] as const) {
               saved: (record) => {
                 if (
                   !lost &&
-                  record.path === "/publications" &&
+                  record.snapshot.path === "/publications" &&
                   Schema.decodeUnknownSync(
                     Schema.Struct({ operations: Schema.Array(WritebackOperation) }),
-                  )(record.state).operations[0]?.status === phase
+                  )(record.snapshot.state).operations[0]?.status === phase
                 ) {
                   lost = true;
                   if (handoff === "pi-only") records.set("/publications", previous!);
                   Deferred.doneUnsafe(acknowledgementLost, Effect.void);
                   throw new Error("Injected commit acknowledgement loss");
                 }
-                if (record.path === "/publications") previous = structuredClone(record);
+                if (record.snapshot.path === "/publications") previous = structuredClone(record);
               },
               publish: () =>
                 Effect.sync(() => {

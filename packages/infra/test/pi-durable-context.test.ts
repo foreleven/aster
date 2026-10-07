@@ -15,7 +15,7 @@ import {
   ContextRecoveryError,
   makeContextRegistryWithBackend,
   defineContext,
-  type ContextRecord,
+  type ContextSnapshot,
 } from "@aster/core";
 import { Cause, Deferred, Effect, Exit, Fiber, Schema } from "effect";
 import { PiDurableContext } from "../src/storage/pi-durable-context.js";
@@ -25,7 +25,8 @@ import {
   PiContextIndex,
 } from "../src/storage/pi-context-documents.js";
 
-const input: ContextRecord = {
+const input: ContextSnapshot = {
+  revision: 0,
   path: "/personal",
   description: "Personal state",
   state: { receipt: "request-1", outbox: [{ id: "delivery-1", status: "pending" }] },
@@ -127,7 +128,10 @@ test("Pi Context commits its entry, snapshot, receipts, outbox and mapping in on
         assert.equal(entries.items.length, 1);
         assert.equal(entries.items[0].kind, PiContextCommit.kind);
         assert.equal(entries.items[0].model, undefined);
-        assert.deepEqual(entries.items[0].data, { mappingVersion: 1, record: saved });
+        assert.deepEqual(entries.items[0].data, {
+          mappingVersion: 1,
+          record: { snapshot: saved, events: [] },
+        });
         assert.deepEqual(yield* registry.commit(input, { expectedRevision: 1 }), saved);
         assert.equal(batches.length, 1);
         const stale = yield* registry.commit(input, { expectedRevision: 0 }).pipe(Effect.flip);
@@ -181,7 +185,10 @@ test("Pi Context reopens snapshots and replacement message windows with stable c
       BACKGROUND_CONTEXT,
     );
     assert.equal(entries.items.length, 3);
-    assert.deepEqual(entries.items[1].data, { mappingVersion: 1, record: saved });
+    assert.deepEqual(entries.items[1].data, {
+      mappingVersion: 1,
+      record: { snapshot: saved, events: [] },
+    });
     assert.equal(index?.contexts[0].entryId, entries.items[0].id);
   } finally {
     await session.close(BACKGROUND_CONTEXT);

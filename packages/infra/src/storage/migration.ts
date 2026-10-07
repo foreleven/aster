@@ -4,8 +4,8 @@ import { Effect, Schema } from "effect";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
 import { createSession } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
-import { contextBackendFor, normalizeContextRevision } from "./routed-durable.js";
-import { DurableContextSnapshot, type ContextRecord } from "@aster/core";
+import { contextBackendFor } from "./routed-durable.js";
+import { StoredContext } from "@aster/core";
 import { makeFileContextStore } from "./file-context-store.js";
 import { acquireActorStoreLock } from "./actor-store-lock.js";
 import { readPiContextSnapshots, writePiContextSnapshot } from "./pi-durable-context.js";
@@ -84,10 +84,7 @@ export const migrateContextStorage = Effect.fn("ContextStorage.migrate")(functio
     catch: failure("Cannot open Local Context archive"),
   });
   const loadLocal = Effect.try({
-    try: () =>
-      Schema.decodeUnknownSync(Schema.Array(DurableContextSnapshot))(local.loadAll()).map(
-        normalizeContextRevision,
-      ),
+    try: () => Schema.decodeUnknownSync(Schema.Array(StoredContext))(local.loadAll()),
     catch: failure("Cannot validate Local Context archive"),
   });
   const snapshot = yield* Effect.scoped(
@@ -96,13 +93,11 @@ export const migrateContextStorage = Effect.fn("ContextStorage.migrate")(functio
       const session = pi ? yield* openPiArchive(pi, lease?.quarantine) : undefined;
       const restored = session && pi ? yield* readPi(session, pi.ownerId) : undefined;
       const stores = {
-        local: new Map(localRecords.map((record) => [record.path, record])),
-        pi: new Map(
-          restored?.records.map((record) => [record.path, normalizeContextRevision(record)]) ?? [],
-        ),
+        local: new Map(localRecords.map((record) => [record.snapshot.path, record])),
+        pi: new Map(restored?.records.map((record) => [record.snapshot.path, record]) ?? []),
       };
       const paths = [...new Set([...stores.local.keys(), ...stores.pi.keys()])].sort();
-      const canonical: ContextRecord[] = [];
+      const canonical: StoredContext[] = [];
       let copied = 0;
       // Validate the complete plan before starting the first destination write.
       for (const path of paths) {
@@ -115,8 +110,9 @@ export const migrateContextStorage = Effect.fn("ContextStorage.migrate")(functio
           const copy = store.get(path);
           if (
             copy &&
-            ((copy.revision ?? 0) > (record.revision ?? 0) ||
-              (copy.revision === record.revision && !isDeepStrictEqual(copy, record)))
+            (copy.snapshot.revision > record.snapshot.revision ||
+              (copy.snapshot.revision === record.snapshot.revision &&
+                !isDeepStrictEqual(copy, record)))
           )
             return yield* new StorageRoutingError({
               message: `Stored copy diverges from the authoritative Context: ${path}`,
@@ -125,13 +121,13 @@ export const migrateContextStorage = Effect.fn("ContextStorage.migrate")(functio
         canonical.push(record);
       }
       for (const record of canonical) {
-        const backend = contextBackendFor(record.path, target.routes);
-        const existing = stores[backend].get(record.path);
+        const backend = contextBackendFor(record.snapshot.path, target.routes);
+        const existing = stores[backend].get(record.snapshot.path);
         if (existing && isDeepStrictEqual(record, existing)) continue;
         if (backend === "local") {
           yield* Effect.try({
             try: () => local.save(record),
-            catch: failure(`Cannot import Local Context: ${record.path}`),
+            catch: failure(`Cannot import Local Context: ${record.snapshot.path}`),
           });
         } else {
           if (!session || !pi || !restored)
@@ -144,13 +140,15 @@ export const migrateContextStorage = Effect.fn("ContextStorage.migrate")(functio
                 restored.conversations,
                 record,
                 withAbortSignal(signal, BACKGROUND_CONTEXT),
-                { expectedStoredRevision: existing?.revision },
+                { expectedStoredRevision: existing?.snapshot.revision },
               ),
-            catch: failure(`Pi Context import outcome requires reconciliation: ${record.path}`),
+            catch: failure(
+              `Pi Context import outcome requires reconciliation: ${record.snapshot.path}`,
+            ),
           });
-          restored.conversations.set(record.path, id);
+          restored.conversations.set(record.snapshot.path, id);
         }
-        stores[backend].set(record.path, record);
+        stores[backend].set(record.snapshot.path, record);
         copied++;
       }
       return { records: canonical, copied };
@@ -159,24 +157,26 @@ export const migrateContextStorage = Effect.fn("ContextStorage.migrate")(functio
   // The lease remains held while all Pi handles close and reopen for disk replay.
   yield* Effect.scoped(
     Effect.gen(function* () {
-      const localRecords = new Map((yield* loadLocal).map((record) => [record.path, record]));
+      const localRecords = new Map(
+        (yield* loadLocal).map((record) => [record.snapshot.path, record]),
+      );
       const session = pi ? yield* openPiArchive(pi, lease?.quarantine) : undefined;
       const restored = session && pi ? yield* readPi(session, pi.ownerId) : undefined;
       const stores = {
         local: localRecords,
-        pi: new Map(
-          restored?.records.map((record) => [record.path, normalizeContextRevision(record)]) ?? [],
-        ),
+        pi: new Map(restored?.records.map((record) => [record.snapshot.path, record]) ?? []),
       };
       for (const record of snapshot.records)
         if (
           !isDeepStrictEqual(
-            stores[contextBackendFor(record.path, target.routes)].get(record.path),
+            stores[contextBackendFor(record.snapshot.path, target.routes)].get(
+              record.snapshot.path,
+            ),
             record,
           )
         )
           return yield* new StorageRoutingError({
-            message: `Migrated Context failed disk replay validation: ${record.path}`,
+            message: `Migrated Context failed disk replay validation: ${record.snapshot.path}`,
           });
     }),
   );

@@ -115,12 +115,12 @@ export const routingAuthorityStore = Effect.fn("StorageAuthority.make")(function
     try: () => {
       const records = store.loadAll();
       if (records.length === 0) return undefined;
-      if (records.length !== 1 || records[0].path !== "/routing")
+      if (records.length !== 1 || records[0].snapshot.path !== "/routing")
         throw new Error("Invalid storage authority records");
       return {
-        messages: records[0].messages,
-        revision: records[0].revision ?? 0,
-        value: Schema.decodeUnknownSync(StorageAuthority)(records[0].state),
+        messages: records[0].snapshot.messages,
+        revision: records[0].snapshot.revision ?? 0,
+        value: Schema.decodeUnknownSync(StorageAuthority)(records[0].snapshot.state),
       };
     },
     catch: (cause) => new StorageRoutingError({ message: "Cannot read storage authority", cause }),
@@ -135,14 +135,17 @@ export const routingAuthorityStore = Effect.fn("StorageAuthority.make")(function
       yield* Effect.try({
         try: () =>
           store.save({
-            path: "/routing",
-            description: "Authoritative Context backend routes",
-            revision: expectedRevision + 1,
-            state: Schema.decodeUnknownSync(StorageAuthority)(value),
-            messages: [
-              ...(previous?.messages ?? []),
-              { generation: expectedRevision + 1, from: previous?.value ?? null, to: value },
-            ],
+            events: [],
+            snapshot: {
+              path: "/routing",
+              description: "Authoritative Context backend routes",
+              revision: expectedRevision + 1,
+              state: Schema.decodeUnknownSync(StorageAuthority)(value),
+              messages: [
+                ...(previous?.messages ?? []),
+                { generation: expectedRevision + 1, from: previous?.value ?? null, to: value },
+              ],
+            },
           }),
         catch: (cause) =>
           new StorageRoutingError({

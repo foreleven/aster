@@ -1,11 +1,11 @@
 import { CurrentActors } from "../src/tools/actors.js";
 import type { CoreTool } from "../src/tools/define.js";
 import { toolSystem } from "./tool-fixtures.js";
-import { ContextsActor } from "../src/context/queries-actor.js";
+import { ContextsActor } from "../src/context/queries/actor.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Schema, Scope, Exit } from "effect";
-import { ContextQueries } from "../src/context/queries.js";
+import { ContextQueries } from "../src/context/queries/routes.js";
 import { contextQueryTools } from "../src/tools/catalogues.js";
 
 const input = { path: "/apps/ctrip", command: "search", args: { query: "Sanya" } };
@@ -80,7 +80,7 @@ test("query tools retain isolated pages across Actor restart and reject changed 
         assert.notEqual(second.resultId, first.resultId);
         yield* env.system.stop(env.contexts);
         const contexts = yield* env.system.spawn("contexts", ContextsActor);
-        yield* contexts.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* contexts.awaitStarted;
         const reopened = makeTools();
         let text = first.content;
         let offset: number | null = first.nextOffset;

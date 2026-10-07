@@ -19,7 +19,7 @@ const fromStore = (store?: ContextStore) =>
     save: (record) =>
       Effect.try({
         try: () => store?.save(record),
-        catch: (cause) => new ContextCommitError({ path: record.path, cause }),
+        catch: (cause) => new ContextCommitError({ path: record.snapshot.path, cause }),
       }),
   });
 

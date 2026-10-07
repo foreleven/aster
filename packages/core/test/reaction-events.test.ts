@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
-import { contextView, defineContext, type ContextRecord } from "../src/index.js";
+import { contextView, defineContext, type StoredContext } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
 const definition = defineContext({
@@ -18,11 +18,11 @@ const initial = {
 };
 
 test("source state and public reaction handoff commit together and survive uncertain acknowledgement", async () => {
-  let persisted: ContextRecord | undefined;
+  let persisted: StoredContext | undefined;
   let fail = true;
   const store = {
     loadAll: () => (persisted ? [structuredClone(persisted)] : []),
-    save: (record: ContextRecord) => {
+    save: (record: StoredContext) => {
       persisted = structuredClone(record);
       if (fail) throw new Error("Commit acknowledgement lost");
     },
@@ -34,53 +34,47 @@ test("source state and public reaction handoff commit together and survive uncer
       const failed = yield* registry.commit(initial, { expectedRevision: 0 }).pipe(Effect.result);
       assert.equal(failed._tag, "Failure");
       assert.equal(registry.get(initial.path), undefined);
-      assert.equal(persisted?.revision, 1);
-      const event = persisted?.reactionEvents?.[0];
+      assert.equal(persisted?.snapshot.revision, 1);
+      const event = persisted?.events?.[0];
       assert.ok(event);
       assert.equal(event.record.revision, 1);
       assert.equal(JSON.stringify(event).includes("PRIVATE_SOURCE_TOKEN"), false);
-      assert.equal((persisted?.state as { token: string }).token, "PRIVATE_SOURCE_TOKEN");
+      assert.equal((persisted?.snapshot.state as { token: string }).token, "PRIVATE_SOURCE_TOKEN");
       fail = false;
       // Same-process storage reconciliation preserves metadata even though domain validation omits it.
       yield* registry.register(initial.path, definition);
       assert.deepEqual(
-        registry.backend.exportRecords().find((record) => record.path === initial.path)
-          ?.reactionEvents,
+        registry.backend.exportRecords().find((record) => record.snapshot.path === initial.path)
+          ?.events,
         [event],
       );
       const restarted = yield* makeContextRegistry(store);
       yield* restarted.register(initial.path, definition);
       const current = restarted.get(initial.path)!;
-      const forged = { ...current, reactionEvents: [] };
+      const forged = { ...current, events: [] };
       yield* restarted.commit(forged, { expectedRevision: 1 });
       assert.deepEqual(
-        restarted.backend.exportRecords().find((record) => record.path === initial.path)
-          ?.reactionEvents,
+        restarted.backend.exportRecords().find((record) => record.snapshot.path === initial.path)
+          ?.events,
         [event],
       );
       const forgedNext = {
         ...initial,
         state: { ...initial.state, summary: "second" },
-        reactionEvents: [],
+        events: [],
       };
       yield* restarted.commit(forgedNext, { expectedRevision: 1 });
       const next = restarted.backend
         .exportRecords()
-        .find((record) => record.path === initial.path)!;
-      assert.equal(next.reactionEvents?.length, 2);
+        .find((record) => record.snapshot.path === initial.path)!;
+      assert.equal(next.events?.length, 2);
       assert.deepEqual(
-        next.reactionEvents?.map((item) => item.record.revision),
+        next.events?.map((item) => item.record.revision),
         [1, 2],
       );
-      assert.equal(
-        (next.reactionEvents?.[0]?.record.state as { summary: string }).summary,
-        "first",
-      );
-      assert.equal(
-        (next.reactionEvents?.[1]?.record.state as { summary: string }).summary,
-        "second",
-      );
-      assert.equal("reactionEvents" in restarted.views.project(next), false);
+      assert.equal((next.events?.[0]?.record.state as { summary: string }).summary, "first");
+      assert.equal((next.events?.[1]?.record.state as { summary: string }).summary, "second");
+      assert.equal("events" in restarted.views.project(next.snapshot), false);
     }),
   );
 });
@@ -94,14 +88,14 @@ test("bootstrap, message-only and description-only changes never create reaction
         { ...initial, description: "" },
         { expectedRevision: 0, mode: "bootstrap" },
       );
-      assert.equal("reactionEvents" in first, false);
+      assert.equal("events" in first, false);
       assert.equal(registry.backend.journal().length, 0);
-      yield* registry.describe(initial.path, "Source", 1);
+      yield* registry.initializeDescription(initial.path, "Source", 1);
       const message = yield* registry.commit(
         { ...registry.get(initial.path)!, messages: ["evidence"] },
         { expectedRevision: 2 },
       );
-      assert.equal("reactionEvents" in message, false);
+      assert.equal("events" in message, false);
       const changed = yield* registry.commit(
         { ...message, state: { ...initial.state, summary: "changed" } },
         { expectedRevision: 3 },
@@ -111,8 +105,8 @@ test("bootstrap, message-only and description-only changes never create reaction
       const stale = yield* registry.commit(initial, { expectedRevision: 3 }).pipe(Effect.result);
       assert.equal(stale._tag, "Failure");
       assert.equal(
-        registry.backend.exportRecords().find((record) => record.path === initial.path)
-          ?.reactionEvents?.length,
+        registry.backend.exportRecords().find((record) => record.snapshot.path === initial.path)
+          ?.events?.length,
         1,
       );
     }),
@@ -125,16 +119,16 @@ test("recovery rejects corrupted reaction envelopes instead of replaying another
       const registry = yield* makeContextRegistry();
       yield* registry.register(initial.path, definition);
       const committed = yield* registry.commit(initial, { expectedRevision: 0 });
-      const event = registry.backend.exportRecords()[0]!.reactionEvents![0]!;
+      const event = registry.backend.exportRecords()[0]!.events![0]!;
       for (const corrupt of [
-        { ...event, source: "/another-source" },
-        { ...event, revision: 2 },
+        { ...event, record: { ...event.record, path: "/another-source" } },
+
         { ...event, record: { ...event.record, revision: 2 } },
-        { ...event, requestId: "forged" },
-        { ...event, causationId: "forged" },
+        { ...event, id: "forged" },
+        { ...event, createdAt: "invalid" },
       ]) {
         const recovered = yield* makeContextRegistry({
-          loadAll: () => [{ ...committed, reactionEvents: [corrupt] }],
+          loadAll: () => [{ snapshot: committed, events: [corrupt] }],
           save: () => assert.fail("Recovery must not rewrite corruption"),
         }).pipe(Effect.result);
         assert.equal(recovered._tag, "Failure");

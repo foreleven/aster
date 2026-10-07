@@ -41,8 +41,8 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
         Schema.decodeUnknownSync(TaskDeliveryInput)(
           (yield* env.conversations.get(
             input.target,
-            Schema.decodeUnknownSync(TaskSnapshot)(env.records.get(input.target)!.state).inputs[0]!
-              .entryId,
+            Schema.decodeUnknownSync(TaskSnapshot)(env.records.get(input.target)!.snapshot.state)
+              .inputs[0]!.entryId,
           )).data,
         ),
         input,

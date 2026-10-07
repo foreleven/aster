@@ -16,7 +16,7 @@ import {
   SystemOneClient,
   defineIntegration,
 } from "../src/index.js";
-import { makeDurableContext } from "../src/context/kernel.js";
+import { makeDurableContext } from "../src/context/store.js";
 
 const integration = (
   name: string,

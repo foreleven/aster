@@ -1,72 +1,61 @@
 # Context design
 
-Context is the versioned shared state boundary between an Actor owner and its readers. It validates owner data, commits it durably, projects public views and announces successful commits. It does not decide which Goals or Signals to invoke, what to memorize, or how to generate descriptions.
+Context is versioned shared state between an Actor owner and its readers. It validates owner data, commits it durably, projects public views and announces successful commits. It does not select Goals or Signals, execute Tasks, capture Memory or generate descriptions.
 
 ## Models
 
-| Model             | Fields and purpose                                                                       |
-| ----------------- | ---------------------------------------------------------------------------------------- |
-| `ContextInput`    | `path`, `description`, `state`, `messages`; complete owner content proposed for commit   |
-| `ContextSnapshot` | Input plus required `revision`; detached canonical owner read                            |
-| `ContextChange`   | `{ record: ContextSnapshot }`; live commit notification                                  |
-| `PublicContext`   | Allowlisted state/messages plus projection metadata; application and model read contract |
-| `ContextEvent`    | `id`, versioned public `record`, `createdAt`; durable source evidence                    |
-| `StoredContext`   | `snapshot`, `events`; kernel state separated from owner reads                            |
+| Model             | Purpose                                                                           |
+| ----------------- | --------------------------------------------------------------------------------- |
+| `ContextInput`    | `path`, `description`, `state`, `messages`; complete content proposed by an owner |
+| `ContextSnapshot` | Input plus required `revision`; detached canonical owner read                     |
+| `ContextEntry`    | `path`, `description`; lightweight discovery without copying state or messages    |
+| `ContextChange`   | `{ record: ContextSnapshot }`; live notification after a successful commit        |
+| `PublicContext`   | Allowlisted state/messages and projection metadata for application/model reads    |
+| `ContextEvent`    | `id`, versioned public `record`, `createdAt`; durable source evidence             |
+| `StoredContext`   | `{ snapshot, events }`; the same validated model in memory, Local and Pi          |
 
-`ContextDefinition` contains schema-generated validation, an optional view and `changes: "none" | "durable-state"`. There is no duplicated identity, capture callback or Signal-specific source flag. Omitting `changes` does not produce durable events. Description identity and Memory selection are consumer policies.
+Context messages can contain source evidence, such as a Lark chat's message window. Goal and Task conversations remain in Pi; Context is not a second Agent transcript store.
 
-Callers supply `expectedRevision` separately from content. Optional `mode: "bootstrap"` suppresses durable reaction creation for initialization; it still persists and publishes changed content. Owners cannot supply a journal event through the registry commit API.
+`ContextDefinition` provides schema validation, an optional public view and `changes: "none" | "durable-state"`. Omitting `changes` produces no durable source events. Owners supply `expectedRevision` separately from content. Optional `mode: "bootstrap"` suppresses durable source events while still persisting and publishing changed content.
 
-## File and package boundaries
+## Organization
 
-| Location                                                     | Responsibility                                                                                                |
-| ------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `core/context/model.ts`                                      | Snapshot, input, change and event schemas; stable event identity                                              |
-| `core/context/definition.ts`                                 | Schema-backed definition and view policy contracts                                                            |
-| `core/context/registry.ts`                                   | Definition registration, validation, public reader, projection registration and description compare-and-swap  |
-| `core/context/kernel.ts`                                     | Revision checks, no-op suppression, persistence ordering, detached reads, journal and uncertain-write fencing |
-| `core/context/persistence.ts`                                | Durable capability, driver port, stored model and conversion helpers                                          |
-| `core/context/storage-format.ts`                             | Legacy disk/Pi envelope validation and compatibility schemas                                                  |
-| `core/context/actor.ts`                                      | Actor lifecycle registration and public path mapping                                                          |
-| `core/context/view.ts`, `queries.ts`, `json.ts`, `errors.ts` | Generic projection, Context query capability, serialization support and typed errors                          |
-| `core/reactions/`                                            | System One screening, phase-specific work, durable delivery, receipts and inspection                          |
-| `core/memory/contracts.ts`, `capture.ts`, `actor.ts`         | Memory ports, capture policies and durable queue/deduplication                                                |
-| `core/reasoning/context-description.ts`                      | Description identity policies and generation                                                                  |
-| `core/tools/context/`                                        | Agent tool adapters                                                                                           |
-| `core/runtime/context-*.ts`, `processing.ts`                 | Consumer lifecycle, core policy assembly and diagnostic composition                                           |
-| `core/{goals,signals,tasks,delegation,approvals}/view.ts`    | Owner-specific public schemas                                                                                 |
-| `core/commands/recovery.ts`                                  | Shared recovery-command receipt validation                                                                    |
-| `infra/storage/`                                             | Local/Pi persistence, native storage adapters, routing and migration                                          |
-| `core/testing/context.ts`                                    | In-memory test setup, exported through `@aster/core/testing`                                                  |
+| File                         | Responsibility                                                                                             |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `context/model.ts`           | Inputs, snapshots, directory entries, source events, storage schema and event identity                     |
+| `context/definition.ts`      | Owner definitions and allowlisted public projection rules                                                  |
+| `context/registry.ts`        | Registration, owner validation, public reads, view registration and conditional description initialization |
+| `context/store.ts`           | DurableContext port, persistence driver contract, ordered commits and recovery                             |
+| `context/actor.ts`           | ContextActor lifecycle registration and public/Actor path mapping                                          |
+| `context/errors.ts`          | Typed commit, validation, conflict and recovery errors                                                     |
+| `context/queries/actor.ts`   | Query Actor and its commands, bounded work and asynchronous result replies                                 |
+| `context/queries/routes.ts`  | Scoped registration and dispatch of integration queries                                                    |
+| `context/queries/results.ts` | Pi query evidence, operation identity checks and result pagination                                         |
+| `commands/query.ts`          | Shared query replies and cancellation used by Contexts, Memory, Signals and Tools                          |
+| `commands/json.ts`           | Shared JSON boundary normalization                                                                         |
 
-Integrations own their view, description and capture policies. Context imports no integration or business-owner schemas. Runtime installs core policies, then integrations add their policies before activating sources. The Memory Actor owns accepted capture identities; runtime does not keep an ephemeral duplicate-suppression set.
+`ContextActor` wraps an owner Actor definition; it is not a separate Actor or a business-state service. `ContextsActor` is the Runtime-owned `/user/contexts` query endpoint and owns no Context snapshots. Tools ask this endpoint; integrations register query routes that dispatch to their own Actors. Runtime uses native `awaitStarted` for query startup, without a Ready command.
+
+Storage adapters and backend selection remain in infra. Reactions, Memory and description generation retain their own modules and policies. Runtime installs core views before source startup; integrations install their policies before source activation. Dormant owners remain discoverable through persisted snapshots and registered view policies.
 
 ## Reads and commits
 
-Owners use `registry.get/snapshot` for complete canonical snapshots. Application queries and model tools use `registry.reader.get/snapshot/subscribe`. `registry.views` is the explicit policy-registration and projection capability used during composition and by consumers holding frozen evidence. Missing or invalid views produce restricted public records. Projection never changes stored owner data.
+Owners use `registry.get/snapshot`. Application queries and model tools use `registry.reader.get/snapshot`; directory search uses `reader.directory`, which returns only paths and descriptions. Public projections never change owner data. Missing or invalid view policies restrict state and messages. `registry.views.project` also projects frozen consumer evidence.
 
-A commit validates owner schemas, compares the observed revision, then persists the complete next snapshot and any source event in one transaction. Only successful persistence changes canonical memory and publishes a notification. An unchanged record preserves its revision. State changes produce an event only when the definition requests durable changes; message-only and description-only changes still notify readers without producing source work.
+A commit validates the owner schema and expected revision, then persists the next snapshot and source event together. Only successful persistence updates canonical memory and publishes a notification. An unchanged record retains its revision. State changes produce source events only when requested by the definition; message-only and description-only changes still notify readers.
 
-The kernel creates the event revision and stable ID. The source path and revision live in its public record, and the System One target is implied by the consumer. Owner reads do not expose journals. `DurableContext.journal()` supports durable consumption; `exportRecords()` supports storage migration and authority validation.
+Owner commits honor their supplied description. `initializeDescription` separately fills an empty description at an observed revision, preserving newer content. Description generation remains outside Context.
 
-Admitted commits drain persistence and publication even when their caller is interrupted. Waiting writers remain interruptible. Failed or uncertain writes fence the path until registration recovers authoritative storage. Recovery rejects missing or regressed snapshots, preserves original journal identities and does not invent a new source event. Domain owners serialize business writes: GoalState owns Goal transitions from mailbox handlers and local tools, while other domain state remains mailbox-owned. ContextRegistry persistence and publication do not introduce another business writer.
+The store serializes commit and recovery per path. Unrelated Contexts may progress independently. Waiting writers are interruptible; admitted persistence, canonical-state updates and publication drain together. Pi adapters additionally serialize access to their shared Session, including poisoning and reopen, so recovery cannot close a Session while another Context is writing.
 
-## Reaction work
+Failed or uncertain writes fence their path until registration reconciles authoritative storage. Recovery rejects missing or regressed snapshots and retains original source event identities. Domain owners still serialize business transitions; the store's revision checks and persistence ordering do not replace mailbox/state ownership.
 
-System One scans the journal on startup and live wakeups, so recovery does not require the source Actor to be alive. It persists work before planning or delivery. Work uses phase-specific schemas:
+## Durable evidence and storage
 
-- `pending`: source event and attempt count.
-- `planning`: event, attempts and frozen screening input.
-- `failed`: the same input plus a failure description for explicit retry.
-- `ready`: committed screenings and one or more deliveries.
-- `completed`: screenings and terminal deliveries.
+Source event IDs derive from the `context-event` namespace, path and committed revision. The storage schema validates event ownership, increasing revisions, snapshot bounds, stable identity and creation time. Event records retain public evidence only. `journal()` supplies durable consumers; `exportRecords()` supplies full records for routed-storage divergence checks and offline backend migration.
 
-Frozen input contains other Context evidence, the Goal catalogue and screening time. The source is retained once in the event and reinserted for screening. Completed work does not retain a redundant full catalogue. Deliveries require a receipt only after delivery, and an error only for unknown or rejected outcomes. Receipt identities, target versions and bounded retry behavior remain unchanged. Unknown external outcomes never authorize a new submission.
+Local keeps its fsync-backed pending transaction across state and message files. Pi atomically commits the storage record, entry and index mapping. Both use `{ snapshot, events }`; old flat records, missing revisions and reaction-envelope conversions are unsupported. No runtime data is rewritten by this change.
 
-## Compatibility
+Live notifications wake System One, whose durable journal scan also recovers work after restart. Reactions own frozen screening evidence, target matching, deliveries and receipts. Memory owns capture selection and deduplication. Neither relies on a live source Actor to preserve accepted evidence.
 
-The existing HTTP/RPC `PublicContext` shape is retained, including optional wire revision and the versioned projection marker. Actual canonical snapshots require a revision; unversioned stored snapshots normalize to zero. No browser contract migration is required.
-
-Existing disk/Pi records keep the v1 flat `reactionEvents` envelope. Compatibility conversion reconstructs its source, target, revision and causation fields from the compact model; the `context-reaction-v1` identity namespace stays unchanged. Full exported records, including journals, participate in routed-storage divergence checks.
-
-Legacy System One work is validated before decoding into phase-specific work. Migration preserves source IDs, frozen input and delivery commands/receipts. New writes encode the compact work schema. This is forward read compatibility, not a promise that an older binary can read newly written reaction work. No offline data rewrite or production-data access is part of this refactor. Journal compaction remains unimplemented.
+Source journals still grow with retained history and are saved with snapshots. Append-only storage and journal compaction require a separate retention design that accounts for every durable consumer.

@@ -1,10 +1,5 @@
 import { ApplicationError } from "@aster/api-contracts";
-import {
-  QueryReply,
-  queryReplyTo,
-  queryCancelled,
-  cancellableQuery,
-} from "../context/query-protocol.js";
+import { QueryReply, queryReplyTo, queryCancelled, cancellableQuery } from "../commands/query.js";
 import { ContextCaptures } from "./capture.js";
 import { ReplyTo, type ActorContext } from "@aster/actor";
 import { Deferred, Effect, HashSet, Layer, Match, Schema } from "effect";
@@ -13,7 +8,7 @@ import { ContextRegistry } from "../context/registry.js";
 import { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { defineContext } from "../context/definition.js";
 import { type ContextCapture } from "./contracts.js";
-import { contextView } from "../context/view.js";
+import { contextView } from "../context/definition.js";
 import { MemoryBackend, MemoryCaptureError } from "./contracts.js";
 
 const Capture = Schema.Struct({ sessionId: Schema.String, records: Schema.Array(ContextRecord) });

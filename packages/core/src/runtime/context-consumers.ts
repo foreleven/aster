@@ -1,5 +1,5 @@
 import { CurrentActors } from "../tools/actors.js";
-import { DurableContext } from "../context/persistence.js";
+import { DurableContext } from "../context/store.js";
 import { type ActorSystem, type ActorRef } from "@aster/actor";
 import { Effect, Stream } from "effect";
 import { ContextRegistry } from "../context/registry.js";

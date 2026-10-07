@@ -27,7 +27,7 @@ for (const result of ["found", "missing", "unsupported", "failed"] as const) {
           let lookups = 0;
           const env = yield* taskFixture({
             conversations,
-            records: new Map([[record.path, record]]),
+            records: new Map([[record.snapshot.path, record]]),
             agent: fakeAgent({
               submit: () => Effect.die("Recovery must not submit"),
               resume: () => Effect.die("Completed work must not resume"),
@@ -37,7 +37,7 @@ for (const result of ["found", "missing", "unsupported", "failed"] as const) {
                     lookupSubmission: (task, submission) =>
                       Effect.gen(function* () {
                         lookups++;
-                        assert.equal(submission.requestId, record.path);
+                        assert.equal(submission.requestId, record.snapshot.path);
                         assert.match(task.instructions, /Test policy/);
                         if (result === "failed")
                           return yield* new ExternalAgentError({
@@ -57,14 +57,14 @@ for (const result of ["found", "missing", "unsupported", "failed"] as const) {
             _tag: "CheckTask",
             input: {
               requestId: "reconcile",
-              target: record.path,
-              expectedRevision: env.registry.get(record.path)!.revision!,
+              target: record.snapshot.path,
+              expectedRevision: env.registry.get(record.snapshot.path)!.revision!,
             },
             replyTo,
           }));
           assert.equal(response._tag, "Accepted");
           const state = () =>
-            Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(record.path)!.state);
+            Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(record.snapshot.path)!.state);
           yield* env.wait(
             () =>
               state().status === (result === "found" ? "completed" : "uncertain") &&
@@ -75,7 +75,7 @@ for (const result of ["found", "missing", "unsupported", "failed"] as const) {
           if (result === "found") {
             yield* env.wait(() => state().status === "completed");
             assert.equal(
-              (yield* checkpoint(conversations, record.path))?.session?.sessionId,
+              (yield* checkpoint(conversations, record.snapshot.path))?.session?.sessionId,
               "original",
             );
           } else assert.equal(state().status, "uncertain");
@@ -93,12 +93,12 @@ test("Task inspection excludes provider metadata and performs no execution", asy
       Effect.gen(function* () {
         const original = yield* retainedTask(conversations, "completed");
         const record = original;
-        yield* seedCheckpoint(conversations, record.path, {
+        yield* seedCheckpoint(conversations, record.snapshot.path, {
           session: { sessionId: "id", metadata: { credential: "private-token" } },
         });
         const env = yield* taskFixture({
           conversations,
-          records: new Map([[record.path, record]]),
+          records: new Map([[record.snapshot.path, record]]),
           agents: {},
         });
         const api = makeApplicationApi({
@@ -106,7 +106,7 @@ test("Task inspection excludes provider metadata and performs no execution", asy
           conversations,
           inspect: Effect.succeed(null),
         });
-        const view = yield* api.inspectTask(record.path);
+        const view = yield* api.inspectTask(record.snapshot.path);
         assert.equal(view.instructions, taskInput().task.instructions);
         assert.equal(view.result, "Original result");
         assert.doesNotMatch(JSON.stringify(view), /private-token|metadata|sessionId/);

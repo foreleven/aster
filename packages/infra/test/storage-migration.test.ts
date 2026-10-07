@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Effect } from "effect";
-import type { ContextRecord } from "@aster/core";
+import type { ContextSnapshot } from "@aster/core";
 import { makeFileContextStore } from "../src/storage/file-context-store.js";
 import { migrateContextStorage } from "../src/storage/migration.js";
 import { routingAuthorityStore, type StorageAuthority } from "../src/storage/routing.js";
@@ -23,7 +23,7 @@ const setup = (t: { after: (cleanup: () => void) => void }) => {
   };
   return { root, authority, local: makeFileContextStore(authority.localDirectory) };
 };
-const original: ContextRecord = {
+const original: ContextSnapshot = {
   path: "/personal",
   description: "Personal",
   revision: 7,
@@ -41,8 +41,8 @@ const migrate = (root: string, authority: StorageAuthority) =>
 
 test("offline migration preserves full snapshots, is repeatable, and rollback carries new Pi commits", async (t) => {
   const { root, authority, local } = setup(t);
-  local.save(original);
-  local.save({ ...original, path: "/personal-archive" });
+  local.save({ snapshot: original, events: [] });
+  local.save({ snapshot: { ...original, path: "/personal-archive" }, events: [] });
   const forward = await migrate(root, authority);
   assert.deepEqual(forward, { checked: 2, copied: 1, routes: authority.routes });
   assert.equal((await migrate(root, authority)).copied, 0);
@@ -73,7 +73,7 @@ test("offline migration preserves full snapshots, is repeatable, and rollback ca
   assert.deepEqual(
     makeFileContextStore(authority.localDirectory)
       .loadAll()
-      .find((record) => record.path === "/personal"),
+      .find((record) => record.snapshot.path === "/personal")?.snapshot,
     newest,
   );
   assert.equal((await migrate(root, reverse)).copied, 0);
@@ -89,10 +89,10 @@ test("offline migration preserves full snapshots, is repeatable, and rollback ca
   );
 });
 
-test("legacy snapshots migrate at revision zero and accept the next CAS commit", async (t) => {
+test("explicit zero-revision snapshots migrate at revision zero and accept the next CAS commit", async (t) => {
   const { root, authority, local } = setup(t);
-  const { revision: _revision, ...legacy } = original;
-  local.save(legacy);
+  const zero = { ...original, revision: 0 };
+  local.save({ snapshot: zero, events: [] });
   await migrate(root, authority);
   await Effect.runPromise(
     Effect.scoped(
@@ -101,9 +101,9 @@ test("legacy snapshots migrate at revision zero and accept the next CAS commit",
           directory: authority.pi!.directory,
           shardId: "test",
         });
-        assert.deepEqual(backend.get("/personal"), { ...legacy, revision: 0 });
+        assert.deepEqual(backend.get("/personal"), { ...zero, revision: 0 });
         const next = yield* backend.commit(
-          { ...legacy, messages: [...legacy.messages, "next"] },
+          { ...zero, messages: [...zero.messages, "next"] },
           { expectedRevision: 0 },
         );
         assert.equal(next.revision, 1);
@@ -114,8 +114,8 @@ test("legacy snapshots migrate at revision zero and accept the next CAS commit",
 
 test("migration validates every copy before writing and leaves routing authority unchanged", async (t) => {
   const { root, authority, local } = setup(t);
-  local.save({ ...original, path: "/a", revision: 1 });
-  local.save({ ...original, path: "/z", revision: 1 });
+  local.save({ snapshot: { ...original, path: "/a", revision: 1 }, events: [] });
+  local.save({ snapshot: { ...original, path: "/z", revision: 1 }, events: [] });
   const previous = { ...authority, routes: [] };
   await migrate(root, previous);
   await Effect.runPromise(
@@ -212,6 +212,9 @@ test("interrupted rollback retains old authority and safely reconciles partial c
   rmSync(obstacle, { recursive: true });
   const retried = await migrate(root, reverse);
   assert.equal(retried.checked, 2);
-  assert.deepEqual(makeFileContextStore(authority.localDirectory).loadAll(), records);
+  assert.deepEqual(
+    makeFileContextStore(authority.localDirectory).loadAll(),
+    records.map((snapshot) => ({ snapshot, events: [] })),
+  );
   assert.equal((await migrate(root, reverse)).copied, 0);
 });

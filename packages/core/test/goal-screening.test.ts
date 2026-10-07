@@ -7,10 +7,10 @@ import {
   GoalScreeningStoreError,
   type GoalScreeningRecord,
   type SystemOneClient,
-  type ContextRecord,
+  type ContextInput,
 } from "../src/index.js";
 
-const source: ContextRecord = {
+const source: ContextInput = {
   path: "/lark/im/chats/project",
   description: "Project chat",
   state: { summary: "The launch is blocked by a backend API delay." },
@@ -92,12 +92,14 @@ test("Goal screening scores each Goal independently and records admitted evidenc
       {
         goalRecords: {
           "/goals/release": {
+            revision: 0,
             path: "/goals/release",
             description: "Release Goal",
             state: { title: "Release readiness", summary: "Prepare this release." },
             messages: [],
           },
           "/goals/hiring": {
+            revision: 0,
             path: "/goals/hiring",
             description: "Hiring Goal",
             state: { title: "Hiring", summary: "Build the team." },

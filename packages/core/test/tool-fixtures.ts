@@ -2,8 +2,8 @@ import { ActorSystem } from "@aster/actor";
 import { AgentConversations, AgentRunner } from "@aster/agent";
 import { Deferred, Effect, Layer } from "effect";
 import { ContextRegistry } from "../src/context/registry.js";
-import { ContextQueries } from "../src/context/queries.js";
-import { ContextsActor } from "../src/context/queries-actor.js";
+import { ContextQueries } from "../src/context/queries/routes.js";
+import { ContextsActor } from "../src/context/queries/actor.js";
 import { MemoryActor } from "../src/memory/actor.js";
 import { MemoryBackend, type MemoryRecall } from "../src/memory/contracts.js";
 import { ContextCaptures } from "../src/memory/capture.js";
@@ -55,7 +55,7 @@ export const toolSystem = Effect.fnUntraced(function* (
     ),
   );
   const contexts = yield* system.spawn("contexts", ContextsActor);
-  yield* contexts.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+  yield* contexts.awaitStarted;
   const memory = yield* system.spawn("memory", MemoryActor);
   yield* memory.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
   if (options.goals?.length) {

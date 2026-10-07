@@ -30,13 +30,25 @@ const operation: WritebackOperation = {
 const registryFor = (writeback = operation) =>
   makeContextRegistry({
     loadAll: () => [
-      { path: source, description: "Run", revision: 3, messages: [], state: { writeback } },
       {
-        path: target,
-        description: "Known chat",
-        revision: 1,
-        messages: [],
-        state: { chat: { id: "oc_test" } },
+        snapshot: {
+          path: source,
+          description: "Run",
+          revision: 3,
+          messages: [],
+          state: { writeback },
+        },
+        events: [],
+      },
+      {
+        snapshot: {
+          path: target,
+          description: "Known chat",
+          revision: 1,
+          messages: [],
+          state: { chat: { id: "oc_test" } },
+        },
+        events: [],
       },
     ],
     save: () => assert.fail("A Channel adapter does not mutate Run state"),

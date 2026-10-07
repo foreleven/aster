@@ -15,20 +15,22 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { ContextRecord } from "@aster/core";
+import { StoredContext, ContextSnapshot } from "@aster/core";
 import { type ContextStore } from "./storage.js";
 
 import { Schema } from "effect";
 
 const StateFile = Schema.Struct({
-  path: ContextRecord.fields.path,
-  revision: ContextRecord.fields.revision,
-  description: ContextRecord.fields.description,
-  state: ContextRecord.fields.state,
-  reactionEvents: ContextRecord.fields.reactionEvents,
+  snapshot: Schema.Struct({
+    path: ContextSnapshot.fields.path,
+    revision: ContextSnapshot.fields.revision,
+    description: ContextSnapshot.fields.description,
+    state: ContextSnapshot.fields.state,
+  }),
+  events: StoredContext.fields.events,
   messageCount: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
 });
-const decodePending = Schema.decodeUnknownSync(Schema.fromJsonString(ContextRecord));
+const decodePending = Schema.decodeUnknownSync(Schema.fromJsonString(StoredContext));
 const decodeState = Schema.decodeUnknownSync(Schema.fromJsonString(StateFile));
 const decodeMessage = Schema.decodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
@@ -82,7 +84,9 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
   };
   const jsonl = (messages: ReadonlyArray<unknown>) =>
     messages.map((message) => JSON.stringify(message) + "\n").join("");
-  const finish = (record: ContextRecord, previous?: ContextRecord) => {
+  const finish = (stored: StoredContext, prior?: StoredContext) => {
+    const record = stored.snapshot;
+    const previous = prior?.snapshot;
     const dir = directory(record.path);
     const messagePath = join(dir, "messages.jsonl");
     const append =
@@ -105,11 +109,13 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
       join(dir, "state.json"),
       JSON.stringify(
         {
-          path: record.path,
-          ...(record.revision === undefined ? {} : { revision: record.revision }),
-          description: record.description,
-          state: record.state,
-          ...(record.reactionEvents === undefined ? {} : { reactionEvents: record.reactionEvents }),
+          snapshot: {
+            path: record.path,
+            revision: record.revision,
+            description: record.description,
+            state: record.state,
+          },
+          events: stored.events,
           messageCount: record.messages.length,
         },
         null,
@@ -119,7 +125,7 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
     rmSync(join(dir, ".pending.json"), { force: true });
     syncDirectory(dir);
   };
-  const cache = new Map<string, ContextRecord>();
+  const cache = new Map<string, StoredContext>();
   const loadAll = () => {
     cache.clear();
     const visit = (dir: string) => {
@@ -127,7 +133,7 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
       const pending = join(dir, ".pending.json");
       if (existsSync(pending)) {
         const record = decodePending(readFileSync(pending, "utf8"));
-        if (directory(record.path) !== dir)
+        if (directory(record.snapshot.path) !== dir)
           throw new Error(`Context recovery path mismatch: ${dir}`);
         // Rewrite rather than append: a crash may have committed only part of the previous append.
         finish(record);
@@ -135,25 +141,20 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
       const statePath = join(dir, "state.json");
       if (existsSync(statePath)) {
         const stored = decodeState(readFileSync(statePath, "utf8"));
-        if (directory(stored.path) !== dir) throw new Error(`Context state path mismatch: ${dir}`);
+        if (directory(stored.snapshot.path) !== dir)
+          throw new Error(`Context state path mismatch: ${dir}`);
         const raw = readFileSync(join(dir, "messages.jsonl"), "utf8");
         const messages = raw
           .split("\n")
           .filter(Boolean)
           .map((line) => decodeMessage(line));
         if (messages.length !== stored.messageCount)
-          throw new Error(`Context message count mismatch: ${stored.path}`);
+          throw new Error(`Context message count mismatch: ${stored.snapshot.path}`);
         cache.set(
-          stored.path,
-          Schema.decodeUnknownSync(ContextRecord)({
-            path: stored.path,
-            ...(stored.revision === undefined ? {} : { revision: stored.revision }),
-            description: stored.description,
-            state: stored.state,
-            ...(stored.reactionEvents === undefined
-              ? {}
-              : { reactionEvents: stored.reactionEvents }),
-            messages,
+          stored.snapshot.path,
+          Schema.decodeUnknownSync(StoredContext)({
+            snapshot: { ...stored.snapshot, messages },
+            events: stored.events,
           }),
         );
       }
@@ -165,12 +166,12 @@ export const makeFileContextStore = (root = join(homedir(), ".aster", "actors"))
   return {
     loadAll,
     save: (input) => {
-      const record = Schema.decodeUnknownSync(ContextRecord)(structuredClone(input));
-      const dir = directory(record.path);
+      const record = Schema.decodeUnknownSync(StoredContext)(structuredClone(input));
+      const dir = directory(record.snapshot.path);
       ensureDirectory(dir);
       atomic(join(dir, ".pending.json"), JSON.stringify(record));
-      finish(record, cache.get(record.path));
-      cache.set(record.path, record);
+      finish(record, cache.get(record.snapshot.path));
+      cache.set(record.snapshot.path, record);
     },
   };
 };

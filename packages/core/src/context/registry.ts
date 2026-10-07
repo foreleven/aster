@@ -1,18 +1,19 @@
-import { ContextInput, ContextSnapshot, ContextPath } from "./model.js";
+import { ContextInput, ContextSnapshot, ContextPath, type ContextEntry } from "./model.js";
 import type { PublicContext } from "@aster/api-contracts";
-import { restrictedContext } from "./view.js";
+import { restrictedContext } from "./definition.js";
 import type { ContextViewPolicy } from "./definition.js";
 import { Context, Effect, Layer, Schema, Stream, type Scope } from "effect";
 import { type ContextDefinition } from "./definition.js";
 import { type ContextChange } from "./model.js";
 import { ContextCommitError, ContextConflict, ContextValidationError } from "./errors.js";
 
-import { DurableContext, type ContextCommitOptions } from "./persistence.js";
-export type { ContextCommitOptions } from "./persistence.js";
+import { DurableContext, type ContextCommitOptions } from "./store.js";
+export type { ContextCommitOptions } from "./store.js";
 
 export interface ContextReader {
   readonly get: (path: string) => PublicContext | undefined;
   readonly snapshot: () => Readonly<Record<string, PublicContext>>;
+  readonly directory: () => readonly ContextEntry[];
   readonly subscribe: Effect.Effect<
     Stream.Stream<{ readonly record: PublicContext }>,
     never,
@@ -39,7 +40,7 @@ export class ContextRegistry extends Context.Service<
       ContextConflict | ContextValidationError | ContextCommitError
     >;
     /** Initialize a dynamic description once, without replacing newer content. */
-    readonly describe: (
+    readonly initializeDescription: (
       path: string,
       description: string,
       expectedRevision: number,
@@ -79,12 +80,11 @@ export const makeContextRegistryWithBackend = (
   ) {
     const definition = definitions.get(input.path);
     if (!definition) return yield* Effect.die(new Error(`Unregistered Context: ${input.path}`));
-    const previous = backend.get(input.path);
     const validated = yield* Effect.try({
       try: () =>
         definition.validate({
           path: input.path,
-          description: previous?.description || input.description,
+          description: input.description,
           state: input.state,
           messages: input.messages,
         }),
@@ -115,6 +115,7 @@ export const makeContextRegistryWithBackend = (
         return record ? project(record) : undefined;
       },
       snapshot: publicSnapshot,
+      directory: backend.directory,
       subscribe: backend.subscribe.pipe(
         Effect.map((stream) =>
           stream.pipe(Stream.map(({ record }) => ({ record: project(record) }))),
@@ -139,7 +140,7 @@ export const makeContextRegistryWithBackend = (
         definitions.set(path, definition);
       }),
     commit,
-    describe: (path, description, expectedRevision) =>
+    initializeDescription: (path, description, expectedRevision) =>
       Effect.gen(function* () {
         if (!description.trim())
           return yield* Effect.die(new Error("Context description must be nonempty"));

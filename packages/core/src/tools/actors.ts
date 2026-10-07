@@ -1,7 +1,7 @@
 import { type ActorContext, type ActorRef, type ReplyTo } from "@aster/actor";
 import { ApplicationError } from "@aster/api-contracts";
 import { Context, Deferred, Effect } from "effect";
-import type { QueryReply } from "../context/query-protocol.js";
+import type { QueryReply } from "../commands/query.js";
 
 /** The current runtime's addressing capability, provided by the owning execution. */
 export class CurrentActors extends Context.Service<

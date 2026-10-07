@@ -8,7 +8,7 @@ import {
   TaskDeliveryInput,
   TaskPath,
 } from "@aster/api-contracts";
-import { contextView } from "../context/view.js";
+import { contextView } from "../context/definition.js";
 import { TaskSnapshot } from "./state/snapshot.js";
 import { AgentConversations } from "@aster/agent";
 import { type ContextRegistry } from "../context/registry.js";

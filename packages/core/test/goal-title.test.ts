@@ -12,7 +12,7 @@ import {
   GoalsRootActor,
   makeApplicationApi,
   parseConfig,
-  type ContextRecord,
+  type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
@@ -62,7 +62,7 @@ test("Goal config readers retain optional titles and reject blank or non-string 
 
 test("Goal startup refreshes the entire definition without losing work", async () => {
   const history = testConversations();
-  let saved: ContextRecord | undefined;
+  let saved: StoredContext | undefined;
   for (const definition of [
     { slug: "project", description: "Detailed responsibility" },
     {
@@ -122,13 +122,13 @@ test("Goal startup refreshes the entire definition without losing work", async (
             title ?? description,
           );
           assert.equal(record.description, description);
-          assert.deepEqual(saved, canonical);
+          assert.deepEqual(saved?.snapshot, canonical);
           assert.deepEqual(yield* api.goals.list, [record]);
           if (previous) {
             assert.deepEqual(canonical, {
-              ...previous,
-              revision: (previous.revision ?? 0) + 1,
-              state: { ...previous.state, definition },
+              ...previous.snapshot,
+              revision: previous.snapshot.revision + 1,
+              state: { ...previous.snapshot.state, definition },
             });
           } else {
             // Retain completed business progress while refreshing display metadata.

@@ -177,7 +177,12 @@ test("System One receives email fields and every Signal condition, then selects 
   }));
   const selected = await Effect.runPromise(
     makeSystemOneGate(client)(
-      { path: "/lark/mail/me/new-id", description: "email", state: email, messages: [] },
+      {
+        path: "/lark/mail/me/new-id",
+        description: "email",
+        state: email,
+        messages: [],
+      },
       signals,
     ),
   );
@@ -206,7 +211,10 @@ for (const mailbox of ["me", "other"])
             state: { mailbox: "me", profile: { address: "saved@example.com", name: "Saved" } },
             messages: [],
           };
-          const registry = yield* makeContextRegistry({ loadAll: () => [saved], save: () => {} });
+          const registry = yield* makeContextRegistry({
+            loadAll: () => [{ snapshot: saved, events: [] }],
+            save: () => {},
+          });
           const entered = yield* Deferred.make<void>();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(

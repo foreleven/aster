@@ -11,7 +11,7 @@ import {
   type ApprovalEntry,
   type ApprovalResponse,
   type InputRequest,
-  type ContextRecord,
+  type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
 
@@ -138,7 +138,7 @@ test("approval validation rejects invalid answers without saving and accepts com
           };
           let saves = 0;
           const registry = yield* makeContextRegistry({
-            loadAll: () => [initial],
+            loadAll: () => [{ snapshot: { ...initial, revision: 0 }, events: [] }],
             save: () => {
               saves++;
             },
@@ -177,11 +177,11 @@ test("approval validation rejects invalid answers without saving and accepts com
 });
 
 test("persisted approval answers reach a recreated Actor only after it exists, with acknowledgement", async () => {
-  const records = new Map<string, ContextRecord>();
+  const records = new Map<string, StoredContext>();
   const store: ContextStore = {
     loadAll: () => [...records.values()].map((r) => structuredClone(r)),
     save: (record) => {
-      records.set(record.path, structuredClone(record));
+      records.set(record.snapshot.path, structuredClone(record));
     },
   };
   let received = 0;

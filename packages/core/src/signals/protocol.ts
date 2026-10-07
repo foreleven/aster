@@ -7,7 +7,7 @@ import {
   PublicContext,
 } from "@aster/api-contracts";
 import { Context, Schema } from "effect";
-import { queryReplyTo } from "../context/query-protocol.js";
+import { queryReplyTo } from "../commands/query.js";
 import { SignalDefinition } from "../config/schema.js";
 import { SignalTime } from "./state/snapshot.js";
 

@@ -8,12 +8,16 @@ import {
   defineContext,
   makeApplicationApi,
   makeContextMaintenance,
-  type ContextRecord,
+  type ContextSnapshot,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
 const secret = "PRIVATE_PROVIDER_SENTINEL";
-const record = (path: string, state: object, messages: readonly unknown[] = []): ContextRecord => ({
+const record = (
+  path: string,
+  state: object,
+  messages: readonly unknown[] = [],
+): ContextSnapshot => ({
   path,
   revision: 7,
   description: path,
@@ -122,7 +126,10 @@ const assertPublic = (value: unknown) =>
 test("application reads project business fields and history without altering canonical recovery data", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
-      const registry = yield* makeContextRegistry({ loadAll: () => fixtures, save: () => {} });
+      const registry = yield* makeContextRegistry({
+        loadAll: () => fixtures.map((snapshot) => ({ snapshot, events: [] })),
+        save: () => {},
+      });
       const before = registry.snapshot();
       const history = testConversations();
       yield* history.append("/goals/project", "public", "goal.input", {

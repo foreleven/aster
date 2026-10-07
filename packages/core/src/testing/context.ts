@@ -1,14 +1,14 @@
 import { Effect } from "effect";
-import { makeDurableContext } from "../context/kernel.js";
+import { makeDurableContext } from "../context/store.js";
 import { ContextCommitError, ContextRecoveryError } from "../context/errors.js";
-import type { ContextRecord } from "../context/storage-format.js";
+import type { StoredContext } from "../context/model.js";
 import { makeContextRegistryWithBackend } from "../context/registry.js";
 import { coreContextViews } from "../runtime/context-views.js";
 
 /** A synchronous fake store for deterministic tests; production drivers belong to infra. */
 export interface ContextStore {
-  readonly loadAll: () => readonly ContextRecord[];
-  readonly save: (record: ContextRecord) => void;
+  readonly loadAll: () => readonly StoredContext[];
+  readonly save: (record: StoredContext) => void;
 }
 export const makeContextRegistry = (store?: ContextStore) =>
   makeDurableContext({
@@ -19,7 +19,7 @@ export const makeContextRegistry = (store?: ContextStore) =>
     save: (record) =>
       Effect.try({
         try: () => store?.save(record),
-        catch: (cause) => new ContextCommitError({ path: record.path, cause }),
+        catch: (cause) => new ContextCommitError({ path: record.snapshot.path, cause }),
       }),
   }).pipe(
     Effect.flatMap((backend) => {

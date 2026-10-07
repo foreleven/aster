@@ -10,12 +10,12 @@ import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import { MemoryActor } from "@aster/core";
 import { MemoryBackend, type ContextCapture as MemoryCapture } from "@aster/core";
-import { ContextRegistry, type ContextRecord } from "@aster/core";
+import { ContextRegistry, type ContextInput } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import { LarkRootActor, LarkEmailChannelActor, LarkMailMessageActor } from "@aster/integrations";
 import { Deferred, Effect, Fiber, Layer, Stream } from "effect";
 
-const source = (subject: string): ContextRecord => ({
+const source = (subject: string): ContextInput => ({
   path: "/lark/mail/me/test",
   description: "",
   state: {

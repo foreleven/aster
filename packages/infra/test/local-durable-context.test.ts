@@ -7,11 +7,13 @@ import {
   ContextRecoveryError,
   makeContextRegistryWithBackend,
   defineContext,
-  type ContextRecord,
+  type ContextSnapshot,
+  type StoredContext,
 } from "@aster/core";
 import { LocalDurableContext } from "../src/storage/local-durable.js";
 
-const initial: ContextRecord = {
+const initial: ContextSnapshot = {
+  revision: 0,
   path: "/local",
   description: "Local state",
   state: { value: 1 },
@@ -33,8 +35,8 @@ test("LocalDurableContext drains an accepted commit on cancellation and cancels 
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        const observed = yield* Deferred.make<ContextRecord>();
-        const saved: ContextRecord[] = [];
+        const observed = yield* Deferred.make<ContextSnapshot>();
+        const saved: StoredContext[] = [];
         const backend = yield* LocalDurableContext.make({
           load: Effect.succeed([]),
           save: (record) =>
@@ -66,8 +68,8 @@ test("LocalDurableContext drains an accepted commit on cancellation and cancels 
         yield* Fiber.join(interrupt);
         const published = yield* Deferred.await(observed);
         assert.equal(saved.length, 1);
-        assert.deepEqual(backend.get(initial.path), saved[0]);
-        assert.deepEqual(published, saved[0]);
+        assert.deepEqual(backend.get(initial.path), saved[0]?.snapshot);
+        assert.deepEqual(published, saved[0]?.snapshot);
         assert.equal(published.revision, 1);
         const exit = yield* Fiber.await(active);
         assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
@@ -85,7 +87,7 @@ test("LocalDurableContext preserves storage defects and fences later commits unt
   await Effect.runPromise(
     Effect.gen(function* () {
       const defect = new Error("Driver defect after durable commit");
-      let persisted: ContextRecord = initial;
+      let persisted: StoredContext = { snapshot: initial, events: [] };
       let crash = true;
       const backend = yield* LocalDurableContext.make({
         load: Effect.sync(() => [persisted]),
@@ -109,12 +111,12 @@ test("LocalDurableContext preserves storage defects and fences later commits unt
       assert.ok(fenced._tag === "Failure" && fenced.failure instanceof ContextCommitError);
       assert.deepEqual(backend.get(initial.path), { ...initial, revision: 0 });
       yield* backend.recover(initial.path, validate);
-      assert.deepEqual(backend.get(initial.path), persisted);
+      assert.deepEqual(backend.get(initial.path), persisted.snapshot);
       const stale = yield* backend.commit(initial, { expectedRevision: 0 }).pipe(Effect.result);
       assert.ok(stale._tag === "Failure" && stale.failure instanceof ContextConflict);
       assert.equal(
         (yield* backend.commit(
-          { ...persisted, messages: ["accepted", "next"] },
+          { ...persisted.snapshot, messages: ["accepted", "next"] },
           { expectedRevision: 1 },
         )).revision,
         2,
@@ -131,7 +133,9 @@ test("recovery refuses missing, regressed and invalid snapshots without releasin
   ]) {
     await Effect.runPromise(
       Effect.gen(function* () {
-        let saved: readonly ContextRecord[] = [{ ...initial, revision: 1 }];
+        let saved: readonly StoredContext[] = [
+          { snapshot: { ...initial, revision: 1 }, events: [] },
+        ];
         const backend = yield* LocalDurableContext.make({
           load: Effect.sync(() => saved),
           save: () =>
@@ -142,7 +146,7 @@ test("recovery refuses missing, regressed and invalid snapshots without releasin
         yield* backend
           .commit({ ...initial, messages: ["pending"] }, { expectedRevision: 1 })
           .pipe(Effect.result);
-        saved = restored;
+        saved = restored.map((snapshot) => ({ snapshot, events: [] }));
         const recovery = yield* backend.recover(initial.path, validate).pipe(Effect.result);
         assert.ok(recovery._tag === "Failure" && recovery.failure instanceof ContextRecoveryError);
         assert.equal(backend.get(initial.path)?.revision, 1);
@@ -156,7 +160,7 @@ test("recovery refuses missing, regressed and invalid snapshots without releasin
 test("the registry validates domain state while a supplied DurableContext owns canonical commits", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
-      const writes: ContextRecord[] = [];
+      const writes: StoredContext[] = [];
       const backend = yield* LocalDurableContext.make({
         load: Effect.succeed([]),
         save: (record) =>
@@ -176,7 +180,7 @@ test("the registry validates domain state while a supplied DurableContext owns c
         { ...initial, state: { value: 2, privateField: "not public" } },
         { expectedRevision: 0 },
       );
-      assert.deepEqual(writes[0]?.state, { value: 2 });
+      assert.deepEqual(writes[0]?.snapshot.state, { value: 2 });
       assert.deepEqual(registry.snapshot(), backend.snapshot());
     }),
   );
@@ -189,9 +193,10 @@ test("LocalDurableContext rejects duplicate identities and invalid public paths 
     [{ ...initial, path: "/trailing/" }],
   ]) {
     const result = await Effect.runPromise(
-      LocalDurableContext.make({ load: Effect.succeed(records), save: () => Effect.void }).pipe(
-        Effect.result,
-      ),
+      LocalDurableContext.make({
+        load: Effect.succeed(records.map((snapshot) => ({ snapshot, events: [] }))),
+        save: () => Effect.void,
+      }).pipe(Effect.result),
     );
     assert.ok(result._tag === "Failure" && result.failure instanceof ContextRecoveryError);
   }

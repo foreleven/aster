@@ -16,7 +16,7 @@ import {
   contextView,
   defineContext,
   makeContextRegistryWithBackend,
-  type ContextRecord,
+  type StoredContext,
 } from "@aster/core";
 import { LocalDurableContext } from "../src/storage/local-durable.js";
 import { makeFileContextStore } from "../src/storage/file-context-store.js";
@@ -34,13 +34,11 @@ const source = {
   state: { summary: "Ready", credential: "PRIVATE_TRANSPORT_TOKEN" },
   messages: ["Evidence"],
 };
-const assertHandoff = (record: ContextRecord) => {
-  assert.equal(record.reactionEvents?.length, 1);
-  const event = record.reactionEvents![0]!;
-  assert.equal(event.source, source.path);
-  assert.equal(event.target, "/system-one");
-  assert.equal(event.revision, record.revision);
-  assert.equal(event.causationId, event.requestId);
+const assertHandoff = (record: StoredContext) => {
+  assert.equal(record.events?.length, 1);
+  const event = record.events![0]!;
+  assert.equal(event.record.path, source.path);
+  assert.equal(event.record.revision, record.snapshot.revision);
   assert.deepEqual(event.record.state, { summary: "Ready" });
   assert.deepEqual(event.record.messages, ["Evidence"]);
   assert.equal(JSON.stringify(event).includes("PRIVATE_TRANSPORT_TOKEN"), false);
@@ -81,7 +79,7 @@ test("file pending recovery restores the source and reaction handoff after a nat
 test("Pi reopens atomic source handoffs and preserves them through later owner writes", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aster-reaction-pi-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  let committed: ContextRecord | undefined;
+  let committed: StoredContext | undefined;
   for (const restart of [false, true]) {
     await Effect.runPromise(
       Effect.scoped(
@@ -98,11 +96,11 @@ test("Pi reopens atomic source handoffs and preserves them through later owner w
           } else assert.deepEqual(backend.exportRecords()[0], committed);
           assertHandoff(backend.exportRecords()[0]!);
           if (restart) {
-            const forged = { ...source, messages: ["Evidence", "New message"], reactionEvents: [] };
+            const forged = { ...source, messages: ["Evidence", "New message"], events: [] };
             const later = yield* registry.commit(forged, { expectedRevision: 1 });
             assert.equal(later.revision, 2);
-            assert.deepEqual(backend.exportRecords()[0]!.reactionEvents, committed?.reactionEvents);
-            assert.equal("reactionEvents" in registry.views.project(later), false);
+            assert.deepEqual(backend.exportRecords()[0]!.events, committed?.events);
+            assert.equal("events" in registry.views.project(later), false);
           }
         }),
       ),
@@ -119,27 +117,27 @@ test("corrupt pending reaction envelopes fail before recovery rewrites committed
       const registry = makeContextRegistryWithBackend(backend);
       yield* registry.register(source.path, definition);
       const committed = yield* registry.commit(source, { expectedRevision: 0 });
-      const event = backend.exportRecords()[0]!.reactionEvents![0]!;
+      const event = backend.exportRecords()[0]!.events![0]!;
       const statePath = join(root, "source/state.json");
       const messagesPath = join(root, "source/messages.jsonl");
       const pendingPath = join(root, "source/.pending.json");
       const stateBefore = readFileSync(statePath, "utf8");
       const messagesBefore = readFileSync(messagesPath, "utf8");
       for (const events of [
-        [{ ...event, source: "/other" }],
-        [{ ...event, revision: 3 }],
+        [{ ...event, record: { ...event.record, path: "/other" } }],
         [{ ...event, record: { ...event.record, revision: 2 } }],
-        [{ ...event, requestId: "forged" }],
-        [{ ...event, causationId: "forged" }],
+        [{ ...event, id: "forged" }],
         [{ ...event, createdAt: "invalid" }],
         [event, event],
       ]) {
         const pending = JSON.stringify({
-          ...committed,
-          revision: 2,
-          state: { summary: "Must never replace the committed state" },
-          messages: ["Must never replace committed evidence"],
-          reactionEvents: events,
+          snapshot: {
+            ...committed,
+            revision: 2,
+            state: { summary: "Must never replace the committed state" },
+            messages: ["Must never replace committed evidence"],
+          },
+          events,
         });
         writeFileSync(pendingPath, pending);
         const restored = yield* LocalDurableContext.fromStore(makeFileContextStore(root)).pipe(

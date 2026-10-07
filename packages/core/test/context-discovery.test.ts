@@ -4,18 +4,19 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
 import { contextTools } from "../src/tools/catalogues.js";
-import { contextView } from "../src/context/view.js";
+import { contextView } from "../src/context/definition.js";
 import { defineContext } from "../src/context/definition.js";
 import { makeContextRegistry } from "../src/testing/context.js";
-import type { ContextRecord } from "../src/context/storage-format.js";
+import type { ContextSnapshot } from "../src/context/model.js";
 import { toolSystem } from "./tool-fixtures.js";
 
 const page = (result: Effect.Success<ReturnType<CoreTool["execute"]>>) =>
   JSON.parse(result.content.map((c) => (c.type === "text" ? c.text : "")).join(""));
 
 test("Context tools ask for bounded public pages, include dormant records and detect changed revisions", async () => {
-  const records: ContextRecord[] = Array.from({ length: 6000 }, (_, i) => ({
+  const records: ContextSnapshot[] = Array.from({ length: 6000 }, (_, i) => ({
     path: `/lark/im/chats/${i}`,
+    revision: 0,
     description: "Knowledge Engine ".repeat(100),
     state: { summary: "message".repeat(5000), secret: "PRIVATE" },
     messages: [],
@@ -23,18 +24,31 @@ test("Context tools ask for bounded public pages, include dormant records and de
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry({ loadAll: () => records, save: () => {} });
+        const registry = yield* makeContextRegistry({
+          loadAll: () => records.map((snapshot) => ({ snapshot, events: [] })),
+          save: () => {},
+        });
         const view = contextView({
           matches: (path) => path.startsWith("/lark/"),
           state: Schema.Struct({ summary: Schema.String }),
         });
-        yield* registry.views.register([view]);
+        let projections = 0;
+        yield* registry.views.register([
+          {
+            ...view,
+            project: (record) => {
+              projections++;
+              return view.project(record);
+            },
+          },
+        ]);
         const { system } = yield* toolSystem({ registry });
         const [search, read] = contextTools();
         const execute = (tool: CoreTool, args: object) =>
           tool.execute("call", args).pipe(Effect.provideService(CurrentActors, system));
         const found = page(yield* execute(search!, { query: "Knowledge Engine" }));
         assert.equal(found.total, 6000);
+        assert.equal(projections, 0, "Directory search must not project full Context state");
         assert.equal(found.items.length, 20);
         assert.equal(found.nextOffset, 20);
         assert.ok(JSON.stringify(found).length < 10000);

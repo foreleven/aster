@@ -108,7 +108,7 @@ test("existing Local records require explicit migration before configured Pi act
     state: {},
     messages: ["existing"],
   };
-  makeFileContextStore(settings.authority.localDirectory).save(record);
+  makeFileContextStore(settings.authority.localDirectory).save({ snapshot: record, events: [] });
   await assert.rejects(
     Effect.runPromise(
       DurableContext.pipe(

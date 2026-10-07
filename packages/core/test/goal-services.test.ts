@@ -154,7 +154,8 @@ test("failed Goal persistence leaves the committed Ref unchanged and remains a d
           loadAll: () => [],
           save: (record) => {
             if (
-              Schema.decodeUnknownSync(GoalSnapshot)(record.state).summary === "Uncommitted finding"
+              Schema.decodeUnknownSync(GoalSnapshot)(record.snapshot.state).summary ===
+              "Uncommitted finding"
             )
               throw new Error("Injected storage failure");
           },

@@ -12,7 +12,7 @@ import {
   MemoryBackend,
   MemoryCaptureError,
   type ContextCapture,
-  type ContextRecord,
+  type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
 
@@ -20,6 +20,7 @@ const input: ContextCapture = {
   sessionId: "/goals/project/tasks/one:outcome:completed",
   records: [
     {
+      revision: 0,
       path: "/goals/project/tasks/one",
       description: "Result",
       state: { status: "completed" },
@@ -42,18 +43,18 @@ const Stored = Schema.Struct({
   ),
   captured: Schema.optional(Schema.Array(Schema.String)),
 });
-const stored = (record: ContextRecord) => Schema.decodeUnknownSync(Stored)(record.state);
-const harness = Effect.fnUntraced(function* (initial: readonly ContextRecord[] = []) {
-  const records = new Map(initial.map((record) => [record.path, record]));
-  const writes = yield* Queue.unbounded<ContextRecord>();
+const stored = (record: StoredContext) => Schema.decodeUnknownSync(Stored)(record.snapshot.state);
+const harness = Effect.fnUntraced(function* (initial: readonly StoredContext[] = []) {
+  const records = new Map(initial.map((record) => [record.snapshot.path, record]));
+  const writes = yield* Queue.unbounded<StoredContext>();
   const store: ContextStore = {
     loadAll: () => structuredClone([...records.values()]),
     save: (record) => {
-      records.set(record.path, structuredClone(record));
+      records.set(record.snapshot.path, structuredClone(record));
       Effect.runSync(Queue.offer(writes, record));
     },
   };
-  const committed = Effect.fnUntraced(function* (predicate: (record: ContextRecord) => boolean) {
+  const committed = Effect.fnUntraced(function* (predicate: (record: StoredContext) => boolean) {
     while (true) {
       const record = yield* Queue.take(writes);
       if (predicate(record)) return record;
@@ -205,7 +206,7 @@ test("recovered captures exclude private source data and Memory queue state stay
             path: "/tasks/" + "a".repeat(64),
             description: "Result",
             state: {
-              ...retained.state,
+              ...retained.snapshot.state,
               source: { token: secret },
             },
             messages: [{ type: "Completed", text: "Done", provider: secret }],
@@ -214,11 +215,14 @@ test("recovered captures exclude private source data and Memory queue state stay
       };
       const h = yield* harness([
         {
-          path: "/memory",
-          revision: 4,
-          description: "Memory",
-          state: { status: "ready", retrieval: "bm25", pending: [pending] },
-          messages: [],
+          snapshot: {
+            path: "/memory",
+            revision: 4,
+            description: "Memory",
+            state: { status: "ready", retrieval: "bm25", pending: [pending] },
+            messages: [],
+          },
+          events: [],
         },
       ]);
       const captured = yield* Deferred.make<void>();

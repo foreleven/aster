@@ -105,10 +105,14 @@ test("durable Goal compacts its native transcript and finishes the same request"
     const registry = yield* makeContextRegistry({
       loadAll: () => [
         {
-          path: "/source",
-          description: "Evidence",
-          state: { evidence: "detail ".repeat(3000) },
-          messages: [],
+          snapshot: {
+            revision: 0,
+            path: "/source",
+            description: "Evidence",
+            state: { evidence: "detail ".repeat(3000) },
+            messages: [],
+          },
+          events: [],
         },
       ],
       save: () => {},

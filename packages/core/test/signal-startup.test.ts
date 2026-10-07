@@ -9,7 +9,7 @@ import {
   SignalDefinitions,
   SignalRootActor,
   type SignalCommandReply,
-  type ContextRecord,
+  type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
@@ -79,6 +79,7 @@ for (const fails of [false, true])
                 target: `/signals/${slug}`,
                 expectedRevision: 1,
                 sourceContext: {
+                  revision: 0,
                   path: "/source",
                   description: "Evidence",
                   state: {},
@@ -103,7 +104,7 @@ for (const fails of [false, true])
 
 for (const operation of ["pause", "delete"] as const)
   test(`restored ${operation} reconciles a lost receipt without sending again`, async () => {
-    const records = new Map<string, ContextRecord>();
+    const records = new Map<string, StoredContext>();
     const messages = testConversations();
     const path = "/signals/personal--watch";
     const input: SignalChangeInput = {
@@ -141,6 +142,7 @@ for (const operation of ["pause", "delete"] as const)
                 target: path,
                 expectedRevision: 1,
                 sourceContext: {
+                  revision: 0,
                   path: "/source",
                   description: "Evidence",
                   state: {},
@@ -174,13 +176,19 @@ for (const operation of ["pause", "delete"] as const)
       }),
     );
     const goal = records.get("/goals/personal")!;
-    records.set(goal.path, {
+    records.set(goal.snapshot.path, {
       ...goal,
-      state: {
-        ...goal.state,
-        receipts: [
-          { requestId: message.requestId, receipt: { requestId: message.requestId, revision: 2 } },
-        ],
+      snapshot: {
+        ...goal.snapshot,
+        state: {
+          ...goal.snapshot.state,
+          receipts: [
+            {
+              requestId: message.requestId,
+              receipt: { requestId: message.requestId, revision: 2 },
+            },
+          ],
+        },
       },
     });
     await Effect.runPromise(

@@ -51,16 +51,25 @@ test("JSON state and JSONL messages survive restart, append, and history compact
     );
     const store = makeFileContextStore(dir);
     const records = store.loadAll();
-    assert.equal(records[0]?.messages.length, 2);
-    assert.equal(records[0]?.revision, 2);
-    assert.deepEqual(records[0]?.state, { status: "completed" });
+    assert.equal(records[0]?.snapshot.messages.length, 2);
+    assert.equal(records[0]?.snapshot.revision, 2);
+    assert.deepEqual(records[0]?.snapshot.state, { status: "completed" });
     assert.equal(
       readFileSync(join(dir, "goals/test/messages.jsonl"), "utf8").trim().split("\n").length,
       2,
     );
-    store.save({ ...records[0]!, messages: [{ text: "summary" }] });
-    assert.deepEqual(makeFileContextStore(dir).loadAll()[0]?.messages, [{ text: "summary" }]);
-    assert.throws(() => store.save({ ...records[0]!, path: "/../outside" }), /Invalid/);
+    store.save({
+      ...records[0]!,
+      snapshot: { ...records[0]!.snapshot, messages: [{ text: "summary" }] },
+    });
+    assert.deepEqual(makeFileContextStore(dir).loadAll()[0]?.snapshot.messages, [
+      { text: "summary" },
+    ]);
+    assert.throws(
+      () =>
+        store.save({ ...records[0]!, snapshot: { ...records[0]!.snapshot, path: "/../outside" } }),
+      /snapshot.*path|Expected/s,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -76,17 +85,20 @@ test("interrupted two-file commit recovers its intended state and messages exact
       state: { status: "running" },
       messages: [{ id: "one" }],
     };
-    store.save(original);
+    store.save({ snapshot: { ...original, revision: 0 }, events: [] });
     const intended = {
       ...original,
       revision: 3,
       state: { status: "completed" },
       messages: [...original.messages, { id: "two" }],
     };
-    writeFileSync(join(dir, "signals/a/.pending.json"), JSON.stringify(intended));
+    writeFileSync(
+      join(dir, "signals/a/.pending.json"),
+      JSON.stringify({ snapshot: intended, events: [] }),
+    );
     writeFileSync(join(dir, "signals/a/messages.jsonl"), '{"id":"one"}\n{"id":');
-    assert.deepEqual(makeFileContextStore(dir).loadAll(), [intended]);
-    assert.deepEqual(makeFileContextStore(dir).loadAll(), [intended]);
+    assert.deepEqual(makeFileContextStore(dir).loadAll(), [{ snapshot: intended, events: [] }]);
+    assert.deepEqual(makeFileContextStore(dir).loadAll(), [{ snapshot: intended, events: [] }]);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -139,7 +151,9 @@ test("LocalDurableContext recovers state, message, receipt and outbox together a
         const accepted = recovered.get(original.path)!;
         assert.deepEqual(accepted, { ...intended, revision: 2 });
         assert.equal(existsSync(join(root, "personal/.pending.json")), false);
-        assert.deepEqual(makeFileContextStore(root).loadAll(), [accepted]);
+        assert.deepEqual(makeFileContextStore(root).loadAll(), [
+          { snapshot: accepted, events: [] },
+        ]);
         // A no-op at the recovered revision neither duplicates messages nor receipts.
         assert.deepEqual(yield* recovered.commit(intended, { expectedRevision: 2 }), accepted);
       }),
@@ -159,12 +173,12 @@ test("invalid pending recovery data is rejected before rewriting committed publi
       state: {},
       messages: ["original"],
     };
-    store.save(original);
+    store.save({ snapshot: { ...original, revision: 0 }, events: [] });
     const state = readFileSync(join(root, "context/state.json"), "utf8");
     const messages = readFileSync(join(root, "context/messages.jsonl"), "utf8");
     writeFileSync(
       join(root, "context/.pending.json"),
-      JSON.stringify({ ...original, revision: -1, messages: "invalid" }),
+      JSON.stringify({ snapshot: { ...original, revision: -1, messages: "invalid" }, events: [] }),
     );
     assert.throws(() => makeFileContextStore(root).loadAll());
     assert.equal(readFileSync(join(root, "context/state.json"), "utf8"), state);

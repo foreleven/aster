@@ -1,6 +1,6 @@
 import { GoalSnapshot } from "./state/snapshot.js";
 import type { ContextViewPolicy } from "../context/definition.js";
-import { contextView } from "../context/view.js";
+import { contextView } from "../context/definition.js";
 import { Option, Schema, Effect } from "effect";
 import type { ContextRegistry } from "../context/registry.js";
 import { AgentConversations } from "@aster/agent";

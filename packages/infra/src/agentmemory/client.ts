@@ -1,7 +1,7 @@
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import type { ContextRecord } from "@aster/core";
+import type { ContextCapture } from "@aster/core";
 
 export interface MemoryConnection {
   readonly url: string;
@@ -12,7 +12,7 @@ export interface MemoryConnection {
 }
 export interface MemoryCapture {
   readonly sessionId: string;
-  readonly records: ReadonlyArray<ContextRecord>;
+  readonly records: ContextCapture["records"];
 }
 export interface MemorySearchOptions {
   readonly signal?: AbortSignal;

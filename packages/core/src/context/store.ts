@@ -1,17 +1,26 @@
-import { contextEventId } from "./model.js";
-import { DurableContextSnapshot } from "./storage-format.js";
-import type { ContextPersistence } from "./persistence.js";
-import { publicJson } from "./json.js";
 import { isDeepStrictEqual } from "node:util";
-import { Cause, Clock, Effect, PubSub, Schema, Semaphore, Stream } from "effect";
+import type { PublicContext } from "@aster/api-contracts";
 import {
-  DurableContext,
-  restoreContext,
-  contextStorageRecord,
-  type DurableCommitOptions,
-  type StoredContext,
-} from "./persistence.js";
-import { ContextInput, ContextEvent, type ContextSnapshot, type ContextChange } from "./model.js";
+  Cause,
+  Clock,
+  Context,
+  Effect,
+  PubSub,
+  Schema,
+  Semaphore,
+  Stream,
+  type Scope,
+} from "effect";
+import { publicJson } from "../commands/json.js";
+import {
+  ContextInput,
+  ContextEvent,
+  StoredContext,
+  contextEventId,
+  type ContextSnapshot,
+  type ContextChange,
+  type ContextEntry,
+} from "./model.js";
 import {
   ContextCommitError,
   ContextConflict,
@@ -19,17 +28,61 @@ import {
   ContextValidationError,
 } from "./errors.js";
 
+/** Drivers own serialization and atomic recovery; the kernel owns revision/publication semantics. */
+export interface ContextPersistence {
+  readonly load: Effect.Effect<readonly StoredContext[], ContextRecoveryError>;
+  readonly save: (record: StoredContext) => Effect.Effect<void, ContextCommitError>;
+}
+
+export interface ContextCommitOptions {
+  readonly expectedRevision: number;
+  readonly mode?: "update" | "bootstrap";
+}
+
+export interface DurableCommitOptions extends ContextCommitOptions {
+  /** A registry-owned public source snapshot, atomically retained on state changes. */
+  readonly event?: PublicContext;
+}
+
+/** Canonical storage boundary. A commit contains the complete state, ordered
+ * messages, and the owner's receipt/outbox state; these are never separate writes.
+ * Agent execution is an optional consumer, not a requirement of this service. */
+export class DurableContext extends Context.Service<
+  DurableContext,
+  {
+    readonly commit: (
+      record: ContextInput,
+      options: DurableCommitOptions,
+    ) => Effect.Effect<
+      ContextSnapshot,
+      ContextConflict | ContextValidationError | ContextCommitError
+    >;
+    /** Reconcile an uncertain commit before allowing the same owner to write again. */
+    readonly recover: (
+      path: string,
+      validate: (record: ContextSnapshot) => ContextInput,
+    ) => Effect.Effect<void, ContextRecoveryError>;
+    /** Detached views of the last known committed snapshot; no file handles escape. */
+    readonly get: (path: string) => ContextSnapshot | undefined;
+    readonly snapshot: () => Readonly<Record<string, ContextSnapshot>>;
+    readonly directory: () => readonly ContextEntry[];
+    /** Durable evidence is available only to consumers and infrastructure. */
+    readonly journal: () => readonly ContextEvent[];
+    readonly exportRecords: () => readonly StoredContext[];
+    readonly changes: Stream.Stream<ContextChange>;
+    readonly subscribe: Effect.Effect<Stream.Stream<ContextChange>, never, Scope.Scope>;
+  }
+>()("context/DurableContext") {}
+
 export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
   persistence: ContextPersistence,
 ) {
   const load = persistence.load.pipe(
-    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(DurableContextSnapshot))),
+    Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(StoredContext))),
     Effect.mapError((cause) => new ContextRecoveryError({ path: "/", cause })),
   );
   const initial = yield* load;
-  const records = new Map(
-    initial.map((record) => [record.path, restoreContext(structuredClone(record))]),
-  );
+  const records = new Map(initial.map((record) => [record.snapshot.path, structuredClone(record)]));
   if (records.size !== initial.length)
     return yield* new ContextRecoveryError({
       path: "/",
@@ -37,7 +90,16 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
     });
   const failedCommits = new Map<string, ContextCommitError>();
   const changes = yield* PubSub.unbounded<ContextChange>();
-  const writer = yield* Semaphore.make(1);
+  // Gates live as long as their registered paths. Only writes to the same Context serialize.
+  const writers = new Map<string, Semaphore.Semaphore>();
+  const writerFor = (path: string) => {
+    let writer = writers.get(path);
+    if (!writer) {
+      writer = Semaphore.makeUnsafe(1);
+      writers.set(path, writer);
+    }
+    return writer;
+  };
   const publish = (record: ContextSnapshot) =>
     PubSub.publish(changes, { record: structuredClone(record) });
 
@@ -45,7 +107,7 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
     input: ContextInput,
     options: DurableCommitOptions,
   ) {
-    return yield* writer.withPermit(
+    return yield* writerFor(input.path).withPermit(
       Effect.gen(function* () {
         const failed = failedCommits.get(input.path);
         if (failed) return yield* failed;
@@ -89,9 +151,7 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
           snapshot: { ...content, revision },
           events,
         });
-        yield* Effect.suspend(() =>
-          persistence.save(contextStorageRecord(structuredClone(stored))),
-        ).pipe(
+        yield* Effect.suspend(() => persistence.save(structuredClone(stored))).pipe(
           Effect.tapCause((cause) =>
             Effect.sync(() => {
               const failure = Cause.findError(cause);
@@ -116,12 +176,14 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
     path: string,
     validate: (record: ContextSnapshot) => ContextInput,
   ) {
-    return yield* writer.withPermit(
+    return yield* writerFor(path).withPermit(
       Effect.gen(function* () {
         const previous = records.get(path);
         const failed = failedCommits.has(path);
-        const encoded = failed ? (yield* load).find((record) => record.path === path) : undefined;
-        const restored = failed ? (encoded ? restoreContext(encoded) : undefined) : previous;
+        const encoded = failed
+          ? (yield* load).find((record) => record.snapshot.path === path)
+          : undefined;
+        const restored = failed ? encoded : previous;
         if (!restored && previous)
           return yield* new ContextRecoveryError({
             path,
@@ -162,8 +224,12 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
         [...records].map(([path, stored]) => [path, structuredClone(stored.snapshot)]),
       ),
     journal: () => structuredClone([...records.values()].flatMap((stored) => stored.events)),
-    exportRecords: () =>
-      [...records.values()].map((stored) => contextStorageRecord(structuredClone(stored))),
+    exportRecords: () => structuredClone([...records.values()]),
+    directory: () =>
+      [...records.values()].map(({ snapshot }) => ({
+        path: snapshot.path,
+        description: snapshot.description,
+      })),
     changes: Stream.fromPubSub(changes).pipe(Stream.map((change) => structuredClone(change))),
     subscribe: PubSub.subscribe(changes).pipe(
       Effect.map((subscription) =>

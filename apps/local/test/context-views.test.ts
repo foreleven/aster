@@ -44,7 +44,10 @@ test("archived Lark contexts remain readable through integration family policies
           messages: [],
         },
       ];
-      const registry = yield* makeContextRegistry({ loadAll: () => records, save: () => {} });
+      const registry = yield* makeContextRegistry({
+        loadAll: () => records.map((snapshot) => ({ snapshot, events: [] })),
+        save: () => {},
+      });
       yield* registry.views.register(larkContextViews);
       const api = makeApplicationApi({
         registry,

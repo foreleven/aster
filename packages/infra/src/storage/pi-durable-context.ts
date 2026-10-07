@@ -16,9 +16,9 @@ import {
   ContextRecoveryError,
   DurableContext,
   makeDurableContext,
-  type ContextRecord,
+  type StoredContext,
 } from "@aster/core";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer, Schema, Semaphore } from "effect";
 import {
   PiContextCommit,
   PiContextCommitSchema,
@@ -65,7 +65,7 @@ export const readPiContextSnapshots = async (
   if (index.shardId !== shardId) throw new Error("Pi Context shard identity mismatch");
   const paths = new Set<string>();
   const ids = new Set<number>();
-  const records: ContextRecord[] = [];
+  const records: StoredContext[] = [];
   const mapped = new Map<string, ConversationId>();
   for (const mapping of index.contexts) {
     if (paths.has(mapping.path) || ids.has(mapping.conversationId))
@@ -79,8 +79,8 @@ export const readPiContextSnapshots = async (
       await session.snapshot(PiContextDocument, conversationId, context),
     );
     if (
-      snapshot.record.path !== mapping.path ||
-      snapshot.record.revision !== mapping.revision ||
+      snapshot.record.snapshot.path !== mapping.path ||
+      snapshot.record.snapshot.revision !== mapping.revision ||
       snapshot.entryId !== mapping.entryId
     )
       throw new Error("Pi Context index/document mismatch");
@@ -107,7 +107,7 @@ export const writePiContextSnapshot = async (
   session: Session,
   shardId: string,
   conversations: ReadonlyMap<string, ConversationId>,
-  record: ContextRecord,
+  record: StoredContext,
   context: ChordContext,
   imported?: { readonly expectedStoredRevision: number | undefined },
 ) => {
@@ -118,12 +118,14 @@ export const writePiContextSnapshot = async (
     const index = await tx.doc(PiContextIndex);
     if (index.shardId !== "" && index.shardId !== shardId)
       throw new Error("Pi Context shard identity mismatch");
-    const mapping = index.contexts.find((item) => item.path === record.path);
-    const expected = imported ? imported.expectedStoredRevision : validated.record.revision - 1;
+    const mapping = index.contexts.find((item) => item.path === record.snapshot.path);
+    const expected = imported
+      ? imported.expectedStoredRevision
+      : validated.record.snapshot.revision - 1;
     const actual = imported ? mapping?.revision : (mapping?.revision ?? 0);
     if (actual !== expected)
       throw new Error("Pi Context persisted revision differs from canonical revision");
-    let conversationId = conversations.get(record.path);
+    let conversationId = conversations.get(record.snapshot.path);
     if (mapping && conversationId !== mapping.conversationId)
       throw new Error("Pi Context mapping changed outside its owner");
     if (conversationId === undefined)
@@ -136,9 +138,9 @@ export const writePiContextSnapshot = async (
     snapshot.entryId = entry.id;
     index.shardId = shardId;
     const next = {
-      path: record.path,
+      path: record.snapshot.path,
       conversationId,
-      revision: validated.record.revision,
+      revision: validated.record.snapshot.revision,
       entryId: entry.id,
     };
     if (mapping) Object.assign(mapping, next);
@@ -172,6 +174,8 @@ const make = Effect.fn("PiDurableContext.make")(function* (options: PiContextSto
         holder.session ? close(holder.session).pipe(Effect.orDie) : Effect.void,
       ),
   );
+  // Contexts commit independently; this shared Session must serialize writes with recovery.
+  const writer = yield* Semaphore.make(1);
   let poisoned = false;
   let conversations = new Map<string, ConversationId>();
   const load = Effect.gen(function* () {
@@ -199,13 +203,13 @@ const make = Effect.fn("PiDurableContext.make")(function* (options: PiContextSto
     return restored.records;
   }).pipe(Effect.uninterruptible);
   return yield* makeDurableContext({
-    load,
+    load: writer.withPermit(load),
     save: (record) =>
       Effect.gen(function* () {
         const session = owner.session;
         if (poisoned || !session)
           return yield* new ContextCommitError({
-            path: record.path,
+            path: record.snapshot.path,
             cause: "Pi shard requires recovery",
           });
         const conversationId = yield* Effect.tryPromise({
@@ -217,7 +221,7 @@ const make = Effect.fn("PiDurableContext.make")(function* (options: PiContextSto
               record,
               withAbortSignal(signal, BACKGROUND_CONTEXT),
             ),
-          catch: (cause) => new ContextCommitError({ path: record.path, cause }),
+          catch: (cause) => new ContextCommitError({ path: record.snapshot.path, cause }),
         }).pipe(
           Effect.tapCause(() =>
             Effect.sync(() => {
@@ -225,8 +229,8 @@ const make = Effect.fn("PiDurableContext.make")(function* (options: PiContextSto
             }),
           ),
         );
-        conversations.set(record.path, conversationId);
-      }),
+        conversations.set(record.snapshot.path, conversationId);
+      }).pipe(writer.withPermit),
   });
 });
 
@@ -236,6 +240,8 @@ const make = Effect.fn("PiDurableContext.make")(function* (options: PiContextSto
 const fromRuntime = Effect.fn("PiDurableContext.fromRuntime")(function* (
   runtime: PiDurableRuntime,
 ) {
+  // Contexts commit independently; this shared Session must serialize writes with recovery.
+  const writer = yield* Semaphore.make(1);
   let uncertain = false;
   let conversations = new Map<string, ConversationId>();
   const load = Effect.gen(function* () {
@@ -248,12 +254,12 @@ const fromRuntime = Effect.fn("PiDurableContext.fromRuntime")(function* (
     return restored.records;
   }).pipe(Effect.mapError((cause) => new ContextRecoveryError({ path: "/", cause })));
   return yield* makeDurableContext({
-    load,
+    load: writer.withPermit(load),
     save: (record) =>
       Effect.gen(function* () {
         if (uncertain)
           return yield* new ContextCommitError({
-            path: record.path,
+            path: record.snapshot.path,
             cause: "Pi owner requires recovery",
           });
         const id = yield* runtime
@@ -261,15 +267,17 @@ const fromRuntime = Effect.fn("PiDurableContext.fromRuntime")(function* (
             writePiContextSnapshot(session, runtime.ownerId, conversations, record, context),
           )
           .pipe(
-            Effect.mapError((cause) => new ContextCommitError({ path: record.path, cause })),
+            Effect.mapError(
+              (cause) => new ContextCommitError({ path: record.snapshot.path, cause }),
+            ),
             Effect.tapCause(() =>
               Effect.sync(() => {
                 uncertain = true;
               }),
             ),
           );
-        conversations.set(record.path, id);
-      }),
+        conversations.set(record.snapshot.path, id);
+      }).pipe(writer.withPermit),
   });
 });
 

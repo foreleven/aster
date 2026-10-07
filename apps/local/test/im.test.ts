@@ -340,10 +340,14 @@ test("startup resumes today's quiet chat backlog but leaves prior-day messages u
         const registry = yield* makeContextRegistry({
           loadAll: () => [
             {
-              path,
-              description: "Project",
-              state: { chat, through: "legacy" },
-              messages: [old, message],
+              snapshot: {
+                revision: 0,
+                path,
+                description: "Project",
+                state: { chat, through: "legacy" },
+                messages: [old, message],
+              },
+              events: [],
             },
           ],
           save: () => {},
@@ -528,10 +532,14 @@ test("automatic retry runs without another incoming message and unchanged summar
         const registry = yield* makeContextRegistry({
           loadAll: () => [
             {
-              path,
-              description: "Project",
-              state: { chat, summary: summary("same") },
-              messages: [message],
+              snapshot: {
+                revision: 0,
+                path,
+                description: "Project",
+                state: { chat, summary: summary("same") },
+                messages: [message],
+              },
+              events: [],
             },
           ],
           save: () => {},

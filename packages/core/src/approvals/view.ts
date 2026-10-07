@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { contextView } from "../context/view.js";
+import { contextView } from "../context/definition.js";
 import { publicBusinessMessage } from "../reasoning/public-messages.js";
 import { ApprovalEntry, InputRequest } from "@aster/api-contracts";
 // Provider metadata and execution handles are intentionally absent from these schemas.

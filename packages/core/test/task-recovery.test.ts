@@ -21,7 +21,7 @@ for (const mode of ["session", "rejected-submission"] as const) {
       Effect.gen(function* () {
         const messages = testConversations();
         const record = yield* retainedTask(messages, "failed");
-        yield* seedCheckpoint(messages, record.path, {
+        yield* seedCheckpoint(messages, record.snapshot.path, {
           ...(mode === "session" ? { session: { sessionId: "original" } } : {}),
           deliveries: [
             {
@@ -36,12 +36,12 @@ for (const mode of ["session", "rejected-submission"] as const) {
           resumes = 0;
         const env = yield* taskFixture({
           conversations: messages,
-          records: new Map([[record.path, record]]),
+          records: new Map([[record.snapshot.path, record]]),
           agent: fakeAgent({
             submit: (_task, identity) =>
               Effect.sync(() => {
                 submits++;
-                assert.equal(identity?.requestId, record.path);
+                assert.equal(identity?.requestId, record.snapshot.path);
                 return { sessionId: "new" };
               }),
             status: () =>
@@ -55,12 +55,12 @@ for (const mode of ["session", "rejected-submission"] as const) {
           }),
         });
         const state = () =>
-          Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(record.path)!.state);
+          Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(record.snapshot.path)!.state);
         const control = (tag: "CheckTask" | "RetryTask", requestId: string) => {
           const input = {
             requestId,
-            target: record.path,
-            expectedRevision: env.registry.get(record.path)!.revision!,
+            target: record.snapshot.path,
+            expectedRevision: env.registry.get(record.snapshot.path)!.revision!,
           };
           return env.tasks.ask<TaskAdmissionReply>((replyTo) => ({ _tag: tag, input, replyTo }));
         };
@@ -191,7 +191,7 @@ test("a rejected follow-up cannot be completed by the old provider round and onl
       let followups = 0;
       const env = yield* taskFixture({
         conversations: messages,
-        records: new Map([[record.path, record]]),
+        records: new Map([[record.snapshot.path, record]]),
         agent: fakeAgent({
           wait: () =>
             followups < 2
@@ -216,13 +216,13 @@ test("a rejected follow-up cannot be completed by the old provider round and onl
       });
       yield* Deferred.await(entered);
       const state = () =>
-        Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(record.path)!.state);
+        Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(record.snapshot.path)!.state);
       yield* env.tasks.ask((replyTo) => ({
         _tag: "Input",
         input: {
           requestId: "follow",
           source: "/goals/personal",
-          target: record.path,
+          target: record.snapshot.path,
           text: "More work",
         },
         replyTo,
@@ -232,8 +232,8 @@ test("a rejected follow-up cannot be completed by the old provider round and onl
         _tag: "CheckTask",
         input: {
           requestId: "check",
-          target: record.path,
-          expectedRevision: env.registry.get(record.path)!.revision!,
+          target: record.snapshot.path,
+          expectedRevision: env.registry.get(record.snapshot.path)!.revision!,
         },
         replyTo,
       }));
@@ -243,8 +243,8 @@ test("a rejected follow-up cannot be completed by the old provider round and onl
         _tag: "RetryTask",
         input: {
           requestId: "retry",
-          target: record.path,
-          expectedRevision: env.registry.get(record.path)!.revision!,
+          target: record.snapshot.path,
+          expectedRevision: env.registry.get(record.snapshot.path)!.revision!,
         },
         replyTo,
       }));

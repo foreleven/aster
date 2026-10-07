@@ -18,7 +18,7 @@ import {
   PublicationsActor,
   TaskSnapshot,
   defineContext,
-  type ContextRecord,
+  type StoredContext,
   type ExternalAgent,
 } from "../src/index.js";
 import { GoalCommand } from "../src/goals/protocol.js";
@@ -40,21 +40,21 @@ export const taskInput = (requestId = "task", source = "/goals/personal"): TaskD
 });
 export const taskFixture = Effect.fnUntraced(function* (
   options: {
-    records?: Map<string, ContextRecord>;
+    records?: Map<string, StoredContext>;
     agent?: ExternalAgent;
     agents?: ExternalAgents["Service"];
     runner?: AgentRunner["Service"];
     clock?: Clock.Clock;
     publish?: ChannelWrites["Service"]["publish"];
     conversations?: AgentConversations["Service"];
-    saved?: (record: ContextRecord) => void;
+    saved?: (record: StoredContext) => void;
   } = {},
 ) {
-  const records = options.records ?? new Map<string, ContextRecord>();
+  const records = options.records ?? new Map<string, StoredContext>();
   const registry = yield* makeContextRegistry({
     loadAll: () => [...records.values()],
     save: (record) => {
-      records.set(record.path, structuredClone(record));
+      records.set(record.snapshot.path, structuredClone(record));
       options.saved?.(record);
     },
   });
@@ -132,8 +132,8 @@ export const taskFixture = Effect.fnUntraced(function* (
   yield* tasks.awaitStarted;
   // Tests inspecting recovery wait only for their pre-existing subjects.
   for (const record of records.values())
-    if (record.path.startsWith("/tasks/"))
-      yield* (yield* system.select(`/user${record.path}`).resolve()).awaitStarted;
+    if (record.snapshot.path.startsWith("/tasks/"))
+      yield* (yield* system.select(`/user${record.snapshot.path}`).resolve()).awaitStarted;
   const wait = (predicate: () => boolean) =>
     Effect.gen(function* () {
       const changes = yield* registry.subscribe;
@@ -189,12 +189,15 @@ export const retainedTask = Effect.fnUntraced(function* (
     ],
   });
   return {
-    path: input.target,
-    description: "Retained Task",
-    revision: 2,
-    messages: [],
-    state,
-  } satisfies ContextRecord;
+    snapshot: {
+      path: input.target,
+      description: "Retained Task",
+      revision: 2,
+      messages: [],
+      state,
+    },
+    events: [],
+  } satisfies StoredContext;
 });
 
 export const checkpoint = (messages: AgentConversations["Service"], path: string) =>
