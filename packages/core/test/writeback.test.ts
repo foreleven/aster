@@ -1,3 +1,4 @@
+import type { ApprovalReply } from "../src/approvals/actor.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { taskFixture, taskInput } from "./task-fixtures.js";
 import type { TaskDeliveryInput } from "@aster/api-contracts";
@@ -40,7 +41,7 @@ const fixture = (options: {
         ),
       };
     const decide = (id: string, decision: "approve" | "reject") =>
-      env.approvals.ask<{ error?: string }>((replyTo) => ({
+      env.approvals.ask<ApprovalReply>((replyTo) => ({
         _tag: "Resolve",
         id,
         response: { decision },
@@ -55,7 +56,7 @@ const fixture = (options: {
       yield* env.wait(() =>
         approvalEntries(env.registry).some((entry) => entry.id.endsWith(":confirm")),
       );
-      assert.deepEqual(yield* decide(`${record()!.path}:confirm`, "approve"), {});
+      assert.deepEqual(yield* decide(`${record()!.path}:confirm`, "approve"), { _tag: "Accepted" });
       yield* env.wait(() => state()?.status === "completed");
     });
     const waiting = env.wait(() =>
@@ -113,13 +114,12 @@ test("Run persists the result and exact writeback before a separate approval; fo
         // A mailbox barrier: the following acknowledgement is processed after the forged message.
         yield* actor.ask<void>((replyTo) => ({
           _tag: "Publish",
-          taskPath: env.record()!.path,
-          entryId: env.state()!.outcomeEntryId!,
+          request: env.state()!.writeback!.request,
           replyTo,
         }));
         assert.equal(calls, 0);
         assert.equal(env.state()!.writeback!.status, "waiting-approval");
-        assert.deepEqual(yield* env.decide(id, "approve"), {});
+        assert.deepEqual(yield* env.decide(id, "approve"), { _tag: "Accepted" });
         yield* env.until(() => env.state()?.writeback?.status === "published");
         yield* actor.tell({
           _tag: "ApprovalResolved",
@@ -128,8 +128,7 @@ test("Run persists the result and exact writeback before a separate approval; fo
         });
         yield* actor.ask<void>((replyTo) => ({
           _tag: "Publish",
-          taskPath: env.record()!.path,
-          entryId: env.state()!.outcomeEntryId!,
+          request: env.state()!.writeback!.request,
           replyTo,
         }));
         assert.equal(calls, 1);
@@ -177,8 +176,7 @@ for (const outcome of ["published", "unknown", "rejected"] as const) {
             const actor = yield* env.system.select("/user/publications").resolve();
             yield* actor.ask<void>((replyTo) => ({
               _tag: "Publish",
-              taskPath: env.record()!.path,
-              entryId: env.state()!.outcomeEntryId!,
+              request: env.state()!.writeback!.request,
               replyTo,
             }));
             assert.equal(calls, 1);
@@ -261,13 +259,6 @@ test("a completed Run without an explicit Signal action stays local", async () =
           publish: () => Effect.die(new Error("Local results cannot publish")),
         });
         yield* env.completed;
-        const actor = yield* env.system.select("/user/publications").resolve();
-        yield* actor.ask<void>((replyTo) => ({
-          _tag: "Publish",
-          taskPath: env.record()!.path,
-          entryId: env.state()!.outcomeEntryId!,
-          replyTo,
-        }));
         assert.equal(env.state()!.writeback, undefined);
         assert.equal(
           approvalEntries(env.registry).some((entry) => entry.id.includes(":writeback:")),
@@ -337,8 +328,7 @@ for (const phase of ["sending", "published"] as const) {
             const actor = yield* env.system.select("/user/publications").resolve();
             yield* actor.ask<void>((replyTo) => ({
               _tag: "Publish",
-              taskPath: env.record()!.path,
-              entryId: env.state()!.outcomeEntryId!,
+              request: env.state()!.writeback!.request,
               replyTo,
             }));
             assert.equal(calls, phase === "sending" ? 0 : 1);

@@ -1,3 +1,4 @@
+import type { ApprovalReply } from "../src/approvals/actor.js";
 import { AgentConversations } from "@aster/agent";
 import { testConversations } from "./conversation-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
@@ -136,13 +137,14 @@ test("invalid option stays pending and can be corrected without losing the origi
             },
           },
         });
-        const invalid = yield* queue.ask<{ error?: string }>((replyTo) => ({
+        const invalid = yield* queue.ask<ApprovalReply>((replyTo) => ({
           _tag: "Resolve",
           id: "choice",
           response: { answers: { q: ["invalid"] } },
           replyTo,
         }));
-        assert.match(invalid.error!, /offered option/);
+        assert.equal(invalid._tag, "Rejected");
+        if (invalid._tag === "Rejected") assert.match(invalid.error.message, /offered option/);
         assert.equal(approvalEntries(registry)[0]!.status, "pending");
         assert.deepEqual(
           yield* queue.ask((replyTo) => ({
@@ -151,7 +153,7 @@ test("invalid option stays pending and can be corrected without losing the origi
             response: { text: "A", answers: {} },
             replyTo,
           })),
-          {},
+          { _tag: "Accepted" },
         );
         assert.deepEqual(approvalEntries(registry)[0]!.response?.answers, { q: ["A"] });
       }),

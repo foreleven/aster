@@ -36,7 +36,7 @@ Context messages can contain source evidence, such as a Lark chat's message wind
 
 `ContextActor` wraps an owner Actor definition; it is not a separate Actor or a business-state service. `ContextsActor` is the Runtime-owned `/user/contexts` query endpoint and owns no Context snapshots. Tools ask this endpoint; integrations register query routes that dispatch to their own Actors. Runtime uses native `awaitStarted` for query startup, without a Ready command.
 
-Storage adapters and backend selection remain in infra. Reactions, Memory and description generation retain their own modules and policies. Runtime installs core views before source startup; integrations install their policies before source activation. Dormant owners remain discoverable through persisted snapshots and registered view policies.
+Storage adapters and backend selection remain in infra. Reactions, Memory and description generation own independent supervised consumers and policies. Memory evidence reads run outside its mailbox; description generation never gates routing or capture. Runtime installs core views before source startup; integrations install their policies before source activation. Dormant owners remain discoverable through persisted snapshots and registered view policies.
 
 ## Reads and commits
 

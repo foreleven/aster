@@ -1,9 +1,8 @@
-import { ContextCaptures, ContextDescriptions, makeContextMaintenance } from "@aster/core";
+import { ContextCaptures, ContextDescriptions } from "@aster/core";
 import { testConversations } from "./conversation-fixtures.js";
-import { taskCapture } from "@aster/core/testing";
+import { initializeContextDescription, taskCapture } from "@aster/core/testing";
 import { larkCaptures, larkDescriptions, larkContextViews } from "@aster/integrations";
 import { TaskActor } from "@aster/core";
-import { ContextDescriptionError } from "@aster/core";
 import { ApprovalQueueActor, ExternalAgents } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -72,27 +71,21 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
           ),
         );
         const memory = yield* system.spawn("memory", MemoryActor);
+        yield* memory.awaitStarted;
         yield* system.spawn("approvals", ApprovalQueueActor);
         const newerSourceWritten = yield* Deferred.make<void>();
         const descriptionInputs: unknown[] = [];
-        const processor = makeContextMaintenance({
-          registry,
-          capture: (input) =>
-            Deferred.await(newerSourceWritten).pipe(
-              Effect.andThen(
-                memory
-                  .ask<void>((replyTo) => ({ _tag: "Capture", input, replyTo }))
-                  .pipe(Effect.orDie),
-              ),
-            ),
-          captures: capturesPolicy,
-          descriptions,
-          describe: (identity) =>
-            Effect.sync(() => {
-              descriptionInputs.push(identity);
-              return `Fixed ${identity.identity}`;
-            }),
-        });
+        const processor = ({ record }: { record: import("@aster/core").ContextSnapshot }) =>
+          initializeContextDescription(
+            registry,
+            record,
+            descriptions.identity(record.path),
+            (identity) =>
+              Effect.sync(() => {
+                descriptionInputs.push(identity);
+                return `Fixed ${identity.identity}`;
+              }),
+          );
         const listener = yield* Stream.runForEach(registry.changes, processor).pipe(
           Effect.forkScoped,
         );
@@ -221,18 +214,7 @@ test("discovered account and mailbox identities use separate sessions; no captur
           ),
         );
         const memory = yield* system.spawn("memory", MemoryActor);
-        const processChange = makeContextMaintenance({
-          registry,
-          capture: (input) =>
-            memory.ask<void>((replyTo) => ({ _tag: "Capture", input, replyTo })).pipe(Effect.orDie),
-          captures: capturesPolicy,
-          descriptions,
-          describe: () => Effect.die(new Error("Descriptions are provided by this fixture")),
-        });
-        const listener = yield* Stream.runForEach(registry.changes, processChange).pipe(
-          Effect.forkScoped,
-        );
-        yield* Effect.yieldNow;
+        yield* memory.awaitStarted;
         yield* registry.commit(
           {
             path: "/lark",
@@ -283,7 +265,6 @@ test("discovered account and mailbox identities use separate sessions; no captur
           { expectedRevision: registry.get("/lark")?.revision ?? 0 },
         );
         yield* waitFor(() => captures.length === 2);
-        yield* Fiber.interrupt(listener);
         return captures;
       }),
     ).pipe(Effect.provide(Layer.mergeAll(ContextCaptures.layer, ContextDescriptions.layer))),
@@ -293,41 +274,4 @@ test("discovered account and mailbox identities use separate sessions; no captur
     [["/lark/mail"], ["/lark"]],
   );
   assert.notEqual(result[0]!.sessionId, result[1]!.sessionId);
-});
-
-test("a failed Context item does not terminate processing of later changes", async () => {
-  const { isolateContextChange } = await import("@aster/core");
-  const handled: string[] = [];
-  await Effect.runPromise(
-    Stream.runForEach(
-      Stream.make(
-        {
-          path: "/failed",
-          created: true,
-          stateChanged: true,
-          record: { revision: 0, path: "/failed", description: "", state: {}, messages: [] },
-        },
-        {
-          path: "/next",
-          created: true,
-          stateChanged: true,
-          record: { revision: 0, path: "/next", description: "", state: {}, messages: [] },
-        },
-      ),
-      isolateContextChange((change) =>
-        change.record.path === "/failed"
-          ? Effect.fail(
-              new ContextDescriptionError({
-                path: change.record.path,
-                message: "Internal Agent returned no structured result",
-                cause: undefined,
-              }),
-            )
-          : Effect.sync(() => {
-              handled.push(change.record.path);
-            }),
-      ),
-    ),
-  );
-  assert.deepEqual(handled, ["/next"]);
 });

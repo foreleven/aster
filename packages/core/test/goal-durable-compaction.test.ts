@@ -1,3 +1,4 @@
+import { GoalState } from "../src/goals/state/model.js";
 import { CurrentActors } from "../src/tools/actors.js";
 import { toolSystem } from "./tool-fixtures.js";
 import { createHash } from "node:crypto";
@@ -13,7 +14,6 @@ import { AgentRunner, Models, type ResolvedModel } from "@aster/agent";
 import { Effect, Layer, Schema } from "effect";
 import {
   GoalActor,
-  GoalState,
   GoalAgent,
   GoalSettings,
   ContextRegistry,

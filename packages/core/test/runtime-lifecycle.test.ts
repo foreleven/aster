@@ -279,3 +279,46 @@ test("runtime becomes ready while a Goal restores; its mailbox resumes after res
     ).pipe(Effect.timeout("5 seconds")),
   );
 });
+
+test("a stopped core owner makes runtime health failed after readiness", async () => {
+  const stopMemory = Deferred.makeUnsafe<Effect.Effect<void>>();
+  const control = Layer.effectDiscard(
+    Effect.gen(function* () {
+      const modules = yield* RuntimeIntegrations;
+      yield* modules.register(
+        defineIntegration({
+          name: "control",
+          phase: "source",
+          services: Context.empty(),
+          activate: (system) =>
+            Effect.gen(function* () {
+              const memory = yield* system.select("/user/memory").resolve();
+              yield* Deferred.succeed(stopMemory, system.stop(memory));
+              return { ready: Effect.void, stop: Effect.void };
+            }),
+        }),
+      );
+    }),
+  );
+  const live = AsterRuntime.layer({ integrations: [control] }).pipe(
+    Layer.provide(infrastructure()),
+    Layer.provide(config),
+  );
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const runtime = yield* AsterRuntime;
+      yield* runtime.ready;
+      yield* yield* Deferred.await(stopMemory);
+      const snapshot = yield* runtime.api.inspect.pipe(
+        Effect.repeat({ until: (snapshot) => snapshot.phase === "failed" }),
+        Effect.timeout("2 seconds"),
+      );
+      assert.equal(snapshot.phase, "failed");
+      assert.ok(
+        snapshot.events.some(
+          (event) => event._tag === "ActorStopped" && event.path === "/user/memory",
+        ),
+      );
+    }).pipe(Effect.provide(live)),
+  );
+});

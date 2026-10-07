@@ -1,6 +1,6 @@
 import { Schema } from "effect";
 import { contextView } from "../context/definition.js";
-import { publicBusinessMessage } from "../reasoning/public-messages.js";
+import { ApprovalEvent } from "./state.js";
 import { ApprovalEntry, InputRequest } from "@aster/api-contracts";
 // Provider metadata and execution handles are intentionally absent from these schemas.
 export const PublicInputRequest = Schema.Struct({
@@ -17,5 +17,5 @@ export const PublicApprovalEntry = Schema.Struct({
 export const approvalView = contextView({
   matches: (path) => path === "/approvals",
   state: Schema.Struct({ entries: Schema.Array(PublicApprovalEntry) }),
-  projectMessage: publicBusinessMessage,
+  message: ApprovalEvent,
 });

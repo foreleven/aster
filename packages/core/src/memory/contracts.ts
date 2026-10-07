@@ -39,11 +39,3 @@ export class MemoryBackend extends Context.Service<
     readonly drain: Effect.Effect<void>;
   }
 >()("memory/Backend") {}
-
-export class ContextCaptureSink extends Context.Service<
-  ContextCaptureSink,
-  {
-    readonly capture: (input: ContextCapture) => Effect.Effect<void>;
-    readonly drain: Effect.Effect<void>;
-  }
->()("context/CaptureSink") {}

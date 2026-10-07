@@ -9,6 +9,7 @@ import { ContextRegistry } from "../context/registry.js";
 import { GoalSettings } from "../config/settings.js";
 import { CurrentActors } from "../tools/actors.js";
 import { approvalEntries, sendApproval } from "../approvals/actor.js";
+import { taskPublication } from "./delivery.js";
 import { requestPublication } from "../publications/actor.js";
 import { ExternalAgents } from "./execution/contracts.js";
 import { TaskExecution } from "./execution/service.js";
@@ -60,8 +61,9 @@ const makeHandlers = Effect.gen(function* () {
     const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(
       (yield* messages.get(state.path, snapshot.inputs[0]!.entryId).pipe(Effect.orDie)).data,
     );
-    if (result.status === "completed" && snapshot.status === "completed" && admission.action)
-      yield* owner.pipeToSelf(requestPublication(owner, state.path, entry.id), (result) => ({
+    const publication = taskPublication(admission, result, entry.at);
+    if (snapshot.status === "completed" && publication)
+      yield* owner.pipeToSelf(requestPublication(owner, publication), (result) => ({
         _tag: "DeliverySettled",
         ...(result._tag === "Failure" ? { error: result.error.message } : {}),
       }));

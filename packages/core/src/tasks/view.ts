@@ -154,18 +154,19 @@ export const inspectTask: (
 /** Resolve frozen evidence from Pi; later source edits cannot change a capture. */
 export const taskCapture = (messages: AgentConversations["Service"]): CapturePolicy => ({
   matches: (path) => taskView.matches!(path),
-  capture: Effect.fn("Task.capture")(function* (record) {
+  capture: (record) => {
     const decoded = Schema.decodeUnknownOption(TaskSnapshot)(record.state);
     if (Option.isNone(decoded)) return undefined;
     const state = decoded.value;
-    const entry = yield* messages.get(record.path, state.inputs[0]!.entryId).pipe(Effect.orDie);
-    const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(entry.data);
-    if (!admission.evidence) return undefined;
     return {
       sessionId: `${record.path}:${state.outcomeEntryId === undefined ? "trigger" : `outcome:${state.outcomeEntryId}`}`,
-      records: [record, admission.evidence],
+      records: Effect.gen(function* () {
+        const entry = yield* messages.get(record.path, state.inputs[0]!.entryId).pipe(Effect.orDie);
+        const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(entry.data);
+        return admission.evidence ? [record, admission.evidence] : undefined;
+      }),
     };
-  }),
+  },
 });
 
 const renderInput = (data: unknown) =>

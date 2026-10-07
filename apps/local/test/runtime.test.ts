@@ -65,7 +65,7 @@ const sourceLayer = (
       yield* captures.register([
         {
           matches: (path) => path === `/${name}`,
-          capture: (record) => Effect.succeed({ sessionId: record.path, records: [record] }),
+          capture: (record) => ({ sessionId: record.path, records: Effect.succeed([record]) }),
         },
       ]);
       const registry = yield* ContextRegistry;

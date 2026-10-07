@@ -2,7 +2,7 @@ import { ApplicationError } from "@aster/api-contracts";
 import { QueryReply, queryReplyTo, queryCancelled, cancellableQuery } from "../commands/query.js";
 import { ContextCaptures } from "./capture.js";
 import { ReplyTo, type ActorContext } from "@aster/actor";
-import { Deferred, Effect, HashSet, Layer, Match, Schema } from "effect";
+import { Deferred, Effect, HashSet, Layer, Match, Schema, Stream, Schedule } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ContextRegistry } from "../context/registry.js";
 import { PublicContext as ContextRecord } from "@aster/api-contracts";
@@ -34,7 +34,6 @@ export const MemoryCommand = Schema.Union([
     replyTo: queryReplyTo,
   }),
   Schema.TaggedStruct("RecallSettled", { id: Schema.String, result: QueryReply }),
-  Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() }),
   Schema.TaggedStruct("Retry", {}),
   Schema.TaggedStruct("Capture", { input: Capture, replyTo: ReplyTo<void>() }),
   Schema.TaggedStruct("Captured", {
@@ -74,6 +73,7 @@ export class MemoryActor extends ContextActor.Service<
       const recalls = new Map<string, Extract<MemoryCommand, { _tag: "Search" | "Expand" }>>();
       const captures = yield* ContextCaptures;
       const registry = yield* ContextRegistry;
+      const changes = yield* registry.subscribe;
       // Only the mailbox changes this set. Each Behavior gets a fresh set on recovery.
       let inFlight = HashSet.empty<string>();
       const state = Effect.suspend(() =>
@@ -137,11 +137,48 @@ export class MemoryActor extends ContextActor.Service<
                 { expectedRevision: previous?.revision ?? 0 },
               )
               .pipe(Effect.orDie);
+            // Recovery and live evidence reads run outside the mailbox. A failed worker
+            // enters Actor supervision; restarting replays retained Contexts and pending work.
+            const sources = Stream.merge(
+              changes.pipe(Stream.map(({ record }) => record)),
+              Stream.fromEffectSchedule(
+                Effect.sync(() => Object.values(registry.snapshot())),
+                Schedule.spaced("30 seconds"),
+              ).pipe(Stream.flatMap(Stream.fromIterable)),
+            );
+            const ignored = new Set<string>();
+            yield* context.pipeToSelf(
+              Stream.runForEach(
+                sources,
+                Effect.fn("Memory.captureSource")(function* (record) {
+                  const plan = captures.select(record);
+                  if (!plan || ignored.has(plan.sessionId)) return;
+                  const current = yield* state;
+                  if (
+                    current.captured?.includes(plan.sessionId) ||
+                    current.pending?.some((entry) => entry.sessionId === plan.sessionId)
+                  )
+                    return;
+                  const records = yield* plan.records;
+                  if (!records) {
+                    ignored.add(plan.sessionId);
+                    return;
+                  }
+                  yield* context.self
+                    .ask<void>((replyTo) => ({
+                      _tag: "Capture",
+                      input: { sessionId: plan.sessionId, records },
+                      replyTo,
+                    }))
+                    .pipe(Effect.orDie);
+                }),
+              ),
+              () => ({ _tag: "Retry" }),
+            );
             yield* context.self.tell({ _tag: "Retry" });
           }),
         receive: (command, context) =>
           Match.value(command).pipe(
-            Match.tag("Ready", ({ replyTo }) => replyTo.tell(undefined)),
             Match.tag("Search", "Expand", (request) =>
               Effect.gen(function* () {
                 if (yield* Deferred.isDone(request.cancelled)) return;
@@ -213,11 +250,6 @@ export class MemoryActor extends ContextActor.Service<
             ),
             Match.tag("Retry", () =>
               Effect.gen(function* () {
-                // Recover the gap between source commit and durable capture admission.
-                for (const record of Object.values(registry.snapshot())) {
-                  const input = yield* captures.select(record);
-                  if (input) yield* admit(input);
-                }
                 yield* context.pipeToSelf(Effect.sleep("30 seconds"), () => ({ _tag: "Retry" }));
                 yield* dispatch(context);
               }),

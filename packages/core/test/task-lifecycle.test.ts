@@ -88,8 +88,8 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
           response: { decision: "approve" },
           replyTo,
         }));
-      assert.deepEqual(yield* decide(), {});
-      assert.deepEqual(yield* decide(), {});
+      assert.deepEqual(yield* decide(), { _tag: "Accepted" });
+      assert.deepEqual(yield* decide(), { _tag: "Accepted" });
       yield* Deferred.await(submitted);
       yield* env.wait(
         () =>

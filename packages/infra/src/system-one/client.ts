@@ -1,6 +1,13 @@
 import { TypeSafeClient, type Questions } from "@typesafe-ai/sdk";
-import { DecisionError, SystemOneConfig, SystemOneClient, secretConfig } from "@aster/core";
+import { DecisionError, SystemOneClient, secretConfig } from "@aster/core";
 import { Config, ConfigProvider, Effect, Layer, Redacted, Schema } from "effect";
+
+const SystemOneConfig = Schema.Struct({
+  url: Schema.String,
+  model: Schema.String,
+  apiKey: Schema.String,
+});
+type SystemOneConfig = typeof SystemOneConfig.Type;
 
 /** Explicit configuration applies to TypeSafe and compatible System One services. */
 export const makeSystemOneClient = (

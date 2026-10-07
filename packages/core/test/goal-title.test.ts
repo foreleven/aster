@@ -7,11 +7,11 @@ import { Deferred, ConfigProvider, Effect, Layer, Schema } from "effect";
 import {
   ContextRegistry,
   ExternalAgents,
+  GoalDefinition,
   GoalSettings,
   GoalSnapshot,
   GoalsRootActor,
   makeApplicationApi,
-  parseConfig,
   type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
@@ -29,19 +29,20 @@ const settingsFor = (config: unknown) =>
   GoalSettings.pipe(
     Effect.provide(
       GoalSettings.layer.pipe(
-        Layer.provide(ConfigProvider.layer(ConfigProvider.fromUnknown(config))),
+        Layer.provide(
+          ConfigProvider.layer(ConfigProvider.fromUnknown(config, { preserveEmptyStrings: true })),
+        ),
       ),
     ),
   );
 
-test("Goal config readers retain optional titles and reject blank or non-string titles", async () => {
+test("Goal settings retain optional titles and reject empty or whitespace titles", async () => {
   for (const goal of [
     { description: "Detailed responsibility" },
     { title: "Project watch", description: "Detailed responsibility" },
   ]) {
     const config = configFor(goal);
     const expected = [{ slug: "project", ...goal }];
-    assert.deepEqual(parseConfig(config, "/tmp").goals, expected);
     assert.deepEqual(
       (await Effect.runPromise(settingsFor(config))).definitions.filter(
         (goal) => goal.slug !== "personal",
@@ -49,15 +50,32 @@ test("Goal config readers retain optional titles and reject blank or non-string 
       expected,
     );
   }
-  for (const title of ["", " \n\t", 42, null]) {
-    const config = configFor({ title, description: "Detailed responsibility" });
-    assert.throws(() => parseConfig(config, "/tmp"));
+  // ConfigProvider normalizes scalars and treats null values as absent.
+  for (const [title, expected] of [
+    [null, undefined],
+    [42, "42"],
+  ] as const) {
+    const settings = await Effect.runPromise(
+      settingsFor(configFor({ title, description: "Detailed responsibility" })),
+    );
+    assert.equal(settings.definitions.find((goal) => goal.slug === "project")?.title, expected);
   }
-  const whitespaceConfig = configFor({ title: " \n\t", description: "Detailed responsibility" });
-  assert.equal(
-    (await Effect.runPromise(Effect.result(settingsFor(whitespaceConfig))))._tag,
-    "Failure",
-  );
+  for (const title of ["", " \n\t"]) {
+    const invalid = configFor({ title, description: "Detailed responsibility" });
+    assert.equal((await Effect.runPromise(Effect.result(settingsFor(invalid))))._tag, "Failure");
+  }
+});
+
+test("Goal definitions reject blank and non-string titles at domain boundaries", () => {
+  for (const title of ["", " \n\t", 42, null]) {
+    assert.throws(() =>
+      Schema.decodeUnknownSync(GoalDefinition)({
+        slug: "project",
+        title,
+        description: "Detailed responsibility",
+      }),
+    );
+  }
 });
 
 test("Goal startup refreshes the entire definition without losing work", async () => {

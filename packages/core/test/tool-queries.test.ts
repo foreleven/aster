@@ -36,7 +36,7 @@ test("Memory asks keep mailboxes available and caller interruption releases reca
           Effect.forkScoped,
         );
         yield* Deferred.await(entered);
-        yield* env.memory.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* env.memory.awaitStarted;
         assert.equal(
           (yield* call(env.system, expand!, { items: [{ obsId: "one" }] })).isError,
           undefined,

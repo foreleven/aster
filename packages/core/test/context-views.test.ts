@@ -7,7 +7,6 @@ import {
   contextView,
   defineContext,
   makeApplicationApi,
-  makeContextMaintenance,
   type ContextSnapshot,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
@@ -65,6 +64,7 @@ const fixtures = [
     ],
   }),
   record("/approvals", {
+    revokedIds: [],
     entries: [
       {
         id: "permission",
@@ -205,21 +205,9 @@ test("owner policies fail closed and project the original change for reactions a
         { ...source, state: { summary: "newer", metadata: secret } },
         { expectedRevision: source.revision! },
       );
-      let captured = false;
-      yield* makeContextMaintenance({
-        registry,
-        capture: (capture) =>
-          Effect.sync(() => {
-            assertPublic(capture);
-            assert.equal((capture.records[0]!.state as { summary: string }).summary, "first");
-            captured = true;
-          }),
-        captures: {
-          select: (source) => Effect.succeed({ sessionId: "capture", records: [source] }),
-        },
-        descriptions: { identity: () => undefined },
-        describe: () => Effect.succeed("source"),
-      })({ record: source });
+      const captured = registry.views.project(source);
+      assertPublic(captured);
+      assert.equal((captured.state as { summary: string }).summary, "first");
       const evidence = registry.backend.journal()[0]!.record;
       assertPublic(evidence);
       assert.equal((evidence.state as { summary: string }).summary, "first");

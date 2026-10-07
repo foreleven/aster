@@ -1,13 +1,23 @@
 import { Effect, Schema } from "effect";
-import { ApplicationError, type ProcessingSnapshot } from "@aster/api-contracts";
-import type { ContextSnapshot } from "../context/model.js";
-import { ReactionState, deliveriesOf } from "./state.js";
+import {
+  ApplicationError,
+  type ProcessingSnapshot,
+  type ProcessingOwner,
+} from "@aster/api-contracts";
+import type { ContextRegistry } from "../context/registry.js";
+import { ReactionSnapshot, deliveriesOf } from "./state.js";
 export const inspectReactions = Effect.fn("Reactions.inspect")(function* (
-  current: ContextSnapshot,
+  registry: ContextRegistry["Service"],
+  owner: ProcessingOwner,
 ): Effect.fn.Return<ProcessingSnapshot, ApplicationError> {
-  const owner = "system-one";
+  const current = registry.get(`/${owner}`);
+  if (!current)
+    return yield* new ApplicationError({
+      kind: "not-found",
+      message: "Processing owner not found",
+    });
 
-  const state = yield* Schema.decodeUnknownEffect(ReactionState)(current.state).pipe(
+  const state = yield* Schema.decodeUnknownEffect(ReactionSnapshot)(current.state).pipe(
     Effect.mapError(
       () => new ApplicationError({ kind: "unavailable", message: "Reaction state unavailable" }),
     ),

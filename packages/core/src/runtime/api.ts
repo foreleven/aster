@@ -8,7 +8,7 @@ import {
   ContextQueryError,
   type ContextQueryInput,
 } from "../context/queries/routes.js";
-import { inspectProcessing } from "./processing.js";
+import { inspectReactions } from "../reactions/inspection.js";
 import { RecoveryInput, type ProcessingOwner, type CommandReceipt } from "@aster/api-contracts";
 import { goalTimeline } from "../goals/view.js";
 import { Effect, Schema, Stream } from "effect";
@@ -27,7 +27,7 @@ import { PublicApprovalEntry } from "../approvals/view.js";
 import type { AgentConversations } from "@aster/agent";
 import type { GoalCommand, GoalCommandReply } from "../goals/protocol.js";
 import type { GoalsRootCommand } from "../goals/root.js";
-import { approvalEntries, type ApprovalCommand } from "../approvals/actor.js";
+import { approvalEntries, type ApprovalCommand, type ApprovalReply } from "../approvals/actor.js";
 import type { ApprovalResponse } from "../tasks/execution/contracts.js";
 
 /** Transport-independent queries and commands. Actor paths remain inside core. */
@@ -132,7 +132,7 @@ export const makeApplicationApi = (options: {
         : Effect.fail(
             new ContextQueryError({ kind: "unavailable", message: "Context queries unavailable" }),
           ),
-    inspectProcessing: (owner: ProcessingOwner) => inspectProcessing(registry, owner),
+    inspectProcessing: (owner: ProcessingOwner) => inspectReactions(registry, owner),
     recoverProcessing: Effect.fn("ApplicationApi.recoverProcessing")(function* (
       raw: RecoveryInput,
     ) {
@@ -254,7 +254,7 @@ export const makeApplicationApi = (options: {
               message: "Approval queue unavailable",
             });
           const result = yield* options.approvals
-            .ask<{ error?: string }>((replyTo) => ({
+            .ask<ApprovalReply>((replyTo) => ({
               _tag: "Resolve",
               id,
               response,
@@ -270,8 +270,7 @@ export const makeApplicationApi = (options: {
                 ),
               ),
             );
-          if (result.error)
-            return yield* new ApplicationError({ kind: "conflict", message: result.error });
+          if (result._tag === "Rejected") return yield* result.error;
         }),
     },
   };

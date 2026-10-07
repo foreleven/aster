@@ -1,3 +1,4 @@
+import type { ApprovalReply } from "../src/approvals/actor.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Layer, Match } from "effect";
@@ -133,7 +134,7 @@ test("approval validation rejects invalid answers without saving and accepts com
           const initial = {
             path: "/approvals",
             description: "Approval queue",
-            state: { entries: scenario.missing ? [] : [entry] },
+            state: { entries: scenario.missing ? [] : [entry], revokedIds: [] },
             messages: [],
           };
           let saves = 0;
@@ -147,14 +148,15 @@ test("approval validation rejects invalid answers without saving and accepts com
             ActorSystem.provide(Layer.succeed(ContextRegistry, registry)),
           );
           const queue = yield* system.spawn("approvals", ApprovalQueueActor);
-          const reply = yield* queue.ask<{ error?: string }>((replyTo) => ({
+          const reply = yield* queue.ask<ApprovalReply>((replyTo) => ({
             _tag: "Resolve",
             id: entry.id,
             response: scenario.response,
             replyTo,
           }));
           if (scenario.error) {
-            assert.deepEqual(reply, { error: scenario.error }, scenario.name);
+            assert.equal(reply._tag, "Rejected");
+            if (reply._tag === "Rejected") assert.equal(reply.error.message, scenario.error);
             assert.equal(saves, 0, scenario.name);
             assert.deepEqual(
               registry.get("/approvals"),
@@ -162,7 +164,7 @@ test("approval validation rejects invalid answers without saving and accepts com
               scenario.name,
             );
           } else {
-            assert.deepEqual(reply, {}, scenario.name);
+            assert.deepEqual(reply, { _tag: "Accepted" }, scenario.name);
             assert.equal(saves, 1, scenario.name);
             assert.deepEqual(
               approvalEntries(registry),
@@ -228,13 +230,13 @@ test("persisted approval answers reach a recreated Actor only after it exists, w
             status: "pending",
           },
         });
-        const reply = yield* queue.ask<{ error?: string }>((replyTo) => ({
+        const reply = yield* queue.ask<ApprovalReply>((replyTo) => ({
           _tag: "Resolve",
           id: "approval-1",
           response: { decision: "approve" },
           replyTo,
         }));
-        assert.deepEqual(reply, {});
+        assert.deepEqual(reply, { _tag: "Accepted" });
         assert.equal(approvalEntries(registry)[0]!.status, "resolved");
       }),
     ),

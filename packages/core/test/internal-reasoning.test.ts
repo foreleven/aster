@@ -7,7 +7,10 @@ import { test } from "node:test";
 import { AgentRunner, Agent, AgentError, Models } from "@aster/agent";
 import { Cause, Clock, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import { TestClock } from "effect/testing";
-import { makeDescriptionInitializer, makeStructuredReasoning } from "../src/index.js";
+import {
+  makeDescriptionInitializer,
+  makeStructuredReasoning,
+} from "../src/reasoning/context-description.js";
 
 const identity = { path: "/test", identity: "Test", parentDescription: "Parent" };
 const models = Layer.succeed(Models, {
@@ -129,6 +132,90 @@ test("AgentRunner cancellation releases memory tools before SDK idle for descrip
           assert.equal(idle, true);
         }),
       ),
+    );
+  }
+});
+
+test("description failures do not block later Contexts and defects reach Actor supervision", async () => {
+  const { ActorSystem } = await import("@aster/actor");
+  const { ContextRegistry, defineContext } = await import("../src/index.js");
+  const { ContextDescriptionsActor, ContextDescriptions } =
+    await import("../src/reasoning/context-description.js");
+  const { makeContextRegistry } = await import("../src/testing/context.js");
+  const { agentResult, reasoningConfig } = await import("./workflow-fixtures.js");
+  const { Schema, Stream } = await import("effect");
+  for (const defect of [false, true]) {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* makeContextRegistry();
+          const policies = yield* ContextDescriptions.pipe(
+            Effect.provide(ContextDescriptions.layer),
+          );
+          yield* policies.register([
+            { matches: (path) => path.startsWith("/source/"), identity: "Source" },
+          ]);
+          for (const path of ["/source/first", "/source/second"]) {
+            yield* registry.register(
+              path,
+              defineContext({ state: Schema.Struct({}), message: Schema.Never }),
+            );
+            yield* registry.commit(
+              { path, description: "", state: {}, messages: [] },
+              { expectedRevision: 0 },
+            );
+          }
+          let calls = 0;
+          const system = yield* ActorSystem.make().pipe(
+            ActorSystem.provide(
+              reasoningConfig,
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(ContextDescriptions, policies),
+              Layer.succeed(
+                AgentRunner,
+                AgentRunner.make(() =>
+                  Effect.suspend(() => {
+                    calls++;
+                    if (calls === 1)
+                      return defect
+                        ? Effect.die("description defect")
+                        : Effect.fail(new AgentError("unavailable"));
+                    return Effect.succeed(
+                      agentResult("submit_result", { description: "Source description" }),
+                    );
+                  }),
+                ),
+              ),
+            ),
+          );
+          const stopped = yield* Stream.runHead(
+            system.events.pipe(
+              Stream.filter(
+                (event) => event._tag === "ActorStopped" && event.path === "/user/descriptions",
+              ),
+            ),
+          ).pipe(Effect.forkScoped);
+          const changes = yield* registry.subscribe;
+          yield* system.spawn("descriptions", ContextDescriptionsActor, {
+            supervision: () => "stop",
+          });
+          if (defect) {
+            const event = yield* Fiber.join(stopped);
+            assert.equal(event._tag, "Some");
+            assert.equal(calls, 1);
+          } else {
+            yield* changes.pipe(
+              Stream.filter(
+                ({ record }) => record.path === "/source/second" && !!record.description,
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+            assert.equal(registry.get("/source/first")!.description, "");
+            assert.equal(registry.get("/source/second")!.description, "Source description");
+          }
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
     );
   }
 });

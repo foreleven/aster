@@ -1,5 +1,5 @@
 import { score, type DecisionError, type SystemOneClient } from "../../decisions/system-one.js";
-import type { GoalDefinition, CoreConfig } from "../../config/schema.js";
+import type { GoalDefinition } from "../../config/schema.js";
 import type { PublicContext as ContextRecord } from "@aster/api-contracts";
 import { Context, Effect, Match, Schema } from "effect";
 import { createHash } from "node:crypto";
@@ -207,7 +207,7 @@ export const screeningDecision = Effect.fn("Goal.screeningDecision")(function* (
   return record;
 });
 
-export type GoalRelevance = CoreConfig["goals"][number] & {
+export type GoalRelevance = GoalDefinition & {
   readonly score: number;
   readonly rationale: string;
   readonly screening: GoalScreeningRecord;
@@ -216,7 +216,7 @@ export type GoalRelevance = CoreConfig["goals"][number] & {
 export const relevantGoals = (
   client: SystemOneClient,
   record: ContextRecord,
-  goals: CoreConfig["goals"],
+  goals: readonly GoalDefinition[],
   options: {
     readonly goalRecords?: Readonly<Record<string, ContextRecord>>;
     readonly screening?: GoalScreeningStore["Service"];

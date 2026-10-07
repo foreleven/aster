@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import { Deferred, Effect, Layer, Schema, Stream } from "effect";
 import {
+  DecisionError,
   ContextRegistry,
   GoalSettings,
   contextView,
@@ -16,9 +17,9 @@ import {
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { SystemOneActor } from "../src/reactions/actor.js";
-import { ReactionPolicy, ReactionFailure } from "../src/reactions/policy.js";
+import { ReactionPolicy, ReactionFailure, makeReactionPolicy } from "../src/reactions/policy.js";
 import {
-  ReactionState,
+  ReactionSnapshot,
   type ReactionWork,
   type ReactionPlanning,
   type ReactionDeliveryInput,
@@ -49,8 +50,8 @@ const proposed = (work: ReactionWork): Extract<ReactionDeliveryInput, { _tag: "S
 });
 const completed = (record: ContextSnapshot) =>
   record.path === "/system-one" &&
-  Schema.decodeUnknownSync(ReactionState)(record.state).work.length > 0 &&
-  Schema.decodeUnknownSync(ReactionState)(record.state).work.every(
+  Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work.length > 0 &&
+  Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work.every(
     (work) => work.status === "completed",
   );
 const storeFor = (records: Map<string, StoredContext>) => ({
@@ -59,12 +60,12 @@ const storeFor = (records: Map<string, StoredContext>) => ({
     records.set(record.snapshot.path, structuredClone(record));
   },
 });
-const layerFor = (registry: TestContextRegistry, policy: Omit<ReactionPolicy["Service"], "bind">) =>
+const layerFor = (registry: TestContextRegistry, policy: ReactionPolicy["Service"]) =>
   Layer.mergeAll(
     Layer.succeed(ContextRegistry, registry),
     Layer.succeed(DurableContext, registry.backend),
     Layer.succeed(GoalSettings, { definitions: [] }),
-    Layer.succeed(ReactionPolicy, { ...policy, bind: () => Effect.void }),
+    Layer.succeed(ReactionPolicy, policy),
   );
 
 test("System One recovers every retained source version without source Actors or live change replay", async () => {
@@ -94,14 +95,14 @@ test("System One recovers every retained source version without source Actors or
                   Effect.sync(() => {
                     assert.equal(work.event.record.revision, work.event.record.revision);
                     seen.push((work.event.record.state as { summary: string }).summary);
-                    return { screenings: [], commands: [] };
+                    return { screenings: [], failures: [], commands: [] };
                   }),
                 deliver: () => Effect.die(new Error("No decisions to deliver")),
               }),
             ),
           );
           const actor = yield* system.spawn("system-one", SystemOneActor);
-          yield* actor.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+          yield* actor.awaitStarted;
           if (!restart)
             yield* changes.pipe(
               Stream.filter((change) => completed(change.record)),
@@ -109,10 +110,11 @@ test("System One recovers every retained source version without source Actors or
               Stream.runDrain,
             );
           yield* actor.tell({ _tag: "Wake" });
-          yield* actor.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+          yield* actor.awaitStarted;
           assert.deepEqual(seen, ["First evidence", "Second evidence"]);
           assert.equal(
-            Schema.decodeUnknownSync(ReactionState)(registry.get("/system-one")!.state).work.length,
+            Schema.decodeUnknownSync(ReactionSnapshot)(registry.get("/system-one")!.state).work
+              .length,
             2,
           );
           assert.equal("events" in registry.get("/system-one")!, false);
@@ -143,7 +145,7 @@ test("a persisted decision survives lost commit acknowledgement without re-scree
             if (
               record.snapshot.path === "/system-one" &&
               loseDecisionAck &&
-              Schema.decodeUnknownSync(ReactionState)(record.snapshot.state).work[0]?.status ===
+              Schema.decodeUnknownSync(ReactionSnapshot)(record.snapshot.state).work[0]?.status ===
                 "ready"
             ) {
               loseDecisionAck = false;
@@ -160,12 +162,12 @@ test("a persisted decision survives lost commit acknowledgement without re-scree
               plan: (work) =>
                 Effect.sync(() => {
                   planned++;
-                  return { screenings: [], commands: [proposed(work)] };
+                  return { screenings: [], failures: [], commands: [proposed(work)] };
                 }),
               deliver: (command) =>
                 Effect.sync(() => {
                   delivered++;
-                  const durable = Schema.decodeUnknownSync(ReactionState)(
+                  const durable = Schema.decodeUnknownSync(ReactionSnapshot)(
                     records.get("/system-one")!.snapshot.state,
                   ).work[0]!;
                   assert.equal(deliveriesOf(durable)[0]?.status, "sending");
@@ -214,7 +216,7 @@ test("lost receiver acknowledgement replays the frozen decision after restart wi
                 plan: (work) =>
                   Effect.sync(() => {
                     planned++;
-                    return { screenings: [], commands: [proposed(work)] };
+                    return { screenings: [], failures: [], commands: [proposed(work)] };
                   }),
                 deliver: (command) =>
                   Effect.gen(function* () {
@@ -241,7 +243,7 @@ test("lost receiver acknowledgement replays the frozen decision after restart wi
                 change.record.path === "/system-one" &&
                 (restart
                   ? completed(change.record)
-                  : Schema.decodeUnknownSync(ReactionState)(change.record.state).work.some(
+                  : Schema.decodeUnknownSync(ReactionSnapshot)(change.record.state).work.some(
                       (work) => deliveriesOf(work)[0]?.status === "unknown",
                     )),
             ),
@@ -285,7 +287,7 @@ test("interrupted planning reuses its admitted source and catalogue despite late
                       assert.deepEqual(work.event, original!.event);
                       assert.equal(work.attempts, 2);
                     }
-                    return { screenings: [], commands: [] };
+                    return { screenings: [], failures: [], commands: [] };
                   }),
                 deliver: () => Effect.die(new Error("No delivery")),
               }),
@@ -305,7 +307,7 @@ test("interrupted planning reuses its admitted source and catalogue despite late
               Stream.runDrain,
             );
             assert.equal(
-              Schema.decodeUnknownSync(ReactionState)(registry.get("/system-one")!.state).work
+              Schema.decodeUnknownSync(ReactionSnapshot)(registry.get("/system-one")!.state).work
                 .length,
               2,
             );
@@ -348,6 +350,7 @@ test("queued sources freeze target revisions when screening starts after the pre
                   const command = proposed(work);
                   return {
                     screenings: [],
+                    failures: [],
                     commands: [
                       {
                         ...command,
@@ -481,7 +484,8 @@ test("interrupted delivery attempts stay bounded across restarts and explicit re
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               layerFor(registry, {
-                plan: (work) => Effect.succeed({ screenings: [], commands: [proposed(work)] }),
+                plan: (work) =>
+                  Effect.succeed({ screenings: [], failures: [], commands: [proposed(work)] }),
                 deliver: (command) =>
                   Effect.gen(function* () {
                     delivered++;
@@ -498,17 +502,19 @@ test("interrupted delivery attempts stay bounded across restarts and explicit re
             ),
           );
           const actor = yield* system.spawn("system-one", SystemOneActor);
-          yield* actor.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+          yield* actor.awaitStarted;
           if (restart < 3) {
             yield* Deferred.await(entered);
             const delivery = deliveriesOf(
-              Schema.decodeUnknownSync(ReactionState)(registry.get("/system-one")!.state).work[0]!,
+              Schema.decodeUnknownSync(ReactionSnapshot)(registry.get("/system-one")!.state)
+                .work[0]!,
             )[0]!;
             assert.equal(delivery.status, "sending");
             assert.equal(delivery.attempts, restart + 1);
           } else {
-            const work = Schema.decodeUnknownSync(ReactionState)(registry.get("/system-one")!.state)
-              .work[0]!;
+            const work = Schema.decodeUnknownSync(ReactionSnapshot)(
+              registry.get("/system-one")!.state,
+            ).work[0]!;
             assert.equal(delivered, 3);
             assert.equal(deliveriesOf(work)[0]!.status, "unknown");
             assert.equal(deliveriesOf(work)[0]!.attempts, 3);
@@ -564,7 +570,7 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
                   admitted.push(work);
                   return admitted.length === 1
                     ? Effect.fail(new ReactionFailure({ message: "Model unavailable" }))
-                    : Effect.succeed({ screenings: [], commands: [] });
+                    : Effect.succeed({ screenings: [], failures: [], commands: [] });
                 }),
               deliver: () => Effect.die(new Error("No delivery proposed")),
             }),
@@ -572,9 +578,9 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
         );
         const changes = yield* registry.subscribe;
         const actor = yield* system.spawn("system-one", SystemOneActor);
-        yield* actor.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* actor.awaitStarted;
         const state = () =>
-          Schema.decodeUnknownSync(ReactionState)(registry.get("/system-one")!.state);
+          Schema.decodeUnknownSync(ReactionSnapshot)(registry.get("/system-one")!.state);
         if (state().work[0]?.status !== "failed")
           yield* changes.pipe(
             Stream.filter(() => state().work[0]?.status === "failed"),
@@ -583,7 +589,7 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
           );
         yield* registry.commit(
           { ...source, state: { summary: "New live evidence" } },
-          { expectedRevision: 1 },
+          { expectedRevision: 1, mode: "bootstrap" },
         );
         const input = {
           _tag: "RetryScreening" as const,
@@ -627,4 +633,133 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
       }),
     ).pipe(Effect.timeout("5 seconds")),
   );
+});
+
+test("partial screening survives restart and retries only failed targets", async () => {
+  const records = new Map<string, StoredContext>();
+  const calls = { signals: 0, healthy: 0, broken: 0 };
+  const delivered: string[] = [];
+  for (const restart of [false, true]) {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* makeContextRegistry(storeFor(records));
+          const definition = defineContext({
+            state: Schema.ObjectKeyword,
+            message: Schema.Never,
+            view: contextView({ state: Schema.ObjectKeyword }),
+          });
+          if (!restart) {
+            for (const slug of ["healthy", "broken"]) {
+              const path = `/goals/${slug}`;
+              yield* registry.register(path, definition);
+              yield* registry.commit(
+                { path, description: slug, state: { status: "active" }, messages: [] },
+                { expectedRevision: 0 },
+              );
+            }
+            yield* registry.register("/signals/review", definition);
+            yield* registry.commit(
+              {
+                path: "/signals/review",
+                description: "Review",
+                messages: [],
+                state: {
+                  status: "active",
+                  version: 1,
+                  trigger: { _tag: "Context", when: "Review" },
+                  task: { _tag: "Goal", target: "/goals/healthy", text: "Review" },
+                },
+              },
+              { expectedRevision: 0 },
+            );
+            yield* registry.register(source.path, sourceDefinition);
+            yield* registry.commit(source, { expectedRevision: 0 });
+          }
+          for (const path of ["/goals/healthy", "/goals/broken", "/signals/review"])
+            yield* registry.register(path, definition);
+          const policy = yield* makeReactionPolicy({
+            client: {
+              systemOne: (request) =>
+                Effect.suspend(
+                  (): ReturnType<
+                    import("../src/decisions/system-one.js").SystemOneClient["systemOne"]
+                  > => {
+                    if (request.questions.signal_0) {
+                      calls.signals++;
+                      return Effect.succeed({
+                        answers: { signal_0: { type: "choice", choice: "yes" } },
+                      });
+                    }
+                    const broken =
+                      request.questions.relevance!.instructions.includes('Goal "broken"');
+                    if (broken) calls.broken++;
+                    else calls.healthy++;
+                    if (broken && !restart)
+                      return Effect.fail(new DecisionError({ message: "Unavailable" }));
+                    return Effect.succeed({ answers: { relevance: { type: "score", score: 9 } } });
+                  },
+                ),
+            },
+          });
+          const system = yield* ActorSystem.make().pipe(
+            ActorSystem.provide(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+              Layer.succeed(GoalSettings, {
+                definitions: ["healthy", "broken"].map((slug) => ({ slug, description: slug })),
+              }),
+              Layer.succeed(ReactionPolicy, {
+                ...policy,
+                deliver: (command) =>
+                  Effect.sync(() => {
+                    delivered.push(command.input.target);
+                    return {
+                      _tag: "Accepted" as const,
+                      receipt: { requestId: command.input.requestId, revision: 2 },
+                    };
+                  }),
+              }),
+            ),
+          );
+          const changes = yield* registry.subscribe;
+          const actor = yield* system.spawn("system-one", SystemOneActor);
+          yield* actor.awaitStarted;
+          if (restart) {
+            const state = Schema.decodeUnknownSync(ReactionSnapshot)(
+              registry.get("/system-one")!.state,
+            );
+            assert.equal(state.work[0]!.status, "failed");
+            const reply = yield* actor.ask<RecoveryReply>((replyTo) => ({
+              _tag: "Recover",
+              replyTo,
+              input: {
+                _tag: "RetryScreening",
+                requestId: "retry-broken",
+                workId: state.work[0]!.event.id,
+                expectedRevision: registry.get("/system-one")!.revision,
+              },
+            }));
+            assert.equal(reply._tag, "Accepted");
+          }
+          yield* changes.pipe(
+            Stream.filter(({ record }) => {
+              if (record.path !== "/system-one") return false;
+              const work = Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work[0];
+              return (
+                work &&
+                work.status === (restart ? "completed" : "failed") &&
+                deliveriesOf(work).length === (restart ? 3 : 2) &&
+                deliveriesOf(work).every((entry) => entry.status === "delivered")
+              );
+            }),
+            Stream.take(1),
+            Stream.runDrain,
+          );
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  }
+  assert.deepEqual(calls, { signals: 1, healthy: 1, broken: 2 });
+  assert.deepEqual(delivered.sort(), ["/goals/broken", "/goals/healthy", "/signals/review"]);
 });

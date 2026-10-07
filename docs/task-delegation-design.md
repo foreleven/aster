@@ -81,3 +81,7 @@ PublicationsActor owns its own snapshot and Pi journal, approval, authorization,
 `InspectTask` joins the Task snapshot, Pi messages, executor checkpoint, approvals and publication record. It returns instructions, follow-ups, outcomes, available tool records and source references without private provider metadata. The web Task detail subscribes to Task, approval and publication invalidations. External providers retain ownership of their private transcripts.
 
 Tests use fake transports, real Actor mailboxes, Deferred and temporary Pi stores. They cover responsive follow-up, reactivation, handoff recovery, late completions, confirmation authority, separate check/retry semantics, cancellation confirmation and publication recovery. No historical-data compatibility path is provided.
+
+## Publication handoff
+
+Tasks construct a frozen `WritebackRequest` from their admitted input and completed Pi result. Publications accept that request without reading Task state or decoding Task conversation entries. Their own Pi journal remains authoritative for publication intent and outcomes; interrupted sends stay unknown and never resubmit automatically. Human decisions use the shared approval queue, with typed replies and immediate delivery after the decision commits.

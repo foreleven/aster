@@ -1,3 +1,4 @@
+import type { WritebackRequest } from "@aster/api-contracts";
 import { createHash } from "node:crypto";
 import { type ActorContext, type ActorRef } from "@aster/actor";
 import {
@@ -241,3 +242,25 @@ export const taskDeliveryReceipt = (registry: ContextRegistry["Service"], messag
         : Schema.decodeUnknownSync(Inputs)(record.state).inputs;
     return entries.find((entry) => entry.requestId === message.requestId)?.receipt;
   });
+
+/** The Task owns its Pi layout and freezes the transport-independent publication request. */
+export const taskPublication = (
+  input: import("@aster/api-contracts").TaskDeliveryInput,
+  outcome: import("./state/snapshot.js").TaskOutcome,
+  at: string,
+): WritebackRequest | undefined => {
+  if (outcome.status !== "completed" || !input.action || !outcome.text.trim()) return undefined;
+  return {
+    requestId: createHash("sha256")
+      .update(JSON.stringify(["publication", input.target]))
+      .digest("hex")
+      .slice(0, 48),
+    source: input.target,
+    taskSource: input.source,
+    causationId: input.requestId,
+    createdAt: at,
+    action: input.action,
+    content: outcome.text,
+    causal: { rootRequestId: input.causal.rootRequestId, remainingAgentTurns: 0 },
+  };
+};

@@ -6,7 +6,6 @@ import {
   childActorName,
   childContextPath,
   defineContext,
-  makeContextMaintenance,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
@@ -195,35 +194,4 @@ test("storage adapters cannot mutate the registry through loaded or saved record
   );
   (saved!.snapshot.state as { value: number }).value = 100;
   assert.deepEqual(registry.get("/x")?.state, { value: 2 });
-});
-
-test("memory handoff failures remain retryable; the durable sink owns deduplication", async () => {
-  let attempts = 0;
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const registry = yield* makeContextRegistry();
-      yield* registry.register("/x", definition);
-      const record = { path: "/x", description: "x", state: { value: 1 }, messages: [] };
-      yield* registry.commit(record, {
-        expectedRevision: registry.get(record.path)?.revision ?? 0,
-      });
-      const process = makeContextMaintenance({
-        registry,
-        capture: () =>
-          Effect.sync(() => {
-            if (++attempts === 1) throw new Error("capture handoff failed");
-          }),
-        captures: {
-          select: (record) => Effect.succeed({ sessionId: "session", records: [record] }),
-        },
-        descriptions: { identity: () => undefined },
-        describe: () => Effect.succeed("unused"),
-      });
-      const change = { record: registry.get("/x")! };
-      assert.equal((yield* Effect.exit(process(change)))._tag, "Failure");
-      yield* process(change);
-      yield* process(change);
-      assert.equal(attempts, 3);
-    }),
-  );
 });

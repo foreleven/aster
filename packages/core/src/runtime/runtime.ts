@@ -1,11 +1,11 @@
 import { ContextsActor } from "../context/queries/actor.js";
 import { ContextCaptures } from "../memory/capture.js";
-import { ContextDescriptions } from "../reasoning/context-description.js";
-import { coreDescriptions } from "./context-descriptions.js";
+import { ContextDescriptions, ContextDescriptionsActor } from "../reasoning/context-description.js";
 import { DurableContext } from "../context/store.js";
 import { coreContextViews } from "./context-views.js";
 import { ContextQueries } from "../context/queries/routes.js";
-import { memoryLayer } from "../memory/services.js";
+import { MemoryActor, memoryView } from "../memory/actor.js";
+import { taskCapture } from "../tasks/view.js";
 import { ApplicationError, type RecoveryInput, type RecoveryReply } from "@aster/api-contracts";
 import type { ReactionCommand } from "../reactions/actor.js";
 import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
@@ -32,7 +32,7 @@ import {
   Stream,
 } from "effect";
 import { ContextRegistry } from "../context/registry.js";
-import { ContextCaptureSink } from "../memory/contracts.js";
+import { MemoryBackend } from "../memory/contracts.js";
 import { GoalSettings, signalSettings } from "../config/settings.js";
 import { SignalDefinitions } from "../signals/protocol.js";
 import { SignalRootActor } from "../signals/root.js";
@@ -41,7 +41,7 @@ import { AgentConversations } from "@aster/agent";
 import { GoalsRootActor } from "../goals/root.js";
 import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
-import { startContextReactions } from "./context-consumers.js";
+import { SystemOneActor } from "../reactions/actor.js";
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
 import { makeApplicationApi, type ApplicationApi } from "./api.js";
 
@@ -52,6 +52,9 @@ type RuntimeDiagnostics = {
 
 type ActorServices =
   | AgentRunner
+  | MemoryBackend
+  | ContextCaptures
+  | ContextDescriptions
   | ContextQueries
   | AgentConversations
   | GoalSettings
@@ -62,8 +65,7 @@ type ActorServices =
 
 const acquireRuntime = Effect.gen(function* () {
   const registry = yield* ContextRegistry;
-  yield* registry.views.register(coreContextViews);
-  yield* (yield* ContextDescriptions).register(coreDescriptions);
+  yield* registry.views.register([...coreContextViews, memoryView]);
   const settings = yield* GoalSettings;
   const definitions = yield* SignalDefinitions;
   const decisions = yield* SystemOneClient;
@@ -75,7 +77,8 @@ const acquireRuntime = Effect.gen(function* () {
       message: "Signals and Goals require config.system-one",
     });
   const conversations = yield* AgentConversations;
-  const capture = yield* ContextCaptureSink;
+  const memoryBackend = yield* MemoryBackend;
+  yield* (yield* ContextCaptures).register([taskCapture(conversations)]);
   const modules = (yield* RuntimeIntegrations).installed();
   const reactionPolicy = yield* makeReactionPolicy({
     client: decisions,
@@ -83,6 +86,9 @@ const acquireRuntime = Effect.gen(function* () {
   });
   const shared = Context.pick(
     DurableContext,
+    MemoryBackend,
+    ContextCaptures,
+    ContextDescriptions,
     AgentRunner,
     ContextQueries,
     AgentConversations,
@@ -123,7 +129,6 @@ const acquireRuntime = Effect.gen(function* () {
         ),
     );
   const running: {
-    reactions?: Fiber.Fiber<void, Error>;
     initialization?: Fiber.Fiber<void, never>;
   } = {};
   // Diagnostics are shared by lifecycle/event fibers and HTTP readers, outside any Actor mailbox.
@@ -141,28 +146,53 @@ const acquireRuntime = Effect.gen(function* () {
         // The startup Fiber may be cancelled before it begins and installs onExit.
         Effect.ensuring(Deferred.interrupt(ready)),
         Effect.ensuring(stopIntegrations("source")),
-        Effect.ensuring(running.reactions ? Fiber.interrupt(running.reactions) : Effect.void),
         Effect.ensuring(stopIntegrations("consumer")),
         Effect.ensuring(system.terminate()),
-        Effect.ensuring(capture.drain),
+        Effect.ensuring(memoryBackend.drain),
       );
     }).pipe(Effect.ensuring(Scope.close(workScope, exit))),
   );
+  const requiredRoots = new Set([
+    "/user/contexts",
+    "/user/memory",
+    "/user/descriptions",
+    "/user/system-one",
+    "/user/approvals",
+    "/user/signals",
+    "/user/tasks",
+    "/user/goals",
+    "/user/publications",
+  ]);
   yield* Stream.runForEach(system.events, (event) =>
-    Ref.update(diagnostics, (state) => ({
-      ...state,
-      events: [...state.events.slice(-199), event],
-    })),
+    Effect.gen(function* () {
+      const failed = event._tag === "ActorStopped" && requiredRoots.has(event.path);
+      const current = yield* Ref.updateAndGet(diagnostics, (state) => ({
+        phase: failed && state.phase !== "stopping" ? ("failed" as const) : state.phase,
+        events: [...state.events.slice(-199), event],
+      }));
+      if (failed && current.phase !== "stopping") {
+        yield* Deferred.fail(
+          ready,
+          new ApplicationError({
+            kind: "unavailable",
+            message: `Runtime owner stopped: ${event.path}`,
+          }),
+        );
+        yield* Effect.logError({ event: "runtime.owner.stopped", path: event.path });
+      }
+    }),
   ).pipe(Effect.forkIn(workScope));
-  const changes = yield* registry.subscribe.pipe(Effect.provideService(Scope.Scope, workScope));
+  // Subscribe consumer Actors before sources start. Each owns recovery and supervision.
+  const contexts = yield* system.spawn("contexts", ContextsActor);
+  yield* contexts.awaitStarted;
+  yield* (yield* system.spawn("memory", MemoryActor)).awaitStarted;
+  yield* (yield* system.spawn("descriptions", ContextDescriptionsActor)).awaitStarted;
   for (const module of modules.filter((module) => module.phase === "source")) {
     const handle = yield* module
       .activate(system)
       .pipe(Effect.provideService(Scope.Scope, workScope));
     handles.push({ phase: module.phase, handle });
   }
-  const contexts = yield* system.spawn("contexts", ContextsActor);
-  yield* contexts.awaitStarted;
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
   const signalActivation = yield* Deferred.make<void>();
   const signals = yield* system.spawn("signals", SignalRootActor, {
@@ -184,13 +214,15 @@ const acquireRuntime = Effect.gen(function* () {
     : undefined;
   // The root registers routing targets; each child queues work until its own startup completes.
   if (goals) yield* goals.awaitStarted;
-  yield* reactionPolicy.bind(signals, goals);
-  running.reactions = yield* startContextReactions({ system, signals, changes }).pipe(
-    Effect.provideService(Scope.Scope, workScope),
-  );
+  yield* (yield* system.spawn("system-one", SystemOneActor)).awaitStarted;
   running.initialization = yield* Effect.gen(function* () {
     yield* Deferred.succeed(signalActivation, undefined);
     yield* Effect.forEach(handles, ({ handle }) => handle.ready, { concurrency: "unbounded" });
+    if ((yield* Ref.get(diagnostics)).phase === "failed")
+      return yield* new ApplicationError({
+        kind: "unavailable",
+        message: "A core owner stopped during startup",
+      });
     yield* Deferred.succeed(goalActivation, undefined);
   }).pipe(
     // Readiness is a completion contract, including defects and cancellation;
@@ -199,7 +231,9 @@ const acquireRuntime = Effect.gen(function* () {
       Effect.gen(function* () {
         const settledPhase = Exit.isSuccess(exit) ? "ready" : "failed";
         yield* Ref.update(diagnostics, (state): RuntimeDiagnostics =>
-          state.phase === "stopping" ? state : { ...state, phase: settledPhase },
+          state.phase === "stopping" || state.phase === "failed"
+            ? state
+            : { ...state, phase: settledPhase },
         );
         yield* Deferred.done(ready, exit);
       }),
@@ -286,7 +320,6 @@ export class AsterRuntime extends Context.Service<
     // Registration captures integration services; acquireRuntime activates their Actors.
     const registerIntegrations = Layer.mergeAll(Layer.empty, ...options.integrations);
     const runtimeServices = registerIntegrations.pipe(
-      Layer.provideMerge(memoryLayer),
       Layer.provideMerge(AgentRunner.layer),
       Layer.provideMerge(contextServices),
     );

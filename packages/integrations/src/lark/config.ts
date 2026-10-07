@@ -14,13 +14,13 @@ export interface LarkIntegrationConfig {
 
 const LarkRootEntry = Schema.Struct({
   description: Schema.optional(Schema.String),
-  config: Schema.optional(Schema.Struct({ profile: Schema.optional(Schema.String) })),
+  config: Schema.optionalKey(Schema.Struct({ profile: Schema.optional(Schema.String) })),
   children: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 });
 
 const LarkEmailEntry = Schema.Struct({
   description: Schema.optional(Schema.String),
-  config: Schema.optional(
+  config: Schema.optionalKey(
     Schema.Struct({
       mailbox: Schema.optional(Schema.String),
       pollIntervalMs: Schema.optional(Schema.Number),
@@ -30,11 +30,11 @@ const LarkEmailEntry = Schema.Struct({
 
 const LarkImEntry = Schema.Struct({
   description: Schema.optional(Schema.String),
-  config: Schema.optional(
+  config: Schema.optionalKey(
     Schema.Struct({
       pollIntervalMs: Schema.optional(Schema.Int),
       catchUpWindowMs: Schema.optional(Schema.Int),
-      summary: Schema.optional(
+      summary: Schema.optionalKey(
         Schema.Struct({
           model: Schema.optional(Schema.NonEmptyString),
           agentStartIntervalMs: Schema.optional(Schema.Int),
@@ -46,11 +46,11 @@ const LarkImEntry = Schema.Struct({
 });
 const LarkEntry = Schema.Struct({
   description: Schema.optional(Schema.String),
-  config: Schema.optional(Schema.Struct({ profile: Schema.optional(Schema.String) })),
-  children: Schema.optional(
+  config: Schema.optionalKey(Schema.Struct({ profile: Schema.optional(Schema.String) })),
+  children: Schema.optionalKey(
     Schema.Struct({
-      "/mail": Schema.optional(LarkEmailEntry),
-      "/im": Schema.optional(LarkImEntry),
+      "/mail": Schema.optionalKey(LarkEmailEntry),
+      "/im": Schema.optionalKey(LarkImEntry),
     }),
   ),
 });

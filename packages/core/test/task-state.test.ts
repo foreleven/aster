@@ -1,14 +1,9 @@
+import { TaskState } from "../src/tasks/state/model.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AgentConversations } from "@aster/agent";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
-import {
-  ContextRegistry,
-  ExternalAgents,
-  TaskActor,
-  TaskSnapshot,
-  TaskState,
-} from "../src/index.js";
+import { ContextRegistry, ExternalAgents, TaskActor, TaskSnapshot } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { retainedTask, taskInput } from "./task-fixtures.js";

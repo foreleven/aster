@@ -11,7 +11,7 @@ Task → Goal message
      → TaskActor → internal Agent / confirmed external executor → feedback to replyTo Goal
 ```
 
-Each active Goal and each eligible Context Signal is matched independently. Matching a Signal owned by a Goal does not exclude that Goal from screening. System One is a routing hint; the Goal's separate read-only Agent gate protects its conversation from unrelated Context changes. Direct user input, Task messages and execution feedback bypass that gate.
+Each active Goal and each eligible Context Signal is matched independently. A failed match retains its target and frozen input while successful matches remain deliverable. Explicit screening recovery retries only failed targets, including after restart; it never repeats successful delivery. Matching a Signal owned by a Goal does not exclude that Goal from screening. System One is a routing hint; the Goal's separate read-only Agent gate protects its conversation from unrelated Context changes. Direct user input, Task messages and execution feedback bypass that gate.
 
 ## Ownership
 
@@ -28,7 +28,9 @@ Each active Goal and each eligible Context Signal is matched independently. Matc
 
 The default personal assistant is the ordinary Goal `/goals/personal`. It has the same conversation, tools and input protocol as other Goals. It starts idle so startup does not manufacture a user request. There is no PersonalActor, Personal RPC family, notification root or business-notification outbox.
 
-`publications/` independently owns result publication, its approval and transport recovery.
+`publications/` independently owns result publication, its approval and transport recovery. Tasks submit a frozen WritebackRequest; Publications never decodes Task snapshots or Task Pi entry layouts. One Task retains one publication, so later rounds cannot replace reviewed content.
+
+ApprovalState and ReactionState are Actor-local Effect services. Their mailboxes are the sole writers; state transitions persist before updating a private Ref. Approval replies are typed Accepted/Rejected values; resolving a request triggers immediate delivery, while a periodic retry retains unacknowledged decisions. ReactionPolicy reads frozen evidence and uses the injected current Actor addressing capability for delivery. There is no separate root-ref binding phase.
 
 ## Task and Signal contracts
 

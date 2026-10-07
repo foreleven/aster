@@ -30,6 +30,7 @@ export type ReactionDelivery = typeof ReactionDelivery.Type;
 export const ReactionPlan = Schema.Struct({
   screenings: Schema.Array(GoalScreeningRecord),
   commands: Schema.Array(ReactionDeliveryInput),
+  failures: Schema.Array(Schema.Struct({ target: Schema.String, error: Schema.String })),
 });
 export type ReactionPlan = typeof ReactionPlan.Type;
 const ScreeningInput = Schema.Struct({
@@ -43,12 +44,19 @@ const ScreeningInput = Schema.Struct({
     }),
   ),
   screeningAt: Schema.String,
+  targets: Schema.optional(Schema.Array(Schema.String)),
 });
 const work = { event: ContextEvent, attempts: Attempts };
 export const ReactionPlanning = Schema.Struct({
   ...work,
   status: Schema.Literal("planning"),
   input: ScreeningInput,
+  retained: Schema.optional(
+    Schema.Struct({
+      screenings: Schema.Array(GoalScreeningRecord),
+      deliveries: Schema.Array(ReactionDelivery),
+    }),
+  ),
 });
 export type ReactionPlanning = typeof ReactionPlanning.Type;
 export const ReactionWork = Schema.Union([
@@ -59,6 +67,9 @@ export const ReactionWork = Schema.Union([
     status: Schema.Literal("failed"),
     input: ScreeningInput,
     error: Schema.String,
+    failedTargets: Schema.Array(Schema.String),
+    screenings: Schema.Array(GoalScreeningRecord),
+    deliveries: Schema.Array(ReactionDelivery),
   }),
   Schema.Struct({
     ...work,
@@ -125,8 +136,8 @@ const CurrentState = Schema.Struct({
   ),
 );
 
-export const ReactionState = CurrentState;
-export type ReactionState = typeof CurrentState.Type;
+export const ReactionSnapshot = CurrentState;
+export type ReactionSnapshot = typeof CurrentState.Type;
 export const ReactionReply = Schema.Union([
   Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
   Schema.TaggedStruct("Rejected", { error: ApplicationError }),

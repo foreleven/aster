@@ -1,10 +1,10 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ReplyTo, type ActorContext, type ActorRef } from "@aster/actor";
 import { AgentConversations } from "@aster/agent";
 import {
   ApplicationError,
-  TaskDeliveryInput,
+  WritebackRequest,
   WritebackOperation,
   writebackApprovalId,
   writebackPrompt,
@@ -16,12 +16,10 @@ import { defineContext } from "../context/definition.js";
 import { contextView } from "../context/definition.js";
 import { ApprovalResolved, approvalEntries, sendApproval } from "../approvals/actor.js";
 import { ChannelWrites, ChannelWriteError } from "./contracts.js";
-import { TaskSnapshot, TaskOutcome } from "../tasks/state/snapshot.js";
 
 const PublicationState = Schema.Struct({ operations: Schema.Array(WritebackOperation) });
 const Publish = Schema.TaggedStruct("Publish", {
-  taskPath: Schema.String,
-  entryId: Schema.Int,
+  request: WritebackRequest,
   replyTo: ReplyTo<void>(),
 });
 const Command = Schema.Union([
@@ -45,7 +43,7 @@ export const publications = (registry: ContextRegistry["Service"]) => {
   return record ? Schema.decodeUnknownSync(PublicationState)(record.state).operations : [];
 };
 export const requestPublication = Effect.fn("Publications.request")(
-  function* (actor: Pick<ActorContext<unknown>, "select">, taskPath: string, entryId: number) {
+  function* (actor: Pick<ActorContext<unknown>, "select">, request: WritebackRequest) {
     const root = yield* actor
       .select("/user/publications")
       .resolve()
@@ -56,7 +54,7 @@ export const requestPublication = Effect.fn("Publications.request")(
         ),
       );
     yield* (root as ActorRef<typeof Command.Type>)
-      .ask<void>((replyTo) => ({ _tag: "Publish", taskPath, entryId, replyTo }))
+      .ask<void>((replyTo) => ({ _tag: "Publish", request, replyTo }))
       .pipe(
         Effect.mapError(
           () =>
@@ -204,45 +202,14 @@ export class PublicationsActor extends ContextActor.Service<
           }),
         receive: (command, owner) =>
           Match.value(command).pipe(
-            Match.tag("Publish", ({ taskPath, entryId, replyTo }) =>
+            Match.tag("Publish", ({ request, replyTo }) =>
               Effect.gen(function* () {
-                const task = Schema.decodeUnknownSync(TaskSnapshot)(registry.get(taskPath)!.state);
-                const admitted = yield* messages
-                  .get(taskPath, task.inputs[0]!.entryId)
-                  .pipe(Effect.orDie);
-                const input = Schema.decodeUnknownSync(TaskDeliveryInput)(admitted.data);
-                const entry = yield* messages.get(taskPath, entryId).pipe(Effect.orDie);
-                const result = Schema.decodeUnknownSync(TaskOutcome)(entry.data);
-                if (
-                  entry.kind !== "task.result" ||
-                  result.status !== "completed" ||
-                  !input.action ||
-                  !result.text.trim()
-                )
-                  return yield* replyTo.tell(undefined);
-                // One frozen publication per Task; follow-ups cannot rewrite an already reviewed result.
-                const requestId = createHash("sha256")
-                  .update(JSON.stringify(["publication", taskPath]))
-                  .digest("hex")
-                  .slice(0, 48);
-                if (publications(registry).some((item) => item.request.requestId === requestId))
-                  return yield* replyTo.tell(undefined);
-                const operation: WritebackOperation = {
-                  status: "waiting-approval",
-                  request: {
-                    requestId,
-                    source: taskPath,
-                    taskSource: task.admission.source,
-                    causationId: input.requestId,
-                    createdAt: entry.at,
-                    action: input.action,
-                    content: result.text,
-                    causal: {
-                      rootRequestId: task.admission.causal.rootRequestId,
-                      remainingAgentTurns: 0,
-                    },
-                  },
-                };
+                const existing = publications(registry).find(
+                  (item) => item.request.requestId === request.requestId,
+                );
+                // A Task has one publication. Later rounds cannot replace its reviewed content.
+                if (existing) return yield* replyTo.tell(undefined);
+                const operation: WritebackOperation = { status: "waiting-approval", request };
                 yield* save(operation);
                 yield* replyTo.tell(undefined);
                 yield* recover(operation, owner);

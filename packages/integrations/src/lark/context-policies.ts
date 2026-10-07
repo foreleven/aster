@@ -7,27 +7,31 @@ import { profileCapture } from "./shared/profile.js";
 export const larkCaptures: readonly CapturePolicy[] = [
   {
     matches: (path) => path === "/lark",
-    capture: (record) =>
-      Effect.sync(() => {
-        const decoded = Schema.decodeUnknownOption(Schema.Struct({ account: AccountProfile }))(
-          record.state,
-        );
-        return Option.isSome(decoded)
-          ? { sessionId: profileCapture(record, decoded.value.account), records: [record] }
-          : undefined;
-      }),
+    capture: (record) => {
+      const decoded = Schema.decodeUnknownOption(Schema.Struct({ account: AccountProfile }))(
+        record.state,
+      );
+      return Option.isSome(decoded)
+        ? {
+            sessionId: profileCapture(record, decoded.value.account),
+            records: Effect.succeed([record]),
+          }
+        : undefined;
+    },
   },
   {
     matches: (path) => path === "/lark/mail",
-    capture: (record) =>
-      Effect.sync(() => {
-        const decoded = Schema.decodeUnknownOption(Schema.Struct({ profile: MailboxProfile }))(
-          record.state,
-        );
-        return Option.isSome(decoded)
-          ? { sessionId: profileCapture(record, decoded.value.profile), records: [record] }
-          : undefined;
-      }),
+    capture: (record) => {
+      const decoded = Schema.decodeUnknownOption(Schema.Struct({ profile: MailboxProfile }))(
+        record.state,
+      );
+      return Option.isSome(decoded)
+        ? {
+            sessionId: profileCapture(record, decoded.value.profile),
+            records: Effect.succeed([record]),
+          }
+        : undefined;
+    },
   },
 ];
 export const larkDescriptions: readonly DescriptionPolicy[] = [

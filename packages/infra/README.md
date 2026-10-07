@@ -4,7 +4,7 @@ Concrete infrastructure adapters for Aster. The local host imports `@aster/infra
 
 This package owns:
 
-- `LocalConfig.layer`: captured YAML, dotenv and process sources, Effect ConfigProvider, source locations and explicit child-process environment. `loadConfig` remains a standalone file-validation utility.
+- `LocalConfig.layer`: captured YAML, dotenv and process sources, Effect ConfigProvider, source locations and explicit child-process environment. Modules validate their own settings through this provider.
 - `makeFileContextStore`, the `FileDurableContext` backend Layer, and the actor-store process lock.
 - The TypeSafe-compatible System One HTTP client, behind core's decision interface.
 - Infrastructure Layers (`FileDurableContext`, `FileGoalHistory`, `SystemOneClientLive`, `ExternalAgentsLive`); Goal runtime assembly and reasoning belong to core.

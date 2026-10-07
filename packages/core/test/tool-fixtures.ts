@@ -57,7 +57,7 @@ export const toolSystem = Effect.fnUntraced(function* (
   const contexts = yield* system.spawn("contexts", ContextsActor);
   yield* contexts.awaitStarted;
   const memory = yield* system.spawn("memory", MemoryActor);
-  yield* memory.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+  yield* memory.awaitStarted;
   if (options.goals?.length) {
     const goalActivation = yield* Deferred.make<void>();
     const goals = yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } });

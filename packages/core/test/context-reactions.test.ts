@@ -1,21 +1,23 @@
+import { CurrentActors } from "../src/tools/actors.js";
+import { SystemOneActor } from "../src/reactions/actor.js";
 import { DurableContext } from "../src/context/store.js";
-import { ContextCaptures } from "../src/memory/capture.js";
-import { ContextDescriptions } from "../src/reasoning/context-description.js";
 import { reasoningConfig, emptyRecall, modelReplyLayer, agentResult } from "./workflow-fixtures.js";
-import { ReactionPolicy, makeReactionPolicy } from "../src/reactions/policy.js";
+import {
+  makeSystemOneGate,
+  sourceSignals,
+  ReactionPolicy,
+  makeReactionPolicy,
+} from "../src/reactions/policy.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem, ActorTestKit } from "@aster/actor";
-import { Effect, Fiber, Layer, Schema } from "effect";
+import { ActorSystem, ActorTestKit, type ActorRef } from "@aster/actor";
+import { Effect, Layer, Schema } from "effect";
 import {
   ContextRegistry,
-  ContextCaptureSink,
   GoalSettings,
   SystemOneClient,
   defineContext,
   contextView,
-  startContextReactions,
-  sourceSignals,
   type SignalRootCommand,
   type GoalsRootCommand,
   type ContextInput,
@@ -101,7 +103,6 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
   const layers = Layer.mergeAll(
     Layer.succeed(ContextRegistry, registry),
     Layer.succeed(DurableContext, registry.backend),
-    Layer.succeed(ContextCaptureSink, { capture: () => Effect.void, drain: Effect.void }),
     Layer.succeed(GoalSettings, {
       definitions: ["owned", "other", "done"].map((slug) => ({ slug, description: slug })),
     }),
@@ -135,25 +136,31 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         const policy = yield* makeReactionPolicy({
           client: yield* SystemOneClient,
         });
-        yield* policy.bind(signalProbe.ref, goalProbe.ref);
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(DurableContext, registry.backend),
-            Layer.succeed(ReactionPolicy, policy),
+            Layer.succeed(ReactionPolicy, {
+              ...policy,
+              deliver: (command) =>
+                policy.deliver(command).pipe(
+                  Effect.provideService(CurrentActors, {
+                    select: (path) => ({
+                      path,
+                      resolve: () =>
+                        Effect.succeed(
+                          (path === "/user/goals"
+                            ? goalProbe.ref
+                            : signalProbe.ref) as ActorRef<unknown>,
+                        ),
+                    }),
+                  }),
+                ),
+            }),
             Layer.succeed(GoalSettings, yield* GoalSettings),
           ),
         );
-        const starting = yield* startContextReactions({
-          system,
-          changes: yield* registry.subscribe,
-          signals: signalProbe.ref,
-        }).pipe(
-          Effect.provide(Layer.mergeAll(ContextCaptures.layer, ContextDescriptions.layer)),
-          Effect.forkScoped,
-        );
-
-        yield* Fiber.join(starting);
+        yield* (yield* system.spawn("system-one", SystemOneActor)).awaitStarted;
         // The subscription is acquired before this returns, even without yieldNow.
         yield* registry.commit(record("/source", { summary: "A relevant source summary" }), {
           expectedRevision: registry.get("/source")?.revision ?? 0,
@@ -209,4 +216,48 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
       }).pipe(Effect.provide(layers)),
     ),
   );
+});
+
+test("System One receives email fields and every Signal condition, then selects typed yes answers", async () => {
+  const email = { subject: "Please review the draft", bodyPlainText: "Review today?" };
+  let request: unknown;
+  const client = {
+    systemOne: (value: unknown) =>
+      Effect.sync(() => {
+        request = value;
+        return {
+          answers: {
+            signal_0: { type: "choice", choice: "yes" },
+            signal_1: { type: "choice", choice: "no" },
+          },
+        };
+      }),
+  } as unknown as SystemOneClient;
+  const signals = ["review", "invoice"].map((slug) => ({
+    slug,
+    trigger: { _tag: "Context" as const, when: slug === "review" ? "Review request" : "Invoice" },
+    task: { _tag: "Goal" as const, target: "/goals/personal", text: "Review" },
+  }));
+  const selected = await Effect.runPromise(
+    makeSystemOneGate(client)(
+      {
+        path: "/lark/mail/me/new-id",
+        description: "email",
+        state: email,
+        messages: [],
+      },
+      signals,
+    ),
+  );
+  assert.deepEqual(
+    selected.map((item) => item.slug),
+    ["review"],
+  );
+  const payload = request as {
+    state: string;
+    questions: Record<string, { instructions: string }>;
+  };
+  assert.equal(JSON.parse(payload.state).context.state.subject, email.subject);
+  assert.equal(JSON.parse(payload.state).context.state.bodyPlainText, email.bodyPlainText);
+  assert.match(payload.questions.signal_1!.instructions, /Invoice/);
 });

@@ -3,9 +3,44 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { parseMailboxProfile, parseAccount, parseLarkConfig } from "@aster/integrations";
-import { parseMemoryConfig } from "@aster/infra";
-import { loadConfig } from "@aster/infra";
+import { parseMailboxProfile, parseAccount, LarkConfig } from "@aster/integrations";
+import { parseMemoryConfig, memorySettings } from "@aster/infra";
+import { LocalConfig } from "@aster/infra";
+import { Config, Effect, Schema } from "effect";
+import { signalSettings } from "@aster/core";
+
+const settings = (file: string) =>
+  Effect.runPromise(
+    Effect.gen(function* () {
+      return {
+        lark: yield* LarkConfig.pipe(Effect.provide(LarkConfig.layer)),
+        memory: yield* memorySettings,
+        custom: yield* Config.schema(Schema.optional(Schema.String), [
+          "contexts",
+          "/custom",
+          "children",
+          "/anything",
+          "private",
+        ]),
+        systemOne: yield* Config.schema(
+          Schema.optional(
+            Schema.Struct({ url: Schema.String, model: Schema.String, apiKey: Schema.String }),
+          ),
+          ["config", "system-one"],
+        ),
+        signals: yield* signalSettings,
+      };
+    }).pipe(
+      Effect.provide(
+        LocalConfig.layer({
+          configPath: file,
+          envPath: `${file}.env`,
+          projectRoot: "/tmp",
+          environment: {},
+        }),
+      ),
+    ),
+  );
 import { agentEnvironment } from "@aster/infra";
 
 test("YAML preserves descriptions and multiline prompts and resolves dataDir beside config", async () => {
@@ -38,14 +73,14 @@ signals:
     task: {_tag: Goal, target: /goals/personal, text: Review}
 `,
     );
-    const config = loadConfig(file);
-    assert.deepEqual(config.config["system-one"], {
+    const config = await settings(file);
+    assert.deepEqual(config.systemOne, {
       url: "http://localhost:8000/v1/systemone",
       model: "multilingual",
       apiKey: "literal-test-key",
     });
-    const lark = parseLarkConfig(config.contexts["/lark"]);
-    const memory = parseMemoryConfig(config.contexts["/memory"], config.baseDir);
+    const lark = config.lark;
+    const memory = config.memory;
     assert.equal(lark.description, "My work account");
     assert.equal(lark.mail.description, "My work mailbox");
     assert.equal(memory.dataDir, join(homedir(), ".aster/memory"));
@@ -66,7 +101,7 @@ signals:
   }
 });
 
-test("loader preserves opaque root configs; integrations own children and defaults", async () => {
+test("module settings own children, defaults and validation", async () => {
   const dir = await mkdtemp(join(tmpdir(), "signals-root-config-test-"));
   try {
     const file = join(dir, "signals.yaml");
@@ -74,24 +109,18 @@ test("loader preserves opaque root configs; integrations own children and defaul
       file,
       "contexts:\n  /custom:\n    children:\n      /anything: {private: value}\n",
     );
-    const config = loadConfig(file);
-    assert.deepEqual(config.contexts["/custom"], {
-      children: { "/anything": { private: "value" } },
-    });
+    const config = await settings(file);
+    assert.equal(config.custom, "value");
     assert.deepEqual(config.signals, []);
-    assert.deepEqual(config.config, {});
-    assert.equal(parseLarkConfig(config.contexts["/lark"]).mail.mailbox, "me");
-    assert.equal(
-      parseMemoryConfig(config.contexts["/memory"], config.baseDir).description,
-      "My long-term memory",
-    );
-    // The central loader does not validate a Lark-owned child's configuration.
+    assert.equal(config.systemOne, undefined);
+    assert.equal(config.lark.mail.mailbox, "me");
+    assert.equal(config.memory.description, "My long-term memory");
+    // The Lark module validates its own child configuration through the provider.
     await writeFile(
       file,
       "contexts:\n  /lark:\n    children:\n      /mail:\n        config: {pollIntervalMs: bad}\n",
     );
-    const invalid = loadConfig(file);
-    assert.throws(() => parseLarkConfig(invalid.contexts["/lark"]));
+    await assert.rejects(settings(file));
   } finally {
     await rm(dir, { recursive: true, force: true });
   }

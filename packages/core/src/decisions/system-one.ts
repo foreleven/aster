@@ -1,16 +1,10 @@
-import { Context, Data, Effect, Schema } from "effect";
+import { Context, Data, Effect } from "effect";
 
 export class DecisionError extends Data.TaggedError("DecisionError")<{
   readonly message: string;
   readonly cause?: unknown;
 }> {}
 
-export const SystemOneConfig = Schema.Struct({
-  url: Schema.String,
-  model: Schema.String,
-  apiKey: Schema.String,
-});
-export type SystemOneConfig = typeof SystemOneConfig.Type;
 export type DecisionQuestion = DecisionChoiceQuestion | DecisionScoreQuestion;
 export interface DecisionChoiceQuestion {
   readonly type: "choice";

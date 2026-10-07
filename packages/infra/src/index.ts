@@ -1,4 +1,3 @@
-export * from "./config/yaml.js";
 export * from "./system-one/client.js";
 export * from "./storage/file-context-store.js";
 export * from "./storage/actor-store-lock.js";

@@ -8,6 +8,8 @@ import { Clock, Deferred, Effect, Fiber, Layer, Option, Queue, Schema, Stream } 
 import { TestClock } from "effect/testing";
 import {
   ContextRegistry,
+  defineContext,
+  contextView,
   MemoryActor,
   MemoryBackend,
   MemoryCaptureError,
@@ -77,7 +79,7 @@ const boot = Effect.fnUntraced(function* (
     ),
   );
   const memory = yield* system.spawn("memory", MemoryActor);
-  yield* memory.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+  yield* memory.awaitStarted;
   return { registry, system, memory };
 });
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>
@@ -186,7 +188,7 @@ test("Memory retries typed failures on its Clock and retains mailbox ownership",
       yield* Deferred.await(failed);
       // Let the failure command re-enter the mailbox before advancing the retry clock.
       yield* Effect.yieldNow;
-      yield* memory.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+      yield* memory.awaitStarted;
       yield* clock.adjust("30 seconds");
       yield* h.committed((record) => stored(record).captured?.includes(input.sessionId) === true);
       assert.equal(attempts, 2);
@@ -293,7 +295,7 @@ test("backend defects reach Actor supervision without becoming capture success",
         ),
       );
       const memory = yield* system.spawn("memory", MemoryActor, { supervision: () => "stop" });
-      yield* memory.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+      yield* memory.awaitStarted;
       const stopped = yield* Stream.runHead(
         Stream.filter(
           system.events,
@@ -307,6 +309,82 @@ test("backend defects reach Actor supervision without becoming capture success",
       assert.equal(event.value._tag, "ActorStopped");
       assert.equal(stored(h.records.get("/memory")!).pending?.length, 1);
       assert.equal(stored(h.records.get("/memory")!).captured?.length ?? 0, 0);
+    }),
+  );
+});
+
+test("slow capture evidence never blocks recall and captured sessions skip subsequent reads", async () => {
+  await run(
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const registry = yield* makeContextRegistry(h.store);
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const clock = yield* TestClock.make();
+      let reads = 0;
+      const captures = yield* ContextCaptures.pipe(Effect.provide(ContextCaptures.layer));
+      yield* captures.register([
+        {
+          matches: (path) => path === "/source",
+          capture: (record) => ({
+            sessionId: "source",
+            records: Effect.gen(function* () {
+              reads++;
+              yield* Deferred.succeed(entered, undefined);
+              yield* Deferred.await(release);
+              return [record];
+            }),
+          }),
+        },
+      ]);
+      yield* registry.register(
+        "/source",
+        defineContext({
+          state: Schema.Struct({ value: Schema.Int }),
+          message: Schema.Never,
+          view: contextView({ state: Schema.Struct({ value: Schema.Int }) }),
+        }),
+      );
+      const system = yield* ActorSystem.make().pipe(
+        ActorSystem.provide(
+          Layer.succeed(ContextRegistry, registry),
+          Layer.succeed(ContextCaptures, captures),
+          Layer.succeed(
+            MemoryBackend,
+            backend(() => Effect.void),
+          ),
+          Layer.succeed(Clock.Clock, clock),
+        ),
+      );
+      const memory = yield* system.spawn("memory", MemoryActor);
+      yield* memory.awaitStarted;
+      yield* registry.commit(
+        { path: "/source", description: "Source", state: { value: 1 }, messages: [] },
+        { expectedRevision: 0 },
+      );
+      yield* Deferred.await(entered);
+      const cancelled = yield* Deferred.make<void>();
+      const reply = yield* memory.ask((replyTo) => ({
+        _tag: "Search",
+        query: "hello",
+        cancelled,
+        replyTo,
+      }));
+      assert.deepEqual(reply, { _tag: "Success", value: [] });
+      yield* Deferred.succeed(release, undefined);
+      yield* h.committed(
+        (record) =>
+          record.snapshot.path === "/memory" &&
+          stored(record).captured?.includes("source") === true,
+      );
+      yield* clock.adjust("30 seconds");
+      // A later source notification and the reconciliation scan share the durable session identity.
+      yield* registry.commit(
+        { path: "/source", description: "Source", state: { value: 2 }, messages: [] },
+        { expectedRevision: 1 },
+      );
+      yield* memory.ask((replyTo) => ({ _tag: "Search", query: "after", cancelled, replyTo }));
+      assert.equal(reads, 1);
     }),
   );
 });
