@@ -1411,3 +1411,48 @@ test("built-in personal assistant uses the ordinary Goal conversation", async ({
   });
   expect(errors).toEqual([]);
 });
+
+test("processing displays per-target negative decisions without offering recovery for them", async ({
+  page,
+}) => {
+  const data = fixture();
+  data.contexts.push({
+    path: "/system-one",
+    description: "Context reaction processing",
+    revision: 3,
+    state: { work: [] },
+    messages: [],
+  });
+  data.processing = {
+    "system-one": {
+      owner: "system-one",
+      revision: 3,
+      entries: [
+        {
+          id: "evidence-1",
+          kind: "screening",
+          workId: "evidence-1",
+          source: "/source",
+          target: "/system-one",
+          status: "completed",
+          matches: [
+            {
+              _tag: "NotMatched",
+              target: "/goals/engine",
+              reason: "Evidence concerns a different project.",
+            },
+          ],
+        },
+      ],
+    },
+  };
+  const { errors } = await setup(page, data);
+  await page.getByRole("button", { name: /Context reaction processing.*system-one/ }).click();
+  await expect(page.getByText(/\d+ attempts/)).toHaveCount(0);
+  const results = page.getByRole("list", { name: "Target matching results" });
+  await expect(results).toContainText("NotMatched: Evidence concerns a different project.");
+  await expect(page.getByRole("button", { name: "Retry screening", exact: true })).toHaveCount(0);
+  await results.getByRole("button", { name: "/goals/engine", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Goal Timeline" })).toBeVisible();
+  expect(errors).toEqual([]);
+});

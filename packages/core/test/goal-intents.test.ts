@@ -23,7 +23,6 @@ const input: GoalIntentInput = {
   causationId: "source-revision-one",
   source: "/system-one",
   target: "/goals/project",
-  expectedRevision: 1,
   intent: {
     intentId: "intent-one",
     goalSlug: "project",
@@ -135,7 +134,6 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
             if (!restart) {
               firstInput = {
                 ...input,
-                expectedRevision: registry.get("/goals/project")!.revision!,
               };
               const invalid = yield* send({
                 ...firstInput,
@@ -191,3 +189,59 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
     }
   });
 }
+
+test("a Context intent remains admissible after user input advances the Goal revision", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeContextRegistry();
+        const history = testConversations();
+        const system = yield* ActorSystem.make().pipe(
+          ActorSystem.provide(
+            Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(ExternalAgents, {}),
+            goalWorkflowLayer({
+              definitions: [{ slug: "project", description: "Monitor release" }],
+              history,
+              reasoner: { plan: () => Effect.never },
+            }),
+          ),
+        );
+        const goalActivation = yield* Deferred.make<void>();
+        const root = yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } });
+        yield* root.awaitStarted;
+        yield* (yield* system.select("/user/goals/project").resolve()).awaitStarted;
+        const before = registry.get("/goals/project")!.revision;
+        const user = yield* root.ask<GoalCommandReply>((replyTo) => ({
+          _tag: "Route",
+          slug: "project",
+          command: {
+            _tag: "SubmitInput",
+            requestId: "user",
+            input: { _tag: "UserInput", text: "How is the release?" },
+            replyTo,
+          },
+        }));
+        assert.equal(user._tag, "Accepted");
+        assert.ok(registry.get("/goals/project")!.revision > before);
+        const reply = yield* root.ask<GoalCommandReply>((replyTo) => ({
+          _tag: "Route",
+          slug: "project",
+          command: {
+            _tag: "SubmitInput",
+            requestId: input.requestId,
+            input: { _tag: "GoalIntent", delivery: input },
+            replyTo,
+          },
+        }));
+        assert.equal(reply._tag, "Accepted");
+        assert.equal(
+          goalIntentRecords(
+            Schema.decodeUnknownSync(GoalSnapshot)(registry.get("/goals/project")!.state),
+          ).length,
+          1,
+        );
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});

@@ -16,7 +16,7 @@ export const SignalReactionInput = Schema.Struct({
   causationId: Schema.NonEmptyString,
   source: Schema.Literal("/system-one"),
   target: Schema.String.check(Schema.isPattern(/^\/signals\/[a-z0-9][a-z0-9-]*$/)),
-  expectedRevision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  version: Schema.Int.check(Schema.isGreaterThan(0)),
   sourceContext: PublicContext,
 });
 export type SignalReactionInput = typeof SignalReactionInput.Type;

@@ -6,7 +6,7 @@ import { makeContextRegistry } from "@aster/core/testing";
 import { Effect, Layer } from "effect";
 import { LarkMailMessageActor } from "../src/lark/mail/message-actor.js";
 
-test("email updates retain the generated Context description and identical replay stays unchanged", async () => {
+test("email updates retain the owner-supplied Context description and identical replay stays unchanged", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -27,12 +27,8 @@ test("email updates retain the generated Context description and identical repla
           attachments: [],
         };
         yield* actor.ask<void>((replyTo) => ({ _tag: "SetEmail", email, replyTo }));
-        yield* registry.initializeDescription(
-          path,
-          "Generated email identity",
-          registry.get(path)!.revision,
-        );
         const initialized = registry.get(path)!;
+        assert.equal(initialized.description, "An email in Lark mailbox me");
         yield* actor.ask<void>((replyTo) => ({ _tag: "SetEmail", email, replyTo }));
         assert.deepEqual(registry.get(path), initialized);
         yield* actor.ask<void>((replyTo) => ({

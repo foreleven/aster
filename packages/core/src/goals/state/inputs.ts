@@ -2,7 +2,7 @@ import type { StoredGoalInput, GoalSnapshot } from "./snapshot.js";
 import { GoalReceipt } from "../protocol.js";
 import type { GoalStore } from "./store.js";
 import { AgentConversations } from "@aster/agent";
-import { ApplicationError, CausalChain, GoalInputPayload } from "@aster/api-contracts";
+import { CausalChain, GoalInputPayload } from "@aster/api-contracts";
 import { Effect, Schema } from "effect";
 import { createHash } from "node:crypto";
 
@@ -41,15 +41,9 @@ export const goalInputs = (working: GoalStore, messages: AgentConversations["Ser
     key: string,
     causal: CausalChain,
     patch: Partial<GoalSnapshot> = {},
-    expectedRevision?: number,
     retryOf?: string,
   ) {
     const state = yield* working.read;
-    if (expectedRevision !== undefined && expectedRevision !== (yield* working.current).revision)
-      return yield* new ApplicationError({
-        kind: "conflict",
-        message: "Goal revision changed; refresh before submitting",
-      });
     const inputId = goalInputId(state.definition.slug, payload._tag, key);
     const prior = state.inputs.find((item) => item.inputId === inputId);
     const entry = yield* messages
@@ -63,9 +57,7 @@ export const goalInputs = (working: GoalStore, messages: AgentConversations["Ser
     if (!prior) {
       const data = yield* decodeInput(entry.data).pipe(Effect.orDie);
       const input = inputReference(entry, data, state.status === "active");
-      yield* working
-        .save({ ...patch, inputs: [...state.inputs, input] }, expectedRevision)
-        .pipe(Effect.orDie);
+      yield* working.save({ ...patch, inputs: [...state.inputs, input] }).pipe(Effect.orDie);
     } else yield* working.save(patch).pipe(Effect.orDie);
     return !prior;
   });

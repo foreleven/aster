@@ -1,4 +1,4 @@
-import type { CapturePolicy, DescriptionPolicy } from "@aster/core";
+import type { CapturePolicy } from "@aster/core";
 import { Effect, Option, Schema } from "effect";
 import { AccountProfile } from "./account/model.js";
 import { MailboxProfile } from "./mail/model.js";
@@ -33,11 +33,4 @@ export const larkCaptures: readonly CapturePolicy[] = [
         : undefined;
     },
   },
-];
-export const larkDescriptions: readonly DescriptionPolicy[] = [
-  { matches: (path) => path === "/lark", identity: "Lark account" },
-  { matches: (path) => path === "/lark/mail", identity: "Lark mailbox" },
-  { matches: (path) => path.startsWith("/lark/mail/"), identity: "An email in a Lark mailbox" },
-  { matches: (path) => path === "/lark/im", identity: "Work Lark IM integration" },
-  { matches: (path) => path.startsWith("/lark/im/"), identity: "Work Lark conversation" },
 ];

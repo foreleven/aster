@@ -1,11 +1,12 @@
+import { inspectReactions } from "../src/reactions/inspection.js";
 import { DurableContext } from "../src/context/store.js";
 import type { TestContextRegistry } from "../src/testing/context.js";
-import { deliveriesOf } from "../src/reactions/state.js";
-import type { RecoveryReply } from "@aster/api-contracts";
+import { deliveriesOf, workStatus, targetPath } from "../src/reactions/state.js";
+import { ProcessingSnapshot, type RecoveryReply } from "@aster/api-contracts";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { Deferred, Effect, Layer, Schema, Stream } from "effect";
+import { ConfigProvider, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import {
   DecisionError,
   ContextRegistry,
@@ -21,8 +22,9 @@ import { ReactionPolicy, ReactionFailure, makeReactionPolicy } from "../src/reac
 import {
   ReactionSnapshot,
   type ReactionWork,
-  type ReactionPlanning,
+  type FrozenReaction,
   type ReactionDeliveryInput,
+  type ReactionPlan,
 } from "../src/reactions/state.js";
 
 const sourceDefinition = defineContext({
@@ -44,15 +46,30 @@ const proposed = (work: ReactionWork): Extract<ReactionDeliveryInput, { _tag: "S
     causationId: work.event.id,
     source: "/system-one",
     target: "/signals/review",
-    expectedRevision: 1,
+    version: 1,
     sourceContext: work.event.record,
   },
 });
+const matched = (command: ReactionDeliveryInput): ReactionPlan[number] => ({
+  target: command.input.target,
+  result: {
+    _tag: "Matched",
+    reason: "Test evidence",
+    delivery: { command, status: "pending", attempts: 0 },
+  },
+});
+const unmatched = (work: FrozenReaction): ReactionPlan =>
+  work.targets
+    .filter(({ result }) => result._tag === "Pending")
+    .map(({ input }) => ({
+      target: targetPath(input),
+      result: { _tag: "NotMatched", reason: "Unrelated test evidence" },
+    }));
 const completed = (record: ContextSnapshot) =>
   record.path === "/system-one" &&
   Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work.length > 0 &&
   Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work.every(
-    (work) => work.status === "completed",
+    (work) => workStatus(work) === "completed",
   );
 const storeFor = (records: Map<string, StoredContext>) => ({
   loadAll: () => [...records.values()],
@@ -60,15 +77,47 @@ const storeFor = (records: Map<string, StoredContext>) => ({
     records.set(record.snapshot.path, structuredClone(record));
   },
 });
-const layerFor = (registry: TestContextRegistry, policy: ReactionPolicy["Service"]) =>
+const candidateDefinition = defineContext({
+  state: Schema.ObjectKeyword,
+  message: Schema.Never,
+  view: contextView({ state: Schema.ObjectKeyword }),
+});
+const layerFor = (
+  registry: TestContextRegistry,
+  policy: ReactionPolicy["Service"],
+  slugs = ["review"],
+) =>
   Layer.mergeAll(
     Layer.succeed(ContextRegistry, registry),
     Layer.succeed(DurableContext, registry.backend),
     Layer.succeed(GoalSettings, { definitions: [] }),
     Layer.succeed(ReactionPolicy, policy),
+    Layer.effectDiscard(
+      Effect.forEach(slugs, (slug) =>
+        Effect.gen(function* () {
+          const path = `/signals/${slug}`;
+          yield* registry.register(path, candidateDefinition);
+          if (!registry.get(path))
+            yield* registry.commit(
+              {
+                path,
+                description: slug,
+                messages: [],
+                state: {
+                  status: "active",
+                  version: 1,
+                  trigger: { _tag: "Context", when: slug },
+                  task: { _tag: "Goal", target: "/goals/personal", text: "Review" },
+                },
+              },
+              { expectedRevision: 0 },
+            );
+        }),
+      ),
+    ),
   );
 
-test("System One recovers every retained source version without source Actors or live change replay", async () => {
+test("System One coalesces retained queued versions without source Actors or live change replay", async () => {
   const records = new Map<string, StoredContext>();
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -95,7 +144,7 @@ test("System One recovers every retained source version without source Actors or
                   Effect.sync(() => {
                     assert.equal(work.event.record.revision, work.event.record.revision);
                     seen.push((work.event.record.state as { summary: string }).summary);
-                    return { screenings: [], failures: [], commands: [] };
+                    return unmatched(work);
                   }),
                 deliver: () => Effect.die(new Error("No decisions to deliver")),
               }),
@@ -109,13 +158,13 @@ test("System One recovers every retained source version without source Actors or
               Stream.take(1),
               Stream.runDrain,
             );
-          yield* actor.tell({ _tag: "Wake" });
+          yield* actor.tell({ _tag: "Ingest", events: [] });
           yield* actor.awaitStarted;
-          assert.deepEqual(seen, ["First evidence", "Second evidence"]);
+          assert.deepEqual(seen, ["Second evidence"]);
           assert.equal(
             Schema.decodeUnknownSync(ReactionSnapshot)(registry.get("/system-one")!.state).work
               .length,
-            2,
+            1,
           );
           assert.equal("events" in registry.get("/system-one")!, false);
           const view = JSON.stringify(registry.views.project(registry.get("/system-one")!));
@@ -145,8 +194,9 @@ test("a persisted decision survives lost commit acknowledgement without re-scree
             if (
               record.snapshot.path === "/system-one" &&
               loseDecisionAck &&
-              Schema.decodeUnknownSync(ReactionSnapshot)(record.snapshot.state).work[0]?.status ===
-                "ready"
+              workStatus(
+                Schema.decodeUnknownSync(ReactionSnapshot)(record.snapshot.state).work[0]!,
+              ) === "ready"
             ) {
               loseDecisionAck = false;
               throw new Error("Decision committed; response lost");
@@ -162,7 +212,7 @@ test("a persisted decision survives lost commit acknowledgement without re-scree
               plan: (work) =>
                 Effect.sync(() => {
                   planned++;
-                  return { screenings: [], failures: [], commands: [proposed(work)] };
+                  return [matched(proposed(work))];
                 }),
               deliver: (command) =>
                 Effect.sync(() => {
@@ -216,7 +266,7 @@ test("lost receiver acknowledgement replays the frozen decision after restart wi
                 plan: (work) =>
                   Effect.sync(() => {
                     planned++;
-                    return { screenings: [], failures: [], commands: [proposed(work)] };
+                    return [matched(proposed(work))];
                   }),
                 deliver: (command) =>
                   Effect.gen(function* () {
@@ -261,7 +311,7 @@ test("lost receiver acknowledgement replays the frozen decision after restart wi
 
 test("interrupted planning reuses its admitted source and catalogue despite later source updates", async () => {
   const records = new Map<string, StoredContext>();
-  let original: ReactionPlanning | undefined;
+  let original: FrozenReaction | undefined;
   for (const restart of [false, true]) {
     await Effect.runPromise(
       Effect.scoped(
@@ -282,12 +332,10 @@ test("interrupted planning reuses its admitted source and catalogue despite late
                       return yield* Effect.never;
                     }
                     if (work.event.record.revision === 1) {
-                      assert.deepEqual(work.input.evidence, original!.input.evidence);
-                      assert.deepEqual(work.input.goals, original!.input.goals);
+                      assert.deepEqual(work.targets, original!.targets);
                       assert.deepEqual(work.event, original!.event);
-                      assert.equal(work.attempts, 2);
                     }
-                    return { screenings: [], failures: [], commands: [] };
+                    return unmatched(work);
                   }),
                 deliver: () => Effect.die(new Error("No delivery")),
               }),
@@ -318,81 +366,6 @@ test("interrupted planning reuses its admitted source and catalogue despite late
   }
 });
 
-test("queued sources freeze target revisions when screening starts after the preceding delivery", async () => {
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        yield* registry.register(source.path, sourceDefinition);
-        yield* registry.register(
-          "/signals/review",
-          defineContext({
-            state: Schema.Struct({ count: Schema.Number }),
-            message: Schema.Never,
-          }),
-        );
-        yield* registry.commit(
-          { path: "/signals/review", description: "Target", state: { count: 0 }, messages: [] },
-          { expectedRevision: 0 },
-        );
-        yield* registry.commit(source, { expectedRevision: 0 });
-        yield* registry.commit(
-          { ...source, state: { summary: "Second" } },
-          { expectedRevision: 1 },
-        );
-        const revisions: number[] = [];
-        const changes = yield* registry.subscribe;
-        const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            layerFor(registry, {
-              plan: (work) =>
-                Effect.sync(() => {
-                  const command = proposed(work);
-                  return {
-                    screenings: [],
-                    failures: [],
-                    commands: [
-                      {
-                        ...command,
-                        input: {
-                          ...command.input,
-                          expectedRevision: work.input.evidence["/signals/review"]!.revision!,
-                        },
-                      },
-                    ],
-                  };
-                }),
-              deliver: (command) =>
-                Effect.gen(function* () {
-                  const current = registry.get("/signals/review")!;
-                  assert.equal(command.input.expectedRevision, current.revision);
-                  revisions.push(command.input.expectedRevision);
-                  const next = yield* registry
-                    .commit(
-                      { ...current, state: { count: current.revision! } },
-                      { expectedRevision: command.input.expectedRevision },
-                    )
-                    .pipe(Effect.orDie);
-                  return {
-                    _tag: "Accepted",
-                    receipt: { requestId: command.input.requestId, revision: next.revision! },
-                  };
-                }),
-            }),
-          ),
-        );
-        yield* system.spawn("system-one", SystemOneActor);
-        yield* changes.pipe(
-          Stream.filter((change) => completed(change.record)),
-          Stream.take(1),
-          Stream.runDrain,
-        );
-        assert.deepEqual(revisions, [1, 2]);
-      }),
-    ).pipe(Effect.timeout("5 seconds")),
-  );
-});
-
 test("System One rejects corrupted recovered work before any planning or delivery", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
@@ -400,43 +373,33 @@ test("System One rejects corrupted recovered work before any planning or deliver
       yield* registry.register(source.path, sourceDefinition);
       yield* registry.commit(source, { expectedRevision: 0 });
       const event = registry.backend.journal()[0]!;
-      const work: ReactionWork = {
-        event,
-        status: "completed",
-        attempts: 1,
-        screenings: [],
-        deliveries: [],
+      const work: ReactionWork = { event, status: "frozen", targets: [] };
+      const target = {
+        input: { _tag: "Signal", slug: "review", when: "Review", version: 1 },
+        result: { _tag: "Pending" },
       };
       for (const invalid of [
         [work, work],
         [{ ...work, event: { ...event, id: "forged" } }],
+        [{ ...work, targets: [{ ...target, input: { ...target.input, version: 0 } }] }],
+        [{ ...work, targets: [{ input: { _tag: "Goal" }, result: { _tag: "Pending" } }] }],
+        [{ ...work, targets: [target, target] }],
         [
           {
             ...work,
-            status: "planning",
-            input: {
-              evidence: { [source.path]: event.record },
-              goals: [],
-              screeningAt: event.createdAt,
-            },
-          },
-        ],
-        [
-          {
-            ...work,
-            status: "planning",
-            input: { evidence: {}, goals: [], screeningAt: "invalid" },
-          },
-        ],
-        [
-          {
-            ...work,
-            deliveries: [
+            targets: [
               {
-                command: proposed(work),
-                status: "delivered" as const,
-                attempts: 1,
-                receipt: { requestId: "other", revision: 2 },
+                ...target,
+                result: {
+                  _tag: "Matched",
+                  reason: "Relevant",
+                  delivery: {
+                    command: proposed(work),
+                    status: "delivered",
+                    attempts: 1,
+                    receipt: { requestId: "other", revision: 2 },
+                  },
+                },
               },
             ],
           },
@@ -449,7 +412,11 @@ test("System One rejects corrupted recovered work before any planning or deliver
                 path: "/system-one",
                 description: "Reactions",
                 revision: 1,
-                state: { work: invalid },
+                state: {
+                  work: invalid,
+                  sourceRevisions: { [source.path]: event.record.revision },
+                  recoveryReceipts: [],
+                },
                 messages: [],
               },
               events: [],
@@ -484,8 +451,7 @@ test("interrupted delivery attempts stay bounded across restarts and explicit re
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               layerFor(registry, {
-                plan: (work) =>
-                  Effect.succeed({ screenings: [], failures: [], commands: [proposed(work)] }),
+                plan: (work) => Effect.succeed([matched(proposed(work))]),
                 deliver: (command) =>
                   Effect.gen(function* () {
                     delivered++;
@@ -561,7 +527,7 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
         const registry = yield* makeContextRegistry();
         yield* registry.register(source.path, sourceDefinition);
         yield* registry.commit(source, { expectedRevision: 0 });
-        const admitted: ReactionPlanning[] = [];
+        const admitted: FrozenReaction[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             layerFor(registry, {
@@ -570,7 +536,7 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
                   admitted.push(work);
                   return admitted.length === 1
                     ? Effect.fail(new ReactionFailure({ message: "Model unavailable" }))
-                    : Effect.succeed({ screenings: [], failures: [], commands: [] });
+                    : Effect.succeed(unmatched(work));
                 }),
               deliver: () => Effect.die(new Error("No delivery proposed")),
             }),
@@ -581,9 +547,9 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
         yield* actor.awaitStarted;
         const state = () =>
           Schema.decodeUnknownSync(ReactionSnapshot)(registry.get("/system-one")!.state);
-        if (state().work[0]?.status !== "failed")
+        if (workStatus(state().work[0]!) !== "failed")
           yield* changes.pipe(
-            Stream.filter(() => state().work[0]?.status === "failed"),
+            Stream.filter(() => workStatus(state().work[0]!) === "failed"),
             Stream.take(1),
             Stream.runDrain,
           );
@@ -603,15 +569,13 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
           replyTo,
         }));
         assert.equal(receipt._tag, "Accepted");
-        if (state().work[0].status !== "completed")
+        if (workStatus(state().work[0]!) !== "completed")
           yield* changes.pipe(
-            Stream.filter(() => state().work[0].status === "completed"),
+            Stream.filter(() => workStatus(state().work[0]!) === "completed"),
             Stream.take(1),
             Stream.runDrain,
           );
-        assert.deepEqual(admitted[1].input.evidence, admitted[0].input.evidence);
-        assert.deepEqual(admitted[1].input.goals, admitted[0].input.goals);
-        assert.equal(admitted[1].attempts, 2);
+        assert.deepEqual(admitted[1].targets, admitted[0].targets);
         assert.equal("error" in state().work[0], false);
         assert.deepEqual(
           yield* actor.ask<RecoveryReply>((replyTo) => ({ _tag: "Recover", input, replyTo })),
@@ -635,131 +599,566 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
   );
 });
 
-test("partial screening survives restart and retries only failed targets", async () => {
+for (const retryMatched of [true, false])
+  test(`partial screening survives restart and retries only failed targets: ${retryMatched ? "Matched" : "NotMatched"}`, async () => {
+    const records = new Map<string, StoredContext>();
+    const calls = { signals: 0, healthy: 0, broken: 0, ignored: 0 };
+    const delivered: string[] = [];
+    for (const restart of [false, true]) {
+      await Effect.runPromise(
+        Effect.scoped(
+          Effect.gen(function* () {
+            const registry = yield* makeContextRegistry(storeFor(records));
+            const definition = defineContext({
+              state: Schema.ObjectKeyword,
+              message: Schema.Never,
+              view: contextView({ state: Schema.ObjectKeyword }),
+            });
+            if (!restart) {
+              for (const slug of ["healthy", "broken", "ignored"]) {
+                const path = `/goals/${slug}`;
+                yield* registry.register(path, definition);
+                yield* registry.commit(
+                  { path, description: slug, state: { status: "active" }, messages: [] },
+                  { expectedRevision: 0 },
+                );
+              }
+              yield* registry.register("/signals/review", definition);
+              yield* registry.commit(
+                {
+                  path: "/signals/review",
+                  description: "Review",
+                  messages: [],
+                  state: {
+                    status: "active",
+                    version: 1,
+                    trigger: { _tag: "Context", when: "Review" },
+                    task: { _tag: "Goal", target: "/goals/healthy", text: "Review" },
+                  },
+                },
+                { expectedRevision: 0 },
+              );
+              yield* registry.register(source.path, sourceDefinition);
+              yield* registry.commit(source, { expectedRevision: 0 });
+            }
+            for (const path of [
+              "/goals/healthy",
+              "/goals/broken",
+              "/goals/ignored",
+              "/signals/review",
+            ])
+              yield* registry.register(path, definition);
+            const policy = yield* makeReactionPolicy({
+              client: {
+                systemOne: (request) =>
+                  Effect.suspend(
+                    (): ReturnType<
+                      import("../src/decisions/system-one.js").SystemOneClient["systemOne"]
+                    > => {
+                      if (request.questions.matches) {
+                        calls.signals++;
+                        return Effect.succeed({
+                          answers: { matches: { type: "choice", choice: "yes" } },
+                        });
+                      }
+                      const broken =
+                        request.questions.relevance!.instructions.includes('Goal "broken"');
+                      const ignored =
+                        request.questions.relevance!.instructions.includes('Goal "ignored"');
+                      if (broken) calls.broken++;
+                      else if (ignored) calls.ignored++;
+                      else calls.healthy++;
+                      if (broken && !restart)
+                        return Effect.fail(new DecisionError({ message: "Unavailable" }));
+                      return Effect.succeed({
+                        answers: {
+                          relevance: {
+                            type: "score",
+                            score: ignored || (broken && !retryMatched) ? 0 : 9,
+                          },
+                        },
+                      });
+                    },
+                  ),
+              },
+            });
+            const system = yield* ActorSystem.make().pipe(
+              ActorSystem.provide(
+                Layer.succeed(ContextRegistry, registry),
+                Layer.succeed(DurableContext, registry.backend),
+                Layer.succeed(GoalSettings, {
+                  definitions: ["healthy", "broken", "ignored"].map((slug) => ({
+                    slug,
+                    description: slug,
+                  })),
+                }),
+                Layer.succeed(ReactionPolicy, {
+                  ...policy,
+                  deliver: (command) =>
+                    Effect.sync(() => {
+                      delivered.push(command.input.target);
+                      return {
+                        _tag: "Accepted" as const,
+                        receipt: { requestId: command.input.requestId, revision: 2 },
+                      };
+                    }),
+                }),
+              ),
+            );
+            const changes = yield* registry.subscribe;
+            const actor = yield* system.spawn("system-one", SystemOneActor);
+            yield* actor.awaitStarted;
+            if (restart) {
+              const state = Schema.decodeUnknownSync(ReactionSnapshot)(
+                registry.get("/system-one")!.state,
+              );
+              assert.equal(workStatus(state.work[0]!), "failed");
+              const reply = yield* actor.ask<RecoveryReply>((replyTo) => ({
+                _tag: "Recover",
+                replyTo,
+                input: {
+                  _tag: "RetryScreening",
+                  requestId: "retry-broken",
+                  workId: state.work[0]!.event.id,
+                  expectedRevision: registry.get("/system-one")!.revision,
+                },
+              }));
+              assert.equal(reply._tag, "Accepted");
+            }
+            yield* changes.pipe(
+              Stream.filter(({ record }) => {
+                if (record.path !== "/system-one") return false;
+                const work = Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work[0];
+                return (
+                  work &&
+                  workStatus(work) === (restart ? "completed" : "failed") &&
+                  deliveriesOf(work).length === (restart && retryMatched ? 3 : 2) &&
+                  deliveriesOf(work).every((entry) => entry.status === "delivered")
+                );
+              }),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+            const inspection = yield* inspectReactions(registry, "system-one");
+            assert.ok(Schema.is(ProcessingSnapshot)(inspection));
+            const matches = inspection.entries.find(
+              (entry) => entry.kind === "screening",
+            )!.matches!;
+            assert.equal(matches.length, 4);
+            assert.equal(
+              matches.find((match) => match.target === "/goals/ignored")?._tag,
+              "NotMatched",
+            );
+            const broken = matches.find((match) => match.target === "/goals/broken")!;
+            assert.equal(
+              broken._tag,
+              restart ? (retryMatched ? "Matched" : "NotMatched") : "Failed",
+            );
+            if (broken._tag === "NotMatched") assert.match(broken.reason, /below threshold/);
+            const view = registry.reader.get("/system-one")!.state as {
+              work: { matches: unknown }[];
+            };
+            assert.deepEqual(view.work[0]!.matches, matches);
+            assert.ok(!JSON.stringify(inspection).includes("First evidence"));
+          }),
+        ).pipe(Effect.timeout("5 seconds")),
+      );
+    }
+    assert.deepEqual(calls, { signals: 1, healthy: 1, broken: 2, ignored: 1 });
+    assert.deepEqual(delivered.sort(), [
+      ...(retryMatched ? ["/goals/broken"] : []),
+      "/goals/healthy",
+      "/signals/review",
+    ]);
+  });
+
+test("live coalescing retains in-flight work and the latest queued revision across restart", async () => {
   const records = new Map<string, StoredContext>();
-  const calls = { signals: 0, healthy: 0, broken: 0 };
-  const delivered: string[] = [];
+  const seen: number[] = [];
+  let scans = 0;
   for (const restart of [false, true]) {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
           const registry = yield* makeContextRegistry(storeFor(records));
-          const definition = defineContext({
-            state: Schema.ObjectKeyword,
-            message: Schema.Never,
-            view: contextView({ state: Schema.ObjectKeyword }),
-          });
-          if (!restart) {
-            for (const slug of ["healthy", "broken"]) {
-              const path = `/goals/${slug}`;
-              yield* registry.register(path, definition);
-              yield* registry.commit(
-                { path, description: slug, state: { status: "active" }, messages: [] },
-                { expectedRevision: 0 },
-              );
-            }
-            yield* registry.register("/signals/review", definition);
-            yield* registry.commit(
-              {
-                path: "/signals/review",
-                description: "Review",
-                messages: [],
-                state: {
-                  status: "active",
-                  version: 1,
-                  trigger: { _tag: "Context", when: "Review" },
-                  task: { _tag: "Goal", target: "/goals/healthy", text: "Review" },
-                },
-              },
-              { expectedRevision: 0 },
-            );
-            yield* registry.register(source.path, sourceDefinition);
-            yield* registry.commit(source, { expectedRevision: 0 });
-          }
-          for (const path of ["/goals/healthy", "/goals/broken", "/signals/review"])
-            yield* registry.register(path, definition);
-          const policy = yield* makeReactionPolicy({
-            client: {
-              systemOne: (request) =>
-                Effect.suspend(
-                  (): ReturnType<
-                    import("../src/decisions/system-one.js").SystemOneClient["systemOne"]
-                  > => {
-                    if (request.questions.signal_0) {
-                      calls.signals++;
-                      return Effect.succeed({
-                        answers: { signal_0: { type: "choice", choice: "yes" } },
-                      });
-                    }
-                    const broken =
-                      request.questions.relevance!.instructions.includes('Goal "broken"');
-                    if (broken) calls.broken++;
-                    else calls.healthy++;
-                    if (broken && !restart)
-                      return Effect.fail(new DecisionError({ message: "Unavailable" }));
-                    return Effect.succeed({ answers: { relevance: { type: "score", score: 9 } } });
-                  },
-                ),
-            },
-          });
+          yield* registry.register(source.path, sourceDefinition);
+          if (!restart) yield* registry.commit(source, { expectedRevision: 0 });
+          const entered = yield* Deferred.make<void>();
+          const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-              Layer.succeed(GoalSettings, {
-                definitions: ["healthy", "broken"].map((slug) => ({ slug, description: slug })),
-              }),
-              Layer.succeed(ReactionPolicy, {
-                ...policy,
-                deliver: (command) =>
-                  Effect.sync(() => {
-                    delivered.push(command.input.target);
-                    return {
-                      _tag: "Accepted" as const,
-                      receipt: { requestId: command.input.requestId, revision: 2 },
-                    };
+              layerFor(registry, {
+                plan: (work) =>
+                  Effect.gen(function* () {
+                    seen.push(work.event.record.revision);
+                    if (!restart) {
+                      yield* Deferred.succeed(entered, undefined);
+                      return yield* Effect.never;
+                    }
+                    return unmatched(work);
                   }),
+                deliver: () => Effect.die("No delivery expected"),
+              }),
+              Layer.succeed(DurableContext, {
+                ...registry.backend,
+                journal: () => {
+                  scans++;
+                  return registry.backend.journal();
+                },
               }),
             ),
           );
+          yield* (yield* system.spawn("system-one", SystemOneActor)).awaitStarted;
+          if (!restart) {
+            yield* Deferred.await(entered);
+            for (const revision of [2, 3, 4])
+              yield* registry.commit(
+                { ...source, state: { summary: `Evidence ${revision}` } },
+                { expectedRevision: revision - 1 },
+              );
+            yield* changes.pipe(
+              Stream.filter(
+                ({ record }) =>
+                  record.path === "/system-one" &&
+                  Schema.decodeUnknownSync(ReactionSnapshot)(record.state).sourceRevisions[
+                    source.path
+                  ] === 4,
+              ),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+            const work = Schema.decodeUnknownSync(ReactionSnapshot)(
+              registry.get("/system-one")!.state,
+            ).work;
+            assert.deepEqual(
+              work.map((item) => [workStatus(item), item.event.record.revision]),
+              [
+                ["planning", 1],
+                ["pending", 4],
+              ],
+            );
+          } else {
+            yield* changes.pipe(
+              Stream.filter(({ record }) => completed(record)),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+          }
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  }
+  assert.deepEqual(seen, [1, 1, 4]);
+  assert.equal(scans, 2, "Live commits do not scan the journal, including reaction state commits");
+});
+
+test("slow delivery does not block matching or other targets and delivery concurrency is bounded", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeContextRegistry();
+        yield* registry.register(source.path, sourceDefinition);
+        yield* registry.commit(source, { expectedRevision: 0 });
+        const slow = yield* Deferred.make<void>();
+        const entered = yield* Deferred.make<void>();
+        const matchedNext = yield* Deferred.make<void>();
+        const fastFinished = yield* Deferred.make<void>();
+        const delivered: string[] = [];
+        let active = 0,
+          peak = 0;
+        const changes = yield* registry.subscribe;
+        const system = yield* ActorSystem.make().pipe(
+          ActorSystem.provide(
+            layerFor(
+              registry,
+              {
+                plan: (work) =>
+                  Effect.gen(function* () {
+                    if (work.event.record.revision === 2) {
+                      yield* Deferred.succeed(matchedNext, undefined);
+                      return unmatched(work);
+                    }
+                    return ["slow", "a", "b", "c", "d"]
+                      .map((slug) => {
+                        const command = proposed(work);
+                        return {
+                          ...command,
+                          input: {
+                            ...command.input,
+                            target: `/signals/${slug}`,
+                            requestId: `${slug}-${work.event.id}`,
+                          },
+                        };
+                      })
+                      .map(matched);
+                  }),
+                deliver: (command) =>
+                  Effect.gen(function* () {
+                    active++;
+                    peak = Math.max(peak, active);
+                    if (command.input.target === "/signals/slow") {
+                      yield* Deferred.succeed(entered, undefined);
+                      yield* Deferred.await(slow);
+                    }
+                    delivered.push(command.input.target);
+                    if (delivered.length === 4) yield* Deferred.succeed(fastFinished, undefined);
+                    return {
+                      _tag: "Accepted" as const,
+                      receipt: { requestId: command.input.requestId, revision: 1 },
+                    };
+                  }).pipe(
+                    Effect.ensuring(
+                      Effect.sync(() => {
+                        active--;
+                      }),
+                    ),
+                  ),
+              },
+              ["slow", "a", "b", "c", "d"],
+            ),
+          ),
+        );
+        yield* (yield* system.spawn("system-one", SystemOneActor)).awaitStarted;
+        yield* Deferred.await(entered);
+        yield* registry.commit(
+          { ...source, state: { summary: "New evidence" } },
+          { expectedRevision: 1 },
+        );
+        yield* Deferred.await(matchedNext);
+        yield* Deferred.await(fastFinished);
+        assert.equal(delivered.includes("/signals/slow"), false);
+        assert.ok(peak <= 2);
+        yield* Deferred.succeed(slow, undefined);
+        yield* changes.pipe(
+          Stream.filter(({ record }) => completed(record)),
+          Stream.take(1),
+          Stream.runDrain,
+        );
+        assert.equal(delivered.length, 5);
+      }),
+    ).pipe(
+      Effect.provideService(
+        ConfigProvider.ConfigProvider,
+        ConfigProvider.fromUnknown({ config: { reactions: { deliveryConcurrency: 2 } } }),
+      ),
+      Effect.timeout("5 seconds"),
+    ),
+  );
+});
+
+test("completed history is bounded and source watermarks prevent replay after pruning", async () => {
+  const records = new Map<string, StoredContext>();
+  let planned = 0;
+  for (const restart of [false, true]) {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* makeContextRegistry(storeFor(records));
+          yield* registry.register(source.path, sourceDefinition);
           const changes = yield* registry.subscribe;
+          const system = yield* ActorSystem.make().pipe(
+            ActorSystem.provide(
+              layerFor(registry, {
+                plan: (work) =>
+                  Effect.sync(() => {
+                    planned++;
+                    return unmatched(work);
+                  }),
+                deliver: () => Effect.die("No delivery expected"),
+              }),
+            ),
+          );
+          yield* (yield* system.spawn("system-one", SystemOneActor)).awaitStarted;
+          if (!restart)
+            for (let revision = 1; revision <= 105; revision++) {
+              yield* registry.commit(
+                { ...source, state: { summary: String(revision) } },
+                { expectedRevision: revision - 1 },
+              );
+              yield* changes.pipe(
+                Stream.filter(
+                  ({ record }) =>
+                    record.path === "/system-one" &&
+                    Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work.some(
+                      (item) =>
+                        item.event.record.revision === revision && workStatus(item) === "completed",
+                    ),
+                ),
+                Stream.take(1),
+                Stream.runDrain,
+              );
+            }
+          const state = Schema.decodeUnknownSync(ReactionSnapshot)(
+            registry.get("/system-one")!.state,
+          );
+          assert.equal(state.work.length, 100);
+          assert.equal(state.sourceRevisions[source.path], 105);
+          assert.ok(state.work.every((item) => workStatus(item) === "completed"));
+          assert.equal(planned, 105);
+        }),
+      ).pipe(Effect.timeout("10 seconds")),
+    );
+  }
+});
+
+test("delivery receipts remain visible during matching retry and survive interrupted retry recovery", async () => {
+  const records = new Map<string, StoredContext>();
+  let plans = 0;
+  let deliveries = 0;
+  for (const restart of [false, true]) {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* makeContextRegistry(storeFor(records));
+          yield* registry.register(source.path, sourceDefinition);
+          if (!restart) yield* registry.commit(source, { expectedRevision: 0 });
+          const delivering = yield* Deferred.make<void>();
+          const finishDelivery = yield* Deferred.make<void>();
+          const retrying = yield* Deferred.make<void>();
+          const changes = yield* registry.subscribe;
+          const system = yield* ActorSystem.make().pipe(
+            ActorSystem.provide(
+              layerFor(
+                registry,
+                {
+                  plan: (work) =>
+                    Effect.gen(function* () {
+                      plans++;
+                      if (plans === 1) {
+                        const command = proposed(work);
+                        return [
+                          matched({
+                            ...command,
+                            input: { ...command.input, target: "/signals/slow" },
+                          }),
+                          {
+                            target: "/signals/broken",
+                            result: { _tag: "Failed" as const, error: "Model unavailable" },
+                          },
+                        ];
+                      }
+                      assert.deepEqual(
+                        work.targets
+                          .filter(({ result }) => result._tag === "Pending")
+                          .map(({ input }) => input.slug),
+                        ["broken"],
+                      );
+                      assert.equal(
+                        deliveriesOf(work)[0]!.status,
+                        restart ? "delivered" : "sending",
+                      );
+                      if (!restart) {
+                        yield* Deferred.succeed(retrying, undefined);
+                        return yield* Effect.never;
+                      }
+                      return unmatched(work);
+                    }),
+                  deliver: (command) =>
+                    Effect.gen(function* () {
+                      deliveries++;
+                      yield* Deferred.succeed(delivering, undefined);
+                      yield* Deferred.await(finishDelivery);
+                      return {
+                        _tag: "Accepted",
+                        receipt: { requestId: command.input.requestId, revision: 2 },
+                      };
+                    }),
+                },
+                ["slow", "broken"],
+              ),
+            ),
+          );
           const actor = yield* system.spawn("system-one", SystemOneActor);
           yield* actor.awaitStarted;
-          if (restart) {
-            const state = Schema.decodeUnknownSync(ReactionSnapshot)(
-              registry.get("/system-one")!.state,
-            );
-            assert.equal(state.work[0]!.status, "failed");
+          if (!restart) {
+            yield* Deferred.await(delivering);
+            const current = registry.get("/system-one")!;
+            const work = Schema.decodeUnknownSync(ReactionSnapshot)(current.state).work[0]!;
             const reply = yield* actor.ask<RecoveryReply>((replyTo) => ({
               _tag: "Recover",
               replyTo,
               input: {
                 _tag: "RetryScreening",
-                requestId: "retry-broken",
-                workId: state.work[0]!.event.id,
-                expectedRevision: registry.get("/system-one")!.revision,
+                workId: work.event.id,
+                requestId: "retry-while-delivering",
+                expectedRevision: current.revision,
               },
             }));
             assert.equal(reply._tag, "Accepted");
+            yield* Deferred.await(retrying);
+            yield* Deferred.succeed(finishDelivery, undefined);
+            yield* changes.pipe(
+              Stream.filter(({ record }) => {
+                if (record.path !== "/system-one") return false;
+                const work = Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work[0];
+                return work !== undefined && deliveriesOf(work)[0]?.status === "delivered";
+              }),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+            const inspection = yield* inspectReactions(registry, "system-one");
+            assert.equal(
+              inspection.entries.find((entry) => entry.kind === "screening")!.status,
+              "planning",
+            );
+            assert.equal(
+              inspection.entries.find((entry) => entry.kind === "screening")!.attempts,
+              undefined,
+            );
+            assert.equal(
+              inspection.entries.find((entry) => entry.kind === "reaction-delivery")!.status,
+              "delivered",
+            );
+          } else {
+            yield* changes.pipe(
+              Stream.filter(({ record }) => completed(record)),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+            const state = Schema.decodeUnknownSync(ReactionSnapshot)(
+              registry.get("/system-one")!.state,
+            );
+            assert.equal(deliveriesOf(state.work[0]!)[0]!.status, "delivered");
           }
-          yield* changes.pipe(
-            Stream.filter(({ record }) => {
-              if (record.path !== "/system-one") return false;
-              const work = Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work[0];
-              return (
-                work &&
-                work.status === (restart ? "completed" : "failed") &&
-                deliveriesOf(work).length === (restart ? 3 : 2) &&
-                deliveriesOf(work).every((entry) => entry.status === "delivered")
-              );
-            }),
-            Stream.take(1),
-            Stream.runDrain,
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  }
+  assert.equal(plans, 3);
+  assert.equal(deliveries, 1);
+});
+
+test("an event without eligible targets completes and is not reconsidered on restart", async () => {
+  const records = new Map<string, StoredContext>();
+  for (const restart of [false, true]) {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* makeContextRegistry(storeFor(records));
+          yield* registry.register(source.path, sourceDefinition);
+          if (!restart) yield* registry.commit(source, { expectedRevision: 0 });
+          const policy = yield* makeReactionPolicy({
+            client: { systemOne: () => Effect.die(new Error("No candidate may call the model")) },
+          });
+          const changes = yield* registry.subscribe;
+          const system = yield* ActorSystem.make().pipe(
+            ActorSystem.provide(layerFor(registry, policy, [])),
+          );
+          yield* (yield* system.spawn("system-one", SystemOneActor)).awaitStarted;
+          if (!completed(registry.get("/system-one")!))
+            yield* changes.pipe(
+              Stream.filter(({ record }) => completed(record)),
+              Stream.take(1),
+              Stream.runDrain,
+            );
+          assert.equal((yield* inspectReactions(registry, "system-one")).entries.length, 1);
+          assert.equal(
+            Schema.decodeUnknownSync(ReactionSnapshot)(registry.get("/system-one")!.state).work
+              .length,
+            1,
           );
         }),
       ).pipe(Effect.timeout("5 seconds")),
     );
   }
-  assert.deepEqual(calls, { signals: 1, healthy: 1, broken: 2 });
-  assert.deepEqual(delivered.sort(), ["/goals/broken", "/goals/healthy", "/signals/review"]);
 });

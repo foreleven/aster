@@ -7,6 +7,7 @@ import {
   ContextConflict,
   ContextValidationError,
   defineContext,
+  contextView,
   type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
@@ -165,7 +166,7 @@ test("owner restart reconciles a commit persisted before its acknowledgement fai
   );
 });
 
-test("description initialization requires its observed revision and never overwrites newer content", async () => {
+test("owner metadata commits require their observed revision and never overwrite newer content", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
       const registry = yield* makeContextRegistry();
@@ -179,11 +180,11 @@ test("description initialization requires its observed revision and never overwr
         { expectedRevision: 1 },
       );
       const conflict = yield* registry
-        .initializeDescription(initial.path, "Identity", 1)
+        .commit({ ...first, description: "Identity" }, { expectedRevision: 1 })
         .pipe(Effect.flip);
       assert.equal(conflict._tag, "ContextConflict");
       assert.deepEqual(registry.get(initial.path), newer);
-      yield* registry.initializeDescription(initial.path, "Identity", 2);
+      yield* registry.commit({ ...newer, description: "Identity" }, { expectedRevision: 2 });
       assert.deepEqual(registry.get(initial.path), {
         ...newer,
         description: "Identity",
@@ -226,19 +227,59 @@ test("a slow Context commit does not block another path; admitted writes publish
   );
 });
 
-test("owner commits update descriptions while initialization remains conditional", async () => {
+test("owner commits update descriptions", async () => {
   await Effect.runPromise(
     Effect.gen(function* () {
       const registry = yield* makeContextRegistry();
       yield* registry.register(initial.path, definition);
       yield* registry.commit(initial, { expectedRevision: 0 });
-      const changed = yield* registry.commit(
+      yield* registry.commit(
         { ...initial, description: "Updated by owner" },
         { expectedRevision: 1 },
       );
-      yield* registry.initializeDescription(initial.path, "Generated fallback", changed.revision);
       assert.equal(registry.get(initial.path)?.description, "Updated by owner");
       assert.equal(registry.get(initial.path)?.revision, 2);
     }),
+  );
+});
+
+test("uncertain source recovery republishes only newly durable events for live consumers", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        let stored: StoredContext | undefined;
+        let loseAcknowledgement = false;
+        const registry = yield* makeContextRegistry({
+          loadAll: () => (stored ? [stored] : []),
+          save: (record) => {
+            stored = structuredClone(record);
+            if (loseAcknowledgement) throw new Error("Commit acknowledgement lost");
+          },
+        });
+        const source = defineContext({
+          changes: "durable-state",
+          state: Schema.Struct({ value: Schema.Number }),
+          message: Schema.String,
+          view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
+        });
+        yield* registry.register(initial.path, source);
+        yield* registry.commit(initial, { expectedRevision: 0 });
+        const changes = yield* registry.subscribe;
+        loseAcknowledgement = true;
+        const failed = yield* registry
+          .commit({ ...initial, state: { value: 2 } }, { expectedRevision: 1 })
+          .pipe(Effect.result);
+        assert.equal(failed._tag, "Failure");
+        assert.equal(registry.get(initial.path)!.revision, 1);
+        loseAcknowledgement = false;
+        yield* registry.register(initial.path, source);
+        const notifications = yield* changes.pipe(Stream.take(1), Stream.runCollect);
+        assert.deepEqual(
+          notifications[0]!.events?.map((event) => event.record.revision),
+          [2],
+        );
+        assert.equal(notifications[0]!.record.revision, 2);
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
   );
 });

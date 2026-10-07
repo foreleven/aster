@@ -1,4 +1,3 @@
-import { ContextDescriptions } from "@aster/core";
 import { Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import { ContextRegistry, RuntimeIntegrations, defineIntegration } from "@aster/core";
 import { MailSettings } from "./config.js";
@@ -18,14 +17,6 @@ const installation = Layer.effectDiscard(
     const settings = yield* MailSettings;
     const registry = yield* ContextRegistry;
     yield* registry.views.register(mailContextViews);
-    yield* (yield* ContextDescriptions).register([
-      { matches: (path) => path === "/mail", identity: "Connected mailboxes" },
-      { matches: (path) => /^\/mail\/[^/]+$/.test(path), identity: "A connected mailbox" },
-      {
-        matches: (path) => /^\/mail\/[^/]+\/[^/]+$/.test(path),
-        identity: "An email in a connected mailbox",
-      },
-    ]);
     if (settings.mailboxes.length === 0) return;
     const modules = yield* RuntimeIntegrations;
     const dependencies = Context.pick(

@@ -1,5 +1,5 @@
-import { ContextCaptures, ContextDescriptions } from "@aster/core";
-import { larkCaptures, larkDescriptions } from "./context-policies.js";
+import { ContextCaptures } from "@aster/core";
+import { larkCaptures } from "./context-policies.js";
 import { larkContextViews } from "./public-views.js";
 import { RuntimeConfigurationError } from "@aster/core";
 import { Layer, Effect, Context, Deferred, Stream, Fiber } from "effect";
@@ -53,7 +53,6 @@ export const LarkIntegration = {
       const registry = yield* ContextRegistry;
       yield* registry.views.register(larkContextViews);
       yield* (yield* ContextCaptures).register(larkCaptures);
-      yield* (yield* ContextDescriptions).register(larkDescriptions);
       const im = (yield* LarkConfig).im;
       if (im !== undefined) {
         yield* Effect.try(() => parseImPolicy(im));

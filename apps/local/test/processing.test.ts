@@ -1,7 +1,7 @@
-import { ContextCaptures, ContextDescriptions } from "@aster/core";
+import { ContextCaptures } from "@aster/core";
 import { testConversations } from "./conversation-fixtures.js";
-import { initializeContextDescription, taskCapture } from "@aster/core/testing";
-import { larkCaptures, larkDescriptions, larkContextViews } from "@aster/integrations";
+import { taskCapture } from "@aster/core/testing";
+import { larkCaptures, larkContextViews } from "@aster/integrations";
 import { TaskActor } from "@aster/core";
 import { ApprovalQueueActor, ExternalAgents } from "@aster/core";
 import assert from "node:assert/strict";
@@ -12,11 +12,11 @@ import { MemoryBackend, type ContextCapture as MemoryCapture } from "@aster/core
 import { ContextRegistry, type ContextInput } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import { LarkRootActor, LarkEmailChannelActor, LarkMailMessageActor } from "@aster/integrations";
-import { Deferred, Effect, Fiber, Layer, Stream } from "effect";
+import { Effect, Layer } from "effect";
 
 const source = (subject: string): ContextInput => ({
   path: "/lark/mail/me/test",
-  description: "",
+  description: "An email in Lark mailbox me",
   state: {
     messageId: "test",
     mailbox: "me",
@@ -46,8 +46,6 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         const capturesPolicy = yield* ContextCaptures;
         const conversations = testConversations();
         yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
-        const descriptions = yield* ContextDescriptions;
-        yield* descriptions.register(larkDescriptions);
 
         yield* registry.register("/lark", LarkRootActor.context);
         yield* registry.register("/lark/mail", LarkEmailChannelActor.context);
@@ -73,23 +71,6 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         const memory = yield* system.spawn("memory", MemoryActor);
         yield* memory.awaitStarted;
         yield* system.spawn("approvals", ApprovalQueueActor);
-        const newerSourceWritten = yield* Deferred.make<void>();
-        const descriptionInputs: unknown[] = [];
-        const processor = ({ record }: { record: import("@aster/core").ContextSnapshot }) =>
-          initializeContextDescription(
-            registry,
-            record,
-            descriptions.identity(record.path),
-            (identity) =>
-              Effect.sync(() => {
-                descriptionInputs.push(identity);
-                return `Fixed ${identity.identity}`;
-              }),
-          );
-        const listener = yield* Stream.runForEach(registry.changes, processor).pipe(
-          Effect.forkScoped,
-        );
-        yield* Effect.yieldNow;
         yield* registry.commit(
           {
             path: "/lark/mail",
@@ -102,10 +83,6 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         yield* registry.commit(source("Unconfirmed candidate"), {
           expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0,
         });
-        yield* waitFor(
-          () => !!registry.get("/lark/mail/me/test")?.description,
-          "description initialization",
-        );
         assert.equal(captures.length, 0, "Context candidate must not write memory");
         yield* registry.commit(source("Confirmed request"), {
           expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0,
@@ -154,31 +131,20 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         yield* registry.commit(
           {
             ...source("Later source update"),
-            description: "Fixed An email in a Lark mailbox",
+            description: "An email in Lark mailbox me",
           },
           { expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0 },
         );
-        yield* Deferred.succeed(newerSourceWritten, undefined);
         yield* waitFor(() => captures.length >= 1, "Memory capture");
-        yield* Fiber.interrupt(listener);
-        return { captures, descriptionInputs, snapshot: registry.snapshot() };
+        return { captures, snapshot: registry.snapshot() };
       }),
-    ).pipe(Effect.provide(Layer.mergeAll(ContextCaptures.layer, ContextDescriptions.layer))),
+    ).pipe(Effect.provide(ContextCaptures.layer)),
   );
   assert.equal(result.captures.length, 1);
   const capture = result.captures[0]!;
   assert.match(capture.sessionId, /^\/tasks\/[a-f0-9]{64}:trigger$/);
   assert.equal((capture.records[1]!.state as { subject: string }).subject, "Confirmed request");
   assert.equal("type" in result.snapshot[capture.records[0]!.path]!, false);
-  assert.deepEqual(result.descriptionInputs[0], {
-    path: "/lark/mail/me/test",
-    identity: "An email in a Lark mailbox",
-    parentDescription: "Work mailbox",
-  });
-  assert.equal(
-    result.descriptionInputs.some((input) => JSON.stringify(input).includes("Please review")),
-    false,
-  );
 });
 
 test("discovered account and mailbox identities use separate sessions; no capture of empty initialization", async () => {
@@ -190,8 +156,6 @@ test("discovered account and mailbox identities use separate sessions; no captur
         const capturesPolicy = yield* ContextCaptures;
         const conversations = testConversations();
         yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
-        const descriptions = yield* ContextDescriptions;
-        yield* descriptions.register(larkDescriptions);
 
         yield* registry.register("/lark", LarkRootActor.context);
         yield* registry.register("/lark/mail", LarkEmailChannelActor.context);
@@ -267,7 +231,7 @@ test("discovered account and mailbox identities use separate sessions; no captur
         yield* waitFor(() => captures.length === 2);
         return captures;
       }),
-    ).pipe(Effect.provide(Layer.mergeAll(ContextCaptures.layer, ContextDescriptions.layer))),
+    ).pipe(Effect.provide(ContextCaptures.layer)),
   );
   assert.deepEqual(
     result.map((input) => input.records.map((r) => r.path)),

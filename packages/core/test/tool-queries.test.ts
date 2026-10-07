@@ -3,12 +3,7 @@ import type { CoreTool } from "../src/tools/define.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber } from "effect";
-import {
-  contextQueryTools,
-  descriptionTools,
-  memoryTools,
-  contextTools,
-} from "../src/tools/catalogues.js";
+import { contextQueryTools, memoryTools, contextTools } from "../src/tools/catalogues.js";
 import { MemoryRecallError } from "../src/memory/contracts.js";
 import { toolSystem } from "./tool-fixtures.js";
 
@@ -43,10 +38,6 @@ test("Memory asks keep mailboxes available and caller interruption releases reca
         );
         yield* Fiber.interrupt(worker);
         yield* Deferred.await(released);
-        assert.deepEqual(
-          descriptionTools({ type: "object" }).map((tool) => tool.name),
-          ["memory_search", "memory_expand", "submit_result"],
-        );
       }),
     ).pipe(Effect.timeout("5 seconds")),
   );

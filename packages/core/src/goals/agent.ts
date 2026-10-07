@@ -1,4 +1,4 @@
-import { conversationText } from "@aster/agent";
+import { conversationText, Type, type EffectTool } from "@aster/agent";
 import { goalTools } from "../tools/catalogues.js";
 import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { GoalState } from "./state/model.js";
@@ -10,7 +10,7 @@ import { Effect, Clock, Context, Layer, Schema, Match } from "effect";
 import { AgentRunner, type AgentMessage, AgentError, type AssistantMessage } from "@aster/agent";
 import type { CurrentActors } from "../tools/actors.js";
 import { createHash } from "node:crypto";
-import { submitRelevance } from "../tools/result/submit-relevance.js";
+import { output } from "../tools/define.js";
 
 export interface GoalConversation {
   readonly goal: GoalDefinition;
@@ -127,7 +127,28 @@ const goalIntentMessage = (intent: GoalIntent): AgentMessage => ({
   timestamp: Date.parse(intent.createdAt),
 });
 
-const Decision = Schema.Struct({ relevant: Schema.Boolean, reason: Schema.NonEmptyString });
+const contextRelevanceParameters = Type.Object({
+  relevant: Type.Boolean(),
+  reason: Type.String({ minLength: 1 }),
+});
+const submitContextRelevance: EffectTool<typeof contextRelevanceParameters> = {
+  name: "submit_context_relevance",
+  replay: "safe" as const,
+  label: "Context relevance",
+  description:
+    "Submit whether this Context change concretely affects the current Goal, with a reason.",
+  parameters: contextRelevanceParameters,
+  execute: (_id, args) =>
+    Effect.succeed({
+      ...output(args),
+      terminate: true,
+    }),
+};
+
+const ContextRelevanceDecision = Schema.Struct({
+  relevant: Schema.Boolean,
+  reason: Schema.NonEmptyString,
+});
 /** Read-only second gate. Rejected context changes never enter the Goal conversation. */
 const goalAgentGate = Effect.fn("Goal.agentGate")(function* (
   model: string,
@@ -138,8 +159,8 @@ const goalAgentGate = Effect.fn("Goal.agentGate")(function* (
   const timestamp = yield* Clock.currentTimeMillis;
   const result = yield* runner.run({
     name: model,
-    resultTool: "submit_relevance",
-    tools: [submitRelevance],
+    resultTool: submitContextRelevance.name,
+    tools: [submitContextRelevance],
     onResponse: (message) =>
       logGoalResponse(message, {
         goalPath: `/goals/${goal.slug}`,
@@ -158,9 +179,11 @@ const goalAgentGate = Effect.fn("Goal.agentGate")(function* (
   });
   const answer = result.messages.findLast(
     (message) =>
-      message.role === "toolResult" && message.toolName === "submit_relevance" && !message.isError,
+      message.role === "toolResult" &&
+      message.toolName === submitContextRelevance.name &&
+      !message.isError,
   );
-  return yield* Schema.decodeUnknownEffect(Decision)(
+  return yield* Schema.decodeUnknownEffect(ContextRelevanceDecision)(
     answer?.role === "toolResult" ? answer.details : undefined,
   ).pipe(
     Effect.mapError(

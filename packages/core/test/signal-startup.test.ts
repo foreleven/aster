@@ -77,7 +77,7 @@ for (const fails of [false, true])
                 requestId: slug,
                 causationId: "source",
                 target: `/signals/${slug}`,
-                expectedRevision: 1,
+                version: 1,
                 sourceContext: {
                   revision: 0,
                   path: "/source",
@@ -140,7 +140,7 @@ for (const operation of ["pause", "delete"] as const)
                 source: "/system-one",
                 causationId: "source",
                 target: path,
-                expectedRevision: 1,
+                version: 1,
                 sourceContext: {
                   revision: 0,
                   path: "/source",

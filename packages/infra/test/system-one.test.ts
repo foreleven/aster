@@ -1,7 +1,7 @@
 import { Deferred, Effect, Fiber, Logger } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { choice, relevantGoals, type GoalScreeningRecord } from "@aster/core";
+import { choice, matchGoal, type GoalScreeningRecord } from "@aster/core";
 import { makeSystemOneClient } from "../src/index.js";
 
 const screeningSource = {
@@ -11,6 +11,7 @@ const screeningSource = {
   messages: [],
 };
 const screeningGoal = { slug: "release", description: "Release readiness" };
+const candidate = { definition: screeningGoal, title: screeningGoal.description, summary: "" };
 const levelError = "Too many score levels. Must have at most 10 levels.";
 const testConfig = {
   url: "https://system-one.test",
@@ -28,8 +29,8 @@ test("Goal screening respects the System One level limit and normalizes the top 
       usage: { input_tokens: 0, output_tokens: 0 },
     });
   });
-  const result = await Effect.runPromise(relevantGoals(client, screeningSource, [screeningGoal]));
-  assert.equal(result[0]?.score, 1);
+  const result = await Effect.runPromise(matchGoal(client, screeningSource, candidate));
+  assert.equal(result._tag === "Matched" ? result.relevance.score : undefined, 1);
 });
 
 test("failed Goal screening emits an error log and audit record while retaining the failure", async () => {
@@ -44,8 +45,8 @@ test("failed Goal screening emits an error log and audit record while retaining 
     return Response.json({ error: { message: levelError } }, { status: 400 });
   });
   const result = await Effect.runPromise(
-    relevantGoals(client, screeningSource, [screeningGoal], {
-      screening: { append: (record) => Effect.sync(() => records.push(record)) },
+    matchGoal(client, screeningSource, candidate, {
+      append: (record) => Effect.sync(() => records.push(record)),
     }).pipe(Effect.result, Effect.provide(Logger.layer([logger]))),
   );
   assert.equal(result._tag, "Failure");

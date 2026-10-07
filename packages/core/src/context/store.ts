@@ -100,8 +100,8 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
     }
     return writer;
   };
-  const publish = (record: ContextSnapshot) =>
-    PubSub.publish(changes, { record: structuredClone(record) });
+  const publish = (record: ContextSnapshot, events: readonly ContextEvent[] = []) =>
+    PubSub.publish(changes, structuredClone({ record, ...(events.length ? { events } : {}) }));
 
   const commit = Effect.fn("DurableContext.commit")(function* (
     input: ContextInput,
@@ -165,7 +165,7 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
           ),
         );
         records.set(input.path, stored);
-        yield* publish(stored.snapshot);
+        yield* publish(stored.snapshot, events.slice(previous?.events.length ?? 0));
         return structuredClone(stored.snapshot);
         // Waiting writers remain interruptible; admitted storage and publication drain together.
       }).pipe(Effect.uninterruptible),
@@ -205,7 +205,13 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
           if (failed) {
             const next = structuredClone({ snapshot, events: restored.events });
             records.set(path, next);
-            if (!isDeepStrictEqual(previous, next)) yield* publish(snapshot);
+            if (!isDeepStrictEqual(previous, next))
+              yield* publish(
+                snapshot,
+                restored.events.filter(
+                  (event) => event.record.revision > (previous?.snapshot.revision ?? 0),
+                ),
+              );
           }
         }
         failedCommits.delete(path);

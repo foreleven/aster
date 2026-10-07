@@ -20,23 +20,23 @@ Context messages can contain source evidence, such as a Lark chat's message wind
 
 ## Organization
 
-| File                         | Responsibility                                                                                             |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `context/model.ts`           | Inputs, snapshots, directory entries, source events, storage schema and event identity                     |
-| `context/definition.ts`      | Owner definitions and allowlisted public projection rules                                                  |
-| `context/registry.ts`        | Registration, owner validation, public reads, view registration and conditional description initialization |
-| `context/store.ts`           | DurableContext port, persistence driver contract, ordered commits and recovery                             |
-| `context/actor.ts`           | ContextActor lifecycle registration and public/Actor path mapping                                          |
-| `context/errors.ts`          | Typed commit, validation, conflict and recovery errors                                                     |
-| `context/queries/actor.ts`   | Query Actor and its commands, bounded work and asynchronous result replies                                 |
-| `context/queries/routes.ts`  | Scoped registration and dispatch of integration queries                                                    |
-| `context/queries/results.ts` | Pi query evidence, operation identity checks and result pagination                                         |
-| `commands/query.ts`          | Shared query replies and cancellation used by Contexts, Memory, Signals and Tools                          |
-| `commands/json.ts`           | Shared JSON boundary normalization                                                                         |
+| File                         | Responsibility                                                                         |
+| ---------------------------- | -------------------------------------------------------------------------------------- |
+| `context/model.ts`           | Inputs, snapshots, directory entries, source events, storage schema and event identity |
+| `context/definition.ts`      | Owner definitions and allowlisted public projection rules                              |
+| `context/registry.ts`        | Registration, owner validation, public reads and view registration                     |
+| `context/store.ts`           | DurableContext port, persistence driver contract, ordered commits and recovery         |
+| `context/actor.ts`           | ContextActor lifecycle registration and public/Actor path mapping                      |
+| `context/errors.ts`          | Typed commit, validation, conflict and recovery errors                                 |
+| `context/queries/actor.ts`   | Query Actor and its commands, bounded work and asynchronous result replies             |
+| `context/queries/routes.ts`  | Scoped registration and dispatch of integration queries                                |
+| `context/queries/results.ts` | Pi query evidence, operation identity checks and result pagination                     |
+| `commands/query.ts`          | Shared query replies and cancellation used by Contexts, Memory, Signals and Tools      |
+| `commands/json.ts`           | Shared JSON boundary normalization                                                     |
 
 `ContextActor` wraps an owner Actor definition; it is not a separate Actor or a business-state service. `ContextsActor` is the Runtime-owned `/user/contexts` query endpoint and owns no Context snapshots. Tools ask this endpoint; integrations register query routes that dispatch to their own Actors. Runtime uses native `awaitStarted` for query startup, without a Ready command.
 
-Storage adapters and backend selection remain in infra. Reactions, Memory and description generation own independent supervised consumers and policies. Memory evidence reads run outside its mailbox; description generation never gates routing or capture. Runtime installs core views before source startup; integrations install their policies before source activation. Dormant owners remain discoverable through persisted snapshots and registered view policies.
+Storage adapters and backend selection remain in infra. Reactions and Memory own independent supervised consumers and policies. Memory evidence reads run outside its mailbox. Runtime installs core views before source startup; integrations install their policies before source activation. Dormant owners remain discoverable through persisted snapshots and registered view policies.
 
 ## Reads and commits
 
@@ -44,7 +44,7 @@ Owners use `registry.get/snapshot`. Application queries and model tools use `reg
 
 A commit validates the owner schema and expected revision, then persists the next snapshot and source event together. Only successful persistence updates canonical memory and publishes a notification. An unchanged record retains its revision. State changes produce source events only when requested by the definition; message-only and description-only changes still notify readers.
 
-Owner commits honor their supplied description. `initializeDescription` separately fills an empty description at an observed revision, preserving newer content. Description generation remains outside Context.
+Owners supply `description` directly when creating or updating a Context. It identifies the Context and its purpose; changing activity belongs in state or summary. There is no model-generated description, metadata consumer or separate description-write API.
 
 The store serializes commit and recovery per path. Unrelated Contexts may progress independently. Waiting writers are interruptible; admitted persistence, canonical-state updates and publication drain together. Pi adapters additionally serialize access to their shared Session, including poisoning and reopen, so recovery cannot close a Session while another Context is writing.
 
@@ -56,6 +56,6 @@ Source event IDs derive from the `context-event` namespace, path and committed r
 
 Local keeps its fsync-backed pending transaction across state and message files. Pi atomically commits the storage record, entry and index mapping. Both use `{ snapshot, events }`; old flat records, missing revisions and reaction-envelope conversions are unsupported. No runtime data is rewritten by this change.
 
-Live notifications wake System One, whose durable journal scan also recovers work after restart. Reactions own frozen screening evidence, target matching, deliveries and receipts. Memory owns capture selection and deduplication. Neither relies on a live source Actor to preserve accepted evidence.
+Live notifications carry newly committed durable events, including events discovered during uncertain-write recovery. System One admits these events directly and scans the journal only at startup. Its persisted per-source revision watermarks prevent replay; queued changes from the same Context coalesce to the latest revision, while in-flight matching retains its frozen evidence. Reactions own target matching, deliveries and receipts. Memory owns capture selection and deduplication. Neither relies on a live source Actor to preserve accepted evidence.
 
 Source journals still grow with retained history and are saved with snapshots. Append-only storage and journal compaction require a separate retention design that accounts for every durable consumer.

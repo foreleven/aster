@@ -32,7 +32,7 @@ GoalActor creates one scoped GoalState service in `started`, after Context regis
 
 ## Context gate
 
-System One independently matches every eligible Goal and Context Signal. A Goal then applies a separate read-only Agent gate only to Context evidence. Ignored evidence does not enter the persistent model conversation or public chat. User input, direct Task messages and execution feedback bypass this second gate.
+System One matches each eligible Goal and Context Signal in a separate request, sharing one bounded concurrency limit. Goal evidence admission validates identity and current availability without an overall Context revision precondition; intervening user input or summary updates do not invalidate incoming evidence. A Goal then applies a separate read-only Agent gate only to Context evidence. Ignored evidence does not enter the persistent model conversation or public chat. User input, direct Task messages and execution feedback bypass this second gate.
 
 Each Goal has one read-only screening slot independent of its single main-conversation slot. Screening can run while the conversation is busy, and user turns can run while screening is busy. Context inputs stay pending until their gate decision commits; relevant inputs then compete for the main slot rather than starting a conversation directly from the gate callback. This bounds concurrency to one gate plus one conversation per Goal.
 
@@ -62,7 +62,7 @@ goals/
 
 `actor.ts` constructs the `state/model.ts` Layer once in its Behavior Scope. Every command and local tool shares that instance. The state model owns business rules and serialization, while its private Store owns the committed Ref and persistence. Input schemas live in `state/snapshot.ts`, so decoding snapshots does not load input persistence operations.
 
-`agent.ts` owns both model invocations: the primary conversation and the read-only Context gate. Their prompts, response logs and input-message rendering stay together. `screening/` owns the earlier System One decision and frozen delivery; this is distinct from the Agent's second gate.
+`agent.ts` owns both model invocations: the primary conversation and the read-only Context gate. Their prompts, response logs and input-message rendering stay together. The second gate's `submit_context_relevance` result tool is private to this module. `screening/` owns the earlier System One decision and frozen delivery; this is distinct from the Agent's second gate.
 
 `protocol.ts` contains public requests and internal result/scheduling messages. Callers import contracts from it and root registration from `root.ts`; `actor.ts` does not forward either module. The package entrypoint exposes public capabilities directly from their defining modules, without compatibility barrels or duplicate exports. The built-in personal Goal is a configuration default beside GoalSettings in `config/settings.ts`.
 
@@ -70,7 +70,7 @@ goals/
 
 Conversation/gate execution handles remain mailbox-owned Refs. Runtime owns the shared activation gate; a scoped waiter signals RunNext when it opens. Model invocation never holds the state writer, so new inputs can be accepted while an Agent is running. Local tools may briefly wait for an in-flight durable admission. AgentRunner aborts callbacks when their invocation finishes or is cancelled; GoalState rejects writes after its Layer closes. Ending the Goal and summary mutation share the same writer, so a summary either commits before End or observes the inactive state and fails. This refactor does not add a new pause/resume protocol: the existing End/completed lifecycle remains separate pending work.
 
-The snapshot Ref is a committed mirror, not a second persistence system. Registry description initialization can update Context metadata independently using revision checks; all Goal business fields go through GoalState. Only durable Context publication drives external change consumers, so a SubscriptionRef would add a redundant notification channel. Pi remains the sole message store, and interrupted Pi-to-snapshot handoffs retain their existing recovery path.
+The snapshot Ref is a committed mirror, not a second persistence system. Context descriptions are supplied by their owners; all Goal business fields go through GoalState. Only durable Context publication drives external change consumers, so a SubscriptionRef would add a redundant notification channel. Pi remains the sole message store, and interrupted Pi-to-snapshot handoffs retain their existing recovery path.
 
 ## Related work
 

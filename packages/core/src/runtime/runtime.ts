@@ -1,6 +1,5 @@
 import { ContextsActor } from "../context/queries/actor.js";
 import { ContextCaptures } from "../memory/capture.js";
-import { ContextDescriptions, ContextDescriptionsActor } from "../reasoning/context-description.js";
 import { DurableContext } from "../context/store.js";
 import { coreContextViews } from "./context-views.js";
 import { ContextQueries } from "../context/queries/routes.js";
@@ -54,7 +53,6 @@ type ActorServices =
   | AgentRunner
   | MemoryBackend
   | ContextCaptures
-  | ContextDescriptions
   | ContextQueries
   | AgentConversations
   | GoalSettings
@@ -88,7 +86,6 @@ const acquireRuntime = Effect.gen(function* () {
     DurableContext,
     MemoryBackend,
     ContextCaptures,
-    ContextDescriptions,
     AgentRunner,
     ContextQueries,
     AgentConversations,
@@ -155,7 +152,6 @@ const acquireRuntime = Effect.gen(function* () {
   const requiredRoots = new Set([
     "/user/contexts",
     "/user/memory",
-    "/user/descriptions",
     "/user/system-one",
     "/user/approvals",
     "/user/signals",
@@ -186,7 +182,6 @@ const acquireRuntime = Effect.gen(function* () {
   const contexts = yield* system.spawn("contexts", ContextsActor);
   yield* contexts.awaitStarted;
   yield* (yield* system.spawn("memory", MemoryActor)).awaitStarted;
-  yield* (yield* system.spawn("descriptions", ContextDescriptionsActor)).awaitStarted;
   for (const module of modules.filter((module) => module.phase === "source")) {
     const handle = yield* module
       .activate(system)
@@ -311,7 +306,6 @@ export class AsterRuntime extends Context.Service<
     const contextServices = Layer.mergeAll(
       ContextRegistry.layer,
       ContextCaptures.layer,
-      ContextDescriptions.layer,
       ContextQueries.layer,
       GoalSettings.layer,
       RuntimeIntegrations.layer,

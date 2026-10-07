@@ -66,7 +66,7 @@ const setup = Effect.fnUntraced(function* () {
       causationId: id,
       source: "/system-one",
       target: path,
-      expectedRevision: registry.get(path)!.revision,
+      version: Schema.decodeUnknownSync(SignalSnapshot)(registry.get(path)!.state).version,
       sourceContext: {
         path: "/source",
         description: "Evidence",

@@ -21,9 +21,11 @@ export const ContextSnapshot = Schema.Struct({
 });
 export type ContextSnapshot = typeof ContextSnapshot.Type;
 
-/** Detached content of one successful commit; durable consumption uses the journal. */
+/** Committed owner snapshot and new source events; the journal covers missed notifications. */
 export interface ContextChange {
   readonly record: ContextSnapshot;
+  /** Newly committed durable source events; absent for metadata/private updates. */
+  readonly events?: readonly ContextEvent[];
 }
 
 export const ContextEvent = Schema.Struct({

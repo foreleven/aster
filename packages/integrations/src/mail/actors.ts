@@ -55,7 +55,12 @@ class MailMessageActor extends ContextActor.Service<MailMessageActor>()("mail/Me
             if (!registry.get(path)) {
               yield* registry
                 .commit(
-                  { path, description: "", state: email, messages: [] },
+                  {
+                    path,
+                    description: `An email in mailbox ${email.mailbox}`,
+                    state: email,
+                    messages: [],
+                  },
                   { expectedRevision: 0 },
                 )
                 .pipe(Effect.orDie);

@@ -14,7 +14,6 @@ import { taskList } from "./task/task-list.js";
 import { taskSend } from "./task/task-send.js";
 import { signalList } from "./signal/signal-list.js";
 import { setSignal } from "./signal/set-signal.js";
-import { submitResult } from "./result/submit-result.js";
 
 export const contextTools = (pageCharacters = 12000): readonly CoreTool[] =>
   [searchContexts(), readContext(pageCharacters)] as const;
@@ -23,10 +22,6 @@ export const contextQueryTools = (
   requestId: (callId: string) => string,
 ): readonly CoreTool[] => [queryContext(owner, requestId), readQueryResult(owner)] as const;
 export const memoryTools = (): readonly CoreTool[] => [memorySearch(), memoryExpand()];
-export const descriptionTools = (schema: object): readonly CoreTool[] => [
-  ...memoryTools(),
-  submitResult(schema),
-];
 export const taskTools = (
   owner: string,
   requestId: (callId: string) => string,

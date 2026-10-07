@@ -20,16 +20,13 @@ export const makeGoalStore = Effect.fn("GoalStore.make")(function* (
     yield* Schema.decodeUnknownEffect(GoalSnapshot)(restored.state).pipe(Effect.orDie),
   );
   const current = Effect.sync(() => registry.get(path)!);
-  const save = Effect.fn("GoalStore.save")(function* (
-    patch: Partial<GoalSnapshot>,
-    expectedRevision?: number,
-  ) {
+  const save = Effect.fn("GoalStore.save")(function* (patch: Partial<GoalSnapshot>) {
     // Description initialization can advance the Context revision independently.
     const record = yield* current;
     const state = { ...(yield* Ref.get(snapshot)), ...patch };
     yield* registry.commit(
       { ...record, state, messages: [] },
-      { expectedRevision: expectedRevision ?? record.revision ?? 0 },
+      { expectedRevision: record.revision },
     );
     yield* Ref.set(snapshot, state);
     // Once storage accepts a write, its in-memory mirror must drain with it.

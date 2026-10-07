@@ -1,6 +1,6 @@
 # Core Agent tools
 
-Core tool implementations live in `packages/core/src/tools/`. Goal, Task and internal reasoning assemble explicit catalogues from the same implementations. There is no common invocation service or tool Actor.
+Shared Context, Memory, Goal, Task and Signal operation tools live in `packages/core/src/tools/`. Goal and Task Agents assemble explicit catalogues from these implementations. The Goal-only `submit_context_relevance` result tool is private to `goals/agent.ts`. There is no common invocation service or tool Actor.
 
 ## Ownership and injection
 
@@ -20,7 +20,7 @@ The summary tool calls the injected GoalState.updateSummary directly. That metho
 packages/core/src/tools/
   actors.ts                  # Injected CurrentActors capability and typed ask transport
   define.ts                  # Effect tool construction and domain error/result shaping
-  catalogues.ts              # Explicit Goal, Task and description tool sets
+  catalogues.ts              # Explicit Goal and Task tool sets
   context/
     search-contexts.ts
     read-context.ts
@@ -41,9 +41,6 @@ packages/core/src/tools/
   memory/
     memory-search.ts
     memory-expand.ts
-  result/
-    submit-result.ts
-    submit-relevance.ts
 ```
 
 Domain protocols and handlers remain next to their owners. The previous Goal/reasoning tool files and duplicated inline memory/result definitions are removed, without compatibility re-exports.
@@ -66,7 +63,7 @@ Domain protocols and handlers remain next to their owners. The previous Goal/rea
 | `memory_search`     | MemoryActor                    | `Search` executes backend recall asynchronously.                                                               |
 | `memory_expand`     | MemoryActor                    | `Expand` retrieves original evidence asynchronously.                                                           |
 
-`submit_result` and `submit_relevance` are local invocation returns. They validate through the existing SDK/result decoders and terminate their invocation. They have no business recipient to ask. Gate results still return through `GateSettled`.
+`submit_context_relevance` is a local invocation return. It validates through the existing SDK/result decoders and terminates the gate invocation. It has no business recipient to ask. Gate results still return through `GateSettled`.
 
 `update_summary` replaces `update_goal`; it has only a `summary` argument and cannot complete a Goal. The old End/completed lifecycle elsewhere is separate pending work, not implemented by this tools refactor.
 
@@ -92,12 +89,11 @@ The SDK adapter in `packages/agent` preserves the caller's Effect Context and Ab
 
 ## Catalogues and runtime
 
-| Invocation                    | Tools                                                                  |
-| ----------------------------- | ---------------------------------------------------------------------- |
-| Goal conversation             | Context, memory, summary, Task and Signal tools.                       |
-| Internal Task                 | Context and memory tools, including memory expansion.                  |
-| Context relevance gate        | `submit_relevance` only.                                               |
-| Context description reasoning | Memory search/expansion and `submit_result`; no global Context access. |
+| Invocation             | Tools                                                 |
+| ---------------------- | ----------------------------------------------------- |
+| Goal conversation      | Context, memory, summary, Task and Signal tools.      |
+| Internal Task          | Context and memory tools, including memory expansion. |
+| Context relevance gate | `submit_context_relevance` only.                      |
 
 Runtime starts the Context query root and activates Memory before restoring Tasks that may immediately resume tool execution. Source integration readiness and Goal activation retain their existing contracts. No host wiring or generic Actor runtime changes are needed.
 

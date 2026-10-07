@@ -4,19 +4,26 @@ import { DurableContext } from "../context/store.js";
 import { RecoveryInput, RecoveryReply } from "@aster/api-contracts";
 import { randomUUID } from "node:crypto";
 import { ReplyTo, type ActorContext } from "@aster/actor";
-import { Effect, Layer, Match, Schema, Stream } from "effect";
+import { Config, Effect, Layer, Match, Option, Schema, Stream } from "effect";
 import { ContextActor } from "../context/actor.js";
+import { ContextEvent } from "../context/model.js";
 import { ContextRegistry } from "../context/registry.js";
 import { defineContext } from "../context/definition.js";
-import { contextView } from "../context/definition.js";
+import { reactionWorkView } from "./inspection.js";
 import { GoalSettings } from "../config/settings.js";
 import { ReactionPolicy, ReactionFailure } from "./policy.js";
-import { ReactionSnapshot, ReactionPlan, ReactionReply, deliveriesOf } from "./state.js";
+import {
+  ReactionSnapshot,
+  ReactionPlan,
+  ReactionReply,
+  deliveriesOf,
+  workStatus,
+} from "./state.js";
 
 export const ReactionCommand = Schema.Union([
-  Schema.TaggedStruct("Wake", {}),
+  Schema.TaggedStruct("Ingest", { events: Schema.Array(ContextEvent) }),
   Schema.TaggedStruct("Recover", { input: RecoveryInput, replyTo: ReplyTo<RecoveryReply>() }),
-  Schema.TaggedStruct("Continue", { generation: Schema.String }),
+  Schema.TaggedStruct("Continue", { deliveryId: Schema.String, generation: Schema.String }),
   Schema.TaggedStruct("Planned", {
     generation: Schema.String,
     requestId: Schema.String,
@@ -36,31 +43,6 @@ export const ReactionCommand = Schema.Union([
   }),
 ]);
 export type ReactionCommand = typeof ReactionCommand.Type;
-const publicWork = Schema.Struct({
-  event: Schema.Struct({
-    id: Schema.String,
-    record: Schema.Struct({ path: Schema.String, revision: Schema.Number }),
-    createdAt: Schema.String,
-  }),
-  status: Schema.String,
-  attempts: Schema.Int,
-  error: Schema.optional(Schema.String),
-  deliveries: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        command: Schema.Struct({
-          _tag: Schema.String,
-          input: Schema.Struct({ requestId: Schema.String, target: Schema.String }),
-        }),
-        status: Schema.String,
-        attempts: Schema.Int,
-        error: Schema.optional(Schema.String),
-        receipt: Schema.optional(Schema.Struct({ requestId: Schema.String, revision: Schema.Int })),
-      }),
-    ),
-  ),
-});
-
 /** The sole writer of the reaction inbox, frozen decisions and delivery outcomes. */
 export class SystemOneActor extends ContextActor.Service<
   SystemOneActor,
@@ -70,7 +52,18 @@ export class SystemOneActor extends ContextActor.Service<
   context: defineContext({
     state: ReactionSnapshot,
     message: Schema.Never,
-    view: contextView({ state: Schema.Struct({ work: Schema.Array(publicWork) }) }),
+    view: {
+      project: (record) => {
+        const state = Schema.decodeUnknownOption(ReactionSnapshot)(record.state);
+        if (Option.isNone(state)) return undefined;
+        return {
+          ...record,
+          state: { work: state.value.work.map(reactionWorkView) },
+          messages: [],
+          projection: { version: 1, visibility: "public" as const },
+        };
+      },
+    },
   }),
 }) {
   static readonly layer = Layer.effect(
@@ -80,41 +73,66 @@ export class SystemOneActor extends ContextActor.Service<
       const changes = yield* registry.subscribe;
       const state = yield* ReactionState;
       const policy = yield* ReactionPolicy;
-      let generation: string | undefined;
+      const durable = yield* DurableContext;
+      const limit = Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(32));
+      const matchConcurrency = yield* Config.schema(limit, [
+        "config",
+        "reactions",
+        "matchConcurrency",
+      ]).pipe(Config.withDefault(4));
+      const deliveryConcurrency = yield* Config.schema(limit, [
+        "config",
+        "reactions",
+        "deliveryConcurrency",
+      ]).pipe(Config.withDefault(4));
+      let planning: string | undefined;
+      // Mailbox-owned slots, including retry cooldowns. A slow receiver never blocks matching.
+      const delivering = new Map<string, { generation: string; target: string }>();
       const drive = Effect.fn("SystemOne.drive")(function* (
         context: ActorContext<ReactionCommand>,
       ) {
-        if (generation) return;
-        for (const work of (yield* state.read).work) {
-          if (work.status === "pending" || work.status === "planning") {
+        const snapshot = yield* state.read;
+        if (!planning) {
+          const work = snapshot.work.find(
+            (item) => item.status === "queued" || workStatus(item) === "planning",
+          );
+          if (work) {
             const planned = yield* state.startPlanning(work);
-            const token = (generation = randomUUID());
-            yield* context.pipeToSelf(policy.plan(planned), (result) => ({
+            const token = (planning = randomUUID());
+            yield* context.pipeToSelf(policy.plan(planned, matchConcurrency), (result) => ({
               _tag: "Planned",
               generation: token,
               requestId: work.event.id,
               result,
             }));
-            return;
           }
-          const delivery = deliveriesOf(work).find(
-            (item) => item.status === "pending" || (item.status === "unknown" && item.attempts < 3),
-          );
-          if (!delivery) continue;
-          const id = delivery.command.input.requestId;
-          yield* state.startDelivery(work.event.id, id);
-          const token = (generation = randomUUID());
-          yield* context.pipeToSelf(
-            policy.deliver(delivery.command).pipe(Effect.provideService(CurrentActors, context)),
-            (result) => ({
-              _tag: "Delivered",
-              generation: token,
-              requestId: work.event.id,
-              deliveryId: id,
-              result,
-            }),
-          );
-          return;
+        }
+        const busyTargets = new Set([...delivering.values()].map((slot) => slot.target));
+        for (const work of snapshot.work) {
+          for (const delivery of deliveriesOf(work)) {
+            if (delivering.size >= deliveryConcurrency) return;
+            const { target, requestId: id } = delivery.command.input;
+            if (busyTargets.has(target)) continue;
+            if (
+              delivery.status !== "pending" &&
+              !(delivery.status === "unknown" && delivery.attempts < 3)
+            )
+              continue;
+            yield* state.startDelivery(work.event.id, id);
+            const token = randomUUID();
+            delivering.set(id, { generation: token, target });
+            busyTargets.add(target);
+            yield* context.pipeToSelf(
+              policy.deliver(delivery.command).pipe(Effect.provideService(CurrentActors, context)),
+              (result) => ({
+                _tag: "Delivered",
+                generation: token,
+                requestId: work.event.id,
+                deliveryId: id,
+                result,
+              }),
+            );
+          }
         }
       });
       return SystemOneActor.of({
@@ -122,19 +140,25 @@ export class SystemOneActor extends ContextActor.Service<
           Effect.gen(function* () {
             yield* state.restore;
             yield* context.pipeToSelf(
-              Stream.runForEach(changes, () => context.self.tell({ _tag: "Wake" })),
-              () => ({ _tag: "Wake" }),
+              Stream.runForEach(changes, (change) =>
+                change.events?.length
+                  ? context.self.tell({ _tag: "Ingest", events: change.events })
+                  : Effect.void,
+              ),
+              () => ({ _tag: "Ingest", events: [] }),
             );
-            yield* state.ingest();
+            yield* state.ingest(durable.journal());
             yield* drive(context);
           }),
         receive: (command, context) =>
           Match.value(command).pipe(
-            Match.tag("Wake", () => state.ingest().pipe(Effect.andThen(drive(context)))),
+            Match.tag("Ingest", ({ events }) =>
+              state.ingest(events).pipe(Effect.andThen(drive(context))),
+            ),
             Match.tag("Continue", (command) =>
               Effect.gen(function* () {
-                if (command.generation !== generation) return;
-                generation = undefined;
+                if (delivering.get(command.deliveryId)?.generation !== command.generation) return;
+                delivering.delete(command.deliveryId);
                 yield* drive(context);
               }),
             ),
@@ -152,26 +176,24 @@ export class SystemOneActor extends ContextActor.Service<
             ),
             Match.tag("Planned", (command) =>
               Effect.gen(function* () {
-                if (command.generation !== generation) return;
+                if (command.generation !== planning) return;
                 yield* state.planned(command.requestId, command.result);
-                generation = undefined;
+                planning = undefined;
                 yield* drive(context);
               }),
             ),
             Match.tag("Delivered", (command) =>
               Effect.gen(function* () {
-                if (command.generation !== generation) return;
+                if (delivering.get(command.deliveryId)?.generation !== command.generation) return;
                 yield* state.delivered(command.requestId, command.deliveryId, command.result);
                 if (command.result._tag === "Failure") {
-                  const token = generation;
                   yield* context.pipeToSelf(Effect.sleep("3 seconds"), () => ({
                     _tag: "Continue",
-                    generation: token,
+                    deliveryId: command.deliveryId,
+                    generation: command.generation,
                   }));
-                } else {
-                  generation = undefined;
-                  yield* drive(context);
-                }
+                } else delivering.delete(command.deliveryId);
+                yield* drive(context);
               }),
             ),
             Match.exhaustive,

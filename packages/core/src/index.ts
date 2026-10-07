@@ -9,7 +9,6 @@ export * from "./signals/protocol.js";
 export * from "./tasks/actor.js";
 export * from "./tasks/protocol.js";
 export * from "./decisions/system-one.js";
-export { ContextDescriptions, type DescriptionPolicy } from "./reasoning/context-description.js";
 export * from "./tasks/execution/contracts.js";
 export * from "./publications/contracts.js";
 export {

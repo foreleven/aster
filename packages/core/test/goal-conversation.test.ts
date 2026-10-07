@@ -67,10 +67,12 @@ const setup = Effect.fnUntraced(function* (
       Layer.succeed(SignalDefinitions, options.signals ?? []),
       Layer.succeed(ExternalAgents, { test: options.external ?? fakeAgent() }),
       modelReplyLayer(
-        "submit_relevance",
+        "submit_context_relevance",
         options.gate ??
           (() =>
-            Effect.succeed(agentResult("submit_relevance", { relevant: true, reason: "Related" }))),
+            Effect.succeed(
+              agentResult("submit_context_relevance", { relevant: true, reason: "Related" }),
+            )),
       ),
       modelReplyLayer(undefined, conversation),
     ),
@@ -113,14 +115,13 @@ const setup = Effect.fnUntraced(function* (
   return { registry, system, root, signals, approvals, state, wait, submit, activate, end, retry };
 });
 
-const contextInput = (requestId: string, revision: number): GoalSubmission => ({
+const contextInput = (requestId: string): GoalSubmission => ({
   _tag: "GoalIntent",
   delivery: {
     requestId,
     causationId: requestId,
     source: "/system-one",
     target: "/goals/project",
-    expectedRevision: revision,
     intent: {
       intentId: requestId,
       goalSlug: "project",
@@ -147,9 +148,9 @@ const contextInput = (requestId: string, revision: number): GoalSubmission => ({
   },
 });
 const submitContext = (env: Effect.Success<ReturnType<typeof setup>>, id: string) =>
-  env.submit(id, contextInput(id, env.registry.get("/goals/project")!.revision!));
+  env.submit(id, contextInput(id));
 const relevant = () =>
-  agentResult("submit_relevance", { relevant: true, reason: "Project evidence" });
+  agentResult("submit_context_relevance", { relevant: true, reason: "Project evidence" });
 
 test("Goal conversation and gate log live responses with their identities without exposing tools in replies", async () => {
   const logs: Array<{ message: unknown; annotations: Record<string, unknown> }> = [];
@@ -584,7 +585,7 @@ test("Context changes pass the Agent Gate before Pi; user and Task inputs bypass
           gate: () =>
             Effect.sync(() => {
               gates++;
-              return agentResult("submit_relevance", {
+              return agentResult("submit_context_relevance", {
                 relevant: gates > 1,
                 reason: gates > 1 ? "Project evidence" : "Different project",
               });
@@ -800,7 +801,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
           gate: () =>
             Effect.sync(() => {
               gates++;
-              return agentResult("submit_relevance", {
+              return agentResult("submit_context_relevance", {
                 relevant: false,
                 reason: "Context gate only",
               });

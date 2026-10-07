@@ -70,7 +70,6 @@ export const goalAdmission = (
             intent.intentId,
             { rootRequestId: delivery.causationId, remainingAgentTurns: 4 },
             patch,
-            delivery.expectedRevision,
           );
           return receipt;
         }),
@@ -196,7 +195,6 @@ export const goalAdmission = (
       request.requestId,
       input.causal,
       { receipts: [...state.receipts, record] },
-      undefined,
       input.inputId,
     );
     return record.receipt;

@@ -135,7 +135,7 @@ export function ProcessingDetails({
             <strong>
               {entry.kind === "screening" ? "Screening" : "Delivery"} · {entry.status}
             </strong>
-            <span>{entry.attempts} attempts</span>
+            {entry.attempts !== undefined && <span>{entry.attempts} attempts</span>}
           </header>
           <p>
             <button className="text-link" onClick={() => navigate(entry.source)}>
@@ -147,6 +147,18 @@ export function ProcessingDetails({
             </button>
           </p>
           {entry.error && <p className="goals-error">{entry.error}</p>}
+          {entry.matches && entry.matches.length > 0 && (
+            <ul aria-label="Target matching results">
+              {entry.matches.map((match) => (
+                <li key={match.target}>
+                  <button className="text-link" onClick={() => navigate(match.target)}>
+                    {match.target}
+                  </button>{" "}
+                  · {match._tag}: {match._tag === "Failed" ? match.error : match.reason}
+                </li>
+              ))}
+            </ul>
+          )}
           <RecoveryAction
             owner={owner}
             revision={snapshot.revision}

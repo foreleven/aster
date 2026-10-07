@@ -137,7 +137,7 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
         causationId: "source",
         source: "/system-one" as const,
         target,
-        expectedRevision: env.registry.get(target)!.revision,
+        version: 1,
         sourceContext: {
           path: "/source",
           description: "Evidence",

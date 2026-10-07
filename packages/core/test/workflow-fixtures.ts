@@ -93,9 +93,12 @@ export const goalWorkflowLayer = (scenario: GoalScenario) =>
       },
     }),
     Layer.succeed(AgentConversations, scenario.history ?? testConversations()),
-    modelReplyLayer("submit_relevance", () =>
+    modelReplyLayer("submit_context_relevance", () =>
       Effect.succeed(
-        agentResult("submit_relevance", { relevant: true, reason: "Relevant test evidence" }),
+        agentResult("submit_context_relevance", {
+          relevant: true,
+          reason: "Relevant test evidence",
+        }),
       ),
     ),
     modelReplyLayer(undefined, (input) =>

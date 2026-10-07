@@ -70,44 +70,6 @@ test("only schema fields notify automatically and owner snapshots are detached",
   assert.deepEqual(result.events, [{ record: result.record }]);
 });
 
-test("dynamic description initializes once and preserves content updated during Agent work", async () => {
-  const record = await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        yield* registry.register("/x", definition);
-        yield* registry.commit(
-          { path: "/x", description: "", state: { value: 1 }, messages: [] },
-          { expectedRevision: registry.get("/x")?.revision ?? 0 },
-        );
-        yield* registry.commit(
-          {
-            path: "/x",
-            description: "",
-            state: { value: 2 },
-            messages: ["new"],
-          },
-          { expectedRevision: registry.get("/x")?.revision ?? 0 },
-        );
-        yield* registry.initializeDescription(
-          "/x",
-          "Fixed identity",
-          registry.get("/x")?.revision ?? 0,
-        );
-        yield* registry.initializeDescription(
-          "/x",
-          "Must not overwrite",
-          registry.get("/x")?.revision ?? 0,
-        );
-        return registry.get("/x");
-      }),
-    ),
-  );
-  assert.equal(record?.description, "Fixed identity");
-  assert.deepEqual(record?.state, { value: 2 });
-  assert.deepEqual(record?.messages, ["new"]);
-});
-
 test("invalid public state and unregistered Context paths are rejected", async () => {
   for (const record of [
     { path: "/x", description: "x", state: [], messages: [] },
@@ -155,10 +117,9 @@ test("every changed commit publishes its detached revision", async () => {
           { ...record, messages: ["new message"] },
           { expectedRevision: registry.get(record.path)?.revision ?? 0 },
         );
-        yield* registry.initializeDescription(
-          "/x",
-          "Fixed description",
-          registry.get("/x")?.revision ?? 0,
+        yield* registry.commit(
+          { ...registry.get("/x")!, description: "Fixed description" },
+          { expectedRevision: registry.get("/x")!.revision },
         );
         yield* registry.commit(
           { ...registry.get("/x")!, state: { value: 2 } },

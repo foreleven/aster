@@ -1,4 +1,3 @@
-import { ContextDescriptions } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ConfigProvider, Effect, Layer } from "effect";
@@ -26,9 +25,7 @@ test("configured mail installs a runtime source without opening connections", as
         const registry = yield* makeContextRegistry();
         yield* Effect.gen(function* () {
           const modules = yield* RuntimeIntegrations;
-          yield* Effect.void.pipe(
-            Effect.provide(MailIntegration.layer.pipe(Layer.provide(ContextDescriptions.layer))),
-          );
+          yield* Effect.void.pipe(Effect.provide(MailIntegration.layer));
           assert.deepEqual(
             modules.installed().map((module) => module.name),
             ["mail"],
@@ -77,9 +74,7 @@ const install = Effect.fnUntraced(function* (
 ) {
   return yield* Effect.gen(function* () {
     const modules = yield* RuntimeIntegrations;
-    yield* Effect.void.pipe(
-      Effect.provide(MailIntegration.installation.pipe(Layer.provide(ContextDescriptions.layer))),
-    );
+    yield* Effect.void.pipe(Effect.provide(MailIntegration.installation));
     const module = modules.installed()[0]!;
     const logs: unknown[] = [];
     const system = yield* ActorSystem.make().pipe(
@@ -167,6 +162,7 @@ test("mail publishes its tree before retrieval and acknowledges persistence befo
           yield* Queue.take(completed);
           const saved = registry.get(mailMessagePath(email))!;
           assert.equal(saved.revision, 1);
+          assert.equal(saved.description, `An email in mailbox ${email.mailbox}`);
           assert.deepEqual(saved.state, email);
           assert.equal(registry.views.project(saved).projection?.visibility, "public");
           yield* clock.adjust(1_000);
@@ -313,9 +309,7 @@ test("missing generic mail config installs no source and requires no credentials
         const registry = yield* makeContextRegistry();
         yield* Effect.gen(function* () {
           const modules = yield* RuntimeIntegrations;
-          yield* Effect.void.pipe(
-            Effect.provide(MailIntegration.layer.pipe(Layer.provide(ContextDescriptions.layer))),
-          );
+          yield* Effect.void.pipe(Effect.provide(MailIntegration.layer));
           assert.deepEqual(modules.installed(), []);
         }).pipe(
           Effect.provide(RuntimeIntegrations.layer),

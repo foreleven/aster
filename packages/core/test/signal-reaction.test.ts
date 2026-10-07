@@ -50,7 +50,7 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
             causationId: "source",
             source: "/system-one",
             target: "/signals/review",
-            expectedRevision: registry.get("/signals/review")!.revision!,
+            version: 1,
             sourceContext: {
               path: "/source",
               revision: 1,
@@ -61,6 +61,14 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
           };
           const send = (value: SignalReactionInput) =>
             root.ask<SignalCommandReply>((replyTo) => ({ _tag: "React", input: value, replyTo }));
+          // Metadata revisions do not change the screened rule version.
+          if (!restart) {
+            const current = registry.get(input.target)!;
+            yield* registry.commit(
+              { ...current, description: "Updated metadata" },
+              { expectedRevision: current.revision },
+            );
+          }
           const reply = yield* send(input);
           assert.equal(reply._tag, "Accepted");
           const state = yield* readSignalHistory(messages, input.target);
@@ -79,7 +87,7 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
             (yield* send({
               ...input,
               requestId: "stale",
-              expectedRevision: input.expectedRevision - 1,
+              version: input.version - 1,
             }))._tag,
             "Rejected",
           );
@@ -119,7 +127,7 @@ test("scheduled Signals reject Context reactions", async () => {
             causationId: "source",
             source: "/system-one",
             target: "/signals/review",
-            expectedRevision: registry.get("/signals/review")!.revision!,
+            version: 1,
             sourceContext: {
               revision: 0,
               path: "/source",

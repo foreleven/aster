@@ -11,7 +11,6 @@ export const GoalIntentInput = Schema.Struct({
   causationId: Schema.NonEmptyString,
   source: Schema.Literal("/system-one"),
   target: Schema.String.check(Schema.isPattern(/^\/goals\/[a-z0-9][a-z0-9-]*$/)),
-  expectedRevision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   intent: GoalIntent,
 });
 export type GoalIntentInput = typeof GoalIntentInput.Type;

@@ -29,6 +29,14 @@ export const RecoveryReceipt = Schema.Struct({
 );
 export type RecoveryReceipt = typeof RecoveryReceipt.Type;
 
+/** Per-target routing decisions; independent of work and delivery lifecycle. */
+export const ReactionMatch = Schema.Union([
+  Schema.TaggedStruct("Matched", { target: Schema.String, reason: Schema.String }),
+  Schema.TaggedStruct("NotMatched", { target: Schema.String, reason: Schema.String }),
+  Schema.TaggedStruct("Failed", { target: Schema.String, error: Schema.String }),
+]);
+export type ReactionMatch = typeof ReactionMatch.Type;
+
 export const ProcessingOwner = Schema.Literal("system-one");
 export type ProcessingOwner = typeof ProcessingOwner.Type;
 export const ProcessingSnapshot = Schema.Struct({
@@ -42,8 +50,9 @@ export const ProcessingSnapshot = Schema.Struct({
       source: Schema.String,
       target: Schema.String,
       status: Schema.String,
-      attempts: Schema.Int,
+      attempts: Schema.optional(Schema.Int),
       error: Schema.optional(Schema.String),
+      matches: Schema.optional(Schema.Array(ReactionMatch)),
     }),
   ),
 });

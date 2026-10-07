@@ -1,15 +1,12 @@
 import {
   ApplicationError,
   CommandReceipt,
-  PublicContext,
   RecoveryReceipt,
+  type ReactionMatch,
 } from "@aster/api-contracts";
-import { Schema } from "effect";
-import { ContextEvent } from "../context/model.js";
-import { contextEventId } from "../context/model.js";
-import { GoalTitle } from "../config/schema.js";
+import { Match, Schema } from "effect";
+import { ContextEvent, contextEventId } from "../context/model.js";
 import { GoalIntentInput } from "../goals/screening/intent.js";
-import { GoalScreeningRecord } from "../goals/screening/decision.js";
 import { SignalReactionInput } from "../signals/protocol.js";
 
 const Attempts = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
@@ -27,72 +24,91 @@ export const ReactionDelivery = Schema.Union([
   Schema.Struct({ ...delivery, status: Schema.Literal("delivered"), receipt: CommandReceipt }),
 ]);
 export type ReactionDelivery = typeof ReactionDelivery.Type;
-export const ReactionPlan = Schema.Struct({
-  screenings: Schema.Array(GoalScreeningRecord),
-  commands: Schema.Array(ReactionDeliveryInput),
-  failures: Schema.Array(Schema.Struct({ target: Schema.String, error: Schema.String })),
+
+/** Only the evidence required to repeat the same target decision. */
+export const ReactionCandidate = Schema.Union([
+  Schema.TaggedStruct("Signal", {
+    slug: Schema.String,
+    when: Schema.String,
+    version: Schema.Int.check(Schema.isGreaterThan(0)),
+  }),
+  Schema.TaggedStruct("Goal", {
+    slug: Schema.String,
+    title: Schema.String,
+    description: Schema.String,
+    summary: Schema.String,
+  }),
+]);
+export type ReactionCandidate = typeof ReactionCandidate.Type;
+export const targetPath = (input: ReactionCandidate): string =>
+  `/${input._tag === "Goal" ? "goals" : "signals"}/${input.slug}`;
+
+export const ReactionDecision = Schema.Union([
+  Schema.TaggedStruct("Failed", { error: Schema.String }),
+  Schema.TaggedStruct("NotMatched", { reason: Schema.String }),
+  Schema.TaggedStruct("Matched", { reason: Schema.String, delivery: ReactionDelivery }),
+]);
+export type ReactionDecision = typeof ReactionDecision.Type;
+export const ReactionTarget = Schema.Struct({
+  input: ReactionCandidate,
+  result: Schema.Union([Schema.TaggedStruct("Pending", {}), ReactionDecision]),
 });
+export type ReactionTarget = typeof ReactionTarget.Type;
+export const ReactionPlan = Schema.Array(
+  Schema.Struct({ target: Schema.String, result: ReactionDecision }),
+);
 export type ReactionPlan = typeof ReactionPlan.Type;
-const ScreeningInput = Schema.Struct({
-  evidence: Schema.Record(Schema.String, PublicContext),
-  goals: Schema.Array(
-    Schema.Struct({
-      slug: Schema.String,
-      title: Schema.optional(GoalTitle),
-      description: Schema.String,
-      completionCriteria: Schema.optional(Schema.String),
-    }),
-  ),
-  screeningAt: Schema.String,
-  targets: Schema.optional(Schema.Array(Schema.String)),
+
+export const FrozenReaction = Schema.Struct({
+  status: Schema.Literal("frozen"),
+  event: ContextEvent,
+  targets: Schema.Array(ReactionTarget),
 });
-const work = { event: ContextEvent, attempts: Attempts };
-export const ReactionPlanning = Schema.Struct({
-  ...work,
-  status: Schema.Literal("planning"),
-  input: ScreeningInput,
-  retained: Schema.optional(
-    Schema.Struct({
-      screenings: Schema.Array(GoalScreeningRecord),
-      deliveries: Schema.Array(ReactionDelivery),
-    }),
-  ),
-});
-export type ReactionPlanning = typeof ReactionPlanning.Type;
+export type FrozenReaction = typeof FrozenReaction.Type;
 export const ReactionWork = Schema.Union([
-  Schema.Struct({ ...work, status: Schema.Literal("pending") }),
-  ReactionPlanning,
-  Schema.Struct({
-    ...work,
-    status: Schema.Literal("failed"),
-    input: ScreeningInput,
-    error: Schema.String,
-    failedTargets: Schema.Array(Schema.String),
-    screenings: Schema.Array(GoalScreeningRecord),
-    deliveries: Schema.Array(ReactionDelivery),
-  }),
-  Schema.Struct({
-    ...work,
-    status: Schema.Literal("ready"),
-    screenings: Schema.Array(GoalScreeningRecord),
-    deliveries: Schema.Array(ReactionDelivery).check(Schema.isMinLength(1)),
-  }),
-  Schema.Struct({
-    ...work,
-    status: Schema.Literal("completed"),
-    screenings: Schema.Array(GoalScreeningRecord),
-    deliveries: Schema.Array(ReactionDelivery),
-  }),
+  Schema.Struct({ status: Schema.Literal("queued"), event: ContextEvent }),
+  FrozenReaction,
 ]);
 export type ReactionWork = typeof ReactionWork.Type;
 export const deliveriesOf = (work: ReactionWork): readonly ReactionDelivery[] =>
-  "deliveries" in work ? work.deliveries : [];
-const CurrentState = Schema.Struct({
+  work.status === "queued"
+    ? []
+    : work.targets.flatMap(({ result }) => (result._tag === "Matched" ? [result.delivery] : []));
+export const matchesOf = (work: ReactionWork): readonly ReactionMatch[] =>
+  work.status === "queued"
+    ? []
+    : work.targets.flatMap(({ input, result }): ReactionMatch[] =>
+        Match.value(result).pipe(
+          Match.tag("Pending", () => []),
+          Match.tag("Failed", ({ error }) => [
+            { _tag: "Failed" as const, target: targetPath(input), error },
+          ]),
+          Match.tag("NotMatched", ({ reason }) => [
+            { _tag: "NotMatched" as const, target: targetPath(input), reason },
+          ]),
+          Match.tag("Matched", ({ reason }) => [
+            { _tag: "Matched" as const, target: targetPath(input), reason },
+          ]),
+          Match.exhaustive,
+        ),
+      );
+/** The lifecycle shown in diagnostics is derived, never persisted alongside target state. */
+export const workStatus = (work: ReactionWork) => {
+  if (work.status === "queued") return "pending";
+  if (work.targets.some(({ result }) => result._tag === "Pending")) return "planning";
+  if (work.targets.some(({ result }) => result._tag === "Failed")) return "failed";
+  if (deliveriesOf(work).some((item) => item.status !== "delivered" && item.status !== "rejected"))
+    return "ready";
+  return "completed";
+};
+
+export const ReactionSnapshot = Schema.Struct({
   work: Schema.Array(ReactionWork),
-  recoveryReceipts: Schema.optional(Schema.Array(RecoveryReceipt)),
+  sourceRevisions: Schema.Record(Schema.String, Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))),
+  recoveryReceipts: Schema.Array(RecoveryReceipt),
 }).check(
   Schema.makeFilter(
-    ({ work, recoveryReceipts = [] }) => {
+    ({ work, sourceRevisions, recoveryReceipts }) => {
       if (
         new Set(recoveryReceipts.map((entry) => entry.input.requestId)).size !==
           recoveryReceipts.length ||
@@ -106,38 +122,38 @@ const CurrentState = Schema.Struct({
         if (
           !Number.isFinite(Date.parse(event.createdAt)) ||
           sources.has(event.id) ||
+          (sourceRevisions[event.record.path] ?? 0) < event.record.revision ||
           event.id !== contextEventId(event.record.path, event.record.revision)
         )
           return false;
         sources.add(event.id);
-        if (
-          "input" in item &&
-          (!Number.isFinite(Date.parse(item.input.screeningAt)) ||
-            event.record.path in item.input.evidence)
-        )
-          return false;
-        for (const delivery of deliveriesOf(item)) {
-          const input = delivery.command.input;
-          if (deliveries.has(input.requestId) || input.causationId !== event.id) return false;
+        if (item.status === "queued") continue;
+        const targets = new Set<string>();
+        for (const { input: candidate, result } of item.targets) {
+          const target = targetPath(candidate);
+          if (targets.has(target)) return false;
+          targets.add(target);
+          if (result._tag !== "Matched") continue;
+          const delivery = result.delivery;
+          const { input } = delivery.command;
+          if (
+            delivery.command._tag !== candidate._tag ||
+            input.target !== target ||
+            deliveries.has(input.requestId) ||
+            input.causationId !== event.id
+          )
+            return false;
           deliveries.add(input.requestId);
           if (delivery.status === "delivered" && delivery.receipt.requestId !== input.requestId)
-            return false;
-          if (
-            item.status === "completed" &&
-            delivery.status !== "delivered" &&
-            delivery.status !== "rejected"
-          )
             return false;
         }
       }
       return true;
     },
-    { expected: "Unique source evidence, frozen screening input and matching terminal receipts" },
+    { expected: "Unique source events, target decisions and matching delivery receipts" },
   ),
 );
-
-export const ReactionSnapshot = CurrentState;
-export type ReactionSnapshot = typeof CurrentState.Type;
+export type ReactionSnapshot = typeof ReactionSnapshot.Type;
 export const ReactionReply = Schema.Union([
   Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
   Schema.TaggedStruct("Rejected", { error: ApplicationError }),

@@ -1,9 +1,10 @@
+import type { FrozenReaction } from "../src/reactions/state.js";
 import { CurrentActors } from "../src/tools/actors.js";
 import { SystemOneActor } from "../src/reactions/actor.js";
 import { DurableContext } from "../src/context/store.js";
 import { reasoningConfig, emptyRecall, modelReplyLayer, agentResult } from "./workflow-fixtures.js";
 import {
-  makeSystemOneGate,
+  matchSignal,
   sourceSignals,
   ReactionPolicy,
   makeReactionPolicy,
@@ -11,7 +12,7 @@ import {
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit, type ActorRef } from "@aster/actor";
-import { Effect, Layer, Schema } from "effect";
+import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import {
   ContextRegistry,
   GoalSettings,
@@ -218,46 +219,162 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
   );
 });
 
-test("System One receives email fields and every Signal condition, then selects typed yes answers", async () => {
-  const email = { subject: "Please review the draft", bodyPlainText: "Review today?" };
-  let request: unknown;
-  const client = {
-    systemOne: (value: unknown) =>
+test("Signal matching sends one condition and preserves the source fields", async () => {
+  const client: SystemOneClient = {
+    systemOne: (request) =>
       Effect.sync(() => {
-        request = value;
-        return {
-          answers: {
-            signal_0: { type: "choice", choice: "yes" },
-            signal_1: { type: "choice", choice: "no" },
-          },
-        };
+        assert.deepEqual(Object.keys(request.questions), ["matches"]);
+        assert.match(request.questions.matches!.instructions, /Review request/);
+        assert.equal(JSON.parse(String(request.state)).context.state.subject, "Draft");
+        return { answers: { matches: { type: "choice", choice: "yes" } } };
       }),
-  } as unknown as SystemOneClient;
-  const signals = ["review", "invoice"].map((slug) => ({
-    slug,
-    trigger: { _tag: "Context" as const, when: slug === "review" ? "Review request" : "Invoice" },
-    task: { _tag: "Goal" as const, target: "/goals/personal", text: "Review" },
-  }));
-  const selected = await Effect.runPromise(
-    makeSystemOneGate(client)(
-      {
-        path: "/lark/mail/me/new-id",
-        description: "email",
-        state: email,
+  };
+  assert.deepEqual(
+    await Effect.runPromise(
+      matchSignal(
+        client,
+        {
+          path: "/email",
+          description: "Email",
+          state: { subject: "Draft" },
+          messages: [],
+        },
+        { _tag: "Signal", slug: "review", when: "Review request", version: 1 },
+      ),
+    ),
+    { _tag: "Matched", reason: "Signal condition satisfied: Review request" },
+  );
+});
+
+test("Signals and Goals share a bounded pool of single-target requests", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const release = yield* Deferred.make<void>();
+        const full = yield* Deferred.make<void>();
+        let active = 0,
+          peak = 0,
+          calls = 0;
+        const policy = yield* makeReactionPolicy({
+          client: {
+            systemOne: (request) =>
+              Effect.gen(function* () {
+                assert.equal(Object.keys(request.questions).length, 1);
+                active++;
+                calls++;
+                peak = Math.max(peak, active);
+                if (calls === 2) yield* Deferred.succeed(full, undefined);
+                yield* Deferred.await(release);
+                const answers: Effect.Success<ReturnType<SystemOneClient["systemOne"]>>["answers"] =
+                  request.questions.matches
+                    ? { matches: { type: "choice", choice: "yes" } }
+                    : { relevance: { type: "score", score: 9 } };
+                return { answers };
+              }).pipe(
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    active--;
+                  }),
+                ),
+              ),
+          },
+        });
+        const work: FrozenReaction = {
+          event: {
+            id: "source",
+            createdAt: "2026-10-07T00:00:00Z",
+            record: {
+              path: "/source",
+              revision: 1,
+              description: "Source",
+              state: { summary: "Release evidence" },
+              messages: [],
+            },
+          },
+          status: "frozen",
+          targets: [
+            {
+              input: { _tag: "Signal", slug: "review", when: "Release changed", version: 2 },
+              result: { _tag: "Pending" },
+            },
+            ...["one", "two", "three", "four"].map((slug) => ({
+              input: {
+                _tag: "Goal" as const,
+                slug,
+                description: "Release",
+                title: slug,
+                summary: "",
+              },
+              result: { _tag: "Pending" as const },
+            })),
+          ],
+        };
+        const fiber = yield* policy.plan(work, 2).pipe(Effect.forkScoped);
+        yield* Deferred.await(full);
+        assert.equal(calls, 2, "A Signal and Goal can be in flight together");
+        yield* Deferred.succeed(release, undefined);
+        const plan = yield* Fiber.join(fiber);
+        assert.equal(calls, 5);
+        assert.equal(peak, 2);
+        assert.equal(plan.length, 5);
+        assert.ok(plan.every((outcome) => outcome.result._tag === "Matched"));
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("malformed answers retain failed targets while valid no answers complete without delivery", async () => {
+  const work: FrozenReaction = {
+    event: {
+      id: "source",
+      createdAt: "2026-10-07T00:00:00Z",
+      record: {
+        path: "/source",
+        revision: 1,
+        description: "Source",
+        state: { summary: "Release evidence" },
         messages: [],
       },
-      signals,
-    ),
+    },
+    status: "frozen",
+    targets: [
+      ...["bad", "no"].map((slug) => ({
+        input: { _tag: "Signal" as const, slug, when: slug, version: 1 },
+        result: { _tag: "Pending" as const },
+      })),
+      {
+        input: { _tag: "Goal", slug: "bad", description: "Release", title: "Bad", summary: "" },
+        result: { _tag: "Pending" },
+      },
+    ],
+  };
+  const policy = await Effect.runPromise(
+    makeReactionPolicy({
+      client: {
+        systemOne: (request) => {
+          const answers: Effect.Success<ReturnType<SystemOneClient["systemOne"]>>["answers"] =
+            request.questions.matches?.instructions.includes("? no")
+              ? { matches: { type: "choice", choice: "no" } }
+              : {};
+          return Effect.succeed({ answers });
+        },
+      },
+    }),
+  );
+  const plan = await Effect.runPromise(policy.plan(work, 2));
+  assert.ok(plan.every((outcome) => outcome.result._tag !== "Matched"));
+  assert.deepEqual(
+    plan
+      .filter((item) => item.result._tag === "Failed")
+      .map((item) => item.target)
+      .sort(),
+    ["/goals/bad", "/signals/bad"],
   );
   assert.deepEqual(
-    selected.map((item) => item.slug),
-    ["review"],
+    plan.find((item) => item.target === "/signals/no"),
+    {
+      target: "/signals/no",
+      result: { _tag: "NotMatched", reason: "Signal condition not satisfied: no" },
+    },
   );
-  const payload = request as {
-    state: string;
-    questions: Record<string, { instructions: string }>;
-  };
-  assert.equal(JSON.parse(payload.state).context.state.subject, email.subject);
-  assert.equal(JSON.parse(payload.state).context.state.bodyPlainText, email.bodyPlainText);
-  assert.match(payload.questions.signal_1!.instructions, /Invoice/);
 });

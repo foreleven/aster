@@ -2,13 +2,43 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Exit, Logger } from "effect";
 import {
-  relevantGoals,
+  matchGoal,
+  goalTitleText,
+  goalSummaryText,
+  type GoalDefinition,
+  type GoalScreeningStore,
   DecisionError,
   GoalScreeningStoreError,
   type GoalScreeningRecord,
   type SystemOneClient,
   type ContextInput,
 } from "../src/index.js";
+
+const relevantGoals = (
+  client: SystemOneClient,
+  source: ContextInput,
+  goals: readonly GoalDefinition[],
+  options: {
+    goalRecords?: Record<string, import("@aster/api-contracts").PublicContext>;
+    screening?: GoalScreeningStore["Service"];
+  } = {},
+) =>
+  Effect.forEach(goals, (goal) =>
+    matchGoal(
+      client,
+      source,
+      {
+        definition: goal,
+        title: goalTitleText(goal, options.goalRecords?.[`/goals/${goal.slug}`]),
+        summary: goalSummaryText(options.goalRecords?.[`/goals/${goal.slug}`]),
+      },
+      options.screening,
+    ),
+  ).pipe(
+    Effect.map((matches) =>
+      matches.flatMap((match) => (match._tag === "Matched" ? [match.relevance] : [])),
+    ),
+  );
 
 const source: ContextInput = {
   path: "/lark/im/chats/project",
@@ -134,9 +164,9 @@ test("invalid Goal screening scores fail closed", async () => {
   const result = await Effect.runPromise(
     relevantGoals(client, source, [{ slug: "release", description: "Release risks" }], {
       screening: { append: (record) => Effect.sync(() => records.push(record)) },
-    }),
+    }).pipe(Effect.result),
   );
-  assert.deepEqual(result, []);
+  assert.equal(result._tag, "Failure");
   assert.equal(records[0]?.admitted, false);
   assert.equal(records[0]?.error, "invalid-score");
 });
@@ -177,9 +207,9 @@ test("scores outside the ten-level rubric and non-score answers fail closed", as
         source,
         [{ slug: "release", description: "Release risks" }],
         { screening: { append: (record) => Effect.sync(() => records.push(record)) } },
-      ),
+      ).pipe(Effect.result),
     );
-    assert.deepEqual(result, []);
+    assert.equal(result._tag, "Failure");
     assert.equal(records[0]?.error, "invalid-score");
   }
 });
@@ -230,4 +260,21 @@ test("screening does not turn defects or interruption into audit decisions", asy
     assert.ok(Exit.hasDies(result) || Exit.hasInterrupts(result));
     assert.deepEqual(records, []);
   }
+});
+
+test("empty Goal evidence is explicitly NotMatched without a model request", async () => {
+  const result = await Effect.runPromise(
+    matchGoal(
+      {
+        systemOne: () => Effect.die(new Error("Empty evidence must not call the model")),
+      },
+      { ...source, state: { summary: "  " } },
+      {
+        definition: { slug: "launch", description: "Launch" },
+        title: "Launch",
+        summary: "",
+      },
+    ),
+  );
+  assert.deepEqual(result, { _tag: "NotMatched", reason: "Context has no summary evidence." });
 });

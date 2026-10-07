@@ -173,9 +173,8 @@ const makeState = Effect.fn("SignalState.make")(function* (
     const state = yield* current;
     if (input.target !== path || !(yield* enabled) || state.trigger._tag !== "Context")
       return yield* conflict("Signal does not accept this reaction");
-    if (input.expectedRevision !== registry.get(path)!.revision)
-      return yield* conflict("Signal changed after screening");
-    const receipt = { requestId: input.requestId, revision: input.expectedRevision };
+    if (input.version !== state.version) return yield* conflict("Signal changed after screening");
+    const receipt = { requestId: input.requestId, revision: registry.get(path)!.revision };
     yield* store.append({
       _tag: "Triggered",
       message: {

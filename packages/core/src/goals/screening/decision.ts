@@ -1,7 +1,7 @@
-import { score, type DecisionError, type SystemOneClient } from "../../decisions/system-one.js";
+import { score, DecisionError, type SystemOneClient } from "../../decisions/system-one.js";
 import type { GoalDefinition } from "../../config/schema.js";
 import type { PublicContext as ContextRecord } from "@aster/api-contracts";
-import { Context, Effect, Match, Schema } from "effect";
+import { Clock, Context, Effect, Match, Schema } from "effect";
 import { createHash } from "node:crypto";
 
 export const GoalScreeningSnapshot = Schema.Struct({
@@ -116,11 +116,12 @@ export const normalizeScore = (value: unknown): number | undefined => {
   return value / maximumRelevanceScore;
 };
 
-export const screeningDecision = Effect.fn("Goal.screeningDecision")(function* (options: {
+const screeningDecision = Effect.fn("Goal.screeningDecision")(function* (options: {
   readonly client: SystemOneClient;
   readonly goal: GoalDefinition;
   readonly source: ContextRecord;
-  readonly goalRecord?: ContextRecord;
+  readonly title: string;
+  readonly summary: string;
   readonly screeningRecordId: string;
   readonly requestId: string;
   readonly summaryRevision: string;
@@ -133,9 +134,9 @@ export const screeningDecision = Effect.fn("Goal.screeningDecision")(function* (
 }): Effect.fn.Return<GoalScreeningRecord, DecisionError | GoalScreeningStoreError> {
   const input: GoalScreeningSnapshot = {
     contextSummary: contextSummaryText(options.source),
-    goalTitle: goalTitleText(options.goal, options.goalRecord),
+    goalTitle: options.title,
     goalDescription: options.goal.description,
-    goalSummary: goalSummaryText(options.goalRecord),
+    goalSummary: options.summary,
   };
   const started = options.now();
   const result = yield* options.client
@@ -204,6 +205,8 @@ export const screeningDecision = Effect.fn("Goal.screeningDecision")(function* (
   // Audit expected transport failures without turning them into a successful
   // rejection. The owning Actor must retain failed work for explicit recovery.
   if (result._tag === "Failure") return yield* result.failure;
+  if (record.error === "invalid-score")
+    return yield* new DecisionError({ message: "System One returned no valid relevance score" });
   return record;
 });
 
@@ -213,69 +216,61 @@ export type GoalRelevance = GoalDefinition & {
   readonly screening: GoalScreeningRecord;
 };
 
-export const relevantGoals = (
+/** One target per decision. The caller owns concurrency and partial-failure collection. */
+export const matchGoal = Effect.fn("Goal.match")(function* (
   client: SystemOneClient,
-  record: ContextRecord,
-  goals: readonly GoalDefinition[],
-  options: {
-    readonly goalRecords?: Readonly<Record<string, ContextRecord>>;
-    readonly screening?: GoalScreeningStore["Service"];
-    readonly threshold?: number;
-    readonly policyVersion?: string;
-    readonly model?: string;
-    readonly now?: () => number;
-  } = {},
-) =>
-  Effect.gen(function* () {
-    const summary = contextSummaryText(record);
-    if (!goals.length || !summary.trim()) return [];
-    const summaryFingerprint = createHash("sha256")
-      .update(JSON.stringify({ path: record.path, summary }))
-      .digest("hex");
-    const summaryRevision = summaryFingerprint;
-    const threshold = options.threshold ?? 0.7;
-    const policyVersion = options.policyVersion ?? "goal-relevance-v3";
-    const model = options.model ?? "system-one";
-    const now = options.now ?? Date.now;
-    const relevant: GoalRelevance[] = [];
-    for (const goal of goals) {
-      const requestId = createHash("sha256")
-        .update(`${record.path}:${goal.slug}:${summaryRevision}`)
-        .digest("hex");
-      const screening = yield* screeningDecision({
-        client,
-        goal,
-        source: record,
-        goalRecord: options.goalRecords?.[`/goals/${goal.slug}`],
-        screeningRecordId: requestId,
-        requestId,
-        summaryRevision,
-        summaryFingerprint,
-        threshold,
-        policyVersion,
-        model,
-        now,
-        store: options.screening,
-      });
-      yield* Effect.logInfo(
-        JSON.stringify({
-          event: "goal.screening.completed",
-          screeningRecordId: screening.screeningRecordId,
-          sourcePath: screening.sourcePath,
-          goalSlug: screening.goalSlug,
-          score: screening.score,
-          admitted: screening.admitted,
-          latencyMs: screening.latencyMs,
-          error: screening.error,
-        }),
-      );
-      if (screening.admitted)
-        relevant.push({
-          ...goal,
-          score: screening.score,
-          rationale: screening.rationale,
-          screening,
-        });
-    }
-    return relevant;
+  source: ContextRecord,
+  candidate: {
+    readonly definition: GoalDefinition;
+    readonly title: string;
+    readonly summary: string;
+  },
+  store?: GoalScreeningStore["Service"],
+) {
+  const summary = contextSummaryText(source);
+  if (!summary.trim())
+    return { _tag: "NotMatched" as const, reason: "Context has no summary evidence." };
+  const goal = candidate.definition;
+  const fingerprint = createHash("sha256")
+    .update(JSON.stringify({ path: source.path, summary }))
+    .digest("hex");
+  const requestId = createHash("sha256")
+    .update(`${source.path}:${goal.slug}:${fingerprint}`)
+    .digest("hex");
+  const clock = yield* Clock.Clock;
+  const screening = yield* screeningDecision({
+    client,
+    goal,
+    source,
+    title: candidate.title,
+    summary: candidate.summary,
+    screeningRecordId: requestId,
+    requestId,
+    summaryRevision: fingerprint,
+    summaryFingerprint: fingerprint,
+    threshold: 0.7,
+    policyVersion: "goal-relevance-v3",
+    model: "system-one",
+    now: () => clock.currentTimeMillisUnsafe(),
+    store,
   });
+  yield* Effect.logInfo({
+    event: "goal.screening.completed",
+    screeningRecordId: requestId,
+    sourcePath: source.path,
+    goalSlug: goal.slug,
+    score: screening.score,
+    admitted: screening.admitted,
+    latencyMs: screening.latencyMs,
+  });
+  if (!screening.admitted)
+    return {
+      _tag: "NotMatched" as const,
+      reason: `${screening.rationale} Relevance ${screening.score.toFixed(3)} is below threshold ${screening.threshold}.`,
+    };
+  return {
+    _tag: "Matched" as const,
+    reason: screening.rationale,
+    relevance: { ...goal, score: screening.score, rationale: screening.rationale, screening },
+  };
+});

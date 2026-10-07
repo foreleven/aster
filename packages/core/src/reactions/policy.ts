@@ -1,21 +1,25 @@
 import { CurrentActors } from "../tools/actors.js";
 import { createHash } from "node:crypto";
+import type { ContextReader } from "../context/registry.js";
 import type { ActorRef } from "@aster/actor";
 import { type PublicContext } from "@aster/api-contracts";
 import { Clock, Context, Effect, Match, Schema } from "effect";
 import { choice, type SystemOneClient } from "../decisions/system-one.js";
 import { SignalSnapshot, signalEnabled } from "../signals/state/snapshot.js";
-import type { SignalDefinition } from "../config/schema.js";
-import { relevantGoals } from "../goals/screening/decision.js";
-import type { GoalScreeningStore, GoalScreeningRecord } from "../goals/screening/decision.js";
+import type { GoalDefinition } from "../config/schema.js";
+import { matchGoal, goalTitleText, goalSummaryText } from "../goals/screening/decision.js";
+import type { GoalScreeningStore } from "../goals/screening/decision.js";
 import { makeGoalIntent } from "../goals/screening/intent.js";
 import type { GoalsRootCommand } from "../goals/root.js";
 import type { SignalRootCommand } from "../signals/protocol.js";
-import type {
-  ReactionDeliveryInput,
-  ReactionPlan,
-  ReactionReply,
-  ReactionPlanning,
+import {
+  targetPath,
+  type ReactionDeliveryInput,
+  type ReactionPlan,
+  type ReactionDecision,
+  type ReactionReply,
+  type FrozenReaction,
+  type ReactionCandidate,
 } from "./state.js";
 
 export const sourceSignals = (snapshot: Readonly<Record<string, PublicContext>>) =>
@@ -29,40 +33,79 @@ export const sourceSignals = (snapshot: Readonly<Record<string, PublicContext>>)
       return state.trigger._tag === "Context" && signalEnabled(state, (path) => snapshot[path])
         ? [
             {
+              _tag: "Signal" as const,
               slug: record.path.slice("/signals/".length),
-              trigger: state.trigger,
-              task: state.task,
+              when: state.trigger.when,
+              version: state.version,
             },
           ]
         : [];
     });
 
-/** One decision-model pass matches every active Context Signal. Timers never enter this path. */
-export const makeSystemOneGate =
-  (client: SystemOneClient) => (record: PublicContext, signals: readonly SignalDefinition[]) =>
-    Effect.gen(function* () {
-      if (!signals.length) return [];
-      const questions = Object.fromEntries(
-        signals.map((signal, index) => [
-          `signal_${index}`,
-          choice(
-            `Does this Context satisfy the Signal condition? ${signal.trigger._tag === "Context" ? signal.trigger.when : "Not a Context Signal"}`,
-            {
-              yes: "Evidence satisfies the condition; execute its Task.",
-              no: "The condition is not satisfied.",
-            },
-          ),
-        ]),
-      );
-      const response = yield* client.systemOne({
-        state: JSON.stringify({ context: record }),
-        questions,
-      });
-      return signals.filter((_, index) => {
-        const answer = response.answers[`signal_${index}`];
-        return answer?.type === "choice" && answer.choice === "yes";
-      });
-    });
+/** Freeze only candidate rules and Goal context, never the entire Context tree. */
+export const reactionTargets = (
+  reader: ContextReader,
+  goals: readonly GoalDefinition[],
+): readonly ReactionCandidate[] => {
+  const records = Object.fromEntries(
+    reader
+      .directory()
+      .filter(({ path }) => /^\/(signals|goals)\/[^/]+$/.test(path))
+      .flatMap(({ path }) => {
+        const record = reader.get(path);
+        return record ? [[path, record]] : [];
+      }),
+  );
+  return [
+    ...sourceSignals(records),
+    ...goals.flatMap((definition): ReactionCandidate[] => {
+      const record = records[`/goals/${definition.slug}`];
+      if (
+        !record ||
+        record.projection?.visibility === "restricted" ||
+        !Schema.is(Schema.Struct({ status: Schema.Literal("active") }))(record.state)
+      )
+        return [];
+      return [
+        {
+          _tag: "Goal",
+          slug: definition.slug,
+          description: definition.description,
+          title: goalTitleText(definition, record),
+          summary: goalSummaryText(record),
+        },
+      ];
+    }),
+  ];
+};
+
+/** One request per Signal; a missing or malformed answer is a failure, not a negative match. */
+export const matchSignal = Effect.fn("Signal.match")(function* (
+  client: SystemOneClient,
+  record: PublicContext,
+  signal: Extract<ReactionCandidate, { _tag: "Signal" }>,
+) {
+  const response = yield* client.systemOne({
+    state: JSON.stringify({ context: record }),
+    questions: {
+      matches: choice(`Does this Context satisfy the Signal condition? ${signal.when}`, {
+        yes: "Evidence satisfies the condition; execute its Task.",
+        no: "The condition is not satisfied.",
+      }),
+    },
+  });
+  const answer = response.answers.matches;
+  if (answer?.type !== "choice" || (answer.choice !== "yes" && answer.choice !== "no"))
+    return yield* new ReactionFailure({ message: "System One returned no valid Signal decision" });
+  const legend = answer.legend?.[answer.choice];
+  const reason =
+    typeof legend === "string"
+      ? legend
+      : `Signal condition ${answer.choice === "yes" ? "satisfied" : "not satisfied"}: ${signal.when}`;
+  return answer.choice === "yes"
+    ? { _tag: "Matched" as const, reason }
+    : { _tag: "NotMatched" as const, reason };
+});
 
 export class ReactionFailure extends Schema.TaggedError<ReactionFailure>()("ReactionFailure", {
   message: Schema.String,
@@ -71,7 +114,10 @@ export class ReactionFailure extends Schema.TaggedError<ReactionFailure>()("Reac
 export class ReactionPolicy extends Context.Service<
   ReactionPolicy,
   {
-    readonly plan: (work: ReactionPlanning) => Effect.Effect<ReactionPlan, ReactionFailure>;
+    readonly plan: (
+      work: FrozenReaction,
+      concurrency: number,
+    ) => Effect.Effect<ReactionPlan, ReactionFailure>;
     readonly deliver: (
       command: ReactionDeliveryInput,
     ) => Effect.Effect<ReactionReply, ReactionFailure, CurrentActors>;
@@ -85,92 +131,94 @@ export const makeReactionPolicy = (options: {
 }): Effect.Effect<ReactionPolicy["Service"]> =>
   Effect.sync(() => {
     return ReactionPolicy.of({
-      plan: Effect.fn("SystemOne.plan")(function* (work) {
+      plan: Effect.fn("SystemOne.plan")(function* (work, concurrency) {
         const record = work.event.record;
-        const snapshot = { ...work.input.evidence, [record.path]: record };
-        const selected = (target: string) =>
-          !work.input.targets || work.input.targets.includes(target);
-        const failures: ReactionPlan["failures"][number][] = [];
-        const definitions = sourceSignals(snapshot).filter((signal) =>
-          selected(`/signals/${signal.slug}`),
-        );
-        const matched = yield* makeSystemOneGate(options.client)(record, definitions).pipe(
-          Effect.result,
-        );
-        const candidates = matched._tag === "Success" ? matched.success : [];
-        if (matched._tag === "Failure")
-          for (const signal of definitions)
-            failures.push({ target: `/signals/${signal.slug}`, error: matched.failure.message });
-        const commands: ReactionDeliveryInput[] = [];
-        const deliveryId = (kind: string, target: string) =>
+        const deliveryId = (target: string) =>
           createHash("sha256")
-            .update(JSON.stringify(["reaction-delivery-v1", work.event.id, kind, target]))
+            .update(JSON.stringify(["reaction-delivery-v1", work.event.id, target]))
             .digest("hex");
-        for (const signal of candidates) {
-          const target = `/signals/${signal.slug}`;
-          commands.push({
-            _tag: "Signal",
-            input: {
-              requestId: deliveryId("signal", target),
-              causationId: work.event.id,
-              source: "/system-one",
-              target,
-              expectedRevision: snapshot[target]?.revision ?? 0,
-              sourceContext: record,
-            },
-          });
-        }
-        const screenings: GoalScreeningRecord[] = [];
         const clock = yield* Clock.Clock;
-        const goals = work.input.goals.filter((goal) => {
-          const target = `/goals/${goal.slug}`;
-          const current = snapshot[target];
-          return (
-            selected(target) &&
-            current?.projection?.visibility !== "restricted" &&
-            (current?.state as { status?: string } | undefined)?.status === "active"
-          );
-        });
-        const matches = yield* Effect.forEach(
-          goals,
-          (goal) =>
-            relevantGoals(options.client, record, [goal], {
-              goalRecords: snapshot,
-              now: () => clock.currentTimeMillisUnsafe(),
-              screening: {
-                append: (item) =>
-                  Effect.gen(function* () {
-                    if (options.screening) yield* options.screening.append(item);
-                    screenings.push(item);
-                  }),
-              },
-            }).pipe(Effect.result),
-          { concurrency: 4 },
+        return yield* Effect.forEach(
+          work.targets.filter(({ result }) => result._tag === "Pending"),
+          ({ input }) =>
+            Effect.gen(function* () {
+              const target = targetPath(input);
+              const request = {
+                requestId: deliveryId(target),
+                causationId: work.event.id,
+                source: "/system-one" as const,
+                target,
+              };
+              const result = yield* Match.value(input).pipe(
+                Match.tag("Signal", (signal) =>
+                  matchSignal(options.client, record, signal).pipe(
+                    Effect.map((match): ReactionDecision =>
+                      match._tag === "NotMatched"
+                        ? match
+                        : {
+                            ...match,
+                            delivery: {
+                              status: "pending",
+                              attempts: 0,
+                              command: {
+                                _tag: "Signal",
+                                input: {
+                                  ...request,
+                                  version: signal.version,
+                                  sourceContext: record,
+                                },
+                              },
+                            },
+                          },
+                    ),
+                  ),
+                ),
+                Match.tag("Goal", (goal) =>
+                  matchGoal(
+                    options.client,
+                    record,
+                    {
+                      definition: { slug: goal.slug, description: goal.description },
+                      title: goal.title,
+                      summary: goal.summary,
+                    },
+                    options.screening,
+                  ).pipe(
+                    Effect.map((match): ReactionDecision =>
+                      match._tag === "NotMatched"
+                        ? match
+                        : {
+                            _tag: "Matched",
+                            reason: match.reason,
+                            delivery: {
+                              status: "pending",
+                              attempts: 0,
+                              command: {
+                                _tag: "Goal",
+                                input: {
+                                  ...request,
+                                  intent: makeGoalIntent(
+                                    record,
+                                    match.relevance,
+                                    new Date(clock.currentTimeMillisUnsafe()).toISOString(),
+                                  ),
+                                },
+                              },
+                            },
+                          },
+                    ),
+                  ),
+                ),
+                Match.exhaustive,
+                Effect.catchTag(
+                  ["DecisionError", "ReactionFailure", "GoalScreeningStoreError"],
+                  (error) => Effect.succeed({ _tag: "Failed" as const, error: error.message }),
+                ),
+              );
+              return { target, result };
+            }),
+          { concurrency },
         );
-        const relevant = matches.flatMap((result, index) => {
-          if (result._tag === "Success") return result.success;
-          failures.push({ target: `/goals/${goals[index]!.slug}`, error: result.failure.message });
-          return [];
-        });
-        for (const goal of relevant) {
-          const target = `/goals/${goal.slug}`;
-          commands.push({
-            _tag: "Goal",
-            input: {
-              requestId: deliveryId("goal", target),
-              causationId: work.event.id,
-              source: "/system-one",
-              target,
-              expectedRevision: snapshot[target]?.revision ?? 0,
-              intent: makeGoalIntent(
-                record,
-                goal,
-                new Date(yield* Clock.currentTimeMillis).toISOString(),
-              ),
-            },
-          });
-        }
-        return { commands, screenings, failures };
       }),
       deliver: Effect.fn("SystemOne.deliver")(function* (command) {
         const actors = yield* CurrentActors;

@@ -90,7 +90,7 @@ test("bootstrap, message-only and description-only changes never create reaction
       );
       assert.equal("events" in first, false);
       assert.equal(registry.backend.journal().length, 0);
-      yield* registry.initializeDescription(initial.path, "Source", 1);
+      yield* registry.commit({ ...first, description: "Source" }, { expectedRevision: 1 });
       const message = yield* registry.commit(
         { ...registry.get(initial.path)!, messages: ["evidence"] },
         { expectedRevision: 2 },

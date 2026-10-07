@@ -39,12 +39,6 @@ export class ContextRegistry extends Context.Service<
       ContextSnapshot,
       ContextConflict | ContextValidationError | ContextCommitError
     >;
-    /** Initialize a dynamic description once, without replacing newer content. */
-    readonly initializeDescription: (
-      path: string,
-      description: string,
-      expectedRevision: number,
-    ) => Effect.Effect<void, ContextConflict | ContextValidationError | ContextCommitError>;
     readonly get: (path: string) => ContextSnapshot | undefined;
     readonly snapshot: () => Readonly<Record<string, ContextSnapshot>>;
     readonly changes: Stream.Stream<ContextChange>;
@@ -140,14 +134,6 @@ export const makeContextRegistryWithBackend = (
         definitions.set(path, definition);
       }),
     commit,
-    initializeDescription: (path, description, expectedRevision) =>
-      Effect.gen(function* () {
-        if (!description.trim())
-          return yield* Effect.die(new Error("Context description must be nonempty"));
-        const current = backend.get(path);
-        if (current && !current.description)
-          yield* commit({ ...current, description }, { expectedRevision });
-      }),
     get: backend.get,
     snapshot: backend.snapshot,
     changes: backend.changes,

@@ -30,5 +30,3 @@ export const makeContextRegistry = (store?: ContextStore) =>
 export type TestContextRegistry = Effect.Success<ReturnType<typeof makeContextRegistry>>;
 
 export { taskCapture } from "../tasks/view.js";
-
-export { initializeContextDescription } from "../reasoning/context-description.js";

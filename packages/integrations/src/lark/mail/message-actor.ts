@@ -37,7 +37,7 @@ export class LarkMailMessageActor extends ContextActor.Service<LarkMailMessageAc
                 .commit(
                   {
                     path,
-                    description: previous?.description ?? "",
+                    description: `An email in Lark mailbox ${email.mailbox}`,
                     state: email,
                     messages: [],
                   },
