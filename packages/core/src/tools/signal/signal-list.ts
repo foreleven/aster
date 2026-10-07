@@ -1,6 +1,6 @@
 import { askQuery } from "../actors.js";
 import { Type } from "@aster/agent";
-import type { SignalRootCommand } from "../../signals/actors.js";
+import type { SignalRootCommand } from "../../signals/protocol.js";
 import { queryTool } from "../define.js";
 
 export const signalList = (goal: string) =>
@@ -9,13 +9,13 @@ export const signalList = (goal: string) =>
       name: "signal_list",
       replay: "safe",
       label: "Read Signals",
-      description: "Read Goal signals and timers, including their current revisions.",
+      description: "Read Goal signals and timers, including their status and definition version.",
       parameters: Type.Object({}),
     },
     () =>
       askQuery<SignalRootCommand>("/user/signals", (replyTo) => ({
-        _tag: "ListByGoal",
-        goal,
+        _tag: "ListByOwner",
+        owner: `/goals/${goal}`,
         replyTo,
       })),
   );

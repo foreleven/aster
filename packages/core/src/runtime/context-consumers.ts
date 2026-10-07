@@ -14,7 +14,7 @@ import {
   makeConfiguredDescriptionInitializer,
 } from "../reasoning/context-description.js";
 import { GoalSettings } from "../config/settings.js";
-import type { SignalRootCommand } from "../signals/actors.js";
+import type { SignalRootCommand } from "../signals/protocol.js";
 import { SystemOneActor } from "../reactions/actor.js";
 import { ReactionPolicy } from "../reactions/policy.js";
 
@@ -35,7 +35,7 @@ export const startContextReactions = <Services>(roots: {
       Effect.provideService(CurrentActors, roots.system),
     );
     // Goal receivers initialize independently; their mailboxes queue delivered work.
-    yield* roots.signals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+    yield* roots.signals.awaitStarted;
     const changes = roots.changes;
     const reactions = yield* roots.system.spawn("system-one", SystemOneActor);
     yield* reactions.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));

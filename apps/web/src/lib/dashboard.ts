@@ -87,6 +87,7 @@ export function references(record?: ContextView) {
         state.definition?.goal && `/goals/${state.definition.goal}`,
         state.request?.taskPath,
         state.goal && `/goals/${state.goal}`,
+        state.owner,
         ...(state.task && "input" in state.task
           ? state.task.input.flatMap((item) => item.sources)
           : []),

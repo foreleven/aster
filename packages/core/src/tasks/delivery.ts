@@ -6,7 +6,7 @@ import {
   TaskPath,
   type TaskDeliveryInput,
   TaskMessage,
-  type CommandReceipt,
+  CommandReceipt,
 } from "@aster/api-contracts";
 import { Effect, Schedule, Schema, Match } from "effect";
 import { type TasksRootCommand } from "./root.js";
@@ -19,7 +19,7 @@ import {
   type GoalCommand,
   type GoalCommandReply,
 } from "../goals/protocol.js";
-import { delegateInput } from "./state/admission.js";
+import { delegateInput, taskPathFor } from "./state/admission.js";
 
 /** Submission creates a durable Task. Its lifetime is independent of the calling conversation. */
 export const startTask = Effect.fn("Tasks.start")(function* <C, R>(
@@ -219,3 +219,25 @@ export const deliverTaskFeedback = Effect.fn("Tasks.feedback")(function* <C, R>(
     }),
   );
 });
+
+const Receipts = Schema.Struct({
+  receipts: Schema.Array(Schema.Struct({ requestId: Schema.String, receipt: CommandReceipt })),
+});
+const Inputs = Schema.Struct({
+  inputs: Schema.Array(Schema.Struct({ requestId: Schema.String, receipt: CommandReceipt })),
+});
+/** Read-only reconciliation. Absence is not permission to submit after pause/delete. */
+export const taskDeliveryReceipt = (registry: ContextRegistry["Service"], message: TaskMessage) =>
+  Effect.sync(() => {
+    const target =
+      message.task._tag === "Goal"
+        ? message.task.target
+        : taskPathFor(message.source, message.requestId);
+    const record = registry.get(target);
+    if (!record) return undefined;
+    const entries =
+      message.task._tag === "Goal"
+        ? Schema.decodeUnknownSync(Receipts)(record.state).receipts
+        : Schema.decodeUnknownSync(Inputs)(record.state).inputs;
+    return entries.find((entry) => entry.requestId === message.requestId)?.receipt;
+  });

@@ -109,7 +109,6 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
                       }),
                   },
                   reasoner: { plan: () => Effect.never },
-                  deactivate: () => Effect.void,
                 }),
               ),
             );

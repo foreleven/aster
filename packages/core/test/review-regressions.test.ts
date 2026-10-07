@@ -1,3 +1,4 @@
+import { AgentConversations } from "@aster/agent";
 import { testConversations } from "./conversation-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
@@ -51,8 +52,6 @@ test("Goal API waits for durable input and history; stopped roots fail instead o
               definitions: [{ slug: "project", description: "Project" }],
               history,
               reasoner: { plan: () => Effect.never },
-
-              deactivate: () => Effect.void,
             }),
           ),
         );
@@ -170,7 +169,9 @@ test("malformed Signal delivery state stops before recovery writes or execution"
           description: "Signal",
           state: {
             ...definition,
-            occurrences: [{ id: "one", text: "Pending", delivered: "false" }],
+            status: "active",
+            version: 1,
+            nextDue: 123,
           },
           messages: [],
         };
@@ -186,13 +187,17 @@ test("malformed Signal delivery state stops before recovery writes or execution"
 
             Layer.succeed(ExternalAgents, {}),
             Layer.succeed(SignalDefinitions, [definition]),
+            Layer.succeed(AgentConversations, testConversations()),
           ),
         );
         const stopped = yield* Stream.runHead(
           system.events.pipe(Stream.filter((event) => event._tag === "ActorStopped")),
         ).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
-        yield* system.spawn("review", SignalActor, { supervision: () => "stop" });
+        yield* system.spawn("review", SignalActor, {
+          supervision: () => "stop",
+          metadata: { contextPath: "/signals/review" },
+        });
         const event = yield* Fiber.join(stopped).pipe(Effect.timeout("2 seconds"));
         assert.equal(event._tag, "Some");
         if (event._tag === "Some" && event.value._tag === "ActorStopped")

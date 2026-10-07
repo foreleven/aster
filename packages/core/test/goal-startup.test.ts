@@ -60,7 +60,6 @@ for (const fails of [false, true]) {
                     }),
                 },
                 reasoner: { plan: () => Effect.die("Execution gate must remain closed") },
-                deactivate: () => Effect.void,
               }),
             ),
           );

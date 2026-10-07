@@ -869,15 +869,30 @@ test("reference layout has a fixed composer, scoped work, and separate user note
   page,
 }) => {
   await page.setViewportSize({ width: 1487, height: 1058 });
-  const { errors } = await setup(page, designFixture());
+  const data = designFixture();
+  const exhausted = data.contexts.find((context) => context.path === "/signals/holiday");
+  exhausted.state.trigger = {
+    _tag: "Schedule",
+    schedule: { type: "once", at: "2025-01-15T09:00:00+09:00" },
+  };
+  exhausted.state.nextDue = null;
+  const { errors } = await setup(page, data);
   await expect(page).toHaveTitle(/Aster/);
   await expect(page).toHaveURL(/127\.0\.0\.1:4329/);
   await expect(page.locator("vite-error-overlay")).toHaveCount(0);
   await expect(page.locator(".goal-timeline .conversation-entry")).toHaveCount(5);
   await expect(
-    page.getByRole("button", { name: "Google Flights – HND to CTS", exact: true }),
+    page.getByRole("button", { name: "View signal: Flight price drops below ¥4,000", exact: true }),
   ).toBeVisible();
-  await expect(page.getByText("hashed-source-fingerprint", { exact: true })).toHaveCount(0);
+  await expect(page.locator(".signal-card").getByText("Next check", { exact: true })).toHaveCount(
+    1,
+  );
+  await expect(page.locator(".signal-card")).not.toContainText(["Invalid Date"]);
+  await expect(
+    page
+      .locator(".signal-card")
+      .getByRole("button", { name: "Google Flights – HND to CTS", exact: true }),
+  ).toHaveCount(0);
   await page.screenshot({ path: "/tmp/aster-goals-reference-desktop.png" });
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(
     true,
@@ -886,8 +901,10 @@ test("reference layout has a fixed composer, scoped work, and separate user note
   await page.getByRole("tab", { name: "Notes", exact: true }).click();
   await expect(page.locator(".goal-timeline .conversation-entry")).toHaveCount(2);
   await page.getByRole("tab", { name: "Timeline", exact: true }).click();
-  await page.getByRole("button", { name: "Google Flights – HND to CTS", exact: true }).click();
-  await expect(page.getByRole("dialog")).toContainText("Google Flights – HND to CTS");
+  await page
+    .getByRole("button", { name: "View signal: Flight price drops below ¥4,000", exact: true })
+    .click();
+  await expect(page.getByRole("dialog")).toContainText("Flight price drops below ¥4,000");
   await page.keyboard.press("Escape");
   await page.getByRole("button", { name: "Add context reference" }).click();
   await page.getByRole("menuitem", { name: "Google Flights – HND to CTS", exact: true }).click();

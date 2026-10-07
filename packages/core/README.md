@@ -4,14 +4,14 @@ Aster's domain and application runtime, implemented with Effect 4. Concrete stor
 
 `AsterRuntime.layer({ integrations })` assembles shared services and owns root Actors. The host supplies infrastructure Layers and ConfigProvider, then uses `runtime.api` and `runtime.ready`. It does not assemble internal domain services or start integrations separately.
 
-Startup subscribes to Context changes before registering/activating source integrations, starts public Context queries, restores Signals, activates Memory, registers publication, Task and Goal owners, then starts durable reaction processing. Signal execution starts after Goal routing registration; each Task and Goal restores independently and queues incoming messages in its mailbox. Required source readiness precedes Goal activation. Shutdown stops producers, cancels scoped processing, stops Actors and drains accepted capture work before infrastructure release.
+Startup subscribes to Context changes before registering/activating source integrations, starts public Context queries, registers Signal owners, activates Memory, registers publication, Task and Goal owners, then starts durable reaction processing. Signal execution starts after Goal routing registration; each Signal, Task and Goal restores independently and queues incoming messages in its mailbox. Required source readiness precedes Goal activation. Shutdown stops producers, cancels scoped processing, stops Actors and drains accepted capture work before infrastructure release.
 
 ## Domain modules
 
 - `context/`: validated snapshots, revisioned persistence, public views and durable source events.
 - `reactions/`: System One matching of each active Goal and Context Signal, frozen decisions and receipt-based delivery.
 - `goals/`: durable conversation, Context-only Agent gate, user and Task inputs, business summaries and public Pi conversation projection. `/goals/personal` is the default assistant using the ordinary GoalActor.
-- `signals/`: Context-condition and schedule triggers; both deliver frozen Task messages.
+- `signals/`: `protocol.ts` defines commands and reaction inputs; `root.ts` registers and watches owners; `actor.ts` schedules triggers and delivery; `state/snapshot.ts` defines state, eligibility and public views; `state/model.ts` owns business operations; `state/store.ts` owns Pi persistence and the committed Ref. Signal candidate selection and System One matching live in `reactions/policy.ts`. Both trigger kinds deliver frozen Task messages. Schedule cursors are timezone-qualified ISO strings, with `null` marking exhaustion.
 - `tasks/`: Goal/Agent/Delegate dispatch, persistent Tasks, follow-up, confirmation and feedback.
 - `publications/`: independent result publication, approval and transport recovery.
 - `approvals/`: durable human decisions, validation and acknowledgement by the requesting Actor.

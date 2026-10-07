@@ -1,5 +1,5 @@
 import { TaskDeliveryInput } from "@aster/api-contracts";
-import { SignalRootActor } from "../src/signals/actors.js";
+import { SignalRootActor } from "../src/signals/root.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber, Stream, Schema } from "effect";
@@ -107,30 +107,30 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
       const env = yield* taskFixture();
       const signals = yield* env.system.spawn("signals", SignalRootActor);
       const target = "/signals/personal--watch";
-      const configured = yield* signals.ask<import("../src/signals/actors.js").SignalCommandReply>(
-        (replyTo) => ({
-          _tag: "ApplyGoalCommand",
-          replyTo,
-          input: {
-            requestId: "create",
-            source: "/goals/personal",
-            target,
-            causal: { rootRequestId: "create", remainingAgentTurns: 3 },
-            change: {
-              operation: "create",
-              definition: {
-                trigger: { _tag: "Context", when: "Evidence changes" },
-                task: {
-                  _tag: "Delegate",
-                  agent: "test",
-                  task: { instructions: "Read the update", input: [] },
-                  replyTo: "/goals/personal",
-                },
+      const configured = yield* signals.ask<
+        import("../src/signals/protocol.js").SignalCommandReply
+      >((replyTo) => ({
+        _tag: "Change",
+        replyTo,
+        input: {
+          requestId: "create",
+          source: "/goals/personal",
+          target,
+          causal: { rootRequestId: "create", remainingAgentTurns: 3 },
+          change: {
+            operation: "create",
+            definition: {
+              trigger: { _tag: "Context", when: "Evidence changes" },
+              task: {
+                _tag: "Delegate",
+                agent: "test",
+                task: { instructions: "Read the update", input: [] },
+                replyTo: "/goals/personal",
               },
             },
           },
-        }),
-      );
+        },
+      }));
       assert.equal(configured._tag, "Accepted");
       const reaction = {
         requestId: "change",

@@ -111,8 +111,9 @@ export function fixture() {
         ],
       ),
       context("/signals/progress", "Significant change in project progress", {
-        goal: "engine",
-        active: true,
+        owner: "/goals/engine",
+        status: "active",
+        version: 1,
       }),
       context(
         "/tasks/5f02eb8dc61a2610739dc2b134208b5c7ed6a939043ceb6d9de1fe26114eb1a3",
@@ -325,8 +326,9 @@ export function designFixture() {
   const signal = data.contexts.find((context) => context.path === "/signals/progress");
   signal.description = "Flight price drops below ¥4,000";
   signal.state = {
-    goal: "engine",
-    active: true,
+    owner: "/goals/engine",
+    status: "active",
+    version: 1,
     trigger: {
       _tag: "Schedule",
       schedule: { type: "cron", expression: "0 */6 * * *", timeZone: "Asia/Tokyo" },
@@ -336,11 +338,7 @@ export function designFixture() {
       target: "/goals/engine",
       text: "Check for round-trip fares HND/CTS below ¥4,000 for our dates.",
     },
-    nextDue: Date.parse("2025-01-14T16:12:00+09:00"),
-    seenSources: ["hashed-source-fingerprint"],
-    occurrences: ["/sources/flights", "/sources/skyscanner", "/sources/ana"].map((path) => ({
-      message: { source: path },
-    })),
+    nextDue: "2025-01-14T16:12:00+09:00",
   };
   const run = data.contexts.find(
     (context) =>
@@ -366,8 +364,9 @@ export function designFixture() {
       path: "/signals/holiday",
       description: "Local holiday availability",
       state: {
-        goal: "engine",
-        active: true,
+        owner: "/goals/engine",
+        status: "active",
+        version: 1,
         trigger: {
           _tag: "Schedule",
           schedule: { type: "cron", expression: "0 9 * * *", timeZone: "Asia/Tokyo" },
@@ -377,8 +376,7 @@ export function designFixture() {
           target: "/goals/engine",
           text: "Monitor Japanese and Hokkaido local holidays during our travel dates.",
         },
-        nextDue: Date.parse("2025-01-15T09:00:00+09:00"),
-        occurrences: [{ message: { source: "/sources/calendar" } }],
+        nextDue: "2025-01-15T09:00:00+09:00",
       },
       messages: [],
     },

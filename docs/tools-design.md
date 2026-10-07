@@ -50,21 +50,21 @@ Domain protocols and handlers remain next to their owners. The previous Goal/rea
 
 ## Commands
 
-| Tool                | Owner                          | Behavior                                                                                               |
-| ------------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| `search_contexts`   | `/user/contexts`               | `SearchContexts` searches public paths and descriptions, including records without a live Actor.       |
-| `read_context`      | `/user/contexts`               | `ReadContext` returns a public JSON page and revision.                                                 |
-| `query_context`     | `/user/contexts`               | `QueryContext` invokes the existing read-only integration route and retains the result in Pi.          |
-| `read_query_result` | `/user/contexts`               | `ReadQueryResult` reads retained evidence under the bound conversation owner.                          |
-| `goal_current`      | Injected GoalState             | Reads the current definition and public state; the catalogue supplies safe executor names.             |
-| `update_summary`    | Injected GoalState             | Validates and persists the summary through its serialized business method.                             |
-| `task_list`         | Injected GoalState             | Resolves GoalSnapshot.tasks to current public Task views, including completed Tasks.                   |
-| `start_task`        | Tasks root or destination Goal | Existing StartTask/SubmitInput and AttachTask admission; returns acceptance, not execution completion. |
-| `task_send`         | Target TaskActor               | Existing FollowupTask admission with stable identity.                                                  |
-| `signal_list`       | Signal root                    | `ListByGoal` returns public Signal views and revisions.                                                |
-| `set_signal`        | Signal root                    | Existing ApplyGoalCommand, including receipts and revision validation.                                 |
-| `memory_search`     | MemoryActor                    | `Search` executes backend recall asynchronously.                                                       |
-| `memory_expand`     | MemoryActor                    | `Expand` retrieves original evidence asynchronously.                                                   |
+| Tool                | Owner                          | Behavior                                                                                                       |
+| ------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
+| `search_contexts`   | `/user/contexts`               | `SearchContexts` searches public paths and descriptions, including records without a live Actor.               |
+| `read_context`      | `/user/contexts`               | `ReadContext` returns a public JSON page and revision.                                                         |
+| `query_context`     | `/user/contexts`               | `QueryContext` invokes the existing read-only integration route and retains the result in Pi.                  |
+| `read_query_result` | `/user/contexts`               | `ReadQueryResult` reads retained evidence under the bound conversation owner.                                  |
+| `goal_current`      | Injected GoalState             | Reads the current definition and public state; the catalogue supplies safe executor names.                     |
+| `update_summary`    | Injected GoalState             | Validates and persists the summary through its serialized business method.                                     |
+| `task_list`         | Injected GoalState             | Resolves GoalSnapshot.tasks to current public Task views, including completed Tasks.                           |
+| `start_task`        | Tasks root or destination Goal | Existing StartTask/SubmitInput and AttachTask admission; returns acceptance, not execution completion.         |
+| `task_send`         | Target TaskActor               | Existing FollowupTask admission with stable identity.                                                          |
+| `signal_list`       | Signal root                    | `ListByOwner` takes a full owner path and returns public Signal views, status and definition version.          |
+| `set_signal`        | Signal root                    | `Change` validates definition version and retains receipts; supports create, update, pause, resume and delete. |
+| `memory_search`     | MemoryActor                    | `Search` executes backend recall asynchronously.                                                               |
+| `memory_expand`     | MemoryActor                    | `Expand` retrieves original evidence asynchronously.                                                           |
 
 `submit_result` and `submit_relevance` are local invocation returns. They validate through the existing SDK/result decoders and terminate their invocation. They have no business recipient to ask. Gate results still return through `GateSettled`.
 

@@ -52,7 +52,8 @@ export function GoalWorkspace({
     (context) =>
       context.path !== goal.path &&
       !context.state.deleted &&
-      (context.state.goal === slug ||
+      (context.state.owner === goal.path ||
+        context.state.goal === slug ||
         context.state.definition?.goal === slug ||
         context.state.sourcePath === goal.path ||
         context.state.replyTo === goal.path),

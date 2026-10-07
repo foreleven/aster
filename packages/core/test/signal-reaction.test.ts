@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer } from "effect";
 import {
   ContextRegistry,
   SignalDefinitions,
@@ -10,8 +10,10 @@ import {
   type SignalCommandReply,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
-import { SignalReactionInput } from "../src/signals/reaction.js";
-import { SignalState } from "../src/signals/state.js";
+import { SignalReactionInput } from "../src/signals/protocol.js";
+import { AgentConversations } from "@aster/agent";
+import { testConversations } from "./conversation-fixtures.js";
+import { readSignalHistory } from "../src/signals/state/store.js";
 const definition = {
   slug: "review",
   trigger: { _tag: "Context" as const, when: "Release changed" },
@@ -20,6 +22,7 @@ const definition = {
 
 test("Signal freezes one Task and evidence with its receipt; restart reuses the original envelope", async () => {
   const records = new Map<string, ContextRecord>();
+  const messages = testConversations();
   let input: SignalReactionInput | undefined;
   let first: unknown;
   for (const restart of [false, true])
@@ -35,11 +38,13 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(AgentConversations, messages),
               Layer.succeed(SignalDefinitions, [definition]),
             ),
           );
           const root = yield* system.spawn("signals", SignalRootActor);
-          yield* root.ask((replyTo) => ({ _tag: "Ready", replyTo }));
+          yield* root.awaitStarted;
+          yield* (yield* system.select("/user/signals/review").resolve()).awaitStarted;
           input ??= {
             requestId: "reaction",
             causationId: "source",
@@ -58,24 +63,32 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
             root.ask<SignalCommandReply>((replyTo) => ({ _tag: "React", input: value, replyTo }));
           const reply = yield* send(input);
           assert.equal(reply._tag, "Accepted");
-          const state = Schema.decodeUnknownSync(SignalState)(registry.get(input.target)!.state);
-          assert.equal(state.occurrences.length, 1);
-          assert.equal(state.reactionReceipts?.length, 1);
-          assert.deepEqual(state.occurrences[0]!.message.evidence, input.sourceContext);
-          assert.deepEqual(state.occurrences[0]!.message.task, definition.task);
-          if (restart) assert.deepEqual(state.occurrences[0], first);
-          first = state.occurrences[0];
+          const state = yield* readSignalHistory(messages, input.target);
+          assert.equal(state.deliveries.length, 1);
+          assert.equal(state.receipts?.length, 1);
+          assert.deepEqual(state.deliveries[0]!.message.evidence, input.sourceContext);
+          assert.deepEqual(state.deliveries[0]!.message.task, definition.task);
+          if (restart) assert.deepEqual(state.deliveries[0]!.message, first);
+          first = state.deliveries[0]!.message;
           assert.equal(
             (yield* send({ ...input, sourceContext: { ...input.sourceContext, revision: 2 } }))
               ._tag,
             "Rejected",
           );
-          assert.equal((yield* send({ ...input, requestId: "stale" }))._tag, "Rejected");
+          assert.equal(
+            (yield* send({
+              ...input,
+              requestId: "stale",
+              expectedRevision: input.expectedRevision - 1,
+            }))._tag,
+            "Rejected",
+          );
         }),
       ).pipe(Effect.timeout("5 seconds")),
     );
 });
 test("scheduled Signals reject Context reactions", async () => {
+  const messages = testConversations();
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -83,6 +96,7 @@ test("scheduled Signals reject Context reactions", async () => {
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(AgentConversations, messages),
             Layer.succeed(SignalDefinitions, [
               {
                 ...definition,
@@ -95,7 +109,8 @@ test("scheduled Signals reject Context reactions", async () => {
           ),
         );
         const root = yield* system.spawn("signals", SignalRootActor);
-        yield* root.ask((replyTo) => ({ _tag: "Ready", replyTo }));
+        yield* root.awaitStarted;
+        yield* (yield* system.select("/user/signals/review").resolve()).awaitStarted;
         const result = yield* root.ask<SignalCommandReply>((replyTo) => ({
           _tag: "React",
           replyTo,
@@ -109,11 +124,7 @@ test("scheduled Signals reject Context reactions", async () => {
           },
         }));
         assert.equal(result._tag, "Rejected");
-        assert.equal(
-          Schema.decodeUnknownSync(SignalState)(registry.get("/signals/review")!.state).occurrences
-            .length,
-          0,
-        );
+        assert.equal((yield* readSignalHistory(messages, "/signals/review")).deliveries.length, 0);
       }),
     ),
   );

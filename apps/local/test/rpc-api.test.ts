@@ -16,7 +16,6 @@ import {
   ContextRegistry,
   GoalsRootActor,
   GoalSettings,
-  GoalSignals,
   MemoryRecall,
   ExternalAgents,
 } from "@aster/core";
@@ -49,10 +48,7 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
               reasoning: { model: "test" },
             }),
             Layer.succeed(AgentConversations, conversations),
-            Layer.succeed(GoalSignals, {
-              applySignal: () => Effect.die("Unexpected Signal"),
-              deactivate: () => Effect.void,
-            }),
+
             Layer.succeed(MemoryRecall, {
               search: () => Effect.succeed({ results: [] }),
               expand: () => Effect.succeed({ results: [] }),

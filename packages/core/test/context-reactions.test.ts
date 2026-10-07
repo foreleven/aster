@@ -40,23 +40,23 @@ const record = (path: string, state: object): ContextRecord => ({
 const definition = {
   trigger: { _tag: "Context", when: "changed" },
   task: { _tag: "Goal", target: "/goals/personal", text: "read" },
-  active: true,
-  revision: 1,
-  occurrences: [],
+  status: "active",
+  version: 1,
 };
 
 test("source Signal eligibility handles deletion, schedules and completed owners consistently", () => {
   const snapshot = Object.fromEntries(
     [
       record("/signals/live", { ...definition, slug: "live" }),
-      record("/signals/deleted", { ...definition, slug: "deleted", deleted: true }),
-      record("/signals/inactive", { ...definition, slug: "inactive", active: false }),
+      record("/signals/deleted", { ...definition, slug: "deleted", status: "deleted" }),
+      record("/signals/inactive", { ...definition, slug: "inactive", status: "paused" }),
       record("/signals/timer", {
         ...definition,
         slug: "timer",
+        nextDue: new Date(1000).toISOString(),
         trigger: { _tag: "Schedule", schedule: { type: "once", at: new Date(1000).toISOString() } },
       }),
-      record("/signals/finished", { ...definition, slug: "finished", goal: "done" }),
+      record("/signals/finished", { ...definition, slug: "finished", owner: "/goals/done" }),
       record("/goals/done", { status: "completed" }),
     ].map((item) => [item.path, item]),
   );
@@ -80,8 +80,8 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
     message: Schema.Unknown,
   });
   for (const item of [
-    record("/signals/one", { ...definition, slug: "one", goal: "owned" }),
-    record("/signals/two", { ...definition, slug: "two", goal: "owned" }),
+    record("/signals/one", { ...definition, slug: "one", owner: "/goals/owned" }),
+    record("/signals/two", { ...definition, slug: "two", owner: "/goals/owned" }),
     record("/goals/owned", { status: "active", summary: "Owned Goal" }),
     record("/goals/other", { status: "active", summary: "Other Goal" }),
     record("/goals/done", { status: "completed" }),
@@ -152,9 +152,7 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
           Effect.provide(Layer.mergeAll(ContextCaptures.layer, ContextDescriptions.layer)),
           Effect.forkScoped,
         );
-        const signalReady = yield* signalProbe.take();
-        assert.equal(signalReady._tag, "Ready");
-        if (signalReady._tag === "Ready") yield* signalReady.replyTo.tell(undefined);
+
         yield* Fiber.join(starting);
         // The subscription is acquired before this returns, even without yieldNow.
         yield* registry.commit(record("/source", { summary: "A relevant source summary" }), {

@@ -93,7 +93,7 @@ export const goalAdmission = (
               kind: "invalid-input",
               message: "Task destination or source is invalid",
             });
-          yield* validateTaskMessage(registry, delivery);
+          yield* validateTaskMessage(registry, delivery, history);
           yield* inputs.accept(
             {
               _tag: "TaskMessage",

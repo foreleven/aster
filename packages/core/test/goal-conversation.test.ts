@@ -3,7 +3,7 @@ import { testConversations } from "./conversation-fixtures.js";
 import { AgentConversations } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem, type ActorRef } from "@aster/actor";
+import { ActorSystem } from "@aster/actor";
 import {
   AgentError,
   type AgentInvocation,
@@ -16,18 +16,16 @@ import {
   ContextQueries,
   ExternalAgents,
   GoalSettings,
-  GoalSignals,
   GoalSnapshot,
   GoalsRootActor,
   TasksRootActor,
   SignalRootActor,
   SignalDefinitions,
+  SignalSnapshot,
   ApprovalQueueActor,
   approvalEntries,
-  SignalCommands,
   type ContextRecord,
   type GoalCommandReply,
-  type SignalRootCommand,
 } from "../src/index.js";
 import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
 import type { GoalSubmission } from "../src/goals/protocol.js";
@@ -45,6 +43,8 @@ const setup = Effect.fnUntraced(function* (
   conversation: (input: AgentInvocation) => Effect.Effect<AgentResult, AgentError>,
   options: {
     store?: ContextStore;
+    goals?: GoalSettings["Service"]["definitions"];
+    signals?: SignalDefinitions["Service"];
     gate?: (input: AgentInvocation) => Effect.Effect<AgentResult, AgentError>;
     external?: ReturnType<typeof fakeAgent>;
     history?: ReturnType<typeof testConversations>;
@@ -58,19 +58,13 @@ const setup = Effect.fnUntraced(function* (
 
       emptyRecall,
       Layer.succeed(GoalSettings, {
-        definitions: [{ slug: "project", description: "Improve project reliability" }],
+        definitions: options.goals ?? [
+          { slug: "project", description: "Improve project reliability" },
+        ],
         reasoning: { model: "test" },
       }),
       Layer.succeed(AgentConversations, options.history ?? testConversations()),
-      GoalSignals.layer.pipe(
-        Layer.provide(
-          Layer.succeed(SignalCommands, {
-            ask: (command, timeout) => signals.ask(command, timeout),
-            bind: () => Effect.succeed(true),
-          }),
-        ),
-      ),
-      Layer.succeed(SignalDefinitions, []),
+      Layer.succeed(SignalDefinitions, options.signals ?? []),
       Layer.succeed(ExternalAgents, { test: options.external ?? fakeAgent() }),
       modelReplyLayer(
         "submit_relevance",
@@ -83,7 +77,7 @@ const setup = Effect.fnUntraced(function* (
   );
   yield* system.spawn("contexts", ContextsActor);
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
-  const signals: ActorRef<SignalRootCommand> = yield* system.spawn("signals", SignalRootActor);
+  const signals = yield* system.spawn("signals", SignalRootActor);
   yield* system.spawn("tasks", TasksRootActor);
   const goalActivation = yield* Deferred.make<void>();
   const root = yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } });
@@ -116,7 +110,7 @@ const setup = Effect.fnUntraced(function* (
       slug: "project",
       command: { _tag: "RetryTurn", requestId, turnId, replyTo },
     }));
-  return { registry, system, root, approvals, state, wait, submit, activate, end, retry };
+  return { registry, system, root, signals, approvals, state, wait, submit, activate, end, retry };
 });
 
 const contextInput = (requestId: string, revision: number): GoalSubmission => ({
@@ -1128,6 +1122,70 @@ test("summary tools persist before acknowledgement and keep the Goal available f
       yield* env.wait(() => env.state().inputs.at(-1)?.status === "completed");
       assert.equal(env.state().summary, "Finding 2");
       assert.equal(env.state().status, "active");
+    }),
+  );
+});
+
+test("Goal lifecycle pauses only owned Signals through its ActorContext", async () => {
+  await run(
+    Effect.gen(function* () {
+      const definition = {
+        trigger: { _tag: "Context" as const, when: "Evidence changes" },
+        task: { _tag: "Goal" as const, target: "/goals/project", text: "Review evidence" },
+      };
+      const env = yield* setup(() => Effect.die("No conversation expected"), {
+        goals: [
+          { slug: "project", description: "Project" },
+          { slug: "other", description: "Other" },
+        ],
+        signals: [{ ...definition, slug: "configured" }],
+      });
+      yield* (yield* env.system.select("/user/goals/other").resolve()).awaitStarted;
+      yield* (yield* env.system.select("/user/signals/configured").resolve()).awaitStarted;
+      for (const slug of ["project", "other"]) {
+        const reply = yield* env.signals.ask<
+          import("../src/signals/protocol.js").SignalCommandReply
+        >((replyTo) => ({
+          _tag: "Change",
+          replyTo,
+          input: {
+            requestId: `create:${slug}`,
+            source: `/goals/${slug}`,
+            target: `/signals/${slug}--watch`,
+            change: { operation: "create", definition },
+            causal: { rootRequestId: "test", remainingAgentTurns: 3 },
+          },
+        }));
+        assert.equal(reply._tag, "Accepted");
+      }
+      const listed = yield* env.signals.ask<import("../src/context/query-protocol.js").QueryReply>(
+        (replyTo) => ({
+          _tag: "ListByOwner",
+          owner: "/goals/project",
+          replyTo,
+        }),
+      );
+      assert.equal(listed._tag, "Success");
+      if (listed._tag === "Success")
+        assert.deepEqual(
+          Schema.decodeUnknownSync(Schema.Array(Schema.Struct({ path: Schema.String })))(
+            listed.value,
+          ).map((record) => record.path),
+          ["/signals/project--watch"],
+        );
+      assert.equal((yield* env.end)._tag, "Accepted");
+      const signalState = (path: string) =>
+        Schema.decodeUnknownSync(SignalSnapshot)(env.registry.get(path)!.state);
+      yield* env.wait(() => signalState("/signals/project--watch").status === "paused");
+      const paused = env.registry.get("/signals/project--watch");
+      yield* env.signals.ask<void>((replyTo) => ({
+        _tag: "PauseByOwner",
+        owner: "/goals/project",
+        replyTo,
+      }));
+      assert.deepEqual(env.registry.get("/signals/project--watch"), paused);
+      assert.equal(signalState("/signals/other--watch").status, "active");
+      assert.equal(signalState("/signals/configured").status, "active");
     }),
   );
 });

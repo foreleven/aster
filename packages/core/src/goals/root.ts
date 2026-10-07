@@ -2,7 +2,6 @@ import { GoalCommand, type GoalMailbox } from "./protocol.js";
 import { GoalActor } from "./actor.js";
 import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { AgentRunner, AgentConversations } from "@aster/agent";
-import { GoalSignals } from "../signals/goal-owner.js";
 import { GoalSettings } from "../config/settings.js";
 import { ContextRegistry } from "../context/registry.js";
 import { Effect, Layer, Schema } from "effect";
@@ -16,7 +15,7 @@ export const GoalsRootCommand = Schema.TaggedStruct("Route", {
 export type GoalsRootCommand = typeof GoalsRootCommand.Type;
 export class GoalsRootActor extends Actor.Service<
   GoalsRootActor,
-  ContextRegistry | GoalSignals | GoalSettings | AgentConversations | AgentRunner | ExternalAgents
+  ContextRegistry | GoalSettings | AgentConversations | AgentRunner | ExternalAgents
 >()("goals/RootActor", { command: GoalsRootCommand }) {
   static readonly layer = Layer.effect(
     GoalsRootActor,

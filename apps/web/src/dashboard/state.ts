@@ -82,6 +82,7 @@ export const inspectorView = Atom.family((path: string) =>
             (c) =>
               c.state.request?.taskPath === context?.path ||
               c.state.sourcePath === context?.path ||
+              c.state.owner === context?.path ||
               `/goals/${c.state.goal || c.state.definition?.goal}` === context?.path,
           )
           .map((c) => c.path)

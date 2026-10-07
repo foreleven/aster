@@ -23,7 +23,7 @@ export function WorkPanel({
   const approvals = useAtomValue(approvalEntries);
   const tasks = related.filter((context) => context.path.includes("/tasks/"));
   const signals = related.filter(
-    (context) => /^\/signals\/[^/]+$/.test(context.path) && !context.state.deleted,
+    (context) => /^\/signals\/[^/]+$/.test(context.path) && context.state.status !== "deleted",
   );
   const approvalPaths = tasks.map((run) => run.path);
   const hasApprovals = approvals.some((entry) => approvalPaths.includes(entry.contextPath));
@@ -93,14 +93,7 @@ export function WorkPanel({
           {signals.map((signal) => {
             const schedule =
               signal.state.trigger?._tag === "Schedule" ? signal.state.trigger.schedule : undefined;
-            const sources = [
-              ...new Set([
-                ...(signal.state.occurrences ?? []).map(
-                  (occurrence) => occurrence.message.evidence?.path ?? occurrence.message.source,
-                ),
-                ...references(signal),
-              ]),
-            ].filter((path) => path !== goal.path);
+            const sources = references(signal);
             return (
               <article className="work-card signal-card" key={signal.path}>
                 <Search className="signal-icon" size={23} />
@@ -116,7 +109,7 @@ export function WorkPanel({
                       </button>
                     </h3>
                   </div>
-                  <Pill status={signal.state.active === false ? "paused" : "active"} />
+                  <Pill status={signal.state.status ?? "active"} />
                   <p>
                     {signal.state.trigger?._tag === "Context"
                       ? signal.state.trigger.when
@@ -132,7 +125,7 @@ export function WorkPanel({
                         : "On relevant updates"}
                     </span>
                   </div>
-                  {signal.state.nextDue !== undefined && (
+                  {signal.state.nextDue != null && (
                     <div className="signal-schedule">
                       <Clock3 size={14} />
                       <span>Next check</span>

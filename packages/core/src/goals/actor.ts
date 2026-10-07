@@ -4,19 +4,18 @@ import { GoalSnapshot, type StoredGoalInput } from "./state/snapshot.js";
 import { GoalState } from "./state/model.js";
 import { GoalAgent } from "./agent.js";
 import { cancelGoalTasks } from "../tasks/delivery.js";
-import { GoalSignals } from "../signals/goal-owner.js";
+import type { SignalRootCommand } from "../signals/protocol.js";
 import { ContextRegistry } from "../context/registry.js";
 import { defineContext } from "../context/definition.js";
 import { ContextActor, contextPath } from "../context/actor.js";
 import { GoalSettings } from "../config/settings.js";
 import { Context, Deferred, Effect, Layer, Match, Ref, Result, Schema } from "effect";
 import { AgentConversations } from "@aster/agent";
-import type { ActorContext } from "@aster/actor";
+import type { ActorContext, ActorRef } from "@aster/actor";
 import { randomUUID } from "node:crypto";
 import { CurrentActors } from "../tools/actors.js";
 
-type Services =
-  ExternalAgents | GoalSignals | Layer.Services<typeof GoalAgent.layer> | AgentConversations;
+type Services = ExternalAgents | Layer.Services<typeof GoalAgent.layer> | AgentConversations;
 type Owner = ActorContext<GoalMailbox, Services | ContextRegistry>;
 type Attempt = { generation: string; cancellation: Deferred.Deferred<void> };
 
@@ -32,18 +31,28 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
       const initialized = yield* Deferred.make<GoalState["Service"]>();
       const registry = yield* ContextRegistry;
       const settings = yield* GoalSettings;
-      const signals = yield* GoalSignals;
       const incarnation = randomUUID();
       // Only lifecycle/mailbox handlers access these refs. Workers return through pipeToSelf.
       const running = yield* Ref.make<Attempt | undefined>(undefined);
       const gating = yield* Ref.make<(Attempt & { inputId: string }) | undefined>(undefined);
       const wake = (context: Owner) => context.self.tell({ _tag: "RunNext" });
-      const endPeers = Effect.fnUntraced(function* (context: Owner, model: GoalState["Service"]) {
+      const endPeers = Effect.fnUntraced(function* (context: Owner) {
         const gate = yield* Ref.getAndSet(gating, undefined);
         if (gate) yield* Deferred.succeed(gate.cancellation, undefined);
         yield* cancelGoalTasks(context, registry, contextPath(context));
         yield* context.pipeToSelf(
-          signals.deactivate((yield* model.read).definition.slug).pipe(Effect.asVoid),
+          context
+            .select("/user/signals")
+            .resolve()
+            .pipe(
+              Effect.flatMap((root) =>
+                (root as ActorRef<SignalRootCommand>).ask<void>((replyTo) => ({
+                  _tag: "PauseByOwner",
+                  owner: contextPath(context),
+                  replyTo,
+                })),
+              ),
+            ),
           (result) => ({ _tag: "PeersEnded", generation: incarnation, result }),
         );
       });
@@ -132,7 +141,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
         if (request._tag === "End") {
           const attempt = yield* Ref.getAndSet(running, undefined);
           if (attempt) yield* Deferred.succeed(attempt.cancellation, undefined);
-          yield* endPeers(context, model);
+          yield* endPeers(context);
         } else yield* wake(context);
       });
       const runNext = Effect.fnUntraced(function* (context: Owner, model: GoalState["Service"]) {

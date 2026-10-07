@@ -34,12 +34,11 @@ import {
 import { ContextRegistry } from "../context/registry.js";
 import { ContextCaptureSink } from "../memory/contracts.js";
 import { GoalSettings, signalSettings } from "../config/settings.js";
-import { SignalCommands } from "../signals/commands.js";
-import { SignalDefinitions, SignalRootActor } from "../signals/actors.js";
+import { SignalDefinitions } from "../signals/protocol.js";
+import { SignalRootActor } from "../signals/root.js";
 import { SystemOneClient } from "../decisions/system-one.js";
 import { AgentConversations } from "@aster/agent";
 import { GoalsRootActor } from "../goals/root.js";
-import { GoalSignals } from "../signals/goal-owner.js";
 import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
 import { startContextReactions } from "./context-consumers.js";
@@ -59,8 +58,7 @@ type ActorServices =
   | ContextRegistry
   | SignalDefinitions
   | SystemOneClient
-  | ExternalAgents
-  | GoalSignals;
+  | ExternalAgents;
 
 const acquireRuntime = Effect.gen(function* () {
   const registry = yield* ContextRegistry;
@@ -77,7 +75,6 @@ const acquireRuntime = Effect.gen(function* () {
       message: "Signals and Goals require config.system-one",
     });
   const conversations = yield* AgentConversations;
-  const endpoint = yield* SignalCommands;
   const capture = yield* ContextCaptureSink;
   const modules = (yield* RuntimeIntegrations).installed();
   const reactionPolicy = yield* makeReactionPolicy({
@@ -94,7 +91,6 @@ const acquireRuntime = Effect.gen(function* () {
     SignalDefinitions,
     SystemOneClient,
     ExternalAgents,
-    GoalSignals,
   )(yield* Effect.context<ActorServices | DurableContext>());
   // Integration environments are captured by their own Layers. Never inject an ambient Scope.
   const actorServices = modules
@@ -168,8 +164,11 @@ const acquireRuntime = Effect.gen(function* () {
   const contexts = yield* system.spawn("contexts", ContextsActor);
   yield* contexts.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
-  const signals = yield* system.spawn("signals", SignalRootActor);
-  yield* signals.ask<void>((replyTo) => ({ _tag: "Ready", replyTo }));
+  const signalActivation = yield* Deferred.make<void>();
+  const signals = yield* system.spawn("signals", SignalRootActor, {
+    metadata: { signalActivation },
+  });
+  yield* signals.awaitStarted;
   for (const module of modules.filter((module) => module.phase === "consumer")) {
     const handle = yield* module
       .activate(system)
@@ -179,7 +178,6 @@ const acquireRuntime = Effect.gen(function* () {
   yield* (yield* system.spawn("publications", PublicationsActor)).awaitStarted;
   const tasks = yield* system.spawn("tasks", TasksRootActor);
   yield* tasks.awaitStarted;
-  yield* endpoint.bind(signals);
   const goalActivation = yield* Deferred.make<void>();
   const goals = settings.definitions.length
     ? yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } })
@@ -191,7 +189,7 @@ const acquireRuntime = Effect.gen(function* () {
     Effect.provideService(Scope.Scope, workScope),
   );
   running.initialization = yield* Effect.gen(function* () {
-    yield* signals.tell({ _tag: "Activate" });
+    yield* Deferred.succeed(signalActivation, undefined);
     yield* Effect.forEach(handles, ({ handle }) => handle.ready, { concurrency: "unbounded" });
     yield* Deferred.succeed(goalActivation, undefined);
   }).pipe(
@@ -276,23 +274,21 @@ export class AsterRuntime extends Context.Service<
   static layer<const Layers extends readonly Layer.Layer<never, any, any>[]>(options: {
     readonly integrations: Layers;
   }) {
-    const contextAndCommandServices = Layer.mergeAll(
+    const contextServices = Layer.mergeAll(
       ContextRegistry.layer,
       ContextCaptures.layer,
       ContextDescriptions.layer,
       ContextQueries.layer,
       GoalSettings.layer,
-      SignalCommands.layer,
       RuntimeIntegrations.layer,
       Layer.effect(SignalDefinitions, signalSettings),
     );
     // Registration captures integration services; acquireRuntime activates their Actors.
     const registerIntegrations = Layer.mergeAll(Layer.empty, ...options.integrations);
-    const runtimeServices = GoalSignals.layer.pipe(
-      Layer.provideMerge(registerIntegrations),
+    const runtimeServices = registerIntegrations.pipe(
       Layer.provideMerge(memoryLayer),
       Layer.provideMerge(AgentRunner.layer),
-      Layer.provideMerge(contextAndCommandServices),
+      Layer.provideMerge(contextServices),
     );
     return Layer.effect(AsterRuntime, acquireRuntime).pipe(Layer.provide(runtimeServices));
   }

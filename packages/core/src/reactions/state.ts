@@ -10,7 +10,7 @@ import { contextEventId } from "../context/model.js";
 import { GoalTitle } from "../config/schema.js";
 import { GoalIntentInput } from "../goals/screening/intent.js";
 import { GoalScreeningRecord } from "../goals/screening/decision.js";
-import { SignalReactionInput } from "../signals/reaction.js";
+import { SignalReactionInput } from "../signals/protocol.js";
 
 const Attempts = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
 export const ReactionDeliveryInput = Schema.Union([

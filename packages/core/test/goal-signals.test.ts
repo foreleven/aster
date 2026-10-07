@@ -1,14 +1,16 @@
+import { testConversations } from "./conversation-fixtures.js";
+import { readSignalHistory } from "../src/signals/state/store.js";
 import { taskFixture } from "./task-fixtures.js";
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { Clock, Effect } from "effect";
+import { Clock, Effect, Fiber, Stream } from "effect";
 import { SignalRootActor, type ContextRecord } from "../src/index.js";
 
-import type { SignalCommandReply } from "../src/signals/actors.js";
-import type { GoalSignalInput } from "../src/signals/goal-command.js";
-const input: GoalSignalInput = {
+import type { SignalCommandReply } from "../src/signals/protocol.js";
+import type { SignalChangeInput } from "../src/signals/protocol.js";
+const input: SignalChangeInput = {
   requestId: "create",
   source: "/goals/personal",
   target: "/signals/personal--watch",
@@ -24,12 +26,13 @@ const input: GoalSignalInput = {
 const setup = Effect.fnUntraced(function* (
   records: Map<string, ContextRecord>,
   clock?: Clock.Clock,
+  conversations = testConversations(),
 ) {
-  const env = yield* taskFixture({ records, clock });
+  const env = yield* taskFixture({ records, clock, conversations });
   const root = yield* env.system.spawn("signals", SignalRootActor);
-  const command = (value: GoalSignalInput) =>
+  const command = (value: SignalChangeInput) =>
     root.ask<SignalCommandReply>((replyTo) => ({
-      _tag: "ApplyGoalCommand",
+      _tag: "Change",
       input: value,
       replyTo,
     }));
@@ -37,11 +40,12 @@ const setup = Effect.fnUntraced(function* (
 });
 test("Signal owns direct command receipts across restarts, rejects stale changes and preserves ownership", async () => {
   const records = new Map<string, ContextRecord>();
+  const conversations = testConversations();
   for (const restart of [false, true])
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const env = yield* setup(records);
+          const env = yield* setup(records, undefined, conversations);
           assert.deepEqual(yield* env.command(input), {
             _tag: "Accepted",
             receipt: { requestId: "create", revision: 1 },
@@ -62,12 +66,12 @@ test("Signal owns direct command receipts across restarts, rejects stale changes
           );
           assert.deepEqual(env.registry.get(input.target), before);
           if (!restart) return;
-          const update: GoalSignalInput = {
+          const update: SignalChangeInput = {
             ...input,
             requestId: "update",
             change: {
               operation: "update",
-              revision: 1,
+              version: 1,
               definition: {
                 task: { _tag: "Goal", target: "/goals/personal", text: "Notify the Goal" },
                 trigger: { _tag: "Context", when: "New condition" },
@@ -89,20 +93,20 @@ test("Signal owns direct command receipts across restarts, rejects stale changes
             (yield* env.command({
               ...input,
               requestId: "delete",
-              change: { operation: "delete", revision: 2 },
+              change: { operation: "delete", version: 2 },
             }))._tag,
             "Accepted",
           );
           assert.equal(
-            (env.registry.get(input.target)!.state as { deleted: boolean }).deleted,
-            true,
+            (env.registry.get(input.target)!.state as { status: string }).status,
+            "deleted",
           );
         }),
       ).pipe(Effect.timeout("5 seconds")),
     );
 });
 
-test("Signal timer lives outside conversation, reschedules by revision and executes its Goal Task exactly once", async () => {
+test("Signal timer lives outside conversation, reschedules by version and executes its Goal Task exactly once", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -125,15 +129,15 @@ test("Signal timer lives outside conversation, reschedules by revision and execu
         });
         yield* env.wait(
           () =>
-            (env.registry.get(input.target)?.state as { nextDue?: number }).nextDue ===
-            start + 10000,
+            (env.registry.get(input.target)?.state as { nextDue?: string }).nextDue ===
+            new Date(start + 10000).toISOString(),
         );
         yield* env.command({
           ...input,
           requestId: "reschedule",
           change: {
             operation: "update",
-            revision: 1,
+            version: 1,
             definition: {
               task: { _tag: "Goal", target: "/goals/personal", text: "Notify" },
               trigger: {
@@ -145,23 +149,32 @@ test("Signal timer lives outside conversation, reschedules by revision and execu
         });
         yield* clock.adjust(11000);
         assert.equal(
-          (env.registry.get(input.target)!.state as { occurrences?: unknown[] }).occurrences
-            ?.length ?? 0,
+          (yield* readSignalHistory(env.conversations, input.target)).deliveries.length,
           0,
         );
+        const delivered = yield* Stream.runHead(
+          env.system.events.pipe(
+            Stream.filter(
+              (event) =>
+                event._tag === "CommandProcessed" &&
+                event.path === "/user/signals/personal--watch" &&
+                event.commandTag === "Delivered",
+            ),
+          ),
+        ).pipe(Effect.forkScoped);
+        yield* Effect.yieldNow;
         yield* clock.adjust(10000);
-        yield* env.wait(
-          () =>
-            (env.registry.get(input.target)!.state as { occurrences: { delivered: boolean }[] })
-              .occurrences[0]?.delivered === true,
-        );
+        yield* Fiber.join(delivered);
+        const history = yield* readSignalHistory(env.conversations, input.target);
+        assert.equal(history.deliveries[0]?.status, "delivered");
+        assert.equal(history.snapshot?.nextDue, null);
         assert.equal(
           Object.keys(env.registry.snapshot()).some((path) => path.includes("/tasks/")),
           false,
         );
         yield* clock.adjust(60000);
         assert.equal(
-          (env.registry.get(input.target)!.state as { occurrences: unknown[] }).occurrences.length,
+          (yield* readSignalHistory(env.conversations, input.target)).deliveries.length,
           1,
         );
       }),

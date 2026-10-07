@@ -43,17 +43,9 @@ const DisplayState = Schema.Struct({
   replyTo: Schema.optional(Schema.String),
   task: Schema.optional(Schema.Union([Task, PreparedTask])),
   outcomeText: Schema.optional(Schema.String),
-  occurrences: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        message: Schema.Struct({
-          source: Schema.String,
-          evidence: Schema.optional(Schema.Struct({ path: Schema.String })),
-        }),
-      }),
-    ),
-  ),
-  nextDue: Schema.optional(Schema.Number),
+  nextDue: Schema.optional(Schema.NullOr(Schema.String)),
+  owner: Schema.optional(Schema.String),
+  version: Schema.optional(Schema.Int),
   sourceContext: Schema.optional(Schema.String),
   sourcePath: Schema.optional(Schema.String),
   taskPath: Schema.optional(Schema.String),

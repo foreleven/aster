@@ -99,8 +99,6 @@ test("Goal startup refreshes the entire definition without losing work", async (
                 definitions: [definition],
                 history,
                 reasoner: { plan: () => Effect.die("No evaluation expected") },
-
-                deactivate: () => Effect.void,
               }),
             ),
           );

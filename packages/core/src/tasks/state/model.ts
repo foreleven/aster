@@ -95,7 +95,7 @@ const makeTaskState = Effect.fn("TaskState.make")(function* (path: string) {
             .pipe(Effect.mapError((error) => conflict(error.message)));
           return { receipt: (yield* store.read).inputs[0]!.receipt, replayed: true };
         }
-        const source = yield* sourceTask(registry, value.source, id);
+        const source = yield* sourceTask(registry, messages, value.source, id);
         if (
           source &&
           (source.task._tag === "Goal" ||

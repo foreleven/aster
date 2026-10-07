@@ -1,21 +1,67 @@
 import { createHash } from "node:crypto";
 import type { ActorRef } from "@aster/actor";
-import { ApplicationError } from "@aster/api-contracts";
+import { ApplicationError, type PublicContext } from "@aster/api-contracts";
 import { Clock, Context, Effect, Match, Ref, Schema } from "effect";
-import type { SystemOneClient } from "../decisions/system-one.js";
-import { makeSystemOneGate } from "../signals/detect.js";
-import { sourceSignals } from "../signals/policy.js";
+import { choice, type SystemOneClient } from "../decisions/system-one.js";
+import { SignalSnapshot, signalEnabled } from "../signals/state/snapshot.js";
+import type { SignalDefinition } from "../config/schema.js";
 import { relevantGoals } from "../goals/screening/decision.js";
 import type { GoalScreeningStore, GoalScreeningRecord } from "../goals/screening/decision.js";
 import { makeGoalIntent } from "../goals/screening/intent.js";
 import type { GoalsRootCommand } from "../goals/root.js";
-import type { SignalRootCommand } from "../signals/actors.js";
+import type { SignalRootCommand } from "../signals/protocol.js";
 import type {
   ReactionDeliveryInput,
   ReactionPlan,
   ReactionReply,
   ReactionPlanning,
 } from "./state.js";
+
+export const sourceSignals = (snapshot: Readonly<Record<string, PublicContext>>) =>
+  Object.values(snapshot)
+    .filter(
+      (record) =>
+        /^\/signals\/[^/]+$/.test(record.path) && record.projection?.visibility !== "restricted",
+    )
+    .flatMap((record) => {
+      const state = Schema.decodeUnknownSync(SignalSnapshot)(record.state);
+      return state.trigger._tag === "Context" && signalEnabled(state, (path) => snapshot[path])
+        ? [
+            {
+              slug: record.path.slice("/signals/".length),
+              trigger: state.trigger,
+              task: state.task,
+            },
+          ]
+        : [];
+    });
+
+/** One decision-model pass matches every active Context Signal. Timers never enter this path. */
+export const makeSystemOneGate =
+  (client: SystemOneClient) => (record: PublicContext, signals: readonly SignalDefinition[]) =>
+    Effect.gen(function* () {
+      if (!signals.length) return [];
+      const questions = Object.fromEntries(
+        signals.map((signal, index) => [
+          `signal_${index}`,
+          choice(
+            `Does this Context satisfy the Signal condition? ${signal.trigger._tag === "Context" ? signal.trigger.when : "Not a Context Signal"}`,
+            {
+              yes: "Evidence satisfies the condition; execute its Task.",
+              no: "The condition is not satisfied.",
+            },
+          ),
+        ]),
+      );
+      const response = yield* client.systemOne({
+        state: JSON.stringify({ context: record }),
+        questions,
+      });
+      return signals.filter((_, index) => {
+        const answer = response.answers[`signal_${index}`];
+        return answer?.type === "choice" && answer.choice === "yes";
+      });
+    });
 
 export class ReactionFailure extends Schema.TaggedError<ReactionFailure>()("ReactionFailure", {
   message: Schema.String,

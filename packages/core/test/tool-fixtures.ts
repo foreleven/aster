@@ -9,7 +9,6 @@ import { MemoryBackend, type MemoryRecall } from "../src/memory/contracts.js";
 import { ContextCaptures } from "../src/memory/capture.js";
 import { GoalSettings } from "../src/config/settings.js";
 import { ExternalAgents } from "../src/tasks/execution/contracts.js";
-import { GoalSignals } from "../src/signals/goal-owner.js";
 import { GoalsRootActor } from "../src/goals/root.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
@@ -48,10 +47,7 @@ export const toolSystem = Effect.fnUntraced(function* (
         reasoning: { model: "test" },
       }),
       Layer.succeed(ExternalAgents, {}),
-      Layer.succeed(GoalSignals, {
-        applySignal: () => Effect.die("Unexpected signal"),
-        deactivate: () => Effect.void,
-      }),
+
       Layer.succeed(
         AgentRunner,
         AgentRunner.make(() => Effect.die("Query fixture cannot execute a model")),
