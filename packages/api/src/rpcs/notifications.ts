@@ -1,4 +1,6 @@
+import { ApplicationError } from "@aster/core/contracts";
 import { Schema } from "effect";
+import { Rpc, RpcGroup } from "effect/rpc";
 
 export const QueryKeys = {
   all: "all-queries",
@@ -22,3 +24,11 @@ export const QueryInvalidation = Schema.TaggedStruct("Invalidate", {
   keys: Schema.Array(Schema.String),
 });
 export type QueryInvalidation = typeof QueryInvalidation.Type;
+
+export const NotificationRpcs = RpcGroup.make(
+  Rpc.make("SubscribeInvalidations", {
+    success: QueryInvalidation,
+    error: ApplicationError,
+    stream: true,
+  }),
+);

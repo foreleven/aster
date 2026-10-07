@@ -20,16 +20,16 @@ app composition -> Runtime Layer + selected transport
 
 ## Ownership
 
-| Owner                        | Responsibility                                                                                                                         |
-| ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| `core/runtime`               | Assemble services, own root Actors, integration activation, readiness and shutdown; expose Actor addressing and native diagnostics.    |
-| Core domain modules          | Actor commands, state transitions, deduplication, durable admission and domain read projections.                                       |
-| `api/src/rpc.ts`             | RPC definitions and API-only response schemas.                                                                                         |
-| `api/src/changes.ts`         | Query keys, notification schema and Context-to-query invalidation mapping.                                                             |
-| `api/src/server.ts`          | Inject Runtime/domain services, construct commands, ask Actors, translate replies/errors, normalize wire data and serve subscriptions. |
-| `api/src/client.ts`          | Construct the native scoped client without selecting a Protocol.                                                                       |
-| `apps/local/src/http-api.ts` | HTTP Protocol, serialization, assets, host policy, Node server and scoped shutdown.                                                    |
-| `apps/web/src/api`           | Browser Protocol, AtomRpc queries/mutations, notification consumption and UI connection state.                                         |
+| Owner                           | Responsibility                                                                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `core/runtime`                  | Assemble services, own root Actors, integration activation, readiness and shutdown; expose Actor addressing and native diagnostics.    |
+| Core domain modules             | Actor commands, state transitions, deduplication, durable admission and domain read projections.                                       |
+| `api/src/rpcs/`                 | RPC definitions and API schemas grouped by module; `api/src/rpc.ts` merges the groups.                                                 |
+| `api/src/rpcs/notifications.ts` | Query keys, notification schema and Context-to-query invalidation mapping.                                                             |
+| `api/src/server.ts`             | Inject Runtime/domain services, construct commands, ask Actors, translate replies/errors, normalize wire data and serve subscriptions. |
+| `api/src/client.ts`             | Construct the native scoped client without selecting a Protocol.                                                                       |
+| `apps/local/src/http-api.ts`    | HTTP Protocol, serialization, assets, host policy, Node server and scoped shutdown.                                                    |
+| `apps/web/src/api`              | Browser Protocol, AtomRpc queries/mutations, notification consumption and UI connection state.                                         |
 
 AsterRuntime has no `api` property or application facade. Its value exposes `actors` (Actor selection only), `ready` and `inspect`. Its Layer publishes the same ContextRegistry, ContextQueries and AgentConversations instances used by the running domain. Local does not reconstruct these services. `makeApplicationApi`, `ApplicationApi` and `core/runtime/api.ts` are removed.
 
@@ -77,7 +77,7 @@ Changing transports uses Effect's existing Protocol Layers. A WebSocket host sup
 
 ## RPC inventory
 
-One ApplicationRpcs group contains 17 operations: nine queries, seven commands and one stream. The categories below do not create separate clients or servers.
+Seven module groups in `api/src/rpcs/` are composed with `RpcGroup.merge` into ApplicationRpcs: ContextRpcs, GoalRpcs, TaskRpcs, ApprovalRpcs, ProcessingRpcs, RuntimeRpcs and NotificationRpcs. Together they contain 17 operations: nine queries, seven commands and one stream. Each group is also exported from `@aster/api`; the default server/client use the combined group.
 
 | Area          | Operations                                                          |
 | ------------- | ------------------------------------------------------------------- |

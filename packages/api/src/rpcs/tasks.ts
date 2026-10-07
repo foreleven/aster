@@ -1,5 +1,12 @@
+import {
+  ContextRevision,
+  ApplicationError,
+  TaskRecoveryInput,
+  TaskPath,
+  CommandReceipt,
+} from "@aster/core/contracts";
 import { Schema } from "effect";
-import { ContextRevision } from "@aster/core/contracts";
+import { Rpc, RpcGroup } from "effect/rpc";
 
 const InspectionTaskPath = Schema.String.check(Schema.isPattern(/^\/tasks\/[^/]+$/));
 /** Business inspection deliberately excludes provider metadata, native frames and credential handles. */
@@ -34,3 +41,21 @@ export const TaskInspection = Schema.Struct({
   ),
 });
 export type TaskInspection = typeof TaskInspection.Type;
+
+export const TaskRpcs = RpcGroup.make(
+  Rpc.make("InspectTask", {
+    payload: { path: TaskPath },
+    success: TaskInspection,
+    error: ApplicationError,
+  }),
+  Rpc.make("CheckTask", {
+    payload: TaskRecoveryInput,
+    success: CommandReceipt,
+    error: ApplicationError,
+  }),
+  Rpc.make("RetryTask", {
+    payload: TaskRecoveryInput,
+    success: CommandReceipt,
+    error: ApplicationError,
+  }),
+);

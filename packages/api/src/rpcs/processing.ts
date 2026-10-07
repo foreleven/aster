@@ -1,5 +1,13 @@
+import {
+  CommandIdentifier,
+  ContextRevision,
+  ApplicationError,
+  RecoveryInput,
+  CommandReceipt,
+} from "@aster/core/contracts";
 import { Schema } from "effect";
-import { CommandIdentifier, ContextRevision } from "@aster/core/contracts";
+import { Rpc, RpcGroup } from "effect/rpc";
+
 /** Per-target routing decisions; independent of work and delivery lifecycle. */
 export const ReactionMatch = Schema.Union([
   Schema.TaggedStruct("Matched", { target: Schema.String, reason: Schema.String }),
@@ -28,3 +36,16 @@ export const ProcessingSnapshot = Schema.Struct({
   ),
 });
 export type ProcessingSnapshot = typeof ProcessingSnapshot.Type;
+
+export const ProcessingRpcs = RpcGroup.make(
+  Rpc.make("InspectProcessing", {
+    payload: { owner: ProcessingOwner },
+    success: ProcessingSnapshot,
+    error: ApplicationError,
+  }),
+  Rpc.make("RecoverProcessing", {
+    payload: RecoveryInput,
+    success: CommandReceipt,
+    error: ApplicationError,
+  }),
+);

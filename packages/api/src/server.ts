@@ -24,8 +24,9 @@ import {
 import { PublicContext, PublicApprovalEntry } from "@aster/core/contracts";
 import { Cause, Effect, Layer, Queue, Schema, Scope, Stream } from "effect";
 import { RpcServer } from "effect/rpc";
-import { ApplicationRpcs, RuntimeSnapshot } from "./rpc.js";
-import { contextQueryKeys, QueryKeys, type QueryInvalidation } from "./changes.js";
+import { ApplicationRpcs } from "./rpc.js";
+import { RuntimeSnapshot } from "./rpcs/runtime.js";
+import { contextQueryKeys, QueryKeys, type QueryInvalidation } from "./rpcs/notifications.js";
 
 /** Dynamic Actor selection is the single typed addressing boundary for RPC commands. */
 const ask = Effect.fn("Rpc.ask")(function* <C, A>(

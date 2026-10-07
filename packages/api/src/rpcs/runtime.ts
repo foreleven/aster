@@ -1,4 +1,7 @@
+import { ApplicationError } from "@aster/core/contracts";
 import { Schema } from "effect";
+import { Rpc, RpcGroup } from "effect/rpc";
+
 const FailureSummary = Schema.Struct({
   message: Schema.String,
   stack: Schema.optional(Schema.String),
@@ -69,3 +72,7 @@ export const RuntimeSnapshot = Schema.Struct({
   events: Schema.Array(RuntimeEvent),
 });
 export type RuntimeSnapshot = typeof RuntimeSnapshot.Type;
+
+export const RuntimeRpcs = RpcGroup.make(
+  Rpc.make("InspectRuntime", { success: RuntimeSnapshot, error: ApplicationError }),
+);
