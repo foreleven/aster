@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Fiber, Layer } from "effect";
+import { Deferred, Effect, Fiber, Layer, Option } from "effect";
 import { TestClock } from "effect/testing";
 import { AgentConversations, AgentRunner, Models, Type } from "../src/index.js";
 
@@ -54,6 +54,9 @@ test("Pi entry lookup stays within its owner and does not decode unrelated histo
           }, BACKGROUND_CONTEXT);
         });
         assert.deepEqual(yield* messages.get("/goals/a", first.id), first);
+        assert.deepEqual(yield* messages.find("/goals/a", "one"), Option.some(first));
+        assert.deepEqual(yield* messages.find("/goals/a", "missing"), Option.none());
+        assert.deepEqual(yield* messages.find("/tasks/other", "one"), Option.none());
         assert.deepEqual(
           yield* messages.append("/goals/a", "one", "goal.input", { text: "Hello" }),
           first,
@@ -89,6 +92,7 @@ test("Pi message commits survive reopen, concurrent admission and changed retry 
   await open((messages) =>
     Effect.gen(function* () {
       assert.equal((yield* messages.read("/goals/a")).length, 80);
+      assert.deepEqual(yield* messages.find("/goals/a", "input-0"), Option.some(entries[0]));
       assert.deepEqual(
         yield* messages.append("/goals/a", "input-0", "goal.input", { text: "Evidence 0" }),
         entries[0],

@@ -10,12 +10,12 @@ import {
   type AssistantMessage,
 } from "@earendil-works/pi-ai";
 import {
-  createRegistry,
   defineExtension,
   defineTool,
   GenerationTask,
   CompactionTask,
-  Harness,
+  type Harness,
+  type EntryId,
   hook,
   type Cursor,
   type EntryRecord,
@@ -23,9 +23,6 @@ import {
   type Extension,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
-import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { Schema } from "effect";
 import { admitExchange, completeExchange, lookupExchange } from "./durable-exchange.js";
@@ -124,14 +121,13 @@ export const DurableContextBudget = Schema.Struct({
 );
 
 export interface DurableRunOptions {
-  /** Bump when tool behavior or context transformation semantics change. */
+  /** Bump when tool behavior change. */
   readonly catalogueId?: string;
   /** Recover saved work without issuing a new provider request for an accepted exchange. */
   readonly reconcile?: boolean;
   readonly owner?: "goals" | "tasks";
   readonly sessionId: string;
   readonly requestId: string;
-  readonly storageDirectory?: string;
   /** Token budget for native compaction, capped to the provider model window. */
   readonly contextBudget?: typeof DurableContextBudget.Type;
 }
@@ -141,16 +137,6 @@ export class DurableCloseFailure extends Error {
     super("Pi writer shutdown is uncertain; storage ownership retained", { cause });
   }
 }
-const closeDurableStorage = async (resource: {
-  close: (context: ChordContext) => Promise<void>;
-}) => {
-  try {
-    await resource.close(BACKGROUND_CONTEXT);
-  } catch (cause) {
-    throw new DurableCloseFailure(cause);
-  }
-};
-
 const abortDurableConversation = async (harness: Harness) => {
   try {
     const conversation = await harness.root(BACKGROUND_CONTEXT);
@@ -161,46 +147,25 @@ const abortDurableConversation = async (harness: Harness) => {
   }
 };
 
-export const durableDirectory = (options: DurableRunOptions) =>
-  options.storageDirectory ??
-  join(homedir(), ".aster", options.owner ?? "goals", options.sessionId, "pi");
-
 export const runDurableAgent = async (input: {
   readonly resolved: ResolvedModel;
   readonly messages: readonly AgentMessage[];
   readonly tools: readonly AgentTool[];
-  readonly resultTool?: string;
-  readonly onMessage?: (message: AgentMessage) => Promise<void> | void;
   readonly onResponse?: (message: AssistantMessage, signal?: AbortSignal) => Promise<void> | void;
-  readonly transformContext?: (
-    messages: AgentMessage[],
-    signal?: AbortSignal,
-  ) => Promise<AgentMessage[]>;
   readonly durable: DurableRunOptions;
   readonly signal?: AbortSignal;
-  readonly driver?: ConversationDriver;
+  readonly driver: ConversationDriver;
 }) => {
   const context = durableContext(input.signal);
   const budget = input.durable.contextBudget;
   const resolved = budget
     ? { ...input.resolved, model: { ...input.resolved.model, contextWindow: budget.contextTokens } }
     : input.resolved;
-  const directory = durableDirectory(input.durable);
-  const storage = input.driver
-    ? undefined
-    : await openNodeJsonlStorage(directory, context, { fsync: true });
-  const registry = input.driver?.registry ?? createRegistry();
+  const { harness, registry, models, settings } = input.driver;
   const unsafeTools = new Set(
     input.tools.filter((tool) => tool.replay !== "safe").map((tool) => tool.name),
   );
-  const fence = generationFence(
-    () => harness,
-    unsafeTools,
-    async (request, _api, context) =>
-      input.transformContext
-        ? { messages: await input.transformContext([...request.messages], context.abortSignal) }
-        : undefined,
-  );
+  const fence = generationFence(() => harness, unsafeTools);
   const extension: Extension = defineExtension({
     name: `aster-${input.durable.owner === "tasks" ? "task" : "goal"}-tools:${input.durable.sessionId}`,
     tools: fenceTools(input.tools.map(durableTool), unsafeTools),
@@ -213,58 +178,31 @@ export const runDurableAgent = async (input: {
     ],
   });
   registry.install(extension);
-  let harness: Harness;
   let observingAccepted = false;
   let providerBlocked = false;
   let completed = false;
-  try {
-    const configuredModels = durableModels(
-      resolved,
-      async (signal) => {
-        if (observingAccepted) {
-          providerBlocked = true;
-          throw new Error(
-            "Accepted Agent outcome is uncertain; reconciliation cannot issue another provider request",
-          );
-        }
-        await fence.beforeModel(signal);
-      },
-      input.driver?.models,
-    );
-    if (input.driver)
-      input.driver.settings.compaction = budget
-        ? {
-            enabled: true,
-            reserveTokens: budget.reserveTokens,
-            keepRecentTokens: Math.floor((budget.contextTokens - budget.reserveTokens) / 2),
-            backgroundTokens: 0,
-          }
-        : undefined;
-    harness =
-      input.driver?.harness ??
-      (await Harness.open(
-        storage!,
-        {
-          models: configuredModels,
-          registry,
-          // Let Pi compact at generation boundaries before preparing the request.
-          // Keep half the input budget verbatim, leaving space for the summary
-          // and future tool results. Blocking compaction stays owned by the run.
-          settings: budget && {
-            compaction: {
-              enabled: true,
-              reserveTokens: budget.reserveTokens,
-              keepRecentTokens: Math.floor((budget.contextTokens - budget.reserveTokens) / 2),
-              backgroundTokens: 0,
-            },
-          },
-        },
-        context,
-      ));
-  } catch (cause) {
-    if (storage) await closeDurableStorage(storage);
-    throw cause;
-  }
+  durableModels(
+    resolved,
+    async (signal) => {
+      if (observingAccepted) {
+        providerBlocked = true;
+        throw new Error(
+          "Accepted Agent outcome is uncertain; reconciliation cannot issue another provider request",
+        );
+      }
+      await fence.beforeModel(signal);
+    },
+    models,
+  );
+  // Native blocking compaction remains owned by this invocation.
+  settings.compaction = budget
+    ? {
+        enabled: true,
+        reserveTokens: budget.reserveTokens,
+        keepRecentTokens: Math.floor((budget.contextTokens - budget.reserveTokens) / 2),
+        backgroundTokens: 0,
+      }
+    : undefined;
   try {
     const conversation = await harness.root(context, {
       agent: {
@@ -313,7 +251,6 @@ export const runDurableAgent = async (input: {
               input: JSON.stringify({
                 content,
                 instructions,
-                resultTool: input.resultTool,
                 catalogueId: input.durable.catalogueId ?? "aster.agent.v2",
                 contextBudget: budget,
                 configuration: createHash("sha256")
@@ -337,23 +274,23 @@ export const runDurableAgent = async (input: {
             context,
           );
     if (admission.error !== null) throw new DurableAgentFailure({ message: admission.error });
-    const resultEntries = admission.entryIds;
-    if (resultEntries !== null) {
-      const wanted = new Set(resultEntries);
-      const entries: EntryRecord[] = [];
-      let cursor: Cursor | undefined;
-      do {
-        const page = await conversation.entries({}, 100, cursor, context);
-        entries.push(...page.items.filter((entry) => wanted.has(entry.id)));
-        cursor = page.next;
-      } while (cursor);
-      if (entries.length !== wanted.size)
-        throw new Error("Durable result references missing transcript entries");
-      entries.sort((a, b) => resultEntries.indexOf(a.id) - resultEntries.indexOf(b.id));
-      const messages = entries
-        .flatMap((entry) => entry.model ?? [])
-        .filter((message) => message.role !== "user" && message.role !== "system");
-      for (const message of messages) await input.onMessage?.(message);
+    const resultMessages = (ids: readonly number[]) =>
+      harness.commit(async (tx) => {
+        const messages: AgentMessage[] = [];
+        for (const id of ids) {
+          const entry = await tx.entry(id as EntryId);
+          if (entry?.conversationId !== conversation.id)
+            throw new Error("Durable result references missing transcript entries");
+          messages.push(
+            ...(entry.model ?? []).filter(
+              (message) => message.role !== "user" && message.role !== "system",
+            ),
+          );
+        }
+        return messages;
+      }, context);
+    if (admission.entryIds !== null) {
+      const messages = await resultMessages(admission.entryIds);
       completed = true;
       return { messages };
     }
@@ -413,10 +350,6 @@ export const runDurableAgent = async (input: {
         !entries.some((entry) => entry.id === settled.answer)
       )
         throw new Error("Durable submission entry is missing from the transcript");
-      const messages = entries
-        .filter((entry) => entry.id !== settled.entry)
-        .flatMap((entry) => entry.model ?? [])
-        .filter((message) => message.role !== "user" && message.role !== "system");
       const resultEntryIds = entries
         .filter((entry) => entry.id !== settled.entry && entry.model?.length)
         .map((entry) => Number(entry.id));
@@ -440,7 +373,6 @@ export const runDurableAgent = async (input: {
           )) {
           if (message.role === "user" || message.role === "assistant") break;
           if (message.role === "toolResult" && calls.delete(message.toolCallId)) {
-            messages.push(message);
             resultEntryIds.push(entryId);
           }
           if (!calls.size) break;
@@ -448,7 +380,7 @@ export const runDurableAgent = async (input: {
         if (calls.size)
           throw new Error("Durable terminal tool results are missing from the transcript");
       }
-      return { messages, resultEntryIds };
+      return resultEntryIds;
     };
     const steering: Array<Promise<Awaited<ReturnType<typeof conversation.submit>>>> = [];
     const admitSteering = (requestId: string, text: string, steerContext: typeof context) => {
@@ -487,85 +419,32 @@ export const runDurableAgent = async (input: {
       context,
     );
     for (const item of retainedSteers) admitSteering(item.requestId, item.text, context);
-    if (input.driver) input.driver.steering = admitSteering;
-    const collected = await collect(submission);
-    let messages = collected.messages;
-    const resultEntryIds = collected.resultEntryIds;
-    if (
-      input.resultTool &&
-      !messages.some(
-        (message) =>
-          message.role === "toolResult" &&
-          message.toolName === input.resultTool &&
-          !message.isError,
-      )
-    ) {
-      const correction = await conversation.submit(
-        {
-          type: "input",
-          content: `The required structured result is missing. Submit it using ${input.resultTool}. Do not substitute prose.`,
-          requestId: JSON.stringify(["aster.agent.input", input.durable.requestId, "correction"]),
-          whenBusy: "followUp",
-        },
-        context,
-      );
-      const correctionMessages = await collect(correction);
-      messages = [...messages, ...correctionMessages.messages];
-      resultEntryIds.push(...correctionMessages.resultEntryIds);
-      if (
-        !messages.some(
-          (message) =>
-            message.role === "toolResult" &&
-            message.toolName === input.resultTool &&
-            !message.isError,
-        )
-      ) {
-        const error = `Agent did not submit ${input.resultTool} after one correction`;
-        await completeExchange(
-          harness,
-          {
-            conversationId: conversation.id,
-            requestId: input.durable.requestId,
-            entryIds: [...new Set(resultEntryIds)],
-            error,
-          },
-          context,
-        );
-        throw new DurableAgentFailure({ message: error });
-      }
-    }
+    input.driver.steering = admitSteering;
+    const resultEntryIds = await collect(submission);
     // Closing admission is synchronous with observing an empty batch. A follow-up
     // admitted during collection is included, even if Pi started another generation.
     for (let index = 0; index < steering.length; index++) {
       const next = await collect(await steering[index]!);
-      messages.push(...next.messages);
-      resultEntryIds.push(...next.resultEntryIds);
+      resultEntryIds.push(...next);
     }
-    if (input.driver) delete input.driver.steering;
-    const selected = new Set(resultEntryIds);
-    messages = (await readEntries({}))
-      .filter((entry) => selected.has(Number(entry.id)))
-      .flatMap((entry) => entry.model ?? [])
-      .filter((message) => message.role !== "user" && message.role !== "system");
+    delete input.driver.steering;
+    const ids = [...new Set(resultEntryIds)].sort((a, b) => a - b);
+    const messages = await resultMessages(ids);
     await completeExchange(
       harness,
       {
         conversationId: conversation.id,
         requestId: input.durable.requestId,
-        entryIds: [...new Set(resultEntryIds)].sort((a, b) => a - b),
+        entryIds: ids,
       },
       context,
     );
-    for (const message of messages)
-      if (message.role === "assistant" || message.role === "toolResult")
-        await input.onMessage?.(message);
     completed = true;
     return { messages };
   } finally {
-    if (input.driver) delete input.driver.steering;
+    delete input.driver.steering;
     // Shutdown uncertainty takes precedence over an ordinary run failure: the
     // enclosing Effect must quarantine ownership even if a result was committed.
-    if (!input.driver) await closeDurableStorage(harness);
-    else if (!completed) await abortDurableConversation(harness);
+    if (!completed) await abortDurableConversation(harness);
   }
 };

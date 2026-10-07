@@ -38,7 +38,7 @@ Selected reply entries can be identified by durable references in Pi rather than
 
 The separate GoalHistory interface, memory/file implementations and runtime wiring have been removed. The implementation replaces duplicated Goal input payloads, response strings and Task message bodies in Actor persistence with Pi conversation, submission or entry references as appropriate. Actor state continues to own business state and delivery/recovery bookkeeping; Pi owns message content. Goal business mutations go through the Actor-local GoalState service, shared by command handlers and local tools; Pi remains the message store.
 
-Message admission must commit to Pi before acceptance is acknowledged. Pi and Actor storage do not share an atomic transaction: use stable identities and a recoverable handoff so a crash between message admission and Actor-state updates neither loses work nor repeats an accepted execution. The shared scoped Pi writer supports message admission while a Task executes. SDK operations and writer ownership stay in packages/agent, with Effect capabilities consumed by core.
+Message admission must commit to Pi before acceptance is acknowledged. Pi and Actor storage do not share an atomic transaction: use stable identities and a recoverable handoff so a crash between message admission and Actor-state updates neither loses work nor repeats an accepted execution. The shared scoped Pi writer supports message admission while a Task executes. SDK operations and writer ownership stay in packages/agent, with Effect capabilities consumed by core. Durable Agent construction requires the injected AgentConversations service; it never opens a standalone writer.
 
 ## Implementation
 

@@ -44,7 +44,7 @@ const readCaller: EffectTool<typeof parameters, never, Caller> = {
     }),
 };
 
-test("runner captures each invocation's injected services for tools and all hooks", async () => {
+test("runner captures each invocation's injected services for tools and response observers", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -64,9 +64,7 @@ test("runner captures each invocation's injected services for tools and all hook
               const text = result.content[0];
               assert.ok(text?.type === "text");
               assert.equal(text.text, `${result.details}:1234`);
-              await native.onMessage!(response);
               await native.onResponse!(response, signal);
-              await native.transformContext!([], signal);
               return { messages: [] };
             },
             catch: (cause) => new AgentError("Fake SDK failed", [], { cause }),
@@ -76,9 +74,7 @@ test("runner captures each invocation's injected services for tools and all hook
           name: "test",
           messages: [],
           tools: [readCaller],
-          onMessage: () => record("message"),
           onResponse: () => record("response"),
-          transformContext: (messages) => record("transform").pipe(Effect.as(messages)),
         });
         // A missing dependency must remain visible in the runner's inferred Effect type.
         const dependencyIsPreserved: [Effect.Services<typeof work>] extends [Caller]
@@ -94,17 +90,7 @@ test("runner captures each invocation's injected services for tools and all hook
           ],
           { concurrency: "unbounded" },
         ).pipe(Effect.provideService(Clock.Clock, clock));
-        assert.deepEqual(
-          seen.sort(),
-          [
-            "one:message",
-            "one:response",
-            "one:transform",
-            "two:message",
-            "two:response",
-            "two:transform",
-          ].sort(),
-        );
+        assert.deepEqual(seen.sort(), ["one:response", "two:response"].sort());
       }),
     ),
   );

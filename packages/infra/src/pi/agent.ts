@@ -55,7 +55,7 @@ export const makePiRuntime = Effect.fn("PiExternalAgent.runtime")(function* (opt
     onCloseFailure: lease.quarantine,
     resolved,
     catalogueId: "prepared-analysis.v2",
-    nativeTools: [{ ...createReadTool(), replay: "safe" }],
+    tools: [{ ...createReadTool(), replay: "safe" }],
     environment: {
       policyId: sandbox.policyId,
       open: (input, context) => run(sandbox.open(input), { signal: context.abortSignal }),

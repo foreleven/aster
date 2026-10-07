@@ -30,6 +30,7 @@ import {
   Scope,
   Semaphore,
   Ref,
+  Option,
 } from "effect";
 import { PiStorageLease } from "./pi-storage-lease.js";
 
@@ -39,20 +40,14 @@ export class ConversationError extends Data.TaggedError("ConversationError")<{
   readonly cause?: unknown;
 }> {}
 
-export const ConversationEntry = Schema.Struct({
-  id: Schema.Int,
-  requestId: Schema.String,
-  kind: Schema.String,
-  data: Schema.Unknown,
-  at: Schema.String,
-});
-export type ConversationEntry = typeof ConversationEntry.Type;
 const StoredEntry = Schema.Struct({
   requestId: Schema.String,
   kind: Schema.String,
   data: Schema.Unknown,
   at: Schema.String,
 });
+export const ConversationEntry = Schema.Struct({ id: Schema.Int, ...StoredEntry.fields });
+export type ConversationEntry = typeof ConversationEntry.Type;
 const decodeEntry = (entry: EntryRecord): ConversationEntry => ({
   ...Schema.decodeUnknownSync(StoredEntry)(entry.data),
   id: entry.id,
@@ -107,6 +102,10 @@ export class AgentConversations extends Context.Service<
       owner: string,
       id: number,
     ) => Effect.Effect<ConversationEntry, ConversationError>;
+    readonly find: (
+      owner: string,
+      requestId: string,
+    ) => Effect.Effect<Option.Option<ConversationEntry>, ConversationError>;
     /** SDK boundary used by AgentRunner, never by business workflows. */
     readonly driver: (owner: string) => Effect.Effect<ConversationDriver, ConversationError>;
   }
@@ -320,6 +319,28 @@ export class AgentConversations extends Context.Service<
                 message: "Conversation entry not found",
               });
             return decodeEntry(entry);
+          }, context);
+        }),
+      find: (owner, requestId) =>
+        access(owner, async ({ harness }, context) => {
+          const conversation = await harness.root(context);
+          return harness.commit(async (tx) => {
+            const index = await tx.doc(Index, conversation.id);
+            const id = index.requests[createHash("sha256").update(requestId).digest("hex")];
+            if (id === undefined) return Option.none();
+            const entry = await tx.entry(id as EntryId);
+            if (entry?.conversationId !== conversation.id || entry.kind !== "app.aster.message")
+              throw new ConversationError({
+                kind: "unavailable",
+                message: "Message reference is missing",
+              });
+            const saved = decodeEntry(entry);
+            if (saved.requestId !== requestId)
+              throw new ConversationError({
+                kind: "unavailable",
+                message: "Message index identity mismatch",
+              });
+            return Option.some(saved);
           }, context);
         }),
       append: (owner, requestId, kind, data) =>

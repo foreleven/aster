@@ -1,3 +1,4 @@
+import { durableTool } from "../src/durable.js";
 import assert from "node:assert/strict";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -124,6 +125,18 @@ test("Pi runtime persists one task-owned execution per request, rejects altered 
         assert.equal(conflict.operation, "submit");
         const invalid = yield* runtime.status({ ...handle, sessionId: "9999" }).pipe(Effect.flip);
         assert.equal(invalid.operation, "status");
+        for (const runId of [
+          `0${handle.runId}`,
+          `${handle.runId}.0`,
+          ` ${handle.runId}`,
+          "not-a-task",
+          "9007199254740992",
+        ]) {
+          assert.equal(
+            (yield* runtime.status({ ...handle, runId }).pipe(Effect.flip)).operation,
+            "status",
+          );
+        }
         const tasks = yield* Effect.promise(() =>
           storage.scanTasks({ kind: "app.aster.execution" }, 100, undefined, BACKGROUND_CONTEXT),
         );
@@ -253,7 +266,7 @@ for (const replay of ["safe", "unsafe"] as const) {
       ownerId: "test",
       openStorage: openAt(directory),
       catalogueId: `test-${replay}.v1`,
-      tools: [tool],
+      tools: [durableTool(tool)],
       resolved: resolved(() => {
         modelCalls++;
         if (modelCalls === 1 || replay === "unsafe")
@@ -339,13 +352,13 @@ test("Pi runtime stops new tool calls after an unsafe tool throws with an uncert
               label: "Write",
               description: "Unsafe test action",
               parameters: Type.Object({}),
-              replay: "never",
+              replay: "never" as const,
               execute: async () => {
                 calls++;
                 throw new Error("Action completed but acknowledgement lost");
               },
             },
-          ],
+          ].map(durableTool),
         });
         const handle = yield* runtime.submit(request);
         assert.equal((yield* runtime.wait(handle)).state, "unknown");
@@ -378,23 +391,25 @@ test("Pi runtime fences a mixed tool round after a returned unknown write outcom
               "toolUse",
             );
           }),
-          tools: ["read", "write", "later"].map((name): AgentTool => ({
-            name,
-            label: name,
-            description: name,
-            parameters: Type.Object({}),
-            replay: name === "write" ? "never" : "safe",
-            execute: async () => {
-              calls.push(name);
-              return {
-                isError: name === "write",
-                content: [
-                  { type: "text", text: name === "write" ? "Acknowledgement lost" : "Read" },
-                ],
-                details: {},
-              };
-            },
-          })),
+          tools: ["read", "write", "later"]
+            .map((name): AgentTool => ({
+              name,
+              label: name,
+              description: name,
+              parameters: Type.Object({}),
+              replay: name === "write" ? "never" : "safe",
+              execute: async () => {
+                calls.push(name);
+                return {
+                  isError: name === "write",
+                  content: [
+                    { type: "text", text: name === "write" ? "Acknowledgement lost" : "Read" },
+                  ],
+                  details: {},
+                };
+              },
+            }))
+            .map(durableTool),
         });
         const handle = yield* runtime.submit(request);
         assert.equal((yield* runtime.wait(handle)).state, "unknown");

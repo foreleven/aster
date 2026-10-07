@@ -1,7 +1,7 @@
 import { AgentConversations } from "@aster/agent";
 import { ApplicationError } from "../../operations.js";
 import { ContextQueryInput } from "../contracts.js";
-import { Effect, Schema } from "effect";
+import { Effect, Option, Schema } from "effect";
 import { isDeepStrictEqual } from "node:util";
 import type { ContextQueries } from "./routes.js";
 
@@ -50,9 +50,9 @@ export const queryResults = (
     requestId: string,
     input: ContextQueryInput,
   ) {
-    const entries = yield* messages.read(owner).pipe(Effect.mapError(queryError));
-    const previous = entries.find((entry) => entry.requestId === requestId);
-    if (previous) {
+    const found = yield* messages.find(owner, requestId).pipe(Effect.mapError(queryError));
+    if (Option.isSome(found)) {
+      const previous = found.value;
       const saved = yield* Schema.decodeUnknownEffect(SavedResult)(previous.data).pipe(
         Effect.mapError(
           () =>
@@ -67,7 +67,7 @@ export const queryResults = (
           kind: "conflict",
           message: "Query identity belongs to another input",
         });
-      return yield* page(owner, previous.id, 0);
+      return { resultId: previous.id, path: saved.input.path, ...textPage(saved.text, 0, 2000) };
     }
     const result = yield* queries.query(input).pipe(Effect.mapError(queryError));
     const text = JSON.stringify(result);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Cause, Effect, Fiber, Layer } from "effect";
+import { Cause, Deferred, Effect, Fiber, Layer } from "effect";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import {
   Agent,
@@ -276,62 +276,86 @@ test("missing results are bounded and token truncation is diagnosed without retr
   }
 });
 
-test("message persistence is awaited before tools and context guards apply to subsequent provider calls", async () => {
-  const persisted: AgentMessage[] = [];
+test("isolated observers run before tools and receive the invocation AbortSignal", async () => {
   const responses: AssistantMessage[] = [];
-  let requests = 0,
-    guardCalls = 0;
+  let requests = 0;
   const result = await Effect.runPromise(
     Effect.gen(function* () {
       const agent = yield* Agent.make({
         name: "test",
-        onResponse: (message) => {
-          responses.push(message);
-        },
-        onMessage: async (message) => {
+        onResponse: async (message, signal) => {
+          assert.ok(signal instanceof AbortSignal);
+          assert.equal(signal.aborted, false);
           await Promise.resolve();
-          persisted.push(message);
-        },
-        transformContext: async (messages) => {
-          guardCalls++;
-          if (messages.some((m) => m.role === "toolResult"))
-            throw new Error("context budget reached");
-          return messages;
+          responses.push(message);
         },
         tools: [
           {
             name: "read",
-            label: "read",
-            description: "read",
+            label: "Read",
+            description: "Read",
             parameters: Type.Object({}),
             execute: async () => {
-              assert.equal(persisted.at(-1)?.role, "assistant");
-              assert.deepEqual(
-                responses,
-                persisted.filter((message) => message.role === "assistant"),
-              );
+              assert.equal(responses.length, 1);
+              assert.equal(responses[0].stopReason, "toolUse");
               return { content: [{ type: "text", text: "evidence" }], details: undefined };
             },
           },
         ],
       });
-      return yield* agent.run({ messages: input("read") }).pipe(Effect.flip);
+      return yield* agent.run({ messages: input("read") });
     }).pipe(
       Effect.provide(
         models(() => {
           requests++;
           return respond(
-            assistant({
-              stopReason: "toolUse",
-              content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
-            }),
+            requests === 1
+              ? assistant({
+                  stopReason: "toolUse",
+                  content: [{ type: "toolCall", id: "read-1", name: "read", arguments: {} }],
+                })
+              : assistant(),
           );
         }),
       ),
     ),
   );
-  assert.equal(requests, 1);
-  assert.ok(guardCalls >= 2);
-  assert.ok(persisted.some((m) => m.role === "toolResult"));
-  assert.match(result.message, /context budget/);
+  assert.equal(requests, 2);
+  assert.equal(responses.length, 2);
+  assert.ok(result.messages.some((message) => message.role === "toolResult"));
+});
+
+test("isolated cancellation interrupts an observer before waiting for SDK idle", async () => {
+  let released = false;
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const agent = yield* Agent.make({
+          name: "test",
+          onResponse: (_message, signal) => {
+            assert.ok(signal);
+            return Effect.runPromise(
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.ensuring(
+                  Effect.sync(() => {
+                    released = true;
+                  }),
+                ),
+              ),
+              { signal },
+            );
+          },
+        });
+        const fiber = yield* agent.run({ messages: input("wait") }).pipe(Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* Fiber.interrupt(fiber);
+        const exit = yield* Fiber.await(fiber);
+        assert.equal(exit._tag, "Failure");
+        if (exit._tag === "Failure") assert.equal(Cause.hasInterrupts(exit.cause), true);
+        assert.equal(released, true);
+      }),
+    ).pipe(Effect.provide(models(() => respond(assistant()))), Effect.timeout("5 seconds")),
+  );
 });

@@ -1,3 +1,6 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import { DurableExchanges } from "../src/durable-exchange.js";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -10,7 +13,19 @@ import {
 } from "@earendil-works/pi-ai";
 import { Cause, Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { Harness } from "@earendil-works/pi-durable";
-import { Agent, AgentError, Models, PiStorageLease, rejectedToolResult } from "../src/index.js";
+import {
+  Agent,
+  AgentError,
+  AgentConversations,
+  Models,
+  PiStorageLease,
+  rejectedToolResult,
+} from "../src/index.js";
+
+const conversations = (root: string) =>
+  Layer.effect(AgentConversations, AgentConversations.make({ root }));
+const ownerDirectory = (root: string, owner: string) =>
+  join(root, createHash("sha256").update(owner).digest("hex"));
 
 const model = {
   id: "test",
@@ -70,7 +85,7 @@ test("durable response observers run before tools and do not replay settled resp
   const run = Effect.gen(function* () {
     const agent = yield* Agent.make({
       name: "test",
-      durable: { sessionId: "response", requestId: "one", storageDirectory: directory },
+      durable: { sessionId: "response", requestId: "one" },
       onResponse: (message, signal) => {
         assert.equal(signal?.aborted, false);
         events.push(`response:${message.stopReason}`);
@@ -79,9 +94,6 @@ test("durable response observers run before tools and do not replay settled resp
             type: "thinking",
             thinking: "Inspect the current state",
           });
-      },
-      onMessage: () => {
-        events.push("settled");
       },
       tools: [
         {
@@ -99,41 +111,28 @@ test("durable response observers run before tools and do not replay settled resp
       ],
     });
     return yield* agent.run({ messages: [{ role: "user", content: "Read", timestamp: 0 }] });
-  }).pipe(Effect.provide(layer));
+  }).pipe(Effect.provide([layer, conversations(directory)]));
   try {
     const first = await Effect.runPromise(run);
-    assert.deepEqual(events, [
-      "response:toolUse",
-      "tool",
-      "response:stop",
-      "settled",
-      "settled",
-      "settled",
-    ]);
+    assert.deepEqual(events, ["response:toolUse", "tool", "response:stop"]);
     events.length = 0;
     assert.deepEqual(await Effect.runPromise(run), first);
-    assert.deepEqual(events, ["settled", "settled", "settled"]);
+    assert.deepEqual(events, []);
     assert.equal(calls, 2);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
 });
 
-test("durable collection paginates a long run and applies the context guard every round", async () => {
+test("durable collection retains a long run and replays its exact result entries", async () => {
   let calls = 0;
-  let guards = 0;
   const layer = Layer.succeed(Models, {
     resolve: () =>
       Effect.succeed({
         model,
         getApiKey: () => "test",
-        stream: (_model, context) => {
+        stream: (_model, _context) => {
           calls++;
-          assert.ok(
-            context.messages.some(
-              (message) => message.role === "user" && message.content === "guarded",
-            ),
-          );
           const stream = createAssistantMessageEventStream();
           const message: AssistantMessage =
             calls <= 55
@@ -153,11 +152,7 @@ test("durable collection paginates a long run and applies the context guard ever
     const run = Effect.gen(function* () {
       const agent = yield* Agent.make({
         name: "test",
-        durable: { sessionId: "pages", requestId: "long-run", storageDirectory: directory },
-        transformContext: async (messages) => {
-          guards++;
-          return [...messages, { role: "user", content: "guarded", timestamp: 0 }];
-        },
+        durable: { sessionId: "pages", requestId: "long-run" },
         tools: [
           {
             name: "read",
@@ -170,49 +165,12 @@ test("durable collection paginates a long run and applies the context guard ever
         ],
       });
       return yield* agent.run({ messages: [{ role: "user", content: "Read", timestamp: 0 }] });
-    }).pipe(Effect.provide(layer));
+    }).pipe(Effect.provide([layer, conversations(directory)]));
     const first = await Effect.runPromise(run);
     assert.equal(first.messages.length, 111);
-    assert.equal(guards, calls);
     assert.equal(calls, 56);
     assert.deepEqual(await Effect.runPromise(run), first);
     assert.equal(calls, 56);
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
-});
-
-test("durable context guard failure prevents a provider request despite native hook recovery", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "aster-pi-context-guard-"));
-  let calls = 0;
-  const layer = Layer.succeed(Models, {
-    resolve: () =>
-      Effect.succeed({
-        model,
-        getApiKey: () => "test",
-        stream: () => {
-          calls++;
-          const stream = createAssistantMessageEventStream();
-          stream.push({ type: "done", reason: "stop", message: assistant() });
-          return stream;
-        },
-      }),
-  });
-  try {
-    const run = Effect.gen(function* () {
-      const agent = yield* Agent.make({
-        name: "test",
-        durable: { sessionId: "guard", requestId: "input", storageDirectory: directory },
-        tools: [],
-        transformContext: async () => {
-          throw new Error("Context exceeds admitted budget");
-        },
-      });
-      return yield* agent.run({ messages: [{ role: "user", content: "Read", timestamp: 0 }] });
-    }).pipe(Effect.provide(layer), Effect.timeout("5 seconds"));
-    await assert.rejects(Effect.runPromise(run), /submission failed: model_error/);
-    await assert.rejects(Effect.runPromise(run), /submission failed: model_error/);
-    assert.equal(calls, 0);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -242,12 +200,11 @@ test("durable token budgets cap the model window and are frozen for request repl
         durable: {
           sessionId: "budget",
           requestId,
-          storageDirectory: directory,
           contextBudget: { contextTokens, reserveTokens: 100 },
         },
       });
       return yield* agent.run({ messages: [{ role: "user", content: "Review", timestamp: 0 }] });
-    }).pipe(Effect.provide(models));
+    }).pipe(Effect.provide([models, conversations(directory)]));
   await Effect.runPromise(run(500, "first"));
   assert.deepEqual(windows, [500]);
   await Effect.runPromise(run(500, "first"));
@@ -280,7 +237,7 @@ test("invalid durable budgets fail before acquiring storage or invoking a provid
       Agent.make({
         name: "test",
         durable: { sessionId: "invalid", requestId: "invalid", contextBudget },
-      }).pipe(Effect.provide(models), Effect.result),
+      }).pipe(Effect.provide([models, AgentConversations.memory]), Effect.result),
     );
     assert.equal(result._tag, "Failure");
     if (result._tag === "Failure") assert.equal(result.failure._tag, "AgentError");
@@ -336,10 +293,10 @@ test("durable Effect interruption joins Harness.close before returning", async (
       Effect.gen(function* () {
         const agent = yield* Agent.make({
           name: "test",
-          durable: { sessionId: "cancel", requestId: "cancel", storageDirectory: directory },
+          durable: { sessionId: "cancel", requestId: "cancel" },
         });
         return yield* agent.run({ messages: [{ role: "user", content: "Wait", timestamp: 0 }] });
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide([layer, conversations(directory)])),
       { signal: controller.signal },
     ).then((exit) => {
       returned = true;
@@ -351,14 +308,22 @@ test("durable Effect interruption joins Harness.close before returning", async (
     await closing.promise;
     assert.equal(returned, false);
     const conflict = await Effect.runPromise(
-      Effect.scoped(PiStorageLease.acquire(directory, "other-owner").pipe(Effect.flip)),
+      Effect.scoped(
+        PiStorageLease.acquire(ownerDirectory(directory, "/goals/cancel"), "other-owner").pipe(
+          Effect.flip,
+        ),
+      ),
     );
     assert.equal(conflict._tag, "PiStorageLeaseError");
     release.resolve();
     const exit = await run;
     assert.equal(exit._tag, "Failure");
     if (exit._tag === "Failure") assert.equal(Cause.hasInterrupts(exit.cause), true);
-    await Effect.runPromise(Effect.scoped(PiStorageLease.acquire(directory, "next-owner")));
+    await Effect.runPromise(
+      Effect.scoped(
+        PiStorageLease.acquire(ownerDirectory(directory, "/goals/cancel"), "next-owner"),
+      ),
+    );
   } finally {
     release.resolve();
     Harness.open = originalOpen;
@@ -387,7 +352,7 @@ test("durable Agent reopens a Goal conversation and deduplicates a request ID", 
       Effect.gen(function* () {
         const agent = yield* Agent.make({
           name: "test",
-          durable: { sessionId: "goal", requestId, storageDirectory: directory },
+          durable: { sessionId: "goal", requestId },
         });
         return yield* agent.run({
           messages: [
@@ -395,7 +360,7 @@ test("durable Agent reopens a Goal conversation and deduplicates a request ID", 
             { role: "user", content: requestId, timestamp: 0 },
           ],
         });
-      }).pipe(Effect.provide(layer));
+      }).pipe(Effect.provide([layer, conversations(directory)]));
 
     const first = await Effect.runPromise(run("evaluation-1"));
     const duplicate = await Effect.runPromise(run("evaluation-1"));
@@ -413,12 +378,11 @@ test("durable Agent reopens a Goal conversation and deduplicates a request ID", 
   }
 });
 
-test("durable admission freezes input before submission and commits results before callbacks", async () => {
+test("durable admission freezes input before submission and commits results before caller delivery", async () => {
   const directory = await mkdtemp(join(tmpdir(), "aster-pi-admission-"));
   const originalOpen = Harness.open;
   let failSubmission = true;
   let calls = 0;
-  let callbacks = 0;
   Harness.open = async (...args) => {
     const harness = await originalOpen(...args);
     const root = harness.root.bind(harness);
@@ -457,7 +421,6 @@ test("durable admission freezes input before submission and commits results befo
       catalogueId?: string;
       callbackFailure?: boolean;
       reconcile?: boolean;
-      owner?: "goals" | "tasks";
     } = {},
   ) =>
     Effect.runPromise(
@@ -467,23 +430,20 @@ test("durable admission freezes input before submission and commits results befo
           durable: {
             sessionId: "goal",
             requestId,
-            storageDirectory: directory,
             catalogueId: options.catalogueId,
-            owner: options.owner,
             reconcile: options.reconcile,
           },
-          onMessage: () => {
-            callbacks++;
-            if (options.callbackFailure) throw new Error("Caller lost its result acknowledgement");
-          },
         });
-        return yield* agent.run({
+        const result = yield* agent.run({
           messages: [
             { role: "system", content: options.instructions ?? "Review evidence", timestamp: 0 },
             { role: "user", content: options.text ?? "Evidence", timestamp: 0 },
           ],
         });
-      }).pipe(Effect.provide(layer)),
+        if (options.callbackFailure)
+          return yield* Effect.fail(new AgentError("Caller lost its result acknowledgement"));
+        return result;
+      }).pipe(Effect.provide([layer, conversations(directory)])),
     );
   try {
     await assert.rejects(run("one"), /before Pi submission/);
@@ -491,11 +451,9 @@ test("durable admission freezes input before submission and commits results befo
     await assert.rejects(run("one", { text: "Changed" }), /frozen input/);
     await assert.rejects(run("one", { instructions: "Changed" }), /frozen input/);
     await assert.rejects(run("one", { catalogueId: "changed-tools" }), /frozen input/);
-    await assert.rejects(run("one", { owner: "tasks" }), /another Aster owner/);
     assert.equal(calls, 0);
     await assert.rejects(run("one", { callbackFailure: true, reconcile: true }), /lost its result/);
     assert.equal(calls, 1);
-    assert.equal(callbacks, 1);
     const replay = await run("one");
     assert.equal(calls, 1);
     assert.equal(replay.messages.length, 1);
@@ -529,21 +487,13 @@ test("known failed durable results replay without model work and allow an explic
         stream: () => {
           calls++;
           const stream = createAssistantMessageEventStream();
-          const message =
-            calls <= 2
-              ? assistant()
-              : {
-                  ...assistant(),
-                  stopReason: "toolUse" as const,
-                  content: [
-                    { type: "toolCall" as const, id: "finish-call", name: "finish", arguments: {} },
-                  ],
-                };
-          stream.push({
-            type: "done",
-            reason: message.stopReason === "toolUse" ? "toolUse" : "stop",
-            message,
-          });
+          if (calls === 1)
+            stream.push({
+              type: "error",
+              reason: "aborted",
+              error: { ...assistant(), stopReason: "aborted" },
+            });
+          else stream.push({ type: "done", reason: "stop", message: assistant() });
           return stream;
         },
       }),
@@ -553,44 +503,29 @@ test("known failed durable results replay without model work and allow an explic
       Effect.gen(function* () {
         const agent = yield* Agent.make({
           name: "test",
-          durable: { sessionId: "goal", requestId, storageDirectory: directory },
-          resultTool: "finish",
-          tools: [
-            {
-              name: "finish",
-              label: "Finish",
-              description: "Submit the result",
-              replay: "safe",
-              parameters: Type.Object({}),
-              execute: async () => ({
-                content: [{ type: "text", text: "Done" }],
-                details: {},
-                terminate: true,
-              }),
-            },
-          ],
+          durable: { sessionId: "goal", requestId },
         });
         return yield* agent.run({ messages: [{ role: "user", content: "Read", timestamp: 0 }] });
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide([layer, conversations(directory)])),
     );
   try {
     await assert.rejects(run("one"), (error: unknown) => {
       assert.ok(error instanceof AgentError);
       assert.equal(error.outcome, "failed");
-      assert.match(error.message, /after one correction/);
+      assert.match(error.message, /submission failed/);
       return true;
     });
-    assert.equal(calls, 2);
+    assert.equal(calls, 1);
     await assert.rejects(run("one"), (error: unknown) => {
       assert.ok(error instanceof AgentError);
       assert.equal(error.outcome, "failed");
       return true;
     });
-    assert.equal(calls, 2);
+    assert.equal(calls, 1);
     // A caller's ID may look like the old internal correction suffix.
     const retried = await run("one:correction");
-    assert.equal(calls, 3);
-    assert.equal(retried.messages.at(-1)?.role, "toolResult");
+    assert.equal(calls, 2);
+    assert.equal(retried.messages.at(-1)?.role, "assistant");
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -630,7 +565,7 @@ test("ownerless unsafe outcomes stop sibling tools and preserve uncertainty acro
       Effect.gen(function* () {
         const agent = yield* Agent.make({
           name: "test",
-          durable: { requestId, sessionId: "goal", storageDirectory: directory },
+          durable: { requestId, sessionId: "goal" },
           tools: [
             {
               name: "write",
@@ -659,7 +594,7 @@ test("ownerless unsafe outcomes stop sibling tools and preserve uncertainty acro
         return yield* agent.run({
           messages: [{ role: "user", content: "Do the work", timestamp: 0 }],
         });
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide([layer, conversations(directory)])),
     );
   try {
     await assert.rejects(run(), (error: unknown) => {
@@ -679,7 +614,7 @@ test("ownerless unsafe outcomes stop sibling tools and preserve uncertainty acro
 });
 
 for (const replay of ["safe", "unsafe"] as const) {
-  test(`ownerless ${replay} tool interruption preserves replay policy after reopening`, async () => {
+  test(`shared conversation cancellation retains ${replay} tool outcomes after reopening`, async () => {
     const directory = await mkdtemp(join(tmpdir(), `aster-ownerless-${replay}-`));
     let toolCalls = 0;
     let modelCalls = 0;
@@ -714,7 +649,7 @@ for (const replay of ["safe", "unsafe"] as const) {
     const run = Effect.gen(function* () {
       const agent = yield* Agent.make({
         name: "test",
-        durable: { requestId: "one", sessionId: "goal", storageDirectory: directory },
+        durable: { requestId: "one", sessionId: "goal" },
         tools: [
           {
             name: "work",
@@ -740,7 +675,7 @@ for (const replay of ["safe", "unsafe"] as const) {
         ],
       });
       return yield* agent.run({ messages: [{ role: "user", content: "Work", timestamp: 0 }] });
-    }).pipe(Effect.provide(layer));
+    }).pipe(Effect.provide([layer, conversations(directory)]));
     try {
       await Effect.runPromise(
         Effect.scoped(
@@ -754,11 +689,18 @@ for (const replay of ["safe", "unsafe"] as const) {
       const recovered = await Effect.runPromise(
         run.pipe(Effect.result, Effect.timeout("5 seconds")),
       );
-      assert.equal(recovered._tag, replay === "safe" ? "Success" : "Failure");
-      if (recovered._tag === "Failure")
-        assert.match(recovered.failure.message, /outcome is unknown/);
-      assert.equal(toolCalls, replay === "safe" ? 2 : 1);
-      assert.equal(modelCalls, replay === "safe" ? 2 : 1);
+      assert.equal(recovered._tag, "Failure");
+      if (recovered._tag === "Failure") {
+        assert.equal(recovered.failure.outcome, replay === "safe" ? "failed" : "unknown");
+        assert.match(
+          recovered.failure.message,
+          replay === "safe" ? /submission failed: aborted/ : /outcome is unknown/,
+        );
+      }
+      // Shared writers explicitly abort a cancelled conversation; reopening must
+      // not turn that cancellation into another provider call or tool execution.
+      assert.equal(toolCalls, 1);
+      assert.equal(modelCalls, 1);
     } finally {
       await rm(directory, { recursive: true, force: true });
     }
@@ -806,7 +748,7 @@ test("ownerless known rejections and pre-execution validation allow model correc
       Effect.gen(function* () {
         const agent = yield* Agent.make({
           name: "test",
-          durable: { requestId: "one", sessionId: "goal", storageDirectory: directory },
+          durable: { requestId: "one", sessionId: "goal" },
           tools: [
             {
               name: "write",
@@ -827,7 +769,7 @@ test("ownerless known rejections and pre-execution validation allow model correc
         return yield* agent.run({
           messages: [{ role: "user", content: "Do the work", timestamp: 0 }],
         });
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide([layer, conversations(directory)])),
     );
   try {
     const result = await run();
@@ -895,7 +837,6 @@ test("durable tools keep structured results in the Pi transcript", async () => {
       Effect.gen(function* () {
         const agent = yield* Agent.make({
           name: "test",
-          resultTool: "save",
           tools: [
             {
               name: "save",
@@ -909,12 +850,12 @@ test("durable tools keep structured results in the Pi transcript", async () => {
               }),
             },
           ],
-          durable: { sessionId: "goal", requestId: "tool-1", storageDirectory: directory },
+          durable: { sessionId: "goal", requestId: "tool-1" },
         });
         return yield* agent.run({
           messages: [{ role: "system", content: "Use tools", timestamp: 0 }],
         });
-      }).pipe(Effect.provide(layer)),
+      }).pipe(Effect.provide([layer, conversations(directory)])),
     );
     const saved = result.messages.find(
       (message) => message.role === "toolResult" && message.toolName === "save",
@@ -961,8 +902,7 @@ test("replaying a terminal tool round excludes later results even when call IDs 
       Effect.gen(function* () {
         const agent = yield* Agent.make({
           name: "test",
-          resultTool: "save",
-          durable: { sessionId: "terminal", requestId, storageDirectory: directory },
+          durable: { sessionId: "terminal", requestId },
           tools: [
             {
               name: "save",
@@ -978,7 +918,7 @@ test("replaying a terminal tool round excludes later results even when call IDs 
           ],
         });
         return yield* agent.run({ messages: [{ role: "user", content: requestId, timestamp: 0 }] });
-      }).pipe(Effect.provide(layer));
+      }).pipe(Effect.provide([layer, conversations(directory)]));
     const first = await Effect.runPromise(run("first"));
     const next = await Effect.runPromise(run("second"));
     assert.equal(first.messages.length, 2);
@@ -990,68 +930,50 @@ test("replaying a terminal tool round excludes later results even when call IDs 
   }
 });
 
-test("Goal and Task durable invocations share storage exclusivity before model admission", async () => {
+test("independent conversation writers reject the same owner before model admission", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "aster-ownerless-exclusive-"));
-  try {
-    await Effect.runPromise(
-      Effect.scoped(
-        Effect.gen(function* () {
-          const entered = yield* Deferred.make<void>();
-          const release = yield* Deferred.make<void>();
-          let calls = 0;
-          const layer = Layer.succeed(Models, {
-            resolve: () =>
-              Effect.succeed({
-                model,
-                getApiKey: () => "test",
-                stream: () => {
-                  calls++;
-                  const stream = createAssistantMessageEventStream();
-                  Effect.runSync(Deferred.succeed(entered, undefined));
-                  void Effect.runPromise(Deferred.await(release)).then(() =>
-                    stream.push({ type: "done", reason: "stop", message: assistant() }),
-                  );
-                  return stream;
-                },
-              }),
-          });
-          const goal = yield* Agent.make({
-            name: "test",
-            durable: {
-              owner: "goals",
-              sessionId: "one",
-              requestId: "request",
-              storageDirectory: directory,
-            },
-          }).pipe(Effect.provide(layer));
-          const task = yield* Agent.make({
-            name: "test",
-            durable: {
-              owner: "tasks",
-              sessionId: "one",
-              requestId: "other",
-              storageDirectory: directory,
-            },
-          }).pipe(Effect.provide(layer));
-          const input = { messages: [{ role: "user" as const, content: "Read", timestamp: 0 }] };
-          const running = yield* goal.run(input).pipe(Effect.forkScoped);
-          yield* Deferred.await(entered);
-          const failure = yield* task.run(input).pipe(Effect.flip);
-          assert.match(failure.message, /owned by another process/);
-          assert.equal(calls, 1);
-          yield* Deferred.succeed(release, undefined);
-          const original = yield* Fiber.join(running);
-          assert.deepEqual(yield* goal.run(input), original);
-          assert.equal(calls, 1);
-        }),
-      ).pipe(Effect.timeout("5 seconds")),
-    );
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const first = yield* AgentConversations.make({ root: directory });
+        const second = yield* AgentConversations.make({ root: directory });
+        let calls = 0;
+        const models = Layer.succeed(Models, {
+          resolve: () =>
+            Effect.succeed({
+              model,
+              getApiKey: () => "test",
+              stream: () => {
+                calls++;
+                const stream = createAssistantMessageEventStream();
+                stream.push({ type: "done", reason: "stop", message: assistant() });
+                return stream;
+              },
+            }),
+        });
+        const options = { name: "test", durable: { sessionId: "same", requestId: "one" } };
+        const one = yield* Agent.make(options).pipe(
+          Effect.provide(models),
+          Effect.provideService(AgentConversations, first),
+        );
+        const two = yield* Agent.make(options).pipe(
+          Effect.provide(models),
+          Effect.provideService(AgentConversations, second),
+        );
+        const input = { messages: [{ role: "user" as const, content: "Read", timestamp: 0 }] };
+        const result = yield* one.run(input);
+        const rejected = yield* two.run(input).pipe(Effect.flip);
+        assert.equal(rejected.outcome, "unknown");
+        assert.match(rejected.message, /Conversation unavailable/);
+        assert.deepEqual(yield* one.run(input), result);
+        assert.equal(calls, 1);
+      }),
+    ),
+  );
 });
 
-test("Unknown ownerless Harness close retains storage fencing after the invocation fails", async (t) => {
+test("unknown conversation writer close retains storage fencing after its scope closes", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "aster-ownerless-close-"));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const open = Harness.open;
@@ -1076,21 +998,24 @@ test("Unknown ownerless Harness close retains storage fencing after the invocati
         },
       }),
   });
-  const failure = await Effect.runPromise(
+  const failure = await Effect.runPromiseExit(
     Effect.gen(function* () {
       const agent = yield* Agent.make({
         name: "test",
-        durable: { sessionId: "one", requestId: "one", storageDirectory: directory },
+        durable: { sessionId: "one", requestId: "one" },
       });
-      return yield* agent
-        .run({ messages: [{ role: "user", content: "Read", timestamp: 0 }] })
-        .pipe(Effect.flip);
-    }).pipe(Effect.provide(layer)),
+      return yield* agent.run({ messages: [{ role: "user", content: "Read", timestamp: 0 }] });
+    }).pipe(Effect.provide([layer, conversations(directory)])),
   );
-  assert.match(failure.message, /shutdown is uncertain/);
-  assert.equal(failure.outcome, "unknown");
+  assert.equal(failure._tag, "Failure");
+  if (failure._tag === "Failure")
+    assert.match(Cause.pretty(failure.cause), /Cannot drain conversation writer/);
   const conflict = await Effect.runPromise(
-    Effect.scoped(PiStorageLease.acquire(directory, "replacement").pipe(Effect.flip)),
+    Effect.scoped(
+      PiStorageLease.acquire(ownerDirectory(directory, "/goals/one"), "replacement").pipe(
+        Effect.flip,
+      ),
+    ),
   );
   assert.equal(conflict._tag, "PiStorageLeaseError");
 });
@@ -1137,15 +1062,78 @@ test("reconciliation observes an accepted uncertain request without issuing anot
         durable: {
           sessionId: "uncertain",
           requestId: "one",
-          storageDirectory: directory,
           reconcile,
         },
       });
       return yield* agent.run({ messages: [{ role: "user", content: "Research", timestamp: 0 }] });
-    }).pipe(Effect.provide(layer), Effect.timeout("5 seconds"));
+    }).pipe(Effect.provide([layer, conversations(directory)]), Effect.timeout("5 seconds"));
   await assert.rejects(Effect.runPromise(run(false)), /acknowledgement lost/);
   const admittedCalls = calls;
   const result = await Effect.runPromise(Effect.result(run(true)));
   assert.equal(calls, admittedCalls, "Recovery must not submit another provider request");
   assert.equal(result._tag, "Failure");
+});
+
+test("settled replay uses exact entries and rejects foreign or missing result references", async () => {
+  let calls = 0;
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const conversations = yield* AgentConversations.makeMemory();
+        const agent = yield* Agent.make({
+          name: "test",
+          durable: { sessionId: "lookup", requestId: "one" },
+        }).pipe(
+          Effect.provideService(AgentConversations, conversations),
+          Effect.provideService(Models, {
+            resolve: () =>
+              Effect.succeed({
+                model,
+                getApiKey: () => "test",
+                stream: () => {
+                  calls++;
+                  const stream = createAssistantMessageEventStream();
+                  stream.push({ type: "done", reason: "stop", message: assistant() });
+                  return stream;
+                },
+              }),
+          }),
+        );
+        const input = { messages: [{ role: "user" as const, content: "Read", timestamp: 0 }] };
+        const first = yield* agent.run(input);
+        const { harness } = yield* conversations.driver("/goals/lookup");
+        const foreign = yield* Effect.promise(() =>
+          harness.commit(async (tx) => {
+            const other = await tx.createConversation({ ownership: { kind: "ownerless" } });
+            const entry = await tx.appendEntry(other.id, {
+              kind: "pi.message",
+              model: [{ ...assistant(), content: [{ type: "text", text: "PRIVATE" }] }],
+            });
+            return entry.id;
+          }, BACKGROUND_CONTEXT),
+        );
+        const originalRoot = harness.root.bind(harness);
+        harness.root = async (...args) => {
+          const root = await originalRoot(...args);
+          root.entries = async () => {
+            throw new Error("Settled replay must not scan conversation history");
+          };
+          return root;
+        };
+        assert.deepEqual(yield* agent.run(input), first);
+        for (const id of [foreign, 999999]) {
+          yield* Effect.promise(() =>
+            harness.commit(async (tx) => {
+              const doc = await tx.doc(DurableExchanges);
+              doc.exchanges[0]!.resultEntries = [id];
+            }, BACKGROUND_CONTEXT),
+          );
+          const failure = yield* agent.run(input).pipe(Effect.flip);
+          assert.match(failure.message, /missing transcript entries/);
+          assert.equal(failure.outcome, "unknown");
+        }
+        assert.equal(calls, 1);
+      }),
+    ),
+  );
 });

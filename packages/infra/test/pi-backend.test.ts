@@ -12,7 +12,7 @@ import {
   type ResolvedModel,
 } from "@aster/agent";
 import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/context";
-import { Harness, MemoryStorage } from "@earendil-works/pi-durable";
+import { Harness, MemoryStorage, defineTool } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import {
   Type,
@@ -94,18 +94,17 @@ test("shared Pi owner permits Context commits while a task observer waits and cl
           openStorage: Effect.succeed(storage),
           resolved: fakeModel(() => answer(++calls === 1)),
           tools: [
-            {
+            defineTool({
               name: "read",
-              label: "Read",
               description: "Gated read",
               replay: "safe",
               parameters: Type.Object({}),
-              execute: async (_id, _args, signal) => {
+              execute: async (_args, _api, context) => {
                 await Effect.runPromise(Deferred.succeed(entered, undefined));
-                await Effect.runPromise(Deferred.await(release), { signal });
+                await Effect.runPromise(Deferred.await(release), { signal: context.abortSignal });
                 return { content: [{ type: "text", text: "Read evidence" }], details: {} };
               },
-            },
+            }),
           ],
         });
         const contexts = yield* PiDurableContext.fromRuntime(runtime);
@@ -289,19 +288,18 @@ test("shared owner recovery retires active observers and preserves unknown unsaf
           }),
           resolved: fakeModel(() => answer(++generations === 1)),
           tools: [
-            {
+            defineTool({
               name: "read",
-              label: "Unsafe action",
               description: "Test interrupted side effect",
               parameters: Type.Object({}),
-              replay: "never",
-              execute: async (_id, _args, signal) => {
+              replay: "unsafe",
+              execute: async (_args, _api, context) => {
                 toolCalls++;
                 await Effect.runPromise(Deferred.succeed(entered, undefined));
-                await Effect.runPromise(Effect.never, { signal });
+                await Effect.runPromise(Effect.never, { signal: context.abortSignal });
                 return { content: [], details: {} };
               },
-            },
+            }),
           ],
         });
         const contexts = yield* PiDurableContext.fromRuntime(runtime);

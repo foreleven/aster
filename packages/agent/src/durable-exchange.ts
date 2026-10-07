@@ -11,13 +11,15 @@ import { Schema } from "effect";
 const Exchange = Schema.Struct({
   requestId: Schema.NonEmptyString,
   input: Schema.NonEmptyString,
-  error: Schema.NullOr(Schema.String),
-  resultEntries: Schema.NullOr(Schema.Array(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))),
+  error: Schema.mutableKey(Schema.NullOr(Schema.String)),
+  resultEntries: Schema.mutableKey(
+    Schema.NullOr(Schema.mutable(Schema.Array(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0))))),
+  ),
 });
 const State = Schema.Struct({
-  identity: Schema.String,
-  pending: Schema.NullOr(Schema.String),
-  exchanges: Schema.Array(Exchange),
+  identity: Schema.mutableKey(Schema.String),
+  pending: Schema.mutableKey(Schema.NullOr(Schema.String)),
+  exchanges: Schema.mutable(Schema.Array(Exchange)),
 }).check(
   Schema.makeFilter(
     (state) =>
@@ -38,16 +40,7 @@ const State = Schema.Struct({
 );
 
 /** SDK transaction boundary. Aster's identity and result references share Pi's mutation line. */
-export const DurableExchanges = defineDoc<{
-  identity: string;
-  pending: string | null;
-  exchanges: {
-    requestId: string;
-    input: string;
-    error: string | null;
-    resultEntries: number[] | null;
-  }[];
-}>({
+export const DurableExchanges = defineDoc<typeof State.Type>({
   kind: "app.aster.agent.exchanges",
   version: 1,
   scope: "session",

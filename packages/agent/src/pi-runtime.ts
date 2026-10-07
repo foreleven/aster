@@ -17,13 +17,13 @@ import {
   type Storage,
   type Session,
   type TaskRecord,
+  type TaskId,
   type Tx,
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ResolvedModel } from "./index.js";
-import { durableModels, durableTool } from "./durable.js";
+import { durableModels } from "./durable.js";
 import { entriesFor, hasUnknownToolOutcome, fenceTools, generationFence } from "./durable-tools.js";
 
 export class PiRuntimeError extends Data.TaggedError("PiRuntimeError")<{
@@ -91,19 +91,17 @@ const openDriver = async (
     readonly ownerId: string;
     readonly resolved: ResolvedModel;
     readonly catalogueId: string;
-    readonly tools: readonly AgentTool[];
-    readonly nativeTools?: readonly ToolRegistration[];
+    readonly tools: readonly ToolRegistration[];
     readonly environment?: PiExecutionEnvironment;
     readonly validateSession?: (session: Session, context: ChordContext) => Promise<void>;
   },
   context: ChordContext,
   ownHarness: (harness: Harness) => void,
 ) => {
-  const registered = [...options.tools.map(durableTool), ...(options.nativeTools ?? [])];
   const unsafeTools = new Set(
-    registered.filter((tool) => tool.replay !== "safe").map((tool) => tool.name),
+    options.tools.filter((tool) => tool.replay !== "safe").map((tool) => tool.name),
   );
-  const tools = fenceTools(registered, unsafeTools);
+  const tools = fenceTools(options.tools, unsafeTools);
   const environmentPolicyId = options.environment?.policyId ?? "aster.no-environment.v1";
   const fence = generationFence(() => harness, unsafeTools);
   const execution = defineTask<typeof Input.Type, { phase: "execute" }, PiExecutionResult>({
@@ -270,19 +268,17 @@ const openDriver = async (
     } while (cursor);
   }, context);
   const find = async (tx: Tx, handle: PiExecutionHandle) => {
-    let cursor: Cursor | undefined;
-    do {
-      const page = await tx.scanTasks({ kind: execution.definition.name }, 100, cursor);
-      const task = page.items.find((item) => String(item.id) === handle.runId);
-      if (task) {
-        const child = (await tx.scanConversations({ ownerTaskId: task.id }, 2)).items;
-        if (child.length !== 1 || String(child[0].id) !== handle.sessionId)
-          throw new Error("Pi execution handle does not match its owned conversation");
-        return task;
-      }
-      cursor = page.next;
-    } while (cursor);
-    throw new Error("Pi execution was not found; no replacement was created");
+    const id = Schema.decodeUnknownSync(Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)))(
+      Number(handle.runId),
+    );
+    if (String(id) !== handle.runId) throw new Error("Invalid Pi execution task identity");
+    const task = await tx.task(id as TaskId);
+    if (!task || task.kind !== execution.definition.name)
+      throw new Error("Pi execution was not found; no replacement was created");
+    const child = (await tx.scanConversations({ ownerTaskId: task.id }, 2)).items;
+    if (child.length !== 1 || String(child[0].id) !== handle.sessionId)
+      throw new Error("Pi execution handle does not match its owned conversation");
+    return task;
   };
   const project = (task: TaskRecord<unknown, unknown, unknown>): PiExecutionStatus => {
     if (task.state.status !== "terminal") return { state: "running" };
@@ -449,8 +445,7 @@ const make = Effect.fn("PiDurableAgentRuntime.make")(function* (options: {
   readonly onCloseFailure?: Effect.Effect<void>;
   readonly resolved: ResolvedModel;
   readonly catalogueId: string;
-  readonly tools?: readonly AgentTool[];
-  readonly nativeTools?: readonly ToolRegistration[];
+  readonly tools?: readonly ToolRegistration[];
   readonly environment?: PiExecutionEnvironment;
   readonly validateSession?: (session: Session, context: ChordContext) => Promise<void>;
 }) {

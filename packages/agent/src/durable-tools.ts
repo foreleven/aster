@@ -20,13 +20,9 @@ const Rejected = Schema.Struct({ aster: Schema.Struct({ outcome: Schema.Literal(
  * across the native callback boundary so the provider must observe its outcome.
  * The invocation signal identifies this attempt; retained entries remain the
  * authority, and reopening rebuilds the guard from those entries. */
-export const generationFence = (
-  owner: () => Harness,
-  unsafe: ReadonlySet<string>,
-  transform?: GenerationHooks["beforeRequest"],
-) => {
+export const generationFence = (owner: () => Harness, unsafe: ReadonlySet<string>) => {
   const requests = new WeakMap<AbortSignal, Promise<unknown>>();
-  const beforeRequest: GenerationHooks["beforeRequest"] = async (request, api, context) => {
+  const beforeRequest: GenerationHooks["beforeRequest"] = async (_request, api, context) => {
     const checked = (async () => {
       const unknown = await owner().commit(
         async (tx) => hasUnknownToolOutcome(await entriesFor(tx, api.conversationId), unsafe),
@@ -34,7 +30,7 @@ export const generationFence = (
       );
       if (unknown)
         throw new Error("Tool outcome is unknown; reconcile before another model request.");
-      return transform?.(request, api, context);
+      return undefined;
     })();
     if (context.abortSignal) requests.set(context.abortSignal, checked);
     return checked;

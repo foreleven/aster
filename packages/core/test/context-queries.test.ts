@@ -1,3 +1,4 @@
+import { AgentConversations } from "@aster/agent";
 import { CurrentActors } from "../src/services/actors.js";
 import type { CoreTool } from "../src/tools/define.js";
 import { toolSystem } from "./tool-fixtures.js";
@@ -42,7 +43,12 @@ test("query tools retain isolated pages across Actor restart and reject changed 
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
+        const messages = yield* AgentConversations.makeMemory();
         const env = yield* toolSystem({
+          messages: {
+            ...messages,
+            read: () => Effect.die("Retained request lookup must not scan the full conversation"),
+          },
           queries: {
             register: () => Effect.void,
             query: (input) =>
