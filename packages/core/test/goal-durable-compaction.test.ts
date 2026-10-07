@@ -11,16 +11,13 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer } from "effect";
 import {
   GoalActor,
   GoalAgent,
   GoalSettings,
   ContextRegistry,
-  MemoryRecall,
   ExternalAgents,
-  defineContext,
-  contextView,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
@@ -71,15 +68,15 @@ test("durable Goal compacts its native transcript and finishes the same request"
               ? [
                   {
                     type: "text",
-                    text: "Retained work checkpoint: continue reviewing the source; no actions were executed.",
+                    text: "Retained work checkpoint: continue coordinating the project; no actions were executed.",
                   },
                 ]
               : generations <= 24
                 ? Array.from({ length: 6 }, (_, page) => ({
                     type: "toolCall" as const,
                     id: `call-${generations}-${page}`,
-                    name: "read_context",
-                    arguments: { path: "/source", offset: page * 2000, revision: 0 },
+                    name: "goal_current",
+                    arguments: {},
                   }))
                 : [{ type: "text", text: "Review completed" }],
             usage: {
@@ -102,33 +99,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
       }),
   });
   const run = Effect.gen(function* () {
-    const registry = yield* makeContextRegistry({
-      loadAll: () => [
-        {
-          snapshot: {
-            revision: 0,
-            path: "/source",
-            description: "Evidence",
-            state: { evidence: "detail ".repeat(3000) },
-            messages: [],
-          },
-          events: [],
-        },
-      ],
-      save: () => {},
-    });
-    // The fixture is explicitly public evidence, using a registered Context projection.
-    yield* registry.register(
-      "/source",
-      defineContext({
-        state: Schema.Struct({ evidence: Schema.String }),
-        message: Schema.Never,
-        view: contextView({
-          state: Schema.Struct({ evidence: Schema.String }),
-          message: Schema.Never,
-        }),
-      }),
-    );
+    const registry = yield* makeContextRegistry();
     yield* registry.register("/goals/test", GoalActor.context);
     const { system } = yield* toolSystem({ registry, messages: conversations });
     return yield* GoalAgent.use((agent) =>
@@ -148,7 +119,10 @@ test("durable Goal compacts its native transcript and finishes the same request"
     ).pipe(
       Effect.provide([
         GoalAgent.layer,
-        GoalState.layer("/goals/test", { slug: "test", description: "Review evidence" }),
+        GoalState.layer("/goals/test", {
+          slug: "test",
+          description: "Coordinate the project and its ongoing tasks. ".repeat(50),
+        }),
       ]),
       Effect.provideService(AgentConversations, conversations),
       Effect.provideService(CurrentActors, system),
@@ -156,10 +130,6 @@ test("durable Goal compacts its native transcript and finishes the same request"
       Effect.provideService(GoalSettings, {
         definitions: [],
         reasoning: { model: "test", contextTokens: 48000 },
-      }),
-      Effect.provideService(MemoryRecall, {
-        search: () => Effect.succeed([]),
-        expand: () => Effect.succeed([]),
       }),
       Effect.provideService(ExternalAgents, {}),
     );

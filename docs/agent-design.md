@@ -87,7 +87,7 @@ Goal reasoning now lives in core/goals and uses the Agent package. Integrations 
 
 ## Bounded Context discovery and structured completion
 
-Goal planning and internal reasoning no longer embed every persisted Context description in the initial model input. They receive a count/root catalogue and `search_contexts` (20 bounded description snippets per page) plus `read_context` (12,000 JSON characters per page). The full snapshot stays local, accessible by path; pagination offsets preserve access to complete records. This prevents thousands of historical chats from exhausting the model context before it can submit a result.
+Internal Tasks retrieve evidence with `search_contexts` (20 bounded description snippets per page) and `read_context` (12,000 JSON characters per page), without embedding every persisted Context description in the initial model input. Main Goal conversations expose only Goal, Task and Signal coordination tools and delegate Context and memory retrieval to Tasks. The full snapshot stays local, accessible by path; pagination offsets preserve access to complete records. This prevents thousands of historical chats from exhausting the model context before it can submit a result.
 
 Isolated `Agent.make({ resultTool })` requires a successful result-tool message; it cannot be combined with `durable`. An ordinary prose completion gets at most one correction in the same conversation. Provider errors, interruption and `length` truncation fail explicitly; truncation reports token counts and is not blindly retried. Goal plans use `submit_plan`; internal extraction, description and Task preparation use `submit_result`. No free-form text is accepted as a structured plan, and this correction does not resubmit external Tasks.
 

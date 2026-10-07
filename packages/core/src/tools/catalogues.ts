@@ -37,10 +37,8 @@ export const goalTools = (options: {
 }): readonly CoreTool<CurrentActors | GoalState>[] => {
   const source = `/goals/${options.goal}`;
   const requestId = (id: string) => options.origin(id).requestId;
+  // The primary conversation coordinates work. Evidence retrieval belongs to Task execution.
   return [
-    ...contextTools(4000),
-    ...contextQueryTools(source, requestId),
-    ...memoryTools(),
     goalCurrent(options.executors),
     updateSummary(),
     taskList(),

@@ -17,7 +17,7 @@ export const startTask = (origin: (callId: string) => TaskOrigin) =>
       replay: "never",
       label: "Start asynchronous Task",
       description:
-        "Start sustained work with the internal Agent, send a message to a Goal, or delegate externally. Delegate tasks require user confirmation and reply to the specified Goal. Keep the same request identity on unknown outcomes.",
+        "Start an internal Agent Task for Context or memory retrieval, investigation or sustained work; send a message to a Goal; or delegate externally. Returns durable acceptance without waiting for completion. Delegate tasks require user confirmation. Agent and Delegate tasks reply to the specified Goal. Keep the same request identity on unknown outcomes.",
       parameters: Type.Object({ task: actorTask }),
     },
     (args, id) =>

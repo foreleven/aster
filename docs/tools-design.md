@@ -10,7 +10,7 @@ Tools own model-facing names, descriptions, schemas, replay declarations, Effect
 
 `EffectTool<T, E, R>` and `AgentRequest<E, R>` in `packages/agent` preserve tool and hook dependencies in the runner's Effect requirement. Tools return Effects; `AgentRunner.run` accepts a request directly. The agent package captures the caller's Context and adapts tools and response observers to native SDK callbacks within one invocation scope. Promise conversion and AbortSignal handling remain private to that SDK boundary.
 
-Goal execution retains accepted-input identity and causal policy. It binds a stable operation identity derived from Goal path, input ID and SDK tool-call ID for Task/Signal commands and retained queries. Task execution likewise derives query identity from its path, accepted input and tool-call ID. These are execution bindings, not model arguments or a universal metadata envelope.
+Goal execution retains accepted-input identity and causal policy. It binds a stable operation identity derived from Goal path, input ID and SDK tool-call ID for Task/Signal commands. Task execution likewise derives query identity from its path, accepted input and tool-call ID. These are execution bindings, not model arguments or a universal metadata envelope.
 
 The summary tool calls the injected GoalState.updateSummary directly. That method validates and serializes the mutation with other Goal transitions and returns only after persistence. The native SDK boundary retires callbacks at invocation completion/cancellation; the model Layer rejects writes after Actor retirement. There is no summary command, generation argument or Accepted/Rejected transport round trip. The existing automatic propagation budget remains Goal/Task/Signal policy.
 
@@ -89,11 +89,13 @@ The SDK adapter in `packages/agent` preserves the caller's Effect Context and Ab
 
 ## Catalogues and runtime
 
-| Invocation             | Tools                                                 |
-| ---------------------- | ----------------------------------------------------- |
-| Goal conversation      | Context, memory, summary, Task and Signal tools.      |
-| Internal Task          | Context and memory tools, including memory expansion. |
-| Context relevance gate | `submit_context_relevance` only.                      |
+| Invocation             | Tools                                                                                                  |
+| ---------------------- | ------------------------------------------------------------------------------------------------------ |
+| Goal conversation      | `goal_current`, `update_summary`, `task_list`, `start_task`, `task_send`, `signal_list`, `set_signal`. |
+| Internal Task          | Context and memory tools, including memory expansion.                                                  |
+| Context relevance gate | `submit_context_relevance` only.                                                                       |
+
+Context and memory tools are absent from the main Goal catalogue. A lookup requiring fresh evidence starts or continues an internal Task. The Goal can still interpret evidence supplied by its Context gate or Task feedback, and coordinate Signals directly. There is no automatic timeout-based handoff or added execution budget.
 
 Runtime starts the Context query root and activates Memory before restoring Tasks that may immediately resume tool execution. Source integration readiness and Goal activation retain their existing contracts. No host wiring or generic Actor runtime changes are needed.
 

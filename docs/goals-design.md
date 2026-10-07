@@ -5,14 +5,14 @@ A Goal owns a natural conversation, business understanding and routing to Tasks 
 ```text
 Context change → System One → Context-only Goal gate → Goal conversation
 User input / Task feedback ─────────────────────────→ Goal conversation
-Goal conversation → lightweight tools
+Goal conversation → Goal/Task/Signal coordination tools
                   → Task → internal Agent or external executor
                   → Signal → scheduled or Context-triggered Task
 ```
 
 ## Conversation and messages
 
-Simple exchanges and lightweight Context/memory reads run in the main Agent. Sustained work uses a Task. `start_task` creates work; `task_send` sends instructions to an existing Task, including completed work that should continue. A new topic only needs a Task when it requires sustained work. A Goal turn ending does not stop its Tasks.
+The main Agent handles dialogue and questions answerable from supplied conversation, Goal state and Task feedback. Its tools are `goal_current`, `update_summary`, `task_list`, `start_task`, `task_send`, `signal_list` and `set_signal`. Context discovery, Context/integration queries and memory retrieval belong to internal Tasks, including apparently simple lookups such as today's email. `start_task` creates work; `task_send` continues an existing Task, including completed work. The Goal acknowledges admission and ends its turn without polling for completion. Greetings need no tool call. A new topic that can be handled conversationally needs no Task. Ending a Goal turn does not stop its Tasks.
 
 `AgentConversations` owns one Pi conversation per Goal. Pi is the only message store: `goal.input` retains accepted user input, internal evidence and feedback; `goal.reply` retains selected public replies. Native Pi entries retain model and tool activity. There is no GoalHistory service or separate public-chat store. Compaction changes model context, not retained message history.
 

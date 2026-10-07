@@ -168,8 +168,8 @@ test("Goal conversation and gate log live responses with their identities withou
       {
         type: "toolCall",
         id: "read-project",
-        name: "read_context",
-        arguments: { path: "/goals/project" },
+        name: "goal_current",
+        arguments: {},
       },
     ],
     stopReason: "toolUse",
@@ -222,8 +222,8 @@ test("Goal conversation and gate log live responses with their identities withou
             "Goal agent tool call",
             {
               toolCallId: "read-project",
-              tool: "read_context",
-              arguments: { path: "/goals/project" },
+              tool: "goal_current",
+              arguments: {},
             },
           ],
         ],
@@ -762,6 +762,110 @@ test("Goal tracks multiple Tasks before tool acknowledgement and reuses referenc
       yield* env.wait(() => env.state().inputs.at(-1)?.status === "completed");
       assert.equal(turns, 2);
       assert.deepEqual(env.state().tasks, paths);
+    }),
+  );
+});
+
+test("Goal delegates evidence reads to an internal Task and answers users while that Task is running", async () => {
+  await run(
+    Effect.gen(function* () {
+      const working = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      const history = testConversations();
+      const replies: string[] = [];
+      const answer = (text: string): AgentResult => ({
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "test",
+            model: "test",
+            content: [{ type: "text", text }],
+            stopReason: "stop",
+            timestamp: 0,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+          },
+        ],
+      });
+      const env = yield* setup(
+        (input) =>
+          Effect.gen(function* () {
+            const names = input.tools!.map((tool) => tool.name);
+            if (input.durable?.owner === "tasks") {
+              assert.ok(names.includes("read_context"));
+              assert.ok(names.includes("memory_search"));
+              assert.ok(!names.includes("update_summary"));
+              const evidence = yield* tool(input, "read_context", {
+                path: "/goals/project",
+                offset: 0,
+              });
+              assert.equal(evidence.isError, undefined);
+              assert.match(JSON.stringify(evidence.details), /Improve project reliability/);
+              yield* Deferred.succeed(working, undefined);
+              yield* Deferred.await(release);
+              return answer("Evidence review finished");
+            }
+            for (const name of [
+              "search_contexts",
+              "read_context",
+              "query_context",
+              "read_query_result",
+              "memory_search",
+              "memory_expand",
+            ])
+              assert.ok(!names.includes(name), `Goal must not execute ${name}`);
+            const message = input.messages.findLast((message) => message.role === "user");
+            let text = "";
+            if (message?.content === "Review project evidence") {
+              const accepted = yield* tool(input, "start_task", {
+                task: {
+                  _tag: "Agent",
+                  replyTo: "/goals/project",
+                  task: { instructions: "Review project evidence", input: [] },
+                },
+              });
+              assert.equal(accepted.isError, undefined);
+              text = "I am reviewing the evidence in a task.";
+            } else if (message?.content === "hi") text = "Hi!";
+            else if (JSON.stringify(message).includes("ExecutionFeedback"))
+              text = "The evidence review is complete.";
+            replies.push(text);
+            return answer(text);
+          }),
+        { history },
+      );
+      yield* env.activate;
+      yield* env.wait(() => env.state().inputs[0]?.status === "completed");
+      yield* env.submit("review", { _tag: "UserInput", text: "Review project evidence" });
+      yield* Deferred.await(working);
+      yield* env.wait(() => env.state().inputs.at(-1)?.status === "completed");
+      assert.equal(env.state().tasks.length, 1);
+      yield* env.submit("greeting", { _tag: "UserInput", text: "hi" });
+      yield* env.wait(() => env.state().inputs.at(-1)?.status === "completed");
+      assert.equal(yield* Deferred.isDone(release), false);
+      assert.equal(replies.at(-1), "Hi!");
+      assert.ok(
+        (yield* history.read("/goals/project")).some(
+          (entry) =>
+            entry.kind === "goal.reply" && (entry.data as { text?: string }).text === "Hi!",
+        ),
+      );
+      yield* Deferred.succeed(release, undefined);
+      yield* env.wait(() =>
+        env
+          .state()
+          .inputs.some(
+            (input) => input.kind === "ExecutionFeedback" && input.status === "completed",
+          ),
+      );
+      assert.equal(replies.at(-1), "The evidence review is complete.");
     }),
   );
 });
