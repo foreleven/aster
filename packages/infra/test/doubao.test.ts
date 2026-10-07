@@ -13,7 +13,7 @@ test("Doubao retains session/run IDs, checks existing work, and routes native co
     items: ["Allow"],
   };
   const agent = makeDoubaoAgent(
-    undefined,
+    {},
     async (args) => {
       calls.push(args);
       if (args[1] === "create") return { conversationId: "session", runId: "run" };
@@ -51,7 +51,7 @@ test("Doubao retains session/run IDs, checks existing work, and routes native co
 });
 
 test("Doubao exposes custom executor instructions for Task construction", () => {
-  const agent = makeDoubaoAgent(undefined, undefined, undefined, "Custom executor policy");
+  const agent = makeDoubaoAgent({}, undefined, undefined, "Custom executor policy");
   assert.equal(agent.executorPrompt, "Custom executor policy");
 });
 
@@ -62,7 +62,7 @@ test("Doubao cancellation prevents follow-up effects even when the active transp
     const calls: string[][] = [];
     let responses = 0;
     const agent = makeDoubaoAgent(
-      undefined,
+      {},
       async (args) => {
         calls.push(args);
         entered.resolve();
@@ -140,7 +140,7 @@ test("Doubao validates pending controls without stripping native response metada
 });
 
 test("Malformed Doubao status is a typed adapter failure", async () => {
-  const agent = makeDoubaoAgent(undefined, async () => ({
+  const agent = makeDoubaoAgent({}, async () => ({
     status: "waiting_input",
     pending: "invalid",
   }));
@@ -150,4 +150,29 @@ test("Malformed Doubao status is a typed adapter failure", async () => {
     assert.equal(result.failure._tag, "ExternalAgentError");
     assert.equal(result.failure.operation, "status");
   }
+});
+
+test("Doubao native replies retain the adapter's captured endpoint", async (t) => {
+  const environment = { DOUBAO_CDP_ENDPOINT: "http://captured.invalid:9226" };
+  const agent = makeDoubaoAgent(environment, async () => ({
+    status: "waiting_input",
+    pending: [{ threadId: "child", messageId: "m", blockId: "b", kind: "approval" }],
+  }));
+  environment.DOUBAO_CDP_ENDPOINT = "http://changed.invalid:9000";
+  let endpoint: string | undefined;
+  t.mock.method(globalThis, "fetch", async (url: string) => {
+    endpoint = url;
+    return Response.json([]);
+  });
+  await assert.rejects(
+    Effect.runPromise(
+      agent.respond(
+        { sessionId: "original", runId: "run" },
+        { id: "child:m:b", kind: "approval", prompt: "Allow?" },
+        { decision: "approve" },
+      ),
+    ),
+    /renderer is unavailable/,
+  );
+  assert.equal(endpoint, "http://captured.invalid:9226/json/list");
 });

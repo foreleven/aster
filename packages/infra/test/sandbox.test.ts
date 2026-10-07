@@ -8,16 +8,12 @@ import { BACKGROUND_CONTEXT, withAbortSignal } from "@earendil-works/chord/conte
 import { getOrThrow } from "@earendil-works/pi-durable/env";
 import { Models, type ResolvedModel } from "@aster/agent";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
-import { SandboxManager } from "../src/pi/sandbox.js";
+import { evidenceEnvironment } from "../src/pi/sandbox.js";
 import { makePiAgent } from "../src/pi/agent.js";
 
 const context = BACKGROUND_CONTEXT;
 const open = (namespace: string, prompt: string) =>
-  Effect.runPromise(
-    SandboxManager.use((manager) =>
-      manager.open({ namespace, prompt, instructions: "Analyze evidence" }),
-    ).pipe(Effect.provide(SandboxManager.layer)),
-  );
+  evidenceEnvironment({ namespace, prompt, instructions: "Analyze evidence" });
 
 test("prepared-evidence sandbox denies host access and every mutation even after cwd changes", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "aster-sandbox-host-"));

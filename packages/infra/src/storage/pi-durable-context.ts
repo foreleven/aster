@@ -14,11 +14,10 @@ import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/n
 import {
   ContextCommitError,
   ContextRecoveryError,
-  DurableContext,
   makeDurableContext,
   type StoredContext,
 } from "@aster/core";
-import { Effect, Layer, Schema, Semaphore } from "effect";
+import { Effect, Schema, Semaphore } from "effect";
 import {
   PiContextCommit,
   PiContextCommitSchema,
@@ -316,6 +315,4 @@ export const PiDurableContext = {
   make,
   fromRuntime,
   directory,
-  layer: (options: Parameters<typeof directory>[0]) =>
-    Layer.effect(DurableContext, directory(options)),
 };

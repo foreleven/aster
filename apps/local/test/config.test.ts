@@ -149,11 +149,18 @@ test("Lark profile parsers match actual CLI envelopes and select only public ide
 
 test("Agent processes receive none of the project service keys", () => {
   const env = agentEnvironment({
-    TYPESAFE_API_KEY: "test",
-    LAYA_API_KEY: "test",
-    AGENTMEMORY_SECRET: "test",
-    PATH: "/bin",
+    privateKeys: ["PROJECT_SECRET"],
+    values: {
+      PROJECT_SECRET: "private",
+      ASTER_HTTP_PORT: "3000",
+      TYPESAFE_API_KEY: "test",
+      LAYA_API_KEY: "test",
+      AGENTMEMORY_SECRET: "test",
+      PATH: "/bin",
+    },
   });
+  assert.equal(env.PROJECT_SECRET, undefined);
+  assert.equal(env.ASTER_HTTP_PORT, undefined);
   assert.equal(env.TYPESAFE_API_KEY, undefined);
   assert.equal(env.LAYA_API_KEY, undefined);
   assert.equal(env.AGENTMEMORY_SECRET, undefined);

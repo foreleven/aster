@@ -49,9 +49,7 @@ const make = Effect.fn("RoutedDurableContext.make")(function* (
   }));
   const paths = new Set(snapshots.flatMap(({ snapshot }) => Object.keys(snapshot)));
   for (const path of paths) {
-    const authoritative = selected(path)
-      .exportRecords()
-      .find((record) => record.snapshot.path === path);
+    const authoritative = snapshots.find(({ name }) => name === owner(path))?.snapshot[path];
     if (!authoritative)
       return yield* new ContextRecoveryError({
         path,

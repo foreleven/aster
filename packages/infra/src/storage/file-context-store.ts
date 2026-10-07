@@ -16,9 +16,12 @@ import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { StoredContext, ContextSnapshot } from "@aster/core";
-import { type ContextStore } from "./storage.js";
-
 import { Schema } from "effect";
+
+export interface ContextStore {
+  readonly loadAll: () => ReadonlyArray<StoredContext>;
+  readonly save: (record: StoredContext) => void;
+}
 
 const StateFile = Schema.Struct({
   snapshot: Schema.Struct({

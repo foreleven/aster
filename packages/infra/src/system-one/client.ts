@@ -12,7 +12,6 @@ type SystemOneConfig = typeof SystemOneConfig.Type;
 /** Explicit configuration applies to TypeSafe and compatible System One services. */
 export const makeSystemOneClient = (
   config: SystemOneConfig | undefined,
-  environment: NodeJS.ProcessEnv = {},
   fetcher: typeof fetch = fetch,
 ): SystemOneClient => {
   if (!config)
@@ -36,15 +35,8 @@ export const makeSystemOneClient = (
   }
   const model = config.model.trim();
   if (!model) throw new Error("config.system-one.model must be nonempty");
-  const reference = /^\$\{([A-Za-z_][A-Za-z0-9_]*)\}$/.exec(config.apiKey.trim());
-  const apiKey = reference ? environment[reference[1]!] : config.apiKey;
-  if (!apiKey?.trim()) {
-    throw new Error(
-      reference
-        ? `System One credential environment variable is missing: ${reference[1]}`
-        : "config.system-one.apiKey must be nonempty",
-    );
-  }
+  const apiKey = config.apiKey;
+  if (!apiKey.trim()) throw new Error("config.system-one.apiKey must be nonempty");
   // The SDK appends /v1/systemone. Accept a service root, /v1, or that full endpoint.
   const baseURL = url
     .toString()

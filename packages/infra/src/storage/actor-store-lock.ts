@@ -1,48 +1,31 @@
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 
-/** The actor directory has one writer, independently of which memory configuration is selected. */
-export const acquireActorStoreLock = (
-  root = join(homedir(), ".aster"),
-  options: { readonly recoverStale?: boolean } = {},
-) => {
+/** SQLite supplies a local-filesystem kernel lock unavailable in Node/Effect's
+ * filesystem API. Never unlink the database: its stable inode is the lock identity.
+ * actors.pid is diagnostic only; process death releases ownership automatically. */
+export const acquireActorStoreLock = (root = join(homedir(), ".aster")) => {
   mkdirSync(root, { recursive: true, mode: 0o700 });
-  const path = join(root, "actors.pid");
-  if (existsSync(path)) {
-    // Pi shards fail closed after an unclean exit. Automatically unlinking a
-    // stale lock can race another recovery process acquiring the same pathname.
-    if (options.recoverStale === false)
-      throw new Error(`Storage ownership requires reconciliation: ${path}`);
-    const pid = Number(readFileSync(path, "utf8").trim());
-    if (!Number.isSafeInteger(pid) || pid <= 0)
-      throw new Error(`Invalid actor-store lock: ${path}`);
-    let alive = true;
-    try {
-      process.kill(pid, 0);
-    } catch (error) {
-      alive = (error as NodeJS.ErrnoException).code !== "ESRCH";
-    }
-    if (alive) throw new Error(`Another Aster process (${pid}) owns the actor store`);
-    // Do not reclaim a different lock installed while we checked the former owner.
-    if (Number(readFileSync(path, "utf8").trim()) === pid) unlinkSync(path);
-  }
-  const fd = openSync(path, "wx", 0o600);
+  const directory = realpathSync(root);
+  const database = new DatabaseSync(join(directory, ".actors-lock.sqlite"), { timeout: 0 });
+  const marker = join(directory, "actors.pid");
   try {
-    writeFileSync(fd, String(process.pid));
-  } finally {
-    closeSync(fd);
+    database.exec(
+      "PRAGMA journal_mode = DELETE; CREATE TABLE IF NOT EXISTS lease (id INTEGER PRIMARY KEY); BEGIN EXCLUSIVE;",
+    );
+    writeFileSync(marker, String(process.pid), { mode: 0o600 });
+  } catch (cause) {
+    database.close();
+    throw new Error("Cannot acquire actor store: another process may own it", { cause });
   }
   return () => {
-    if (existsSync(path) && Number(readFileSync(path, "utf8").trim()) === process.pid)
-      unlinkSync(path);
+    if (!database.isOpen) return;
+    try {
+      unlinkSync(marker);
+    } finally {
+      database.close();
+    }
   };
 };

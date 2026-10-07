@@ -1,5 +1,4 @@
 import { posix } from "node:path";
-import { Context, Effect, Layer } from "effect";
 import type { Context as ChordContext } from "@earendil-works/chord";
 import {
   ExecutionError,
@@ -22,7 +21,7 @@ export interface SandboxEvidence {
 /** Native SDK boundary. This filesystem is an immutable value, not a path filter
  * around the host filesystem. It has no host I/O, process, network or credential
  * capability to delegate. Changing cwd cannot change the visible namespace. */
-const evidenceEnvironment = (input: SandboxEvidence): ExecutionEnv => {
+export const evidenceEnvironment = (input: SandboxEvidence): ExecutionEnv => {
   const files = new Map([
     ["/task/input.md", input.prompt],
     ["/task/instructions.md", input.instructions],
@@ -132,21 +131,3 @@ const evidenceEnvironment = (input: SandboxEvidence): ExecutionEnv => {
     cleanup: async () => {},
   };
 };
-
-/** Infrastructure owns execution authority. This initial policy grants only
- * immutable admitted evidence; enabling host execution requires a new backend
- * and policy identity, not an approval flag on this environment. */
-export class SandboxManager extends Context.Service<
-  SandboxManager,
-  {
-    readonly policyId: string;
-    readonly open: (input: SandboxEvidence) => Effect.Effect<ExecutionEnv>;
-  }
->()("aster/SandboxManager") {
-  static readonly layer = Layer.succeed(SandboxManager, {
-    policyId: evidencePolicyId,
-    open: Effect.fn("SandboxManager.open")((input: SandboxEvidence) =>
-      Effect.sync(() => evidenceEnvironment(input)),
-    ),
-  });
-}

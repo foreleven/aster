@@ -81,10 +81,6 @@ export const storageSettings = Effect.gen(function* () {
   const settings = yield* Config.schema(Schema.optional(Settings), ["config", "durable"]);
   const root = settings?.root ? resolve(baseDir, settings.root) : join(homedir(), ".aster");
   const routes = [...(settings?.routes ?? [])].sort((a, b) => a.prefix.localeCompare(b.prefix));
-  if (new Set(routes.map((route) => route.prefix)).size !== routes.length)
-    return yield* new StorageRoutingError({ message: "Duplicate Context route prefix" });
-  if (!settings?.pi && routes.some((route) => route.backend === "pi"))
-    return yield* new StorageRoutingError({ message: "Pi routes require config.durable.pi" });
   const authority: StorageAuthority = {
     version: 1,
     localDirectory: join(root, "actors"),

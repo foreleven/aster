@@ -10,7 +10,7 @@ import {
   type ContextSnapshot,
   type StoredContext,
 } from "@aster/core";
-import { LocalDurableContext } from "../src/storage/local-durable.js";
+import { makeDurableContext } from "@aster/core";
 
 const initial: ContextSnapshot = {
   revision: 0,
@@ -37,7 +37,7 @@ test("LocalDurableContext drains an accepted commit on cancellation and cancels 
         const release = yield* Deferred.make<void>();
         const observed = yield* Deferred.make<ContextSnapshot>();
         const saved: StoredContext[] = [];
-        const backend = yield* LocalDurableContext.make({
+        const backend = yield* makeDurableContext({
           load: Effect.succeed([]),
           save: (record) =>
             Effect.gen(function* () {
@@ -89,7 +89,7 @@ test("LocalDurableContext preserves storage defects and fences later commits unt
       const defect = new Error("Driver defect after durable commit");
       let persisted: StoredContext = { snapshot: initial, events: [] };
       let crash = true;
-      const backend = yield* LocalDurableContext.make({
+      const backend = yield* makeDurableContext({
         load: Effect.sync(() => [persisted]),
         save: (record) =>
           Effect.gen(function* () {
@@ -136,7 +136,7 @@ test("recovery refuses missing, regressed and invalid snapshots without releasin
         let saved: readonly StoredContext[] = [
           { snapshot: { ...initial, revision: 1 }, events: [] },
         ];
-        const backend = yield* LocalDurableContext.make({
+        const backend = yield* makeDurableContext({
           load: Effect.sync(() => saved),
           save: () =>
             Effect.fail(
@@ -161,7 +161,7 @@ test("the registry validates domain state while a supplied DurableContext owns c
   await Effect.runPromise(
     Effect.gen(function* () {
       const writes: StoredContext[] = [];
-      const backend = yield* LocalDurableContext.make({
+      const backend = yield* makeDurableContext({
         load: Effect.succeed([]),
         save: (record) =>
           Effect.sync(() => {
@@ -193,7 +193,7 @@ test("LocalDurableContext rejects duplicate identities and invalid public paths 
     [{ ...initial, path: "/trailing/" }],
   ]) {
     const result = await Effect.runPromise(
-      LocalDurableContext.make({
+      makeDurableContext({
         load: Effect.succeed(records.map((snapshot) => ({ snapshot, events: [] }))),
         save: () => Effect.void,
       }).pipe(Effect.result),

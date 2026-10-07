@@ -119,9 +119,10 @@ export async function respondInRenderer(
 export const respondDoubaoNative = async (
   request: any,
   response: ApprovalResponse,
-  signal?: AbortSignal,
+  signal: AbortSignal | undefined,
+  cdpEndpoint: string,
 ): Promise<void> => {
-  const endpoint = (process.env.DOUBAO_CDP_ENDPOINT ?? "http://127.0.0.1:9226").replace(/\/$/, "");
+  const endpoint = cdpEndpoint.replace(/\/$/, "");
   const targets = (await fetch(`${endpoint}/json/list`, {
     signal: signal
       ? AbortSignal.any([signal, AbortSignal.timeout(5000)])

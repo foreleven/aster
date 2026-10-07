@@ -7,16 +7,15 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import type { ExecutionSession, ExecutionStatus, InputRequest } from "@aster/core";
-import { agentEnvironment } from "../process/environment.js";
 import { taskPrompt } from "@aster/core";
 
 /** One lazily started app-server connection; native approval requests stay correlated with JSON-RPC IDs. */
 export const makeCodexAgent = (
-  envPath: string,
+  environment: NodeJS.ProcessEnv,
   executable = "codex",
   taskRoot = join(homedir(), ".aster", "tasks"),
-  environment: NodeJS.ProcessEnv = process.env,
 ): ManagedExternalAgent => {
+  const childEnvironment = { ...environment };
   let child: ChildProcessWithoutNullStreams | undefined;
   let initialization: Promise<void> | undefined;
   let sequence = 0;
@@ -91,7 +90,7 @@ export const makeCodexAgent = (
   const ensure = () =>
     (initialization ??= (async () => {
       child = spawn(executable, ["app-server"], {
-        env: agentEnvironment(environment, envPath),
+        env: childEnvironment,
         stdio: ["pipe", "pipe", "pipe"],
       });
       const lines = createInterface({ input: child.stdout });
@@ -318,7 +317,11 @@ export const makeCodexAgent = (
         },
         signal,
       );
-      const next = { ...session, runId: turn.id };
+      const next = {
+        ...session,
+        runId: turn.id,
+        metadata: { ...session.metadata, processId: child?.pid },
+      };
       sessions.set(next.sessionId, next);
       return next;
     },

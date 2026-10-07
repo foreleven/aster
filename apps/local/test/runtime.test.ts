@@ -19,7 +19,7 @@ import {
   defineIntegration,
   contextPath,
 } from "@aster/core";
-import { LocalDurableContext } from "@aster/infra";
+import { makeDurableContext } from "@aster/core";
 import { Models } from "@aster/agent";
 import { MailFetcher, MailIntegration, MailSettings } from "@aster/integrations";
 import { MemoryBackend } from "@aster/core";
@@ -105,7 +105,10 @@ const sourceLayer = (
 const infrastructure = (events: string[], overrides: Partial<MemoryBackend["Service"]> = {}) =>
   Layer.mergeAll(
     Layer.succeed(ConfigLocation, { baseDir: "/tmp", projectRoot: "/tmp", envPath: "/tmp/.env" }),
-    Layer.effect(DurableContext, LocalDurableContext.fromStore()),
+    Layer.effect(
+      DurableContext,
+      makeDurableContext({ load: Effect.succeed([]), save: () => Effect.void }),
+    ),
     AgentConversations.memory,
     Models.layer([
       {

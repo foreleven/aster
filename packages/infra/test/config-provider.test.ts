@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Config, ConfigProvider, Effect, Redacted, Schema } from "effect";
+import { Config, ConfigProvider, Effect, Layer, Redacted, Schema } from "effect";
 import { ConfigLocation, GoalSettings, secretConfig, signalSettings } from "@aster/core";
 import { LocalConfig, SystemOneClientLive } from "../src/index.js";
 import { SystemOneClient } from "@aster/core";
@@ -105,7 +105,6 @@ test("local provider precedence, exact credentials and config-relative locations
 });
 
 test("module settings read structured provider values and disabled decisions need no credentials", async () => {
-  const { Layer } = await import("effect");
   const config = ConfigProvider.layer(
     ConfigProvider.fromUnknown({
       config: { agent: { model: "test" } },
@@ -136,4 +135,49 @@ test("module settings read structured provider values and disabled decisions nee
       ),
     ),
   );
+});
+
+test("executor environments use captured private keys even after dotenv changes", async (t) => {
+  const { ProcessEnvironment } = await import("@aster/core");
+  const { agentEnvironment } = await import("../src/process/environment.js");
+  const dir = await mkdtemp(join(tmpdir(), "aster-captured-env-"));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const configPath = join(dir, "config.yaml");
+  const envPath = join(dir, ".env");
+  await writeFile(configPath, "{}");
+  await writeFile(envPath, "PROJECT_SECRET=private\n");
+  const captured = await Effect.runPromise(
+    ProcessEnvironment.pipe(
+      Effect.provide(
+        LocalConfig.layer({
+          configPath,
+          envPath,
+          projectRoot: dir,
+          environment: {
+            PATH: "/captured/bin",
+            DOUBAO_CDP_ENDPOINT: "http://captured:9226",
+            ASTER_HTTP_PORT: "9000",
+          },
+        }),
+      ),
+    ),
+  );
+  await rm(envPath);
+  assert.deepEqual(agentEnvironment(captured), {
+    PATH: "/captured/bin",
+    DOUBAO_CDP_ENDPOINT: "http://captured:9226",
+  });
+});
+
+test("System One resolves credential references exactly once in its Layer", async () => {
+  const sources = ConfigProvider.layer(
+    ConfigProvider.fromUnknown({
+      config: { "system-one": { url: "http://unused", model: "fake", apiKey: "${SERVICE_KEY}" } },
+      secrets: { SERVICE_KEY: "${LITERAL_SECRET_VALUE}" },
+    }),
+  );
+  const client = await Effect.runPromise(
+    SystemOneClient.pipe(Effect.provide(SystemOneClientLive.layer.pipe(Layer.provide(sources)))),
+  );
+  assert.equal(client.configured, true);
 });

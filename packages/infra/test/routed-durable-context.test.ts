@@ -82,3 +82,38 @@ test("router refuses missing, regressed or divergent selected state and invalid 
     }),
   );
 });
+
+test("route validation exports each backend once regardless of Context count", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const records = Array.from({ length: 100 }, (_, index) => ({
+        ...record,
+        path: `/personal/${index}`,
+      }));
+      const local = yield* seeded(records);
+      const pi = yield* seeded(records);
+      const counts = { local: 0, pi: 0 };
+      const router = yield* RoutedDurableContext.make(
+        {
+          local: {
+            ...local,
+            exportRecords: () => {
+              counts.local++;
+              return local.exportRecords();
+            },
+          },
+          pi: {
+            ...pi,
+            exportRecords: () => {
+              counts.pi++;
+              return pi.exportRecords();
+            },
+          },
+        },
+        routes,
+      );
+      assert.deepEqual(counts, { local: 1, pi: 1 });
+      assert.equal(router.directory().length, 100);
+    }),
+  );
+});

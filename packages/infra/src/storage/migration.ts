@@ -57,7 +57,7 @@ export const migrateContextStorage = Effect.fn("ContextStorage.migrate")(functio
   const target = yield* validateStorageAuthority(options.root, options.authority);
   yield* Effect.acquireRelease(
     Effect.try({
-      try: () => acquireActorStoreLock(options.root, { recoverStale: false }),
+      try: () => acquireActorStoreLock(options.root),
       catch: failure("Stop Aster before migrating its Context storage"),
     }),
     (release) => Effect.sync(release),

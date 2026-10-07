@@ -21,7 +21,7 @@ const testConfig = {
 };
 
 test("Goal screening respects the System One level limit and normalizes the top score to one", async () => {
-  const client = makeSystemOneClient(testConfig, {}, async (_url, init) => {
+  const client = makeSystemOneClient(testConfig, async (_url, init) => {
     const body = JSON.parse(String(init?.body));
     const levels = body.questions.relevance.criteria.length;
     if (levels > 10) return Response.json({ error: { message: levelError } }, { status: 400 });
@@ -41,7 +41,7 @@ test("failed Goal screening emits an error log and audit record while retaining 
     logs.push({ level: entry.logLevel, message: entry.message });
   });
   let requests = 0;
-  const client = makeSystemOneClient(testConfig, {}, async () => {
+  const client = makeSystemOneClient(testConfig, async () => {
     requests++;
     return Response.json({ error: { message: levelError } }, { status: 400 });
   });
@@ -86,7 +86,6 @@ test("interrupting a System One fiber aborts the SDK request without retrying", 
             model: "test",
             apiKey: "test",
           },
-          {},
           (_url, init) => {
             requests++;
             requestSignal = init?.signal ?? undefined;
@@ -114,16 +113,15 @@ test("interrupting a System One fiber aborts the SDK request without retrying", 
   );
 });
 
-test("configured URL, model and environment credential reach the System One request", async () => {
+test("configured URL, model and resolved credential reach the System One request", async () => {
   for (const suffix of ["", "/", "/v1", "/v1/systemone/"]) {
     let request: { url: string; headers: Headers; body: Record<string, unknown> } | undefined;
     const client = makeSystemOneClient(
       {
         url: `http://localhost:8000/proxy${suffix}`,
         model: "multilingual",
-        apiKey: "${LAYA_API_KEY}",
+        apiKey: "test-laya-key",
       },
-      { LAYA_API_KEY: "test-laya-key", TYPESAFE_API_KEY: "unrelated-key" },
       async (url, init) => {
         request = {
           url: String(url),
@@ -153,13 +151,13 @@ test("configured URL, model and environment credential reach the System One requ
   }
 });
 
-test("literal credentials work; missing settings and environment references fail before requests", async () => {
+test("resolved credentials work; missing or invalid settings fail before requests", async () => {
   const config = {
     url: "https://api.typesafe.ai",
     model: "jev-latest",
     apiKey: "literal-test-key",
   };
-  const client = makeSystemOneClient(config, {}, async (_url, init) => {
+  const client = makeSystemOneClient(config, async (_url, init) => {
     assert.equal(new Headers(init?.headers).get("Authorization"), "Bearer literal-test-key");
     assert.equal(JSON.parse(String(init?.body)).model, "jev-latest");
     return Response.json({
@@ -173,18 +171,8 @@ test("literal credentials work; missing settings and environment references fail
       questions: { intent: choice("intent", { a: "first", b: "second" }) },
     }),
   );
-  assert.throws(() => makeSystemOneClient(undefined, {}), /config\.system-one is required/);
-  assert.throws(
-    () => makeSystemOneClient({ ...config, apiKey: "${CUSTOM_KEY}" }, {}),
-    /variable is missing: CUSTOM_KEY/,
-  );
-  assert.throws(
-    () => makeSystemOneClient({ ...config, apiKey: " " }, {}),
-    /apiKey must be nonempty/,
-  );
-  assert.throws(() => makeSystemOneClient({ ...config, model: " " }, {}), /model must be nonempty/);
-  assert.throws(
-    () => makeSystemOneClient({ ...config, url: "invalid" }, {}),
-    /url must be an HTTP/,
-  );
+  assert.throws(() => makeSystemOneClient(undefined), /config\.system-one is required/);
+  assert.throws(() => makeSystemOneClient({ ...config, apiKey: " " }), /apiKey must be nonempty/);
+  assert.throws(() => makeSystemOneClient({ ...config, model: " " }), /model must be nonempty/);
+  assert.throws(() => makeSystemOneClient({ ...config, url: "invalid" }), /url must be an HTTP/);
 });

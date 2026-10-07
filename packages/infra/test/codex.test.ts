@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { makeCodexAgent } from "../src/index.js";
+import { makeCodexAgent, agentEnvironment } from "../src/index.js";
 
 const isInterrupted = (error: unknown) =>
   error instanceof Error && /interrupt/i.test(error.message);
@@ -12,8 +12,6 @@ const isInterrupted = (error: unknown) =>
 test("Codex native session/run, approval response, result and recovery use app-server", async () => {
   const dir = await mkdtemp(join(tmpdir(), "signals-codex-test-"));
   const originalKey = process.env.TEST_INTEGRATION_TOKEN;
-  const envPath = join(dir, "app.env");
-  await writeFile(envPath, "TEST_INTEGRATION_TOKEN=test-only\n");
   const executable = join(dir, "fake-codex");
   await writeFile(
     executable,
@@ -42,7 +40,11 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     { mode: 0o700 },
   );
   process.env.TEST_INTEGRATION_TOKEN = "test-only";
-  const agent = makeCodexAgent(envPath, executable, join(dir, "tasks"));
+  const agent = makeCodexAgent(
+    agentEnvironment({ values: process.env, privateKeys: ["TEST_INTEGRATION_TOKEN"] }),
+    executable,
+    join(dir, "tasks"),
+  );
   let restored: ReturnType<typeof makeCodexAgent> | undefined;
   try {
     const session = await Effect.runPromise(agent.submit({ instructions: "Prepared", input: [] }));
@@ -59,9 +61,20 @@ readline.createInterface({input:process.stdin}).on('line', line => {
       text: "Final result",
     });
     await Effect.runPromise(agent.close());
-    restored = makeCodexAgent(envPath, executable, join(dir, "tasks"));
+    restored = makeCodexAgent(
+      agentEnvironment({ values: process.env, privateKeys: ["TEST_INTEGRATION_TOKEN"] }),
+      executable,
+      join(dir, "tasks"),
+    );
     assert.equal((await Effect.runPromise(restored.status(session))).state, "completed");
     assert.deepEqual(await Effect.runPromise(restored.resume(session)), session);
+    const followUp = await Effect.runPromise(
+      restored.followUp(session, { text: "Prepared follow-up", requestId: "follow-up" }),
+    );
+    assert.equal(followUp.sessionId, session.sessionId);
+    assert.equal(typeof followUp.metadata?.processId, "number");
+    assert.notEqual(followUp.metadata?.processId, session.metadata?.processId);
+    process.kill(Number(followUp.metadata?.processId), 0);
   } finally {
     await Effect.runPromise(agent.close());
     if (restored) await Effect.runPromise(restored.close());
@@ -96,8 +109,8 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 `,
     { mode: 0o700 },
   );
-  const agent = makeCodexAgent(join(dir, "absent.env"), executable, join(dir, "tasks"));
-  const restored = makeCodexAgent(join(dir, "absent.env"), executable, join(dir, "tasks"));
+  const agent = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
+  const restored = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
   try {
     const session = await Effect.runPromise(agent.submit({ instructions: "Prepared", input: [] }));
     assert.equal((await Effect.runPromise(agent.status(session))).state, "running");
@@ -142,7 +155,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 `,
     { mode: 0o700 },
   );
-  const agent = makeCodexAgent(join(dir, "absent.env"), executable, join(dir, "tasks"));
+  const agent = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
   const methods = async (): Promise<string[]> =>
     (await readFile(log, "utf8"))
       .trim()
@@ -234,7 +247,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 `,
     { mode: 0o700 },
   );
-  const agent = makeCodexAgent(join(dir, "absent.env"), executable, join(dir, "tasks"));
+  const agent = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
   try {
     const first = await Effect.runPromise(
       agent.submit({ instructions: "Initial work", input: [] }),

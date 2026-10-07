@@ -7,20 +7,23 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { DEFAULT_EXECUTOR_PROMPT, taskPrompt, ExternalAgentError } from "@aster/core";
-import type { ExecutionSession } from "@aster/core";
+import type { ApprovalResponse, ExecutionSession } from "@aster/core";
 import { respondDoubaoNative } from "./native-response.js";
-import { agentEnvironment } from "../process/environment.js";
 
 const exec = promisify(execFile);
 export type DoubaoCommand = (args: string[], signal?: AbortSignal) => Promise<unknown>;
 export { doubaoStatus } from "./status.js";
 export const makeDoubaoAgent = (
-  envPath?: string,
+  environment: NodeJS.ProcessEnv,
   command?: DoubaoCommand,
-  respond = respondDoubaoNative,
+  respond?: (request: unknown, response: ApprovalResponse, signal?: AbortSignal) => Promise<void>,
   prompt = DEFAULT_EXECUTOR_PROMPT,
-  environment: NodeJS.ProcessEnv = process.env,
 ): ManagedExternalAgent => {
+  const childEnvironment = { ...environment };
+  const endpoint = childEnvironment.DOUBAO_CDP_ENDPOINT ?? "http://127.0.0.1:9226";
+  const respondNative =
+    respond ??
+    ((request, response, signal) => respondDoubaoNative(request, response, signal, endpoint));
   let queue: Promise<unknown> = Promise.resolve();
   const run: DoubaoCommand =
     command ??
@@ -32,7 +35,7 @@ export const makeDoubaoAgent = (
             signal,
             timeout: 90_000,
             maxBuffer: 16 * 1024 * 1024,
-            env: agentEnvironment(environment, envPath),
+            env: childEnvironment,
           });
           return JSON.parse(stdout);
         } catch (error) {
@@ -124,7 +127,7 @@ export const makeDoubaoAgent = (
       if (current.state !== "waiting_input" || !pending)
         throw new Error("Original external approval is no longer pending");
       signal.throwIfAborted();
-      await respond(pending.metadata, response, signal);
+      await respondNative(pending.metadata, response, signal);
     },
   });
 };

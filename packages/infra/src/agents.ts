@@ -1,16 +1,11 @@
 import type { ManagedExternalAgent } from "./external-agent.js";
-import { Config, Effect, Layer, Schema } from "effect";
-import {
-  ConfigLocation,
-  ExternalAgents,
-  ProcessEnvironment,
-  type ExternalAgent,
-} from "@aster/core";
+import { Config, Effect, Schema } from "effect";
+import { ConfigLocation, ProcessEnvironment, type ExternalAgent } from "@aster/core";
 import { makeCodexAgent } from "./codex/agent.js";
 import { makeDoubaoAgent } from "./doubao/delegation.js";
-import { Models } from "@aster/agent";
+import { agentEnvironment } from "./process/environment.js";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { makePiAgent } from "./pi/agent.js";
 
 export const piAgentSettings = Config.schema(
@@ -26,12 +21,8 @@ export const piAgentSettings = Config.schema(
 export const makeExternalAgents = Effect.fn("ExternalAgents.make")(function* (
   sharedPi?: ExternalAgent,
 ) {
-  const { envPath } = yield* ConfigLocation;
-  const environment = yield* ProcessEnvironment;
-  const privateKeys = new Set(environment.privateKeys);
-  const childEnvironment = Object.fromEntries(
-    Object.entries(environment.values).filter(([key]) => !privateKeys.has(key)),
-  );
+  const { baseDir } = yield* ConfigLocation;
+  const childEnvironment = agentEnvironment(yield* ProcessEnvironment);
   const prompt = yield* Config.schema(Schema.optional(Schema.String), [
     "agents",
     "doubao",
@@ -39,11 +30,9 @@ export const makeExternalAgents = Effect.fn("ExternalAgents.make")(function* (
   ]);
   const acquire = (make: () => ManagedExternalAgent) =>
     Effect.acquireRelease(Effect.sync(make), (agent) => agent.close());
-  const codex = yield* acquire(() =>
-    makeCodexAgent(envPath, undefined, undefined, childEnvironment),
-  );
+  const codex = yield* acquire(() => makeCodexAgent(childEnvironment));
   const doubao = yield* acquire(() =>
-    makeDoubaoAgent(envPath, undefined, undefined, prompt, childEnvironment),
+    makeDoubaoAgent(childEnvironment, undefined, undefined, prompt),
   );
   const pi = yield* piAgentSettings;
   const executor =
@@ -51,13 +40,11 @@ export const makeExternalAgents = Effect.fn("ExternalAgents.make")(function* (
     (pi
       ? yield* makePiAgent({
           model: pi.model,
-          directory: pi.storageDirectory ?? join(homedir(), ".aster", "executions", "pi"),
+          directory: pi.storageDirectory
+            ? resolve(baseDir, pi.storageDirectory)
+            : join(homedir(), ".aster", "executions", "pi"),
           shardId: "aster-executions",
         })
       : undefined);
   return { codex, "doubao-delegate": doubao, ...(executor ? { pi: executor } : {}) };
 });
-
-export const ExternalAgentsLive = {
-  layer: Layer.effect(ExternalAgents, makeExternalAgents()).pipe(Layer.provide(Models.configured)),
-};

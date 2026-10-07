@@ -19,7 +19,7 @@ import {
   type ExecutionStatus,
 } from "@aster/core";
 import { readPiContextSnapshots } from "../storage/pi-durable-context.js";
-import { SandboxManager } from "./sandbox.js";
+import { evidenceEnvironment, evidencePolicyId } from "./sandbox.js";
 
 const Handle = Schema.Struct({
   sessionId: Schema.NonEmptyString,
@@ -45,8 +45,6 @@ export const makePiRuntime = Effect.fn("PiExternalAgent.runtime")(function* (opt
 }) {
   const models = yield* Models;
   const resolved = yield* models.resolve(options.model);
-  const sandbox = yield* SandboxManager.pipe(Effect.provide(SandboxManager.layer));
-  const run = Effect.runPromiseWith(yield* Effect.context<never>());
   const lease = yield* PiStorageLease.acquire(options.directory, options.shardId).pipe(
     Effect.mapError((cause) => new PiRuntimeError({ operation: "open", cause })),
   );
@@ -57,8 +55,11 @@ export const makePiRuntime = Effect.fn("PiExternalAgent.runtime")(function* (opt
     catalogueId: "prepared-analysis.v2",
     tools: [{ ...createReadTool(), replay: "safe" }],
     environment: {
-      policyId: sandbox.policyId,
-      open: (input, context) => run(sandbox.open(input), { signal: context.abortSignal }),
+      policyId: evidencePolicyId,
+      open: async (input, context) => {
+        context.abortSignal?.throwIfAborted();
+        return evidenceEnvironment(input);
+      },
     },
     validateSession: async (session, context) => {
       await readPiContextSnapshots(session, options.shardId, context, true);

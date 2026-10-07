@@ -18,4 +18,3 @@ export * from "./agentmemory/index.js";
 
 export * from "./storage/local-durable.js";
 export * from "./storage/routed-durable.js";
-export * from "./storage/storage.js";

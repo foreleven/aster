@@ -19,10 +19,6 @@ import { Effect } from "effect";
 import { memoryEnvironment, type MemoryConfig } from "./config.js";
 import { makeMemoryClient, type MemoryClient, type MemoryConnection } from "./client.js";
 
-export interface ManagedMemory {
-  readonly connection: MemoryConnection;
-  readonly client: MemoryClient;
-}
 const require = createRequire(import.meta.url);
 const alive = (pid: number) => {
   try {
@@ -56,12 +52,7 @@ const checkPort = (port: number) =>
   });
 
 /** The published CLI has global PID files, so serialize ownership without adopting another daemon. */
-export const launchMemory = async (
-  config: MemoryConfig,
-  cwd: string,
-  signal?: AbortSignal,
-  source: NodeJS.ProcessEnv = process.env,
-) => {
+const createMemoryRuntime = (config: MemoryConfig, cwd: string, source: NodeJS.ProcessEnv) => {
   const upstreamDir = join(homedir(), ".agentmemory");
   mkdirSync(upstreamDir, { recursive: true });
   const lockPath = join(upstreamDir, "signals-managed.pid");
@@ -121,7 +112,7 @@ export const launchMemory = async (
     }
     if (pidAt(lockPath) === process.pid) unlinkSync(lockPath);
   };
-  try {
+  const start = async (signal: AbortSignal) => {
     if ((previousEngine && alive(previousEngine)) || (previousWorker && alive(previousWorker))) {
       throw new Error("agentmemory is already running; stop that instance before starting Aster");
     }
@@ -217,27 +208,43 @@ export const launchMemory = async (
     if (!enginePid) throw new Error("Cannot establish ownership of the agentmemory engine");
     signal?.throwIfAborted();
     client = makeMemoryClient(connection);
-    return { connection, client, stop };
-  } catch (error) {
-    await stop();
-    throw error;
-  }
+    return { connection, client };
+  };
+  return { start, stop };
 };
 
-export const managedMemory = (
+/** The resource exists before readiness. Interrupting readiness aborts and joins
+ * the native launch before the Scope stops it and releases the outer store lock. */
+export const managedMemory = Effect.fn("AgentMemory.acquire")(function* (
   config: MemoryConfig,
   cwd: string,
-  environment: NodeJS.ProcessEnv = process.env,
-) =>
-  Effect.acquireRelease(
-    Effect.tryPromise({
-      try: (signal) => launchMemory(config, cwd, signal, environment),
-      catch: (cause) =>
-        new MemoryStartupError({
-          cause,
-          message: cause instanceof Error ? cause.message : String(cause),
-        }),
-    }),
+  environment: NodeJS.ProcessEnv,
+  create: typeof createMemoryRuntime = createMemoryRuntime,
+) {
+  const failure = (cause: unknown) =>
+    new MemoryStartupError({
+      cause,
+      message: cause instanceof Error ? cause.message : String(cause),
+    });
+  const runtime = yield* Effect.acquireRelease(
+    Effect.try({ try: () => create(config, cwd, environment), catch: failure }),
     (runtime) => Effect.promise(runtime.stop),
-    { interruptible: true },
   );
+  return yield* Effect.callback<Awaited<ReturnType<typeof runtime.start>>, MemoryStartupError>(
+    (resume, signal) => {
+      const pending = runtime.start(signal);
+      pending.then(
+        (ready) => resume(Effect.succeed(ready)),
+        (cause) => resume(Effect.fail(failure(cause))),
+      );
+      // Startup rejection is already reported above; stop failures remain defects
+      // in the resource finalizer, including when startup was interrupted.
+      return Effect.promise(() =>
+        pending.then(
+          () => {},
+          () => {},
+        ),
+      );
+    },
+  );
+});

@@ -142,3 +142,57 @@ for (const durable of [
     );
     assert.equal(failure._tag, "StorageRoutingError");
   });
+
+test("standalone Pi execution resolves storage beside captured configuration", async (t) => {
+  const { Models, PiStorageLease } = await import("@aster/agent");
+  const { makeExternalAgents } = await import("../src/agents.js");
+  const { root } = setup(t, {});
+  const configPath = join(root, "config.yaml");
+  writeFileSync(
+    configPath,
+    JSON.stringify({ agents: { pi: { model: "fake", storageDirectory: "execution" } } }),
+  );
+  const sources = LocalConfig.layer({
+    configPath,
+    projectRoot: "/unrelated",
+    envPath: join(root, ".env"),
+    environment: {},
+  });
+  const models = Layer.succeed(Models, {
+    resolve: () =>
+      Effect.succeed({
+        model: {
+          id: "fake",
+          name: "fake",
+          provider: "test",
+          api: "openai-completions",
+          baseUrl: "http://unused",
+          reasoning: false,
+          input: ["text"],
+          contextWindow: 10000,
+          maxTokens: 100,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+        getApiKey: () => "fake",
+        stream: () => {
+          throw new Error("Startup must not invoke a model");
+        },
+      }),
+  });
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const agents = yield* makeExternalAgents();
+        assert.ok(agents.pi);
+        assert.equal(
+          typeof readFileSync(join(root, "execution", ".aster-owner.json"), "utf8"),
+          "string",
+        );
+        const conflict = yield* PiStorageLease.acquire(join(root, "execution"), "competitor").pipe(
+          Effect.flip,
+        );
+        assert.equal(conflict._tag, "PiStorageLeaseError");
+      }),
+    ).pipe(Effect.provide(Layer.mergeAll(sources, models))),
+  );
+});

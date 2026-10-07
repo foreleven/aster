@@ -1,17 +1,18 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { acquireActorStoreLock } from "@aster/infra";
 
-test("startup reports the live actor-store owner without changing its lock", async () => {
+test("startup rejects a held actor-store lock without changing its owner marker", async () => {
   const home = await mkdtemp(join(tmpdir(), "aster-startup-"));
   const lock = join(home, ".aster", "actors.pid");
+  let release: (() => void) | undefined;
   try {
-    await mkdir(join(home, ".aster"));
-    await writeFile(lock, String(process.pid));
+    release = acquireActorStoreLock(join(home, ".aster"));
     const config = join(home, "config.yaml");
     await writeFile(config, "{}");
     const result = await new Promise<{ code: number | string | null | undefined; stderr: string }>(
@@ -32,12 +33,10 @@ test("startup reports the live actor-store owner without changing its lock", asy
       },
     );
     assert.equal(result.code, 1, result.stderr);
-    assert.ok(
-      result.stderr.includes(`Another Aster process (${process.pid}) owns the actor store`),
-      result.stderr,
-    );
+    assert.ok(result.stderr.includes("Cannot acquire actor store"), result.stderr);
     assert.equal(await readFile(lock, "utf8"), String(process.pid));
   } finally {
+    release?.();
     await rm(home, { recursive: true, force: true });
   }
 });
@@ -67,21 +66,19 @@ test("startup locks the configured root before acquiring model and integration s
   const root = join(home, "custom");
   const lock = join(root, "actors.pid");
   const config = join(home, "config.yaml");
+  let release: (() => void) | undefined;
   try {
-    await mkdir(root);
-    await writeFile(lock, String(process.pid));
+    release = acquireActorStoreLock(root);
     await writeFile(
       config,
       JSON.stringify({ config: { durable: { root }, personal: { model: "missing" } } }),
     );
     const result = await cli(["start", "--config", config], home);
     assert.equal(result.code, 1, result.stderr);
-    assert.match(
-      result.stderr,
-      new RegExp(`Another Aster process \\(${process.pid}\\) owns the actor store`),
-    );
+    assert.match(result.stderr, /Cannot acquire actor store/);
     assert.equal(await readFile(lock, "utf8"), String(process.pid));
   } finally {
+    release?.();
     await rm(home, { recursive: true, force: true });
   }
 });
