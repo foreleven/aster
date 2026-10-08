@@ -107,10 +107,7 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
                 }),
               ),
             );
-            const goalActivation = yield* Deferred.make<void>();
-            const root = yield* system.spawn("goals", GoalsRootActor, {
-              metadata: { goalActivation },
-            });
+            const root = yield* system.spawn("goals", GoalsRootActor);
             yield* root.awaitStarted;
             yield* (yield* system.select("/user/goals/project").resolve()).awaitStarted;
             const send = (value: GoalIntentInput) =>
@@ -200,8 +197,7 @@ test("a Context intent remains admissible after user input advances the Goal rev
             }),
           ),
         );
-        const goalActivation = yield* Deferred.make<void>();
-        const root = yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } });
+        const root = yield* system.spawn("goals", GoalsRootActor);
         yield* root.awaitStarted;
         yield* (yield* system.select("/user/goals/project").resolve()).awaitStarted;
         const before = registry.get("/goals/project")!.revision;

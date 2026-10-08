@@ -205,9 +205,8 @@ const acquireRuntime = Effect.gen(function* () {
   }
   const tasks = yield* system.spawn("tasks", TasksRootActor);
   yield* tasks.awaitStarted;
-  const goalActivation = yield* Deferred.make<void>();
   const goals = settings.definitions.length
-    ? yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } })
+    ? yield* system.spawn("goals", GoalsRootActor)
     : undefined;
   // The root registers routing targets; each child queues work until its own startup completes.
   if (goals) yield* goals.awaitStarted;
@@ -220,7 +219,6 @@ const acquireRuntime = Effect.gen(function* () {
         kind: "unavailable",
         message: "A core owner stopped during startup",
       });
-    yield* Deferred.succeed(goalActivation, undefined);
   }).pipe(
     // Readiness is a completion contract, including defects and cancellation;
     // catching only typed errors strands waiters when startup never succeeds.

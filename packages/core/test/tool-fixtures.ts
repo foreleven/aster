@@ -2,7 +2,7 @@ import { makeHarness } from "./harness-fixtures.js";
 import { DurableHarness, AgentConversations } from "@aster/agent/harness";
 import { ActorSystem } from "@aster/actor";
 import { AgentRunner } from "@aster/agent/agent";
-import { Deferred, Effect, Layer } from "effect";
+import { Effect, Layer } from "effect";
 import { ContextRegistry } from "../src/context/registry.js";
 import { ContextQueries } from "../src/context/queries/routes.js";
 import { ContextsActor } from "../src/context/queries/actor.js";
@@ -14,7 +14,7 @@ import { ExternalAgents } from "../src/tasks/execution/contracts.js";
 import { GoalsRootActor } from "../src/goals/root.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
-/** Real domain query owners, with fake backend work and no activated model conversations. */
+/** Real domain query owners, with fake backend work and model execution held pending. */
 export const toolSystem = Effect.fnUntraced(function* (
   options: {
     registry?: ContextRegistry["Service"];
@@ -52,7 +52,7 @@ export const toolSystem = Effect.fnUntraced(function* (
 
       Layer.succeed(
         DurableHarness,
-        makeHarness(() => Effect.die("No durable model expected")),
+        makeHarness(() => Effect.never),
       ),
       Layer.succeed(
         AgentRunner,
@@ -65,8 +65,7 @@ export const toolSystem = Effect.fnUntraced(function* (
   const memory = yield* system.spawn("memory", MemoryActor);
   yield* memory.awaitStarted;
   if (options.goals?.length) {
-    const goalActivation = yield* Deferred.make<void>();
-    const goals = yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } });
+    const goals = yield* system.spawn("goals", GoalsRootActor);
     yield* goals.awaitStarted;
     // Query fixtures inspect restored snapshots; production routing does not wait for children.
     for (const goal of options.goals)

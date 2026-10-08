@@ -55,8 +55,7 @@ test("Goal command waits for durable input and history; stopped roots fail inste
             }),
           ),
         );
-        const goalActivation = yield* Deferred.make<void>();
-        const root = yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } });
+        const root = yield* system.spawn("goals", GoalsRootActor);
         yield* root.awaitStarted;
         const sending = yield* submitGoal(system, "project", "Durable input").pipe(
           Effect.forkScoped,

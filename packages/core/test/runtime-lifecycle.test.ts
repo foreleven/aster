@@ -6,9 +6,22 @@ import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Models } from "@aster/agent";
-import { Cause, ConfigProvider, Context, Deferred, Effect, Exit, Fiber, Layer } from "effect";
+import {
+  Cause,
+  ConfigProvider,
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  Fiber,
+  Layer,
+  Schema,
+  Stream,
+} from "effect";
 import {
   AsterRuntime,
+  GoalSnapshot,
+  goalTimeline,
   MemoryBackend,
   DurableContext,
   ExternalAgents,
@@ -39,7 +52,7 @@ const integration = (
     }),
   );
 
-const infrastructure = (drain = Effect.void) =>
+const infrastructure = (drain = Effect.void, decisionsConfigured = false) =>
   Layer.mergeAll(
     Layer.effect(
       DurableContext,
@@ -56,7 +69,7 @@ const infrastructure = (drain = Effect.void) =>
       },
     ]),
     Layer.succeed(SystemOneClient, {
-      configured: false,
+      configured: decisionsConfigured,
       systemOne: () => Effect.die(new Error("No model calls expected")),
     }),
     Layer.succeed(ExternalAgents, {}),
@@ -152,46 +165,86 @@ test("closing a runtime before readiness also settles later readiness callers", 
   assert.ok(Cause.hasInterruptsOnly(exit.cause));
 });
 
-test("restored Goals admit input while integration readiness gates execution", async () => {
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const release = yield* Deferred.make<void>();
-        const called = yield* Deferred.make<void>();
-        const live = AsterRuntime.layer({
-          integrations: [
-            integration(
-              "pending",
-              "source",
-              Effect.void,
-              Deferred.await(release),
-              makeHarness(() =>
-                Deferred.succeed(called, undefined).pipe(Effect.as({ messages: [] })),
+for (const slug of ["personal", "project"]) {
+  test(`${slug} replies while integration readiness is pending`, async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const release = yield* Deferred.make<void>();
+          const live = AsterRuntime.layer({
+            integrations: [
+              integration(
+                "pending",
+                "source",
+                Effect.void,
+                Deferred.await(release),
+                makeHarness(() =>
+                  Effect.succeed({
+                    messages: [
+                      {
+                        role: "assistant",
+                        api: "openai-completions",
+                        provider: "test",
+                        model: "test",
+                        content: [{ type: "text", text: "Hello!" }],
+                        stopReason: "stop",
+                        timestamp: 0,
+                        usage: {
+                          input: 0,
+                          output: 0,
+                          cacheRead: 0,
+                          cacheWrite: 0,
+                          totalTokens: 0,
+                          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+                        },
+                      },
+                    ],
+                  }),
+                ),
+              ),
+            ],
+          }).pipe(
+            Layer.provide(infrastructure(Effect.void, true)),
+            Layer.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown({
+                  config: { agent: { model: "test" } },
+                  goals: { project: { description: "Project" } },
+                }),
               ),
             ),
-          ],
-        }).pipe(Layer.provide(infrastructure()), Layer.provide(config));
-        yield* Effect.gen(function* () {
-          const runtime = yield* AsterRuntime;
-          const readiness = yield* runtime.ready.pipe(Effect.forkScoped);
-          yield* submitGoal(runtime.actors, "personal", "Hello", "before-ready");
-          const goals = Object.values((yield* ContextRegistry).reader.snapshot()).filter((r) =>
-            /^\/goals\/[^/]+$/.test(r.path),
           );
-          assert.deepEqual(
-            goals.map((goal) => goal.path),
-            ["/goals/personal"],
-          );
-          assert.equal(yield* Deferred.isDone(called), false);
-          assert.equal(readiness.pollUnsafe(), undefined);
-          yield* Deferred.succeed(release, undefined);
-          yield* Fiber.join(readiness);
-          yield* Deferred.await(called);
-        }).pipe(Effect.provide(live));
-      }),
-    ).pipe(Effect.timeout("5 seconds")),
-  );
-});
+          yield* Effect.gen(function* () {
+            const runtime = yield* AsterRuntime;
+            const registry = yield* ContextRegistry;
+            const conversations = yield* AgentConversations;
+            const readiness = yield* runtime.ready.pipe(Effect.forkScoped);
+            const changes = yield* registry.subscribe;
+            yield* submitGoal(runtime.actors, slug, "Hello", "before-ready");
+            const replied = () =>
+              Schema.decodeUnknownSync(GoalSnapshot)(
+                registry.get(`/goals/${slug}`)!.state,
+              ).inputs.some((input) => input.kind === "UserInput" && input.status === "completed");
+            if (!replied())
+              yield* changes.pipe(Stream.filter(replied), Stream.take(1), Stream.runDrain);
+            const timeline = yield* goalTimeline(registry, conversations, slug);
+            assert.ok(
+              timeline.messages.some(
+                (message) => message.role === "assistant" && message.text === "Hello!",
+              ),
+            );
+            assert.equal(yield* Deferred.isDone(release), false);
+            assert.equal(readiness.pollUnsafe(), undefined);
+            assert.equal((yield* runtime.inspect).phase, "starting");
+            yield* Deferred.succeed(release, undefined);
+            yield* Fiber.join(readiness);
+            assert.equal((yield* runtime.inspect).phase, "ready");
+          }).pipe(Effect.provide(live));
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  });
+}
 
 test("runtime becomes ready while a Goal restores; its mailbox resumes after restoration", async () => {
   await Effect.runPromise(

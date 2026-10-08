@@ -27,6 +27,5 @@ export const GoalDefinition = Schema.Struct({
   slug: Schema.String,
   title: Schema.optional(GoalTitle),
   description: Schema.NonEmptyString,
-  completionCriteria: Schema.optional(Schema.String),
 });
 export type GoalDefinition = typeof GoalDefinition.Type;

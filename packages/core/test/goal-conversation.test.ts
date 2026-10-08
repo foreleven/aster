@@ -95,8 +95,7 @@ const setup = Effect.fnUntraced(function* (
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
   const signals = yield* system.spawn("signals", SignalRootActor);
   yield* system.spawn("tasks", TasksRootActor);
-  const goalActivation = yield* Deferred.make<void>();
-  const root = yield* system.spawn("goals", GoalsRootActor, { metadata: { goalActivation } });
+  const root = yield* system.spawn("goals", GoalsRootActor);
   yield* root.awaitStarted;
   yield* (yield* system.select("/user/goals/project").resolve()).awaitStarted;
   const state = () => Schema.decodeUnknownSync(GoalSnapshot)(registry.get("/goals/project")!.state);
@@ -114,7 +113,6 @@ const setup = Effect.fnUntraced(function* (
       slug: "project",
       command: { _tag: "SubmitInput", requestId, input, replyTo },
     }));
-  const activate = Deferred.succeed(goalActivation, undefined).pipe(Effect.asVoid);
   const end = root.ask<GoalCommandReply>((replyTo) => ({
     _tag: "Route",
     slug: "project",
@@ -126,7 +124,7 @@ const setup = Effect.fnUntraced(function* (
       slug: "project",
       command: { _tag: "RetryTurn", requestId, turnId, replyTo },
     }));
-  return { registry, system, root, signals, approvals, state, wait, submit, activate, end, retry };
+  return { registry, system, root, signals, approvals, state, wait, submit, end, retry };
 });
 
 const contextInput = (requestId: string): GoalSubmission => ({
@@ -220,7 +218,6 @@ test("Goal conversation and gate log live responses with their identities withou
           ),
         { history, gate: (input) => observe(input).pipe(Effect.as(relevant())) },
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       const inputId = env.state().inputs[0]!.inputId;
       yield* submitContext(env, "logged-context");
@@ -289,7 +286,6 @@ test("a slow Context gate does not delay a user reply or start another gate", as
             }),
         },
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       assert.equal((yield* submitContext(env, "slow-context"))._tag, "Accepted");
       yield* Deferred.await(entered);
@@ -341,7 +337,6 @@ test("queued users precede ready Context and Task inputs without overlapping mai
           ),
         ),
       );
-      yield* env.activate;
       yield* Deferred.await(entered);
       yield* submitContext(env, "context");
       yield* env.submit("task", {
@@ -393,7 +388,6 @@ test("a failed gate releases screening without releasing the active main convers
             ),
         },
       );
-      yield* env.activate;
       yield* Deferred.await(entered);
       yield* submitContext(env, "failed-context");
       yield* env.wait(() => env.state().inputs[1]?.status === "failed");
@@ -433,7 +427,6 @@ test("ending a Goal cancels its read-only gate without marking delivery uncertai
             ),
         },
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       yield* submitContext(env, "context");
       yield* Deferred.await(entered);
@@ -463,7 +456,6 @@ test("an interrupted read-only gate reruns on restart without reconciling a Pi d
         history,
         gate: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
       });
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       yield* submitContext(env, "context");
       yield* Deferred.await(entered);
@@ -490,7 +482,6 @@ test("an interrupted read-only gate reruns on restart without reconciling a Pi d
             }),
         },
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[1]?.status === "completed");
       assert.equal(gates, 1);
       assert.equal(calls.length, 1);
@@ -524,9 +515,7 @@ test("Goal persists input before acknowledgement, serializes delivery, and start
           }),
         { store, history },
       );
-      assert.equal(calls, 0);
       assert.equal(env.state().inputs[0]!.kind, "GoalStarted");
-      yield* env.activate;
       yield* Deferred.await(entered);
       const input = { _tag: "UserInput" as const, text: "Investigate the build" };
       const accepted = yield* env.submit("user-1", input);
@@ -537,7 +526,6 @@ test("Goal persists input before acknowledgement, serializes delivery, and start
       );
       assert.deepEqual(yield* env.submit("user-1", input), accepted);
       assert.equal((yield* env.submit("user-1", { ...input, text: "Different" }))._tag, "Rejected");
-      yield* env.activate;
       assert.equal(calls, 1);
       yield* Deferred.succeed(release, undefined);
       yield* env.wait(() => env.state().inputs.every((input) => input.status === "completed"));
@@ -570,7 +558,7 @@ test("Goal persists input before acknowledgement, serializes delivery, and start
           }),
         { store, history },
       );
-      yield* env.activate;
+      assert.ok(env.state().inputs.every((input) => input.status === "completed"));
       assert.equal(calls, 2);
     }),
   );
@@ -598,7 +586,6 @@ test("Context changes pass the Agent Gate before Pi; user and Task inputs bypass
             }),
         },
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       for (const index of [1, 2]) {
         const requestId = `change-${index}`;
@@ -640,7 +627,6 @@ test("End interrupts Pi without waiting, rejects late writes and leaves accepted
           Effect.ensuring(Deferred.succeed(interrupted, undefined)),
         ),
       );
-      yield* env.activate;
       const input = yield* Deferred.await(entered);
       assert.equal((yield* env.end)._tag, "Accepted");
       yield* Deferred.await(interrupted);
@@ -682,7 +668,6 @@ test("known failures can retry once; uncertain delivery blocks new work and resu
           }),
         { store, history },
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[0]?.status === "failed");
       const first = original;
       assert.equal((yield* env.retry("retry", first))._tag, "Accepted");
@@ -703,7 +688,6 @@ test("known failures can retry once; uncertain delivery blocks new work and resu
           }),
         { store, history },
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs.at(-1)?.status === "completed");
       assert.equal(seen[0]!.requestId, original);
       assert.equal(seen.length, 2);
@@ -765,7 +749,6 @@ test("Goal tracks multiple Tasks before tool acknowledgement and reuses referenc
           return { messages: [] };
         }),
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       assert.equal(paths.length, 2);
       assert.deepEqual(env.state().tasks, paths);
@@ -855,7 +838,6 @@ test("Goal delegates evidence reads to an internal Task and answers users while 
           }),
         { history },
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       yield* env.submit("review", { _tag: "UserInput", text: "Review project evidence" });
       yield* Deferred.await(working);
@@ -932,7 +914,6 @@ test("Tasks execute independently through shared Run approval and return feedbac
           }),
         },
       );
-      yield* env.activate;
       yield* env.wait(() =>
         approvalEntries(env.registry).some((entry) => entry.status === "pending"),
       );
@@ -1009,7 +990,6 @@ test("a lost delivery-commit acknowledgement reopens the same Pi exchange withou
           },
         },
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       assert.equal(env.state().inputs.length, 1);
       assert.equal(calls.length, 1);
@@ -1058,7 +1038,6 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
           }),
         },
       );
-      yield* env.activate;
       yield* env.wait(() =>
         approvalEntries(env.registry).some((entry) => entry.status === "pending"),
       );
@@ -1097,7 +1076,6 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
           wait: () => Effect.succeed(result),
         }),
       });
-      yield* env.activate;
       yield* env.wait(() =>
         env
           .state()
@@ -1126,7 +1104,6 @@ test("an ended Goal retains uncertain delivery on restart without restarting Pi"
         () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
         { store, history },
       );
-      yield* env.activate;
       yield* Deferred.await(entered);
       yield* env.end;
       assert.equal(env.state().inputs[0]!.status, "unknown");
@@ -1143,7 +1120,6 @@ test("an ended Goal retains uncertain delivery on restart without restarting Pi"
           }),
         { store, history },
       );
-      yield* env.activate;
       assert.equal(env.state().status, "completed");
       assert.equal(env.state().inputs[0]!.status, "unknown");
       assert.equal(calls, 0);
@@ -1227,7 +1203,6 @@ test("summary tools persist before acknowledgement and keep the Goal available f
           return { messages: [] };
         }),
       );
-      yield* env.activate;
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       assert.equal(env.state().status, "active");
       yield* env.submit("continue", { _tag: "UserInput", text: "Continue" });

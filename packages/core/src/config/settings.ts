@@ -47,7 +47,6 @@ const personalGoal: GoalDefinition = {
 const GoalEntry = Schema.Struct({
   title: Schema.optional(GoalTitle),
   description: Schema.NonEmptyString,
-  completionCriteria: Schema.optional(Schema.String),
 });
 const GoalOptions = Schema.Struct({
   model: Schema.NonEmptyString,

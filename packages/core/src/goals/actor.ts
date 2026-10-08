@@ -145,8 +145,6 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
       });
       const runNext = Effect.fnUntraced(function* (context: Owner, model: GoalState["Service"]) {
         const state = yield* model.read;
-        const activation = context.metadata.goalActivation as Deferred.Deferred<void> | undefined;
-        if (activation && !(yield* Deferred.isDone(activation))) return;
         if (state.status !== "active") return;
         // An uncertain delivery blocks later inputs. Restart inspects it using the same Pi identity.
         if (state.inputs.some((input) => input.status === "unknown")) return;
@@ -220,11 +218,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
               scope,
             );
             yield* Deferred.succeed(initialized, Context.get(services, GoalState));
-            const activation = context.metadata.goalActivation as
-              Deferred.Deferred<void> | undefined;
-            if (activation)
-              yield* context.pipeToSelf(Deferred.await(activation), () => ({ _tag: "RunNext" }));
-            else yield* wake(context);
+            yield* wake(context);
           }),
         receive: (command, context) =>
           Effect.gen(function* () {

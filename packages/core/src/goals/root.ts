@@ -32,10 +32,7 @@ export class GoalsRootActor extends Actor.Service<
           Effect.gen(function* () {
             for (const goal of settings.definitions) {
               const child =
-                (yield* context.child(goal.slug)) ??
-                (yield* context.spawn(goal.slug, GoalActor, {
-                  metadata: { goalActivation: context.metadata.goalActivation },
-                }));
+                (yield* context.child(goal.slug)) ?? (yield* context.spawn(goal.slug, GoalActor));
               yield* context.watch(child);
             }
           }),

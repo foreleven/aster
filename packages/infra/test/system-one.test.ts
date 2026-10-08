@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, Logger } from "effect";
+import { Deferred, Effect, Fiber, Logger, References } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { choice, matchGoal, type GoalScreeningRecord } from "@aster/core";
@@ -19,6 +19,114 @@ const testConfig = {
   model: "test-model",
   apiKey: "test-secret",
 };
+
+test("concurrent System One calls correlate attempts, retries and headers without logging payloads", async () => {
+  const logs: string[] = [];
+  const annotations: Array<Readonly<Record<string, unknown>>> = [];
+  const logger = Logger.make<unknown, void>((entry) => {
+    logs.push(...(Array.isArray(entry.message) ? entry.message : [entry.message]).map(String));
+    annotations.push(entry.fiber.getRef(References.CurrentLogAnnotations));
+  });
+  const client = makeSystemOneClient(testConfig, async (_url, init) => {
+    if (!new Headers(init?.headers).has("X-TypeSafe-Retry-Count"))
+      return Response.json(
+        { error: { message: "private response body" } },
+        {
+          status: 503,
+          headers: { "retry-after-ms": "0" },
+        },
+      );
+    return Response.json({ answers: {}, usage: { input_tokens: 1, output_tokens: 1 } });
+  });
+  await Effect.runPromise(
+    Effect.all(
+      ["private chat one", "private chat two"].map((state) =>
+        client.systemOne({
+          state,
+          questions: { intent: choice("private question", { yes: "private criterion" }) },
+        }),
+      ),
+      { concurrency: "unbounded" },
+    ).pipe(
+      Effect.annotateLogs({ contextPath: "/test/logging" }),
+      Effect.provide(Logger.layer([logger])),
+    ),
+  );
+  const entries = logs.map((line) => JSON.parse(line));
+  const starts = entries.filter((entry) => entry.event === "system-one.request.started");
+  assert.equal(starts.length, 2);
+  assert.notEqual(starts[0].requestId, starts[1].requestId);
+  for (const start of starts) {
+    assert.equal(start.timeoutMs, 10000);
+    assert.equal(start.maxRetries, 2);
+    const request = entries.filter((entry) => entry.requestId === start.requestId);
+    assert.deepEqual(
+      request
+        .filter((entry) => entry.event === "system-one.request.attempt.started")
+        .map((entry) => entry.attempt),
+      [1, 2],
+    );
+    const headers = request.filter((entry) => entry.event === "system-one.request.headers");
+    assert.deepEqual(
+      headers.map((entry) => entry.status),
+      [503, 200],
+    );
+    assert.ok(headers.every((entry) => entry.headersMs >= 0));
+    assert.ok(
+      request.some(
+        (entry) => entry.event === "system-one.request.sdk" && entry.message.includes("retry 1/2"),
+      ),
+    );
+    const completed = request.find((entry) => entry.event === "system-one.request.completed");
+    assert.equal(completed.attempt, 2);
+    assert.ok(completed.elapsedMs >= 0);
+  }
+  assert.ok(!logs.join("\n").includes("private"));
+  assert.ok(!logs.join("\n").includes(testConfig.apiKey));
+  assert.ok(annotations.every((entry) => entry.contextPath === "/test/logging"));
+});
+
+test("System One connection failures expose nested network codes and preserve SDK retry limits", async () => {
+  const logs: string[] = [];
+  const logger = Logger.make<unknown, void>((entry) => {
+    logs.push(...(Array.isArray(entry.message) ? entry.message : [entry.message]).map(String));
+  });
+  const network = Object.assign(new Error("private transport detail"), {
+    code: "UND_ERR_CONNECT_TIMEOUT",
+  });
+  const client = makeSystemOneClient(testConfig, async () => {
+    throw new TypeError("fetch failed", {
+      cause: new AggregateError([network], "private connection detail"),
+    });
+  });
+  const result = await Effect.runPromise(
+    client
+      .systemOne({
+        state: "private chat",
+        questions: { intent: choice("Choose", { yes: "Yes" }) },
+      })
+      .pipe(Effect.result, Effect.provide(Logger.layer([logger]))),
+  );
+  assert.equal(result._tag, "Failure");
+  const entries = logs.map((line) => JSON.parse(line));
+  assert.equal(
+    entries.filter((entry) => entry.event === "system-one.request.attempt.started").length,
+    3,
+  );
+  assert.equal(entries.filter((entry) => entry.event === "system-one.request.headers").length, 0);
+  const failed = entries.find((entry) => entry.event === "system-one.request.failed");
+  assert.deepEqual(failed.errorCodes, ["UND_ERR_CONNECT_TIMEOUT"]);
+  assert.equal(failed.attempt, 3);
+  assert.ok(
+    entries.some(
+      (entry) =>
+        entry.event === "system-one.request.sdk" &&
+        entry.errorCodes.includes("UND_ERR_CONNECT_TIMEOUT"),
+    ),
+  );
+  assert.ok(!logs.join("\n").includes("private"));
+  assert.ok(!logs.join("\n").includes(testConfig.apiKey));
+});
 
 test("Goal screening respects the System One level limit and normalizes the top score to one", async () => {
   const client = makeSystemOneClient(testConfig, async (_url, init) => {

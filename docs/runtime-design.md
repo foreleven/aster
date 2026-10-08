@@ -53,7 +53,7 @@ const RuntimeLive = AsterRuntime.layer({
 
 `ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. Every host supplies MemoryBackend; core directly starts the Memory Actor. Local never supplies the internal registry, command endpoint, business reasoning workflows separately.
 
-Startup phases: acquire dependencies; start Context queries and Memory; register/activate source integrations; restore Signals; register Task and Goal owners; start journal consumption. Buffered changes and the durable journal preserve early source commits. Signal activation waits for Goal routing registration. After integration readiness, runtime opens its shared Goal execution gate without waiting for model completion. The built-in personal assistant is an idle ordinary Goal at `/goals/personal`.
+Startup phases: acquire dependencies; start Context queries and Memory; register/activate source integrations; restore Signals; register Task and Goal owners; start journal consumption. Buffered changes and the durable journal preserve early source commits. Signal activation waits for Goal routing registration. Each Goal starts execution after its own restoration, independently of integration readiness. The built-in personal assistant is an idle ordinary Goal at `/goals/personal`.
 
 Shutdown phases: close admission/stop sources; stop startup coordination and reaction producers; finish or durably retain pending work according to existing domain contracts; stop Actors; release adapter resources. Store lock and signal handlers outlive all finalizers. Interrupted startup must release every resource already acquired.
 
@@ -113,13 +113,13 @@ Memory is an internal consumer owned by core. Its startup acknowledgement follow
 
 Apps readiness means that the configured query Contexts are durably registered and their scoped query routes are bound. It does not require browser login or an initial external fetch. The local host supplies Effect Node process services; the integration owns command validation, process limits and query cancellation.
 
-## Goal readiness and activation
+## Goal startup and runtime readiness
 
 Sources register first; Signal and Task root registration precede Goal registration. SignalRootActor registers and watches configured and retained children without waiting for their restoration; root restarts reuse existing children. TasksRootActor registers and watches retained Tasks without awaiting their recovery; root restarts reuse live children. GoalsRootActor likewise registers and watches every configured child in `started`, without awaiting child recovery. Runtime awaits only root registration before starting System One and activating Signals. Each child mailbox queues its own Commands during initialization. Slow or failed children do not block root routing or sibling Tasks and Goals. System One reads currently committed Context snapshots; runtime readiness does not promise that every Signal, Task or Goal has finished restoration.
 
 Supervision retries child failures independently. If a child finally terminates, `watch` delivers `Terminated` to the root, which logs its path and cause. Later requests to that missing child are rejected. The root does not create an unbounded replacement loop or fail healthy siblings.
 
-Runtime owns transient `Deferred<void>` execution gates passed through Actor spawn metadata. Signal activation opens after receiver registration; Goal activation opens after integrations are ready, completing runtime readiness without waiting for model results. Restored Goal Actors can admit inputs while this gate is closed; a scoped waiter wakes the mailbox with `RunNext` when it opens. Supervised root and child restarts retain their original gates. Signal and Goal Actors spawned without a gate execute immediately after restoration. Root startup failures propagate through `awaitStarted`; child failures follow supervision and watch.
+Runtime owns a transient `Deferred<void>` Signal activation gate passed through Actor spawn metadata. It opens after receiver registration and survives supervised root and child restarts. Each Goal wakes its mailbox with `RunNext` immediately after its own state restoration, including after restart. Goal input processing never waits for integration readiness. `runtime.ready` still waits for all integration readiness handles, without waiting for Goal restoration or model results. Root startup failures propagate through `awaitStarted`; child failures follow supervision and watch.
 
 ## Context consumer composition
 

@@ -6,7 +6,7 @@ Aster's domain and application runtime, implemented with Effect 4. Concrete stor
 
 `AsterRuntime.layer({ integrations })` assembles shared services and owns root Actors. The host supplies infrastructure Layers and ConfigProvider, then consumes `runtime.ready`, `runtime.inspect`, Actor addressing and the domain services published by that Layer. RPC adaptation belongs to `@aster/api/server`; Runtime has no application API facade. It does not assemble internal domain services or start integrations separately.
 
-Startup starts public Context queries and the independent Memory consumer before activating source integrations, registers Signal, Task and Goal owners, then starts durable reaction processing. Signal execution starts after Goal routing registration; each Signal, Task and Goal restores independently and queues incoming messages in its mailbox. Required source readiness precedes Goal activation. Shutdown stops producers, cancels scoped processing, stops Actors and drains accepted capture work before infrastructure release.
+Startup starts public Context queries and the independent Memory consumer before activating source integrations, registers Signal, Task and Goal owners, then starts durable reaction processing. Signal execution starts after Goal routing registration; each Signal, Task and Goal restores independently and queues incoming messages in its mailbox. Each Goal begins execution after its own restoration, independently of source readiness; runtime readiness still waits for all integrations. Shutdown stops producers, cancels scoped processing, stops Actors and drains accepted capture work before infrastructure release.
 
 ## Domain modules
 

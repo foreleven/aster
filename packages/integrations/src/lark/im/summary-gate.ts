@@ -32,7 +32,10 @@ export const makeImSummaryGate = (client: SystemOneClient): ImSummaryGate["Servi
           ),
         },
       })
-      .pipe(Effect.mapError((cause) => new ImSummaryError({ cause, message: cause.message })));
+      .pipe(
+        Effect.annotateLogs({ contextPath: input.path, operation: "chat.summary.gate" }),
+        Effect.mapError((cause) => new ImSummaryError({ cause, message: cause.message })),
+      );
     const answer = result.answers.summarize;
     if (answer?.type !== "choice" || !["yes", "no"].includes(answer.choice ?? ""))
       return yield* new ImSummaryError({

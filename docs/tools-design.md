@@ -97,6 +97,6 @@ The SDK adapter in `packages/agent` preserves the caller's Effect Context and Ab
 
 Context and memory tools are absent from the main Goal catalogue. A lookup requiring fresh evidence starts or continues an internal Task. The Goal can still interpret evidence supplied by its Context gate or Task feedback, and coordinate Signals directly. There is no automatic timeout-based handoff or added execution budget.
 
-Runtime starts the Context query root and activates Memory before restoring Tasks that may immediately resume tool execution. Source integration readiness and Goal activation retain their existing contracts. No host wiring or generic Actor runtime changes are needed.
+Runtime starts the Context query root and activates Memory before restoring Tasks that may immediately resume tool execution. Goals begin execution after their own restoration, independently of source integration readiness. No host wiring or generic Actor runtime changes are needed.
 
 Tests use real Actor mailboxes and Pi with fake backends. They cover public projections and dormant records, live reads and revision conflicts, retained paging and owner isolation, stable identity reuse, cancellation, bounded recall concurrency, responsive mailboxes, summary updates, Task admission and stopped-worker fencing.

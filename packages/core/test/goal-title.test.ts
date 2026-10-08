@@ -3,7 +3,7 @@ import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { Deferred, ConfigProvider, Effect, Layer, Schema } from "effect";
+import { ConfigProvider, Effect, Layer, Schema } from "effect";
 import {
   ContextRegistry,
   ExternalAgents,
@@ -86,13 +86,11 @@ test("Goal startup refreshes the entire definition without losing work", async (
       slug: "project",
       title: "Project watch",
       description: "Updated responsibility",
-      completionCriteria: "Release ships",
     },
     {
       slug: "project",
       title: "Renamed project",
       description: "Another responsibility",
-      completionCriteria: "Review done",
     },
     { slug: "project", description: "Final responsibility" },
   ]) {
@@ -115,14 +113,11 @@ test("Goal startup refreshes the entire definition without losing work", async (
               goalWorkflowLayer({
                 definitions: [definition],
                 history,
-                reasoner: { plan: () => Effect.die("No evaluation expected") },
+                reasoner: { plan: () => Effect.never },
               }),
             ),
           );
-          const goalActivation = yield* Deferred.make<void>();
-          const root = yield* system.spawn("goals", GoalsRootActor, {
-            metadata: { goalActivation },
-          });
+          const root = yield* system.spawn("goals", GoalsRootActor);
           yield* root.awaitStarted;
           yield* (yield* system.select("/user/goals/project").resolve()).awaitStarted;
           const record = registry.reader.get("/goals/project")!;

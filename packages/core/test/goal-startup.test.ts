@@ -28,7 +28,6 @@ for (const fails of [false, true]) {
           const slowRead = yield* Deferred.make<void>();
           const release = yield* Deferred.make<void>();
           const noticed = yield* Deferred.make<typeof TerminationLog.Type>();
-          const goalActivation = yield* Deferred.make<void>();
           const clock = yield* TestClock.make();
           const history = testConversations();
           const registry = yield* makeContextRegistry();
@@ -59,13 +58,11 @@ for (const fails of [false, true]) {
                       return yield* history.read(path);
                     }),
                 },
-                reasoner: { plan: () => Effect.die("Execution gate must remain closed") },
+                reasoner: { plan: () => Effect.never },
               }),
             ),
           );
-          const root = yield* system.spawn("goals", GoalsRootActor, {
-            metadata: { goalActivation },
-          });
+          const root = yield* system.spawn("goals", GoalsRootActor);
           yield* Deferred.await(slowRead);
           yield* root.awaitStarted;
           const send = (slug: string, requestId: string) =>
@@ -96,7 +93,11 @@ for (const fails of [false, true]) {
           }
           assert.equal((yield* send("fast", "second"))._tag, "Accepted");
           const state = Schema.decodeUnknownSync(GoalSnapshot)(registry.get("/goals/fast")!.state);
-          assert.ok(state.inputs.every((input) => input.status === "pending"));
+          assert.ok(
+            state.inputs
+              .filter((input) => input.kind === "UserInput")
+              .every((input) => input.status === "pending"),
+          );
           assert.equal(state.receipts.length, 2);
         }),
       ).pipe(Effect.timeout("5 seconds")),

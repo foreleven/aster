@@ -84,18 +84,6 @@ contexts:
   #         password: ${MAIL_PASSWORD}
   #         folder: INBOX
   #         timeZone: Asia/Shanghai
-signals:
-  email-action-request:
-    trigger:
-      _tag: Context
-      when: A new email explicitly asks me to complete a specific task.
-    task:
-      _tag: Delegate
-      agent: doubao-delegate
-      replyTo: /goals/personal
-      task:
-        instructions: Complete the work requested in the email and explain the result.
-        input: []
 
 goals:
   knowledge-engine:
@@ -138,7 +126,7 @@ goals:
       Request my feedback and revise the plan. Only research and plan; do not book, pay, publish,
       contact third parties or modify external accounts. If login/captcha blocks a source, explain
       the required user action, continue independent research and never invent blocked results.
-    completionCriteria: |
-      I have confirmed my travel preferences and selected a destination, and explicitly accepted
-      a feasible itinerary with transport and hotel options, an itemized budget, cited evidence,
+      The planning outcome should be my confirmed travel preferences, a selected destination,
+      and my explicit acceptance of a feasible itinerary with transport and hotel options,
+      an itemized budget, cited evidence,
       reservation deadlines, contingency plans and clearly stated unresolved availability checks.

@@ -63,7 +63,7 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
             Layer.succeed(ExternalAgents, {}),
             Layer.succeed(
               DurableHarness,
-              DurableHarness.make(() => Effect.die("No durable model expected")),
+              DurableHarness.make(() => Effect.never),
             ),
             Layer.succeed(
               AgentRunner,
@@ -71,10 +71,7 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
             ),
           ),
         );
-        const goalActivation = yield* Deferred.make<void>();
-        const goals = yield* system.spawn("goals", GoalsRootActor, {
-          metadata: { goalActivation },
-        });
+        const goals = yield* system.spawn("goals", GoalsRootActor);
         yield* goals.awaitStarted;
         const api = yield* Effect.acquireRelease(
           Effect.promise(() => startTestHttp({ registry, conversations, actors: system })),
