@@ -23,9 +23,37 @@ test("Context query routes follow ownership scopes and reject unavailable/invali
             queriedAt: "2026-10-04T00:00:00.000Z",
             data: [],
           });
-        yield* queries.register(input.path, query).pipe(Effect.provideService(Scope.Scope, owner));
+        yield* queries
+          .register(
+            input.path,
+            {
+              description: "Test",
+              commands: {
+                search: { description: "Search", schema: Schema.Struct({ query: Schema.String }) },
+              },
+            },
+            query,
+          )
+          .pipe(Effect.provideService(Scope.Scope, owner));
         assert.deepEqual((yield* queries.query(input)).data, []);
-        assert.equal((yield* Effect.flip(queries.register(input.path, query))).kind, "unavailable");
+        assert.equal(
+          (yield* Effect.flip(
+            queries.register(
+              input.path,
+              {
+                description: "Test",
+                commands: {
+                  search: {
+                    description: "Search",
+                    schema: Schema.Struct({ query: Schema.String }),
+                  },
+                },
+              },
+              query,
+            ),
+          )).kind,
+          "unavailable",
+        );
         assert.equal(
           (yield* Effect.flip(queries.query({ ...input, command: "" }))).kind,
           "invalid-input",
@@ -51,6 +79,8 @@ test("query tools retain isolated pages across Actor restart and reject changed 
           },
           queries: {
             register: () => Effect.void,
+            list: () => Effect.succeed({ items: [], total: 0, nextOffset: null }),
+            describe: () => Effect.succeed({ path: "/test", description: "Test", commands: [] }),
             query: (input) =>
               Effect.sync(() => {
                 calls++;

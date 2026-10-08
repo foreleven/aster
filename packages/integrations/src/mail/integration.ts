@@ -1,15 +1,17 @@
+import { MailboxSnapshot } from "./state/snapshot.js";
 import { Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
-import { ContextRegistry, RuntimeIntegrations, defineIntegration } from "@aster/core";
+import {
+  ContextQueries,
+  ContextRegistry,
+  RuntimeIntegrations,
+  defineIntegration,
+} from "@aster/core";
 import { MailSettings } from "./config.js";
 import { MailFetcher, mailFetcherLayer } from "./client.js";
 import { MailRootActor } from "./actors.js";
-import { mailContextViews, mailboxPath, MailboxState } from "./contexts.js";
+import { mailContextViews, mailboxPath } from "./contexts.js";
 
-const services = Layer.unwrap(
-  Effect.gen(function* () {
-    return mailFetcherLayer((yield* MailSettings).mailboxes);
-  }),
-).pipe(Layer.provideMerge(MailSettings.layer));
+const services = mailFetcherLayer().pipe(Layer.provideMerge(MailSettings.layer));
 
 /** Installation is separate from transport acquisition so hosts and tests can supply a fetcher. */
 const installation = Layer.effectDiscard(
@@ -22,8 +24,9 @@ const installation = Layer.effectDiscard(
     const dependencies = Context.pick(
       MailSettings,
       MailFetcher,
+      ContextQueries,
       ContextRegistry,
-    )(yield* Effect.context<MailSettings | MailFetcher | ContextRegistry>());
+    )(yield* Effect.context<MailSettings | MailFetcher | ContextRegistry | ContextQueries>());
     yield* modules.register(
       defineIntegration({
         name: "mail",
@@ -39,7 +42,7 @@ const installation = Layer.effectDiscard(
               Effect.gen(function* () {
                 if (
                   pending.has(change.record.path) &&
-                  Schema.is(MailboxState)(change.record.state) &&
+                  Schema.is(MailboxSnapshot)(change.record.state) &&
                   change.record.state.status === "ready"
                 ) {
                   pending.delete(change.record.path);

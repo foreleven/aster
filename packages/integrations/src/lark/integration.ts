@@ -4,6 +4,7 @@ import { larkContextViews } from "./public-views.js";
 import { RuntimeConfigurationError } from "@aster/core";
 import { Layer, Effect, Context, Deferred, Stream, Fiber } from "effect";
 import {
+  ContextQueries,
   ContextRegistry,
   RuntimeIntegrations,
   defineIntegration,
@@ -60,6 +61,7 @@ export const LarkIntegration = {
           );
       }
       const dependencies = Context.pick(
+        ContextQueries,
         ContextRegistry,
         LarkConfig,
         LarkAccountCli,
@@ -71,6 +73,7 @@ export const LarkIntegration = {
         ImSummaryGate,
       )(
         yield* Effect.context<
+          | ContextQueries
           | ContextRegistry
           | LarkConfig
           | LarkAccountCli

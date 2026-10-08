@@ -53,6 +53,8 @@ test("Context query cancellation reaches the backend and parallel callers retain
         const env = yield* toolSystem({
           queries: {
             register: () => Effect.void,
+            list: () => Effect.succeed({ items: [], total: 0, nextOffset: null }),
+            describe: () => Effect.succeed({ path: "/test", description: "Test", commands: [] }),
             query: (input) =>
               input.args.query === "blocked"
                 ? Deferred.succeed(entered, undefined).pipe(

@@ -1,3 +1,6 @@
+import { registerGoalQueries } from "../goals/view.js";
+import { registerTaskQueries } from "../tasks/view.js";
+import { registerSignalQueries } from "../signals/queries.js";
 import { ContextsActor } from "../context/queries/actor.js";
 import { ContextCaptures } from "../memory/capture.js";
 import { DurableContext } from "../context/store.js";
@@ -73,6 +76,7 @@ const acquireRuntime = Effect.gen(function* () {
       message: "Signals and Goals require config.system-one",
     });
   const conversations = yield* AgentConversations;
+  yield* Effect.all([registerGoalQueries(), registerTaskQueries(), registerSignalQueries()]);
   const memoryBackend = yield* MemoryBackend;
   yield* (yield* ContextCaptures).register([taskCapture(conversations)]);
   const modules = (yield* RuntimeIntegrations).installed();

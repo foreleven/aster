@@ -2,16 +2,45 @@ import { Context, Effect, Layer, Redacted, Schema } from "effect";
 import { ImapFlow } from "imapflow";
 import { simpleParser } from "mailparser";
 import Pop3Command from "node-pop3";
-import type { Mailbox, MailMessage } from "./model.js";
+import type { Mailbox, MailMessage, MailboxWindow, MailBatch } from "./model.js";
 import { MailFetchError, mailFailureDetails, type MailFailureStage } from "./errors.js";
+
+import { inWindow } from "./dates.js";
 
 export class MailFetcher extends Context.Service<
   MailFetcher,
   {
-    readonly pull: (mailbox: Mailbox) => Effect.Effect<ReadonlyArray<MailMessage>, MailFetchError>;
-    readonly pullAll: () => Effect.Effect<ReadonlyArray<MailMessage>, MailFetchError>;
+    readonly inventory: (mailbox: Mailbox) => Effect.Effect<readonly string[], MailFetchError>;
+    readonly pull: (
+      mailbox: Mailbox,
+      window: MailboxWindow,
+      known: readonly string[],
+    ) => Effect.Effect<MailBatch, MailFetchError>;
+    readonly list: (
+      mailbox: Mailbox,
+      window: MailboxWindow,
+    ) => Effect.Effect<MailBatch, MailFetchError>;
+    readonly read: (mailbox: Mailbox, id: string) => Effect.Effect<MailMessage, MailFetchError>;
   }
 >()("mail/Fetcher") {}
+
+type Request =
+  | { kind: "inventory" }
+  | { kind: "read"; id: string }
+  | { kind: "list"; window: MailboxWindow }
+  | { kind: "pull"; window: MailboxWindow; known: ReadonlySet<string> };
+const selected = (request: Extract<Request, { kind: "list" | "pull" }>, message: MailMessage) =>
+  inWindow(message.date, request.window) ||
+  (request.kind === "pull" && !request.known.has(message.id));
+const batch = (): { ids: string[]; messages: MailMessage[]; undated: number } => ({
+  ids: [],
+  messages: [],
+  undated: 0,
+});
+const validDate = (value: Date | string | undefined) => {
+  const time = value === undefined ? NaN : new Date(value).getTime();
+  return Number.isFinite(time) ? new Date(time).toISOString() : undefined;
+};
 
 const address = (value: { name?: string; address?: string } | undefined): string =>
   value === undefined ? "" : [value.name, value.address].filter(Boolean).join(" ");
@@ -35,11 +64,11 @@ const normalize = async (
     to: addresses(parsed.to),
     subject: parsed.subject ?? "",
     text: parsed.text ?? "",
-    ...(parsed.date === undefined ? {} : { date: parsed.date.toISOString() }),
+    ...(validDate(parsed.date) === undefined ? {} : { date: validDate(parsed.date) }),
   };
 };
 
-const pullMailbox = (mailbox: Mailbox) =>
+const pullMailbox = (mailbox: Mailbox, request: Request) =>
   Effect.suspend(() => {
     let stage: MailFailureStage = "connect";
     return Effect.tryPromise({
@@ -63,29 +92,86 @@ const pullMailbox = (mailbox: Mailbox) =>
           const lock = await client.getMailboxLock(mailbox.folder ?? "INBOX");
           try {
             stage = "fetch";
-            const messages: MailMessage[] = [];
-            const limit = mailbox.maxMessages ?? 50;
-            const selected = client.mailbox;
-            if (!selected || selected.exists === 0) return [];
-            const first = Math.max(1, selected.exists - limit + 1);
-            for await (const item of client.fetch(`${first}:${selected.exists}`, {
-              uid: true,
-              source: true,
-            })) {
-              if (item.source !== undefined) {
-                stage = "parse";
-                messages.push(
-                  await normalize(
-                    mailbox,
-                    `imap:${mailbox.folder ?? "INBOX"}:${selected.uidValidity}:${item.uid}`,
-                    item.source,
-                  ),
+            const result = batch();
+            const box = client.mailbox;
+            if (!box || box.exists === 0) return result;
+            const identity = (uid: number) =>
+              `imap:${mailbox.folder ?? "INBOX"}:${box.uidValidity}:${uid}`;
+            const ids = await client.search({ all: true }, { uid: true });
+            if (!Array.isArray(ids)) throw new Error("Incomplete IMAP inventory");
+            result.ids = ids.map(identity);
+            if (request.kind === "inventory") return result;
+            if (request.kind === "read") {
+              const uid = ids.find((id) => identity(id) === request.id);
+              if (uid === undefined) throw new Error("Email is no longer available");
+              const item = await client.fetchOne(
+                String(uid),
+                { source: true, internalDate: true },
+                { uid: true },
+              );
+              if (!item || !item.source) throw new Error("Incomplete IMAP message");
+              result.messages.push({
+                ...(await normalize(mailbox, request.id, item.source)),
+                date: validDate(item.internalDate),
+              });
+              return result;
+            }
+            // SEARCH dates ignore timezone/time-of-day. Widen the candidate window,
+            // then apply precise INTERNALDATE bounds before downloading bodies.
+            const since = new Date(Date.parse(request.window.from) - 86_400_000);
+            const before = new Date(Date.parse(request.window.through) + 86_400_000);
+            const dated = await client.search({ since, before }, { uid: true });
+            if (!Array.isArray(dated)) throw new Error("Incomplete IMAP date search");
+            const candidates = new Set(dated);
+            if (request.kind === "pull") {
+              const prefix = `imap:${mailbox.folder ?? "INBOX"}:${box.uidValidity}:`;
+              if ([...request.known].some((id) => !id.startsWith(prefix)))
+                throw Object.assign(
+                  new Error("IMAP UIDVALIDITY changed; discovery baseline requires reconciliation"),
+                  { code: "UIDVALIDITY_CHANGED" },
                 );
+              for (const uid of ids) if (!request.known.has(identity(uid))) candidates.add(uid);
+            }
+            const uids = [...candidates];
+            for (let offset = 0; offset < uids.length; offset += 200) {
+              const headers: MailMessage[] = [];
+              const pending = new Set(uids.slice(offset, offset + 200));
+              for await (const item of client.fetch(
+                uids.slice(offset, offset + 200),
+                { uid: true, headers: true, internalDate: true },
+                { uid: true },
+              )) {
+                if (!item.headers || !pending.delete(item.uid))
+                  throw new Error("Incomplete IMAP headers");
+                stage = "parse";
+                const message = {
+                  ...(await normalize(mailbox, identity(item.uid), item.headers)),
+                  date: validDate(item.internalDate),
+                };
+                if (!message.date) result.undated++;
+                if (selected(request, message)) headers.push(message);
                 stage = "fetch";
               }
-              if (messages.length >= limit) break;
+              if (pending.size > 0) throw new Error("Incomplete IMAP header scan");
+              // Never issue another IMAP command inside its fetch iterator.
+              for (const header of headers) {
+                if (request.kind === "list") {
+                  result.messages.push(header);
+                  continue;
+                }
+                const item = await client.fetchOne(
+                  header.id.slice(header.id.lastIndexOf(":") + 1),
+                  { source: true },
+                  { uid: true },
+                );
+                if (!item || !item.source) throw new Error("Email disappeared during retrieval");
+                result.messages.push({
+                  ...(await normalize(mailbox, header.id, item.source)),
+                  date: header.date,
+                });
+              }
             }
-            return messages;
+            return result;
           } finally {
             lock.release();
           }
@@ -104,7 +190,7 @@ const pullMailbox = (mailbox: Mailbox) =>
     });
   });
 
-const pullPop3Mailbox = (mailbox: Mailbox) =>
+const pullPop3Mailbox = (mailbox: Mailbox, request: Request) =>
   Effect.suspend(() => {
     let stage: MailFailureStage = "connect";
     return Effect.tryPromise({
@@ -134,26 +220,41 @@ const pullPop3Mailbox = (mailbox: Mailbox) =>
               throw signal.reason;
             }
             stage = "authenticate";
-            const [countText] = (await client.STAT()).trim().split(/\s+/);
-            stage = "fetch";
-            const total = Number.parseInt(countText ?? "0", 10);
-            const first = Math.max(1, total - (mailbox.maxMessages ?? 50) + 1);
             const ids = Schema.decodeUnknownSync(
               Schema.Array(Schema.Tuple([Schema.String, Schema.String])),
             )(await client.UIDL());
-            const byNumber = new Map(ids);
-            const messages: MailMessage[] = [];
-            for (let number = first; number <= total; number++) {
-              const source = await client.RETR(number);
-              const text =
-                typeof source === "string" ? source : await Pop3Command.stream2String(source);
-              const uid = byNumber.get(String(number));
-              if (!uid) throw new Error("Missing POP3 UIDL identity");
-              stage = "parse";
-              messages.push(await normalize(mailbox, `pop3:${uid}`, text));
+            const result = batch();
+            result.ids = ids.map(([, id]) => `pop3:${id}`);
+            if (new Set(result.ids).size !== ids.length)
+              throw new Error("Duplicate POP3 UIDL identity");
+            if (request.kind === "inventory") return result;
+            const textOf = async (source: Awaited<ReturnType<typeof client.RETR>>) =>
+              typeof source === "string" ? source : await Pop3Command.stream2String(source);
+            for (const [number, uid] of ids) {
+              if (signal.aborted) throw signal.reason;
+              const id = `pop3:${uid}`;
               stage = "fetch";
+              if (request.kind === "read") {
+                if (request.id === id)
+                  result.messages.push(
+                    await normalize(mailbox, id, await textOf(await client.RETR(Number(number)))),
+                  );
+                continue;
+              }
+              // POP3 cannot search by receipt date. TOP avoids downloading historical bodies.
+              const headers = await textOf(await client.TOP(Number(number), 0));
+              stage = "parse";
+              const message = await normalize(mailbox, id, headers);
+              if (!message.date) result.undated++;
+              if (!selected(request, message)) continue;
+              stage = "fetch";
+              result.messages.push(
+                request.kind === "list"
+                  ? message
+                  : await normalize(mailbox, id, await textOf(await client.RETR(Number(number)))),
+              );
             }
-            return messages;
+            return result;
           };
           if (signal.aborted) {
             onAbort();
@@ -176,22 +277,30 @@ const pullPop3Mailbox = (mailbox: Mailbox) =>
     });
   });
 
-export const mailFetcherLayer = (mailboxes: ReadonlyArray<Mailbox>) =>
-  Layer.effect(
-    MailFetcher,
-    Effect.succeed(
-      MailFetcher.of({
-        pull: (mailbox) =>
-          (mailbox.protocol ?? "imap") === "pop3" ? pullPop3Mailbox(mailbox) : pullMailbox(mailbox),
-        pullAll: () =>
-          Effect.forEach(
-            mailboxes,
-            (mailbox) =>
-              (mailbox.protocol ?? "imap") === "pop3"
-                ? pullPop3Mailbox(mailbox)
-                : pullMailbox(mailbox),
-            { concurrency: 1 },
-          ).pipe(Effect.map((groups) => groups.flat())),
-      }),
-    ),
-  );
+const fetch = (mailbox: Mailbox, request: Request) =>
+  (mailbox.protocol ?? "imap") === "pop3"
+    ? pullPop3Mailbox(mailbox, request)
+    : pullMailbox(mailbox, request);
+
+export const mailFetcherLayer = () =>
+  Layer.succeed(MailFetcher, {
+    inventory: (mailbox) =>
+      fetch(mailbox, { kind: "inventory" }).pipe(Effect.map((result) => result.ids)),
+    pull: (mailbox, window, known) =>
+      fetch(mailbox, { kind: "pull", window, known: new Set(known) }),
+    list: (mailbox, window) => fetch(mailbox, { kind: "list", window }),
+    read: (mailbox, id) =>
+      fetch(mailbox, { kind: "read", id }).pipe(
+        Effect.flatMap((result) =>
+          result.messages[0]
+            ? Effect.succeed(result.messages[0])
+            : Effect.fail(
+                new MailFetchError({
+                  mailbox: mailbox.id,
+                  message: "Email is no longer available",
+                  cause: undefined,
+                }),
+              ),
+        ),
+      ),
+  });

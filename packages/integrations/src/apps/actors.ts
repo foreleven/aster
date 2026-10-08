@@ -13,7 +13,7 @@ import {
 import { DateTime, Deferred, Effect, Layer, Match, Schema, Scope } from "effect";
 import { AppsSettings } from "./config.js";
 import { OpenCli } from "./client.js";
-import { commandCatalogue, queryArgv } from "./commands.js";
+import { appCommands, queryArgv } from "./commands.js";
 import { AppsState, AppState, appsView, appView } from "./contexts.js";
 
 const QueryReply = Schema.Union([
@@ -83,7 +83,6 @@ class AppActor extends ContextActor.Service<AppActor, AppsSettings | OpenCli | C
                   state: {
                     app: app.name,
                     mode: "query-only",
-                    commands: commandCatalogue(app.name),
                     ...(restored?.lastResult ? { lastResult: restored.lastResult } : {}),
                   },
                 },
@@ -93,6 +92,7 @@ class AppActor extends ContextActor.Service<AppActor, AppsSettings | OpenCli | C
             yield* queries
               .register(
                 path,
+                { description: app.description, commands: appCommands[app.name] },
                 Effect.fn("Apps.query")(function* (input) {
                   const cancelled = yield* Deferred.make<void>();
                   const reply = yield* actor.self

@@ -6,9 +6,6 @@ export const AppsState = Schema.Struct({ apps: Schema.Array(Schema.String) });
 export const AppState = Schema.Struct({
   app: AppName,
   mode: Schema.Literal("query-only"),
-  commands: Schema.Array(
-    Schema.Struct({ command: Schema.String, description: Schema.String, arguments: Schema.Json }),
-  ),
   lastResult: Schema.optional(ContextQueryResult),
 });
 export const appsView = contextView({ matches: (path) => path === "/apps", state: AppsState });

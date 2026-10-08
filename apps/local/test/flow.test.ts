@@ -4,7 +4,7 @@ import { Models } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { ContextRegistry, contextSpawnOptions } from "@aster/core";
+import { ContextRegistry, ContextQueries, contextSpawnOptions } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import {
   ChatSummarizer,
@@ -40,6 +40,7 @@ test("a code-registered Lark root starts without YAML entries and creates its ow
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
+            ContextQueries.layer,
             ImStorage.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
@@ -104,6 +105,7 @@ test("Lark channel publishes today’s startup mail as an email Context", async 
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
+            ContextQueries.layer,
             ImStorage.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
@@ -175,6 +177,7 @@ for (const mailbox of ["me", "other"])
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               Layer.succeed(ContextRegistry, registry),
+              ContextQueries.layer,
               Layer.succeed(LarkConfig, {
                 description: "Account",
                 mail: { mailbox, description: "Mailbox", pollIntervalMs: 60_000 },

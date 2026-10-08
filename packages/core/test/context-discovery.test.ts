@@ -1,94 +1,94 @@
 import { CurrentActors } from "../src/services/actors.js";
-import type { CoreTool } from "../src/tools/define.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Schema } from "effect";
+import { Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect";
 import { contextTools } from "../src/tools/catalogues.js";
-import { contextView } from "../src/context/definition.js";
-import { defineContext } from "../src/context/definition.js";
-import { makeContextRegistry } from "../src/testing/context.js";
-import type { ContextSnapshot } from "../src/context/model.js";
 import { toolSystem } from "./tool-fixtures.js";
 
-const page = (result: Effect.Success<ReturnType<CoreTool["execute"]>>) =>
-  JSON.parse(result.content.map((c) => (c.type === "text" ? c.text : "")).join(""));
-
-test("Context tools ask for bounded public pages, include dormant records and detect changed revisions", async () => {
-  const records: ContextSnapshot[] = Array.from({ length: 6000 }, (_, i) => ({
-    path: `/lark/im/chats/${i}`,
-    revision: 0,
-    description: "Knowledge Engine ".repeat(100),
-    state: { summary: "message".repeat(5000), secret: "PRIVATE" },
-    messages: [],
-  }));
+test("Context discovery lists capabilities without state and descriptions match strict execution schemas", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry({
-          loadAll: () => records.map((snapshot) => ({ snapshot, events: [] })),
-          save: () => {},
-        });
-        const view = contextView({
-          matches: (path) => path.startsWith("/lark/"),
-          state: Schema.Struct({ summary: Schema.String }),
-        });
-        let projections = 0;
-        yield* registry.views.register([
-          {
-            ...view,
-            project: (record) => {
-              projections++;
-              return view.project(record);
+        const { system, queries } = yield* toolSystem();
+        for (let i = 0; i < 31; i++)
+          yield* queries.register(
+            `/mail/${i}`,
+            {
+              description: `Mailbox ${i}`,
+              commands: {
+                read: {
+                  description: "Read one email",
+                  schema: Schema.Struct({ id: Schema.String }),
+                },
+              },
             },
-          },
-        ]);
-        const { system } = yield* toolSystem({ registry });
-        const [search, read] = contextTools();
-        const execute = (tool: CoreTool, args: object) =>
-          tool.execute("call", args).pipe(Effect.provideService(CurrentActors, system));
-        const found = page(yield* execute(search!, { query: "Knowledge Engine" }));
-        assert.equal(found.total, 6000);
-        assert.equal(projections, 0, "Directory search must not project full Context state");
-        assert.equal(found.items.length, 20);
-        assert.equal(found.nextOffset, 20);
-        assert.ok(JSON.stringify(found).length < 10000);
-        const first = page(yield* execute(read!, { path: records[1]!.path }));
-        assert.equal(first.content.length, 12000);
-        assert.equal(first.nextOffset, 12000);
-        const next = page(
-          yield* execute(read!, {
-            path: records[1]!.path,
-            offset: first.nextOffset,
-            revision: first.revision,
-          }),
+            (input) => Effect.succeed({ ...input, queriedAt: "now", data: "PRIVATE BODY" }),
+          );
+        const [list, describe] = contextTools();
+        const found = yield* list!
+          .execute("list", { parent: "/mail" })
+          .pipe(Effect.provideService(CurrentActors, system));
+        const page = JSON.parse(
+          found.content.map((c) => (c.type === "text" ? c.text : "")).join(""),
         );
+        assert.equal(page.total, 31);
+        assert.equal(page.items.length, 20);
+        assert.equal(page.nextOffset, 20);
+        assert.doesNotMatch(JSON.stringify(page), /PRIVATE|state/);
+        const description = yield* describe!
+          .execute("describe", { path: "/mail/0" })
+          .pipe(Effect.provideService(CurrentActors, system));
+        assert.match(JSON.stringify(description), /Read one email/);
+        assert.doesNotMatch(JSON.stringify(description), /PRIVATE/);
+        const invalidInputs: import("../src/context/contracts.js").ContextQueryInput[] = [
+          { path: "/mail/0", command: "state", args: {} },
+          { path: "/mail/0", command: "read", args: { id: 3 } },
+          { path: "/mail/0", command: "read", args: { id: "1", extra: true } },
+        ];
+        for (const input of invalidInputs)
+          assert.equal((yield* Effect.flip(queries.query(input))).kind, "invalid-input");
         assert.equal(
-          next.content,
-          JSON.stringify(registry.reader.get(records[1]!.path)).slice(12000, 24000),
+          (yield* queries.query({ path: "/mail/0", command: "read", args: { id: "1" } })).data,
+          "PRIVATE BODY",
         );
-        assert.doesNotMatch(JSON.stringify(registry.reader.get(records[1]!.path)), /PRIVATE/);
-        yield* registry.register(
-          records[1]!.path,
-          defineContext({
-            state: Schema.Struct({ summary: Schema.String }),
-            message: Schema.Never,
-            view,
-          }),
-        );
-        yield* registry.commit(
-          { ...records[1]!, state: { summary: "Changed" } },
-          { expectedRevision: 0 },
-        );
-        const conflict = yield* execute(read!, {
-          path: records[1]!.path,
-          offset: 12000,
-          revision: first.revision,
-        });
-        assert.equal(conflict.isError, true);
-        const fresh = page(yield* execute(read!, { path: records[1]!.path }));
-        assert.match(fresh.content, /Changed/);
-        assert.equal((yield* execute(read!, { path: "/missing" })).isError, true);
+        assert.equal((yield* queries.list("/mai")).total, 0);
       }),
     ),
+  );
+});
+
+test("Context query registration owns active handlers and cancels them on shutdown", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { queries } = yield* toolSystem();
+        const owner = yield* Scope.make();
+        const entered = yield* Deferred.make<void>();
+        const cancelled = yield* Deferred.make<void>();
+        yield* queries
+          .register(
+            "/source",
+            {
+              description: "Source",
+              commands: { read: { description: "Read", schema: Schema.Struct({}) } },
+            },
+            () =>
+              Deferred.succeed(entered, undefined).pipe(
+                Effect.andThen(Effect.never),
+                Effect.ensuring(Deferred.succeed(cancelled, undefined)),
+              ),
+          )
+          .pipe(Effect.provideService(Scope.Scope, owner));
+        const caller = yield* queries
+          .query({ path: "/source", command: "read", args: {} })
+          .pipe(Effect.flip, Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* Scope.close(owner, Exit.void);
+        yield* Deferred.await(cancelled);
+        assert.equal((yield* Fiber.join(caller)).kind, "unavailable");
+        assert.equal((yield* queries.list()).total, 0);
+        assert.equal((yield* Effect.flip(queries.describe("/source"))).kind, "unavailable");
+      }),
+    ).pipe(Effect.timeout("10 seconds")),
   );
 });

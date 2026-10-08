@@ -62,11 +62,12 @@ test("MailIntegration.services provides configured fetcher without opening conne
     ),
   );
   assert.equal(typeof fetcher.pull, "function");
-  assert.equal(typeof fetcher.pullAll, "function");
+  assert.equal(typeof fetcher.inventory, "function");
 });
 
 test("POP3 mailboxes normalize messages with stable UIDL identities across renumbering", async () => {
   let deletedFirst = false;
+  const commands: string[] = [];
   const server = createServer((socket) => {
     socket.write("+OK ready\r\n");
     let buffer = "";
@@ -75,6 +76,7 @@ test("POP3 mailboxes normalize messages with stable UIDL identities across renum
       while (buffer.includes("\r\n")) {
         const end = buffer.indexOf("\r\n");
         const command = buffer.slice(0, end);
+        commands.push(command);
         buffer = buffer.slice(end + 2);
         if (command.startsWith("USER ")) socket.write("+OK user\r\n");
         else if (command.startsWith("PASS ")) socket.write("+OK pass\r\n");
@@ -85,13 +87,16 @@ test("POP3 mailboxes normalize messages with stable UIDL identities across renum
               : "+OK\r\n1 stable-one\r\n2 stable-two\r\n.\r\n",
           );
         else if (command === "STAT") socket.write(deletedFirst ? "+OK 1 50\r\n" : "+OK 2 100\r\n");
-        else if (command === "RETR 1" && !deletedFirst)
+        else if ((command === "RETR 1" || command === "TOP 1 0") && !deletedFirst)
           socket.write(
-            "+OK\r\nFrom: sender@example.com\r\nTo: alice@example.com\r\nSubject: First\r\n\r\nHello one\r\n.\r\n",
+            "+OK\r\nFrom: sender@example.com\r\nTo: alice@example.com\r\nDate: Tue, 06 Oct 2026 08:00:00 +0800\r\nSubject: First\r\n\r\nHello one\r\n.\r\n",
           );
-        else if (command === "RETR 2" || (command === "RETR 1" && deletedFirst))
+        else if (
+          ["RETR 2", "TOP 2 0"].includes(command) ||
+          (["RETR 1", "TOP 1 0"].includes(command) && deletedFirst)
+        )
           socket.write(
-            "+OK\r\nFrom: sender@example.com\r\nTo: alice@example.com\r\nSubject: Second\r\n\r\nHello two\r\n.\r\n",
+            "+OK\r\nFrom: sender@example.com\r\nTo: alice@example.com\r\nDate: Wed, 07 Oct 2026 09:00:00 +0800\r\nSubject: Second\r\n\r\nHello two\r\n.\r\n",
           );
         else if (command === "QUIT") {
           socket.write("+OK bye\r\n");
@@ -104,24 +109,34 @@ test("POP3 mailboxes normalize messages with stable UIDL identities across renum
   const address = server.address();
   assert.ok(address && typeof address !== "string");
   try {
-    const pull = () =>
+    const pull = (known: readonly string[] = []) =>
       Effect.runPromise(
         Effect.gen(function* () {
           const fetcher = yield* MailFetcher;
-          return yield* fetcher.pull({
-            id: "test-pop3",
-            protocol: "pop3",
-            host: "127.0.0.1",
-            port: address.port,
-            secure: false,
-            username: "alice",
-            password: Redacted.make("secret"),
-          });
-        }).pipe(Effect.provide(mailFetcherLayer([]))),
+          return yield* fetcher.pull(
+            {
+              id: "test-pop3",
+              protocol: "pop3",
+              host: "127.0.0.1",
+              port: address.port,
+              secure: false,
+              username: "alice",
+              password: Redacted.make("secret"),
+            },
+            { from: "2026-10-06T16:00:00Z", through: "2026-10-07T16:00:00Z" },
+            known,
+          );
+        }).pipe(Effect.provide(mailFetcherLayer())),
       );
-    const messages = await pull();
+    assert.deepEqual(
+      (await pull(["pop3:stable-one", "pop3:stable-two"])).messages.map((message) => message.id),
+      ["pop3:stable-two"],
+    );
+    assert.ok(!commands.includes("RETR 1"));
+    // An unknown backdated UID is admitted, but the initial historical UID was excluded.
+    const messages = (await pull(["pop3:stable-two"])).messages;
     deletedFirst = true;
-    const remaining = await pull();
+    const remaining = (await pull()).messages;
     assert.equal(remaining[0]?.id, messages[1]?.id);
     assert.equal(remaining[0]?.id, "pop3:stable-two");
     assert.deepEqual(
@@ -138,10 +153,11 @@ test("POP3 mailboxes normalize messages with stable UIDL identities across renum
   }
 });
 
-test("IMAP polls the latest messages and scopes stable UIDs to UIDVALIDITY", async () => {
+test("IMAP filters by received day before downloading bodies and scopes UIDs to UIDVALIDITY", async () => {
   const requests: string[] = [];
   let validity = 12;
   let rejectLogin = false;
+  let omitHeader = false;
   const server = createServer((socket) => {
     socket.write("* OK [CAPABILITY IMAP4rev1] ready\r\n");
     let buffer = "";
@@ -165,11 +181,23 @@ test("IMAP polls the latest messages and scopes stable UIDs to UIDVALIDITY", asy
           socket.write(
             `* FLAGS (\\Seen)\r\n* 100 EXISTS\r\n* OK [UIDVALIDITY ${validity}] valid\r\n* OK [UIDNEXT 101] next\r\n${tag} OK [READ-WRITE] selected\r\n`,
           );
-        else if (command === "FETCH") {
-          for (const seq of [99, 100]) {
-            const source = `From: sender@example.com\r\nTo: alice@example.com\r\nSubject: Message ${seq}\r\n\r\nBody ${seq}\r\n`;
+        else if (command === "UID" && line.includes(" SEARCH "))
+          socket.write(`* SEARCH 98 99 100\r\n${tag} OK searched\r\n`);
+        else if (command === "UID" && line.includes(" FETCH ")) {
+          const header = line.includes("HEADER");
+          const range = line.split(" ")[3]!;
+          const sequences = range.split(",").flatMap((part) => {
+            const [from, to] = part.split(":").map(Number);
+            return to === undefined
+              ? [from!]
+              : Array.from({ length: to - from! + 1 }, (_, i) => from! + i);
+          });
+          for (const seq of sequences) {
+            if (omitHeader && header && seq === 99) continue;
+            const source = `From: sender@example.com\r\nTo: alice@example.com\r\nSubject: Message ${seq}\r\n\r\n${header ? "" : `Body ${seq}\r\n`}`;
+            const date = seq === 98 ? "05-Oct-2026 16:00:00 +0000" : "06-Oct-2026 16:00:00 +0000";
             socket.write(
-              `* ${seq} FETCH (UID ${seq} BODY[] {${Buffer.byteLength(source)}}\r\n${source})\r\n`,
+              `* ${seq} FETCH (UID ${seq} INTERNALDATE "${date}" BODY[${header ? "HEADER" : ""}] {${Buffer.byteLength(source)}}\r\n${source})\r\n`,
             );
           }
           socket.write(`${tag} OK fetched\r\n`);
@@ -184,18 +212,24 @@ test("IMAP polls the latest messages and scopes stable UIDs to UIDVALIDITY", asy
     const pull = () =>
       Effect.runPromise(
         Effect.gen(function* () {
-          return yield* (yield* MailFetcher).pull({
-            id: "work",
-            host: "127.0.0.1",
-            port: address.port,
-            secure: false,
-            username: "alice",
-            password: Redacted.make("secret"),
-            maxMessages: 2,
-          });
-        }).pipe(Effect.provide(mailFetcherLayer([])), Effect.timeout("5 seconds")),
+          return yield* (yield* MailFetcher).pull(
+            {
+              id: "work",
+              host: "127.0.0.1",
+              port: address.port,
+              secure: false,
+              username: "alice",
+              password: Redacted.make("secret"),
+            },
+            { from: "2026-10-06T16:00:00Z", through: "2026-10-07T16:00:00Z" },
+            [98, 99, 100].map((id) => `imap:INBOX:${validity}:${id}`),
+          );
+        }).pipe(Effect.provide(mailFetcherLayer()), Effect.timeout("5 seconds")),
       );
-    const first = await pull();
+    omitHeader = true;
+    await assert.rejects(pull(), MailFetchError);
+    omitHeader = false;
+    const first = (await pull()).messages;
     assert.deepEqual(
       first.map((email) => email.id),
       ["imap:INBOX:12:99", "imap:INBOX:12:100"],
@@ -204,13 +238,14 @@ test("IMAP polls the latest messages and scopes stable UIDs to UIDVALIDITY", asy
       first.map((email) => email.subject),
       ["Message 99", "Message 100"],
     );
-    assert.ok(requests.some((line) => / FETCH 99:100 /.test(line)));
+    assert.ok(requests.some((line) => /UID SEARCH.*SINCE.*BEFORE/.test(line)));
+    assert.ok(!requests.some((line) => /UID FETCH 98 /.test(line) && !line.includes("HEADER")));
     assert.deepEqual(
-      (await pull()).map((email) => email.id),
+      (await pull()).messages.map((email) => email.id),
       first.map((email) => email.id),
     );
     validity = 13;
-    assert.notEqual((await pull())[0]?.id, first[0]?.id);
+    assert.notEqual((await pull()).messages[0]?.id, first[0]?.id);
     rejectLogin = true;
     await assert.rejects(pull(), (error: unknown) => {
       assert.ok(error instanceof MailFetchError);
@@ -224,7 +259,7 @@ test("IMAP polls the latest messages and scopes stable UIDs to UIDVALIDITY", asy
       return true;
     });
     rejectLogin = false;
-    assert.equal((await pull()).length, 2);
+    assert.equal((await pull()).messages.length, 2);
   } finally {
     await new Promise<void>((resolve, reject) =>
       server.close((error) => (error ? reject(error) : resolve())),
@@ -245,7 +280,7 @@ for (const protocol of ["imap", "pop3"] as const)
     assert.ok(address && typeof address !== "string");
     const fiber = Effect.runFork(
       Effect.gen(function* () {
-        return yield* (yield* MailFetcher).pull({
+        return yield* (yield* MailFetcher).inventory({
           id: "test",
           protocol,
           host: "127.0.0.1",
@@ -254,7 +289,7 @@ for (const protocol of ["imap", "pop3"] as const)
           username: "u",
           password: Redacted.make("p"),
         });
-      }).pipe(Effect.provide(mailFetcherLayer([]))),
+      }).pipe(Effect.provide(mailFetcherLayer())),
     );
     try {
       await accepted.promise;
@@ -294,4 +329,17 @@ test("mail diagnostics retain network and server causes wrapped as authenticatio
     ),
     { stage: "fetch", reason: "protocol" },
   );
+});
+
+test("mail day bounds follow the mailbox zone across DST and exclude the next midnight", async () => {
+  const { dayWindow, inWindow, MailDate } = await import("../src/mail/dates.js");
+  const { Schema } = await import("effect");
+  const spring = dayWindow("2026-03-08", "America/New_York");
+  const autumn = dayWindow("2026-11-01", "America/New_York");
+  assert.equal(Date.parse(spring.through) - Date.parse(spring.from), 23 * 60 * 60 * 1000);
+  assert.equal(Date.parse(autumn.through) - Date.parse(autumn.from), 25 * 60 * 60 * 1000);
+  assert.equal(inWindow(spring.from, spring), true);
+  assert.equal(inWindow(spring.through, spring), false);
+  assert.equal(inWindow(undefined, spring), false);
+  assert.equal(Schema.is(MailDate)("2026-02-30"), false);
 });

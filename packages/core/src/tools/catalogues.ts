@@ -1,8 +1,8 @@
 import type { GoalState } from "../goals/state/model.js";
 import type { CurrentActors } from "../services/actors.js";
 import type { CoreTool } from "./define.js";
-import { searchContexts } from "./context/search-contexts.js";
-import { readContext } from "./context/read-context.js";
+import { listContexts } from "./context/list-contexts.js";
+import { describeContext } from "./context/describe-context.js";
 import { queryContext } from "./context/query-context.js";
 import { readQueryResult } from "./context/read-query-result.js";
 import { memorySearch } from "./memory/memory-search.js";
@@ -15,8 +15,7 @@ import { taskSend } from "./task/task-send.js";
 import { signalList } from "./signal/signal-list.js";
 import { setSignal } from "./signal/set-signal.js";
 
-export const contextTools = (pageCharacters = 12000): readonly CoreTool[] =>
-  [searchContexts(), readContext(pageCharacters)] as const;
+export const contextTools = (): readonly CoreTool[] => [listContexts(), describeContext()] as const;
 export const contextQueryTools = (
   owner: string,
   requestId: (callId: string) => string,

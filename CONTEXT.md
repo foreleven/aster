@@ -59,6 +59,15 @@ A data-ingress behavior of a Channel Context, such as Feishu IM, Feishu Mail, or
 **Email Context**:
 A Context representing one email in one mailbox, identified by that mailbox's email ID. Repeated observations of the same email address the same Context.
 
+**Mailbox Daily Index**:
+The default listing of emails for the current calendar day in a mailbox's time zone. Leaving this listing does not remove an email retained as evidence for assistant work.
+
+**Mail Retrieval Watermark (`through`)**:
+The end of the interval covered by automatic mail retrieval, whose observed emails have been durably retained. It describes retrieval coverage, not completion of assistant work, and is independent of on-demand historical queries.
+
+**Late-arriving Email**:
+An email newly appearing in a connected mailbox whose date precedes the mailbox's completed retrieval interval. It is distinct from historical mail already present when the mailbox was first connected.
+
 **Goal**:
 A continuing assistant responsibility pursued across conversations, observations, and actions, with Tasks tracking individual pieces of work and Signals monitoring conditions for action. A Goal can be paused, resumed or manually deleted; completion belongs to a Task, not to the Goal itself.
 

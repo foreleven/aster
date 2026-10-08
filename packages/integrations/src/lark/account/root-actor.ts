@@ -1,7 +1,8 @@
+import { registerLarkQueries } from "../queries.js";
 import { accountView } from "../public-views.js";
-import { Effect, Match, Layer, Schema } from "effect";
+import { Effect, Match, Layer, Schema, Scope } from "effect";
 
-import { ContextActor, ContextRegistry, defineContext } from "@aster/core";
+import { ContextQueries, ContextActor, ContextRegistry, defineContext } from "@aster/core";
 import { AccountProfile } from "./model.js";
 import { LarkConfig } from "../config.js";
 import { LarkMailCli } from "../mail/client.js";
@@ -25,6 +26,7 @@ type LarkRootCommand = typeof LarkRootCommand.Type;
 
 export class LarkRootActor extends ContextActor.Service<
   LarkRootActor,
+  | ContextQueries
   | LarkConfig
   | LarkMailCli
   | LarkAccountCli
@@ -44,12 +46,17 @@ export class LarkRootActor extends ContextActor.Service<
   static readonly layer = Layer.effect(
     LarkRootActor,
     Effect.gen(function* () {
+      const scope = yield* Scope.Scope;
       const registry = yield* ContextRegistry;
       const config = yield* LarkConfig;
       const cli = yield* LarkAccountCli;
       return LarkRootActor.of({
         started: (context) =>
           Effect.gen(function* () {
+            yield* registerLarkQueries().pipe(
+              Effect.provideService(Scope.Scope, scope),
+              Effect.orDie,
+            );
             const previous = registry.get("/lark");
             yield* registry
               .commit(

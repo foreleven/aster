@@ -1,5 +1,8 @@
+import { registerCollectionQueries } from "../context/queries/commands.js";
+import { ContextQueryError } from "../context/queries/routes.js";
+import { publicJson } from "../json.js";
 import { ExecutionCheckpoint } from "./execution/checkpoint.js";
-import { StoredTaskInput, TaskSnapshot } from "./state/snapshot.js";
+import { StoredTaskInput, TaskSnapshot, TaskOutcome } from "./state/snapshot.js";
 import { Option, Schema, Effect, Match } from "effect";
 import { ApplicationError } from "../operations.js";
 import { TaskDeliveryInput, TaskPath } from "./contracts.js";
@@ -175,3 +178,53 @@ const renderInput = (data: unknown) =>
     Match.tag("Retry", () => "Retry failed execution"),
     Match.exhaustive,
   );
+
+export const registerTaskQueries = Effect.fn("Task.registerQueries")(function* () {
+  const conversations = yield* AgentConversations;
+  yield* registerCollectionQueries(
+    "/tasks",
+    Effect.fnUntraced(function* (record, detail) {
+      const state = yield* Schema.decodeUnknownEffect(TaskSnapshot)(record.state).pipe(
+        Effect.orDie,
+      );
+      const summary = {
+        path: record.path,
+        status: state.status,
+        goal: state.admission.replyTo,
+        agent: state.admission.agent,
+      };
+      if (!detail) return publicJson(summary);
+      const admission = yield* conversations
+        .get(record.path, state.inputs[0]!.entryId)
+        .pipe(
+          Effect.mapError(
+            () =>
+              new ContextQueryError({ kind: "unavailable", message: "Task evidence unavailable" }),
+          ),
+        );
+      const input = yield* Schema.decodeUnknownEffect(TaskDeliveryInput)(admission.data).pipe(
+        Effect.orDie,
+      );
+      const outcome =
+        state.outcomeEntryId === undefined
+          ? undefined
+          : yield* conversations.get(record.path, state.outcomeEntryId).pipe(
+              Effect.mapError(
+                () =>
+                  new ContextQueryError({
+                    kind: "unavailable",
+                    message: "Task result unavailable",
+                  }),
+              ),
+            );
+      const result = outcome
+        ? yield* Schema.decodeUnknownEffect(TaskOutcome)(outcome.data).pipe(Effect.orDie)
+        : undefined;
+      return publicJson({
+        ...summary,
+        instructions: input.task.instructions,
+        result: result?.text,
+      });
+    }),
+  );
+});

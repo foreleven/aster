@@ -1,3 +1,5 @@
+import { registerCollectionQueries } from "../context/queries/commands.js";
+import { publicJson } from "../json.js";
 import { GoalSnapshot } from "./state/snapshot.js";
 import { type ContextViewPolicy, contextView } from "../context/definition.js";
 
@@ -104,3 +106,21 @@ export const goalTimeline = (
       nextBefore: eligible.length > messages.length ? messages[0]!.id : null,
     };
   }).pipe(Effect.withSpan("Goal.timeline"));
+
+export const registerGoalQueries = () =>
+  registerCollectionQueries(
+    "/goals",
+    Effect.fnUntraced(function* (record, detail) {
+      const state = yield* Schema.decodeUnknownEffect(GoalSnapshot)(record.state).pipe(
+        Effect.orDie,
+      );
+      return publicJson({
+        path: record.path,
+        title: state.definition.title ?? state.definition.description,
+        description: state.definition.description,
+        status: state.status,
+        summary: state.summary,
+        ...(detail ? { tasks: state.tasks } : {}),
+      });
+    }),
+  );

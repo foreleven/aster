@@ -1,6 +1,7 @@
 import { Match, Option, Schema } from "effect";
 
 const MailErrorCode = Schema.Literals([
+  "UIDVALIDITY_CHANGED",
   "ECONNRESET",
   "ECONNREFUSED",
   "ECONNABORTED",

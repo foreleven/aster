@@ -104,7 +104,10 @@ test("apps register discoverable query-only Contexts without running OpenCLI; qu
         ]);
         const ctrip = runtime.reader.get(input.path)!;
         assert.equal(Schema.decodeUnknownSync(AppState)(ctrip.state).mode, "query-only");
-        assert.ok(JSON.stringify(ctrip.state).includes("hotel-search"));
+        assert.ok(!JSON.stringify(ctrip.state).includes("hotel-search"));
+        assert.ok(
+          JSON.stringify(yield* runtime.queries.describe(input.path)).includes("hotel-search"),
+        );
         const query = yield* runtime.queries.query(input).pipe(Effect.forkScoped);
         yield* Deferred.await(saving);
         assert.equal(

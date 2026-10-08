@@ -185,13 +185,6 @@ export const appCommands: Record<AppName, Readonly<Record<string, CommandSpec>>>
   },
 };
 
-export const commandCatalogue = (app: AppName) =>
-  Object.entries(appCommands[app]).map(([command, spec]) => ({
-    command,
-    description: spec.description,
-    arguments: Schema.toJsonSchemaDocument(spec.schema).schema,
-  }));
-
 export const queryArgv = Effect.fn("Apps.queryArgv")(function* (
   app: AppName,
   command: string,

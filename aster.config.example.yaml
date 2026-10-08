@@ -94,7 +94,7 @@ contexts:
   #         username: me@example.com
   #         password: ${MAIL_PASSWORD}
   #         folder: INBOX
-  #         maxMessages: 50
+  #         timeZone: Asia/Shanghai
 signals:
   email-action-request:
     trigger:

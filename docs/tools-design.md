@@ -22,8 +22,8 @@ packages/core/src/tools/
   define.ts                  # Effect tool construction and domain error/result shaping
   catalogues.ts              # Explicit Goal and Task tool sets
   context/
-    search-contexts.ts
-    read-context.ts
+    list-contexts.ts
+    describe-context.ts
     query-context.ts
     read-query-result.ts
   goal/
@@ -49,8 +49,8 @@ Domain protocols and handlers remain next to their owners. The previous Goal/rea
 
 | Tool                | Owner                          | Behavior                                                                                                       |
 | ------------------- | ------------------------------ | -------------------------------------------------------------------------------------------------------------- |
-| `search_contexts`   | `/user/contexts`               | `SearchContexts` searches public paths and descriptions, including records without a live Actor.               |
-| `read_context`      | `/user/contexts`               | `ReadContext` returns a public JSON page and revision.                                                         |
+| `list_contexts`     | `/user/contexts`               | `ListContexts` pages active capability paths and descriptions without state.                                   |
+| `describe_context`  | `/user/contexts`               | `DescribeContext` returns public command descriptions and argument schemas.                                    |
 | `query_context`     | `/user/contexts`               | `QueryContext` invokes the existing read-only integration route and retains the result in Pi.                  |
 | `read_query_result` | `/user/contexts`               | `ReadQueryResult` reads retained evidence under the bound conversation owner.                                  |
 | `goal_current`      | Injected GoalState             | Reads the current definition and public state; the catalogue supplies safe executor names.                     |

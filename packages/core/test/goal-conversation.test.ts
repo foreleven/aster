@@ -1,3 +1,6 @@
+import { registerGoalQueries } from "../src/goals/view.js";
+import { registerTaskQueries } from "../src/tasks/view.js";
+import { registerSignalQueries } from "../src/signals/queries.js";
 import { ContextsActor } from "../src/context/queries/actor.js";
 import { testConversations } from "./conversation-fixtures.js";
 import {
@@ -52,10 +55,17 @@ const setup = Effect.fnUntraced(function* (
   } = {},
 ) {
   const registry = yield* makeContextRegistry(options.store);
+  const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
+  const conversations = options.history ?? testConversations();
+  yield* Effect.all([registerGoalQueries(), registerTaskQueries(), registerSignalQueries()]).pipe(
+    Effect.provideService(ContextRegistry, registry),
+    Effect.provideService(ContextQueries, queries),
+    Effect.provideService(AgentConversations, conversations),
+  );
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
       Layer.succeed(ContextRegistry, registry),
-      ContextQueries.layer.pipe(Layer.provide(Layer.succeed(ContextRegistry, registry))),
+      Layer.succeed(ContextQueries, queries),
 
       emptyRecall,
       Layer.succeed(GoalSettings, {
@@ -64,7 +74,7 @@ const setup = Effect.fnUntraced(function* (
         ],
         reasoning: { model: "test" },
       }),
-      Layer.succeed(AgentConversations, options.history ?? testConversations()),
+      Layer.succeed(AgentConversations, conversations),
       Layer.succeed(SignalDefinitions, options.signals ?? []),
       Layer.succeed(ExternalAgents, { test: options.external ?? fakeAgent() }),
       modelReplyLayer(
@@ -799,12 +809,13 @@ test("Goal delegates evidence reads to an internal Task and answers users while 
           Effect.gen(function* () {
             const names = input.tools!.map((tool) => tool.name);
             if (input.durable?.owner === "tasks") {
-              assert.ok(names.includes("read_context"));
+              assert.ok(names.includes("describe_context"));
               assert.ok(names.includes("memory_search"));
               assert.ok(!names.includes("update_summary"));
-              const evidence = yield* tool(input, "read_context", {
-                path: "/goals/project",
-                offset: 0,
+              const evidence = yield* tool(input, "query_context", {
+                path: "/goals",
+                command: "read",
+                args: { path: "/goals/project" },
               });
               assert.equal(evidence.isError, undefined);
               assert.match(JSON.stringify(evidence.details), /Improve project reliability/);
@@ -813,8 +824,8 @@ test("Goal delegates evidence reads to an internal Task and answers users while 
               return answer("Evidence review finished");
             }
             for (const name of [
-              "search_contexts",
-              "read_context",
+              "list_contexts",
+              "describe_context",
               "query_context",
               "read_query_result",
               "memory_search",

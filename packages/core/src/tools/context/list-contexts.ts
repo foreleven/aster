@@ -2,24 +2,23 @@ import { askQuery } from "../actors.js";
 import { Type } from "@aster/agent";
 import type { ContextsCommand } from "../../context/queries/actor.js";
 import { queryTool } from "../define.js";
-
-export const searchContexts = () =>
+export const listContexts = () =>
   queryTool(
     {
-      name: "search_contexts",
+      name: "list_contexts",
       replay: "safe",
-      label: "Find Contexts",
+      label: "List Contexts",
       description:
-        "Find public Context paths by words in their path or description. Empty query browses all. Use nextOffset to paginate.",
+        "List active Context capability paths and descriptions, without business data. Optionally scope to descendants of parent. Use describe_context to inspect commands and nextOffset to paginate.",
       parameters: Type.Object({
-        query: Type.String(),
+        parent: Type.Optional(Type.String()),
         offset: Type.Optional(Type.Integer({ minimum: 0 })),
       }),
     },
-    ({ query, offset = 0 }) =>
+    ({ parent, offset = 0 }) =>
       askQuery<ContextsCommand>("/user/contexts", (replyTo) => ({
-        _tag: "SearchContexts",
-        query,
+        _tag: "ListContexts",
+        parent,
         offset,
         replyTo,
       })),

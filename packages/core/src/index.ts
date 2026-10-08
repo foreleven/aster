@@ -47,3 +47,5 @@ export * from "./goals/agent.js";
 export * from "./context/definition.js";
 
 export * from "./memory/capture.js";
+
+export { ContextListArgs, contextPage } from "./context/queries/commands.js";

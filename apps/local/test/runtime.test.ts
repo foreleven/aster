@@ -344,9 +344,11 @@ test("runtime activates generic mail and exposes its tree through ListContexts b
                 pull: () =>
                   Deferred.succeed(entered, undefined).pipe(
                     Effect.andThen(Deferred.await(release)),
-                    Effect.as([]),
+                    Effect.as({ ids: [], messages: [], undated: 0 }),
                   ),
-                pullAll: () => Effect.die("Unexpected batch pull"),
+                inventory: () => Effect.succeed([]),
+                list: () => Effect.die("Unexpected list"),
+                read: () => Effect.die("Unexpected read"),
               }),
             ),
           ),
