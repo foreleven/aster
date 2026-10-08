@@ -10,7 +10,7 @@ Run `pnpm start` at the repository root and open the printed loopback URL (defau
 - Official shadcn Bubble, Message and MessageScroller components render messages, earlier history and scrolling. Suggestions fill an editable draft; they never send automatically. Add context inserts a public Context path into that draft.
 - The composer stays available after a message is accepted. It does not wait for model execution or infer a thinking state from the last message. Goal lifecycle and public projection determine whether a conversation is writable.
 - Drafts and uncertain submission identities survive navigation within the app instance. Explicit retries reuse the same identity and payload. Full document reload does not preserve browser-only pending identities.
-- Activity shows the Goal summary, its authoritative `tasks` list, owned Signals and related approvals. Tasks open the same typed detail page from Activity and the global Tasks collection. Tool records appear only in Task execution details.
+- The fixed Goal sidebar has Activity and Summary tabs. Activity shows the Goal description, its authoritative `tasks` list, owned Signals and related approvals; Summary shows the current Goal summary. The conversation and sidebar content scroll independently, while the tabs remain visible. Tasks open the same typed detail page from Activity and the global Tasks collection. Tool records appear only in Task execution details.
 - Needs you provides confirmation, approval and question forms. Failed or uncertain work exposes the existing explicit recovery commands. Reconnecting never automatically resubmits a command.
 
 There is no End Goal action in the Web UI. Goal creation and lifecycle configuration remain outside this interface. Simple conversation and task delegation are decided by the core agent, not by the browser.
@@ -21,7 +21,7 @@ The official Sidebar provides assistant, spaces, Tasks, Following, Needs you and
 
 Selections use the `context` and `view` URL parameters and support reload/back/forward. Missing and restricted records stay explicit. Sources show public summaries, readable messages and email bodies; unfamiliar records and public state can be expanded as structured data. The UI does not import integration, Actor or persistence implementations.
 
-InputGroup, Field, Item, ToggleGroup, Sheet, Tabs, Alert, Empty and Skeleton provide shared controls and feedback. Mobile navigation and Activity use accessible modal sheets. Dates use the browser timezone, and reduced-motion preferences are respected.
+InputGroup, Field, Item, ToggleGroup, Sheet, Tabs, Alert, Empty and Skeleton provide shared controls and feedback. Mobile navigation and Goal details use accessible modal sheets; Goal details retain the same Activity and Summary tabs on narrow screens. Dates use the browser timezone, and reduced-motion preferences are respected.
 
 ## Application API and organization
 

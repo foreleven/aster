@@ -48,8 +48,25 @@ test("Activity and Tasks open the same current Task details and Goal tasks are a
   const { data, reads, errors } = await setup(page);
   data.tasks[taskPath].result = "Release evidence is ready.";
   await navigate(page, "Knowledge Engine");
-  await page.getByRole("button", { name: "Activity", exact: true }).click();
-  const activity = page.getByRole("dialog");
+  const activity = page.getByRole("complementary", { name: "Goal details" });
+  await expect(activity).toBeVisible();
+  await expect(page.getByRole("dialog")).toHaveCount(0);
+  await expect(composer(page)).toBeInViewport();
+  await expect(activity.getByRole("tab", { name: "Activity", exact: true })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
+  await expect(activity.getByText("Validation starts this week.", { exact: true })).toHaveCount(0);
+  await activity.getByLabel("Which environment?").fill("Test");
+  await activity.getByRole("tab", { name: "Summary", exact: true }).click();
+  await expect(activity.getByRole("tabpanel", { name: "Summary" })).toHaveText(
+    "Validation starts this week.",
+  );
+  await expect(activity.getByRole("heading", { name: "Tasks · 1" })).not.toBeVisible();
+  await page.screenshot({ path: "/tmp/aster-goal-summary.png", animations: "disabled" });
+  await activity.getByRole("tab", { name: "Summary", exact: true }).press("ArrowLeft");
+  await expect(activity.getByRole("tab", { name: "Activity", exact: true })).toBeFocused();
+  await expect(activity.getByLabel("Which environment?")).toHaveValue("Test");
   await expect(activity.getByRole("heading", { name: "Tasks · 1" })).toBeVisible();
   await page.screenshot({ path: "/tmp/aster-shadcn-activity.png", animations: "disabled" });
   await activity.getByRole("button", { name: "Review the release", exact: true }).click();
@@ -260,9 +277,14 @@ test("mobile sidebar, composer and activity remain keyboard accessible without o
   await page.keyboard.press("Escape");
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByRole("button", { name: "Activity", exact: true }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
+  const activity = page.getByRole("dialog");
+  await expect(activity).toBeVisible();
+  await activity.getByRole("tab", { name: "Summary", exact: true }).click();
+  await expect(activity.getByRole("tabpanel", { name: "Summary" })).toHaveText("No summary yet.");
+  await page.screenshot({ path: "/tmp/aster-goal-mobile-summary.png", animations: "disabled" });
   await page.keyboard.press("Escape");
   await expect(page.getByRole("button", { name: "Activity", exact: true })).toBeFocused();
+  await expect(composer(page)).toBeInViewport();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   expect(errors).toEqual([]);
 });
@@ -396,6 +418,7 @@ test("long titles and approval content fit mobile sheets and lists", async ({ pa
   await navigate(page, "Knowledge Engine");
   await page.getByRole("button", { name: "Activity", exact: true }).click();
   const dialog = page.getByRole("dialog");
+  await expect(page.getByLabel("Which environment?")).toHaveCount(1);
   await expect(
     dialog.getByRole("button", { name: "Approve execution", exact: true }),
   ).toBeVisible();
