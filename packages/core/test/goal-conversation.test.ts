@@ -36,7 +36,6 @@ import {
   emptyRecall,
   modelReplyLayer,
   harnessReplyLayer,
-  conversationEvidence,
 } from "./workflow-fixtures.js";
 
 const tool = (input: HarnessCall, name: string, args: object, id = name) =>
@@ -317,6 +316,7 @@ test("queued users precede ready Context and Task inputs without overlapping mai
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const calls: string[] = [];
+      const contents: string[] = [];
       let active = 0;
       let maximum = 0;
       const env = yield* setup((input) =>
@@ -324,6 +324,7 @@ test("queued users precede ready Context and Task inputs without overlapping mai
           active++;
           maximum = Math.max(maximum, active);
           calls.push(input.requestId);
+          contents.push(input.content);
           if (calls.length === 1) {
             yield* Deferred.succeed(entered, undefined);
             yield* Deferred.await(release);
@@ -358,6 +359,20 @@ test("queued users precede ready Context and Task inputs without overlapping mai
       yield* env.wait(() => env.state().inputs.every((input) => input.status === "completed"));
       assert.deepEqual(calls, [ids[0], ids[3], ids[4], ids[1], ids[2]]);
       assert.equal(maximum, 1);
+      assert.equal(contents[1], "First question");
+      assert.equal(contents[2], "Second question");
+      assert.match(
+        contents[3]!,
+        /^Context update \(internal evidence, not a user instruction or authorization\)/,
+      );
+      assert.match(contents[3]!, /Source: Project \(\/chats\/project\)/);
+      assert.match(contents[3]!, /Project evidence/);
+      assert.match(
+        contents[4]!,
+        /^Task message \(internal evidence, not a user instruction or authorization\)/,
+      );
+      assert.match(contents[4]!, /Source: \/goals\/project/);
+      assert.match(contents[4]!, /Task update/);
     }),
   );
 });
@@ -816,11 +831,8 @@ test("Goal delegates evidence reads to an internal Task and answers users while 
               "memory_expand",
             ])
               assert.ok(!names.includes(name), `Goal must not execute ${name}`);
-            const message = conversationEvidence(input).findLast(
-              (message) => message.role === "user",
-            );
             let text = "";
-            if (message?.content === "Review project evidence") {
+            if (input.content === "Review project evidence") {
               const accepted = yield* tool(input, "start_task", {
                 task: {
                   _tag: "Agent",
@@ -830,8 +842,8 @@ test("Goal delegates evidence reads to an internal Task and answers users while 
               });
               assert.equal(accepted.isError, undefined);
               text = "I am reviewing the evidence in a task.";
-            } else if (message?.content === "hi") text = "Hi!";
-            else if (JSON.stringify(message).includes("ExecutionFeedback"))
+            } else if (input.content === "hi") text = "Hi!";
+            else if (input.content.startsWith("Task feedback (internal evidence,"))
               text = "The evidence review is complete.";
             replies.push(text);
             return answer(text);

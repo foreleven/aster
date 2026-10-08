@@ -30,23 +30,6 @@ export const agentResult = (toolName: string, details: unknown): AgentResult => 
     },
   ],
 });
-const Evidence = Schema.Struct({
-  evidence: Schema.Array(
-    Schema.Struct({
-      role: Schema.Literal("user"),
-      content: Schema.Union([
-        Schema.String,
-        Schema.mutable(
-          Schema.Array(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })),
-        ),
-      ]),
-      timestamp: Schema.Number,
-    }),
-  ),
-});
-export const conversationEvidence = (input: HarnessCall) =>
-  Schema.decodeUnknownSync(Evidence)(JSON.parse(input.content)).evidence;
-
 const agentFailure = (cause: Error) => new AgentError(cause.message, [], { cause });
 
 export const modelReplyLayer = (
@@ -124,7 +107,7 @@ export const goalWorkflowLayer = (scenario: GoalScenario) =>
               state: current.state,
               messages: [],
             },
-            messages: conversationEvidence(input),
+            messages: [{ role: "user", content: input.content, timestamp: 0 }],
           })
           .pipe(Effect.mapError(agentFailure));
         yield* callTool(input, "update_summary", { summary: response.progress });

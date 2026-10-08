@@ -89,9 +89,10 @@ goals:
   knowledge-engine:
     title: Knowledge Engine
     description: |
-      As the Knowledge Engine frontend tech lead, continuously monitor the Knowledge Engine project.
-      Track significant changes, frontend impact, dependencies and blockers, matters requiring my involvement, and recommended next steps.
-      Provide concise analysis through Doubao, citing evidence from messages and documents.
+      I lead the frontend team for Knowledge Engine (知识引擎).
+      Help me stay informed about project progress, especially frontend delivery,
+      milestones, cross-team dependencies and risks.
+      Highlight meaningful changes and matters that need my attention or decisions.
 
   spring-festival-travel:
     title: Spring Festival 2027 Travel Plan

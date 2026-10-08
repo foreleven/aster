@@ -28,7 +28,6 @@ test("reopened Goal sessions keep their policy and history while tools read the 
   const conversations = testConversations(directory);
   t.after(() => rm(directory, { recursive: true, force: true }));
   let calls = 0;
-  let initialPolicy: string | undefined;
   const model: ResolvedModel["model"] = {
     id: "test",
     name: "test",
@@ -54,9 +53,17 @@ test("reopened Goal sessions keep their policy and history while tools read the 
             context.messages.filter((message) => message.role === "system"),
           );
           assert.match(policy, /You are the user's personal assistant/);
-          assert.doesNotMatch(policy, /PRIVATE_/);
-          initialPolicy ??= policy;
-          assert.equal(policy, initialPolicy);
+          // Pi retains prior system updates in history; the latest update is authoritative.
+          const currentPolicy = JSON.stringify(
+            context.messages.findLast((message) => message.role === "system"),
+          );
+          assert.match(currentPolicy, new RegExp(`PRIVATE_goal_${turn}`));
+          assert.doesNotMatch(currentPolicy, new RegExp(`PRIVATE_goal_${1 - turn}`));
+          assert.doesNotMatch(policy, /PRIVATE_summary_/);
+          if (reading) {
+            const latest = context.messages.findLast((message) => message.role === "user");
+            assert.equal(latest?.content, "Continue the Goal");
+          }
           if (calls === 3) {
             assert.match(JSON.stringify(context.messages), /PRIVATE_summary_0/);
             assert.doesNotMatch(JSON.stringify(context.messages), /PRIVATE_summary_1/);
