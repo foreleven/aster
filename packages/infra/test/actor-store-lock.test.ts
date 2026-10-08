@@ -5,12 +5,17 @@ import { mkdtemp, readFile, rm, stat, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { acquireActorStoreLock } from "../src/storage/actor-store-lock.js";
+import { Data, Deferred, Effect, Exit, Fiber } from "effect";
+import { acquireActorStoreLock, withActorStoreLock } from "../src/storage/actor-store-lock.js";
 
-const child = (directory: string) => {
-  const process = fork(new URL("./fixtures/actor-lock-child.js", import.meta.url), [directory], {
-    stdio: ["ignore", "ignore", "pipe", "ipc"],
-  });
+const child = (directory: string, mode = "normal") => {
+  const process = fork(
+    new URL("./fixtures/actor-lock-child.js", import.meta.url),
+    [directory, mode],
+    {
+      stdio: ["ignore", "ignore", "pipe", "ipc"],
+    },
+  );
   return {
     process,
     reply: once(process, "message").then(([message]) => message),
@@ -51,4 +56,51 @@ test("root lock excludes aliases, survives owner death and permits only one reco
   release();
   assert.throws(() => acquireActorStoreLock(alias), /Cannot acquire actor store/);
   replacement();
+});
+
+class TestFailure extends Data.TaggedError("TestFailure") {}
+
+for (const outcome of ["success", "failure", "interruption"] as const) {
+  test(`root lock stays held through finalizer drain on ${outcome}`, async (t) => {
+    const directory = await mkdtemp(join(tmpdir(), "aster-root-drain-"));
+    t.after(() => rm(directory, { recursive: true, force: true }));
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const started = yield* Deferred.make<void>();
+          const closing = yield* Deferred.make<void>();
+          const drained = yield* Deferred.make<void>();
+          const use = Effect.gen(function* () {
+            yield* Effect.addFinalizer(() =>
+              Deferred.succeed(closing, undefined).pipe(Effect.andThen(Deferred.await(drained))),
+            );
+            yield* Deferred.succeed(started, undefined);
+            if (outcome === "failure") return yield* new TestFailure();
+            if (outcome === "interruption") return yield* Effect.never;
+          });
+          const owner = yield* withActorStoreLock(directory, use).pipe(Effect.forkScoped);
+          yield* Deferred.await(started);
+          if (outcome === "interruption") yield* Fiber.interrupt(owner).pipe(Effect.forkScoped);
+          yield* Deferred.await(closing);
+          assert.throws(() => acquireActorStoreLock(directory), /Cannot acquire actor store/);
+          yield* Deferred.succeed(drained, undefined);
+          const exit = yield* Fiber.await(owner);
+          assert.equal(Exit.isSuccess(exit), outcome === "success");
+          acquireActorStoreLock(directory)();
+        }),
+      ),
+    );
+  });
+}
+
+test("defective shutdown retains the root lock until process exit, including signal races", async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), "aster-root-defect-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const owner = child(directory, "defective-shutdown");
+  t.after(() => owner.process.kill("SIGKILL"));
+  assert.equal(await owner.reply, "retained");
+  assert.throws(() => acquireActorStoreLock(directory), /Cannot acquire actor store/);
+  owner.process.kill("SIGKILL");
+  await owner.exit;
+  acquireActorStoreLock(directory)();
 });

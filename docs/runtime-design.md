@@ -99,11 +99,11 @@ Pi model execution belongs to `@aster/agent`. Goal conversations and internal Ta
 
 The process captures LocalConfig once before resolving and locking `config.durable.root`. The root lock holds an exclusive SQLite transaction on permanent `.actors-lock.sqlite`; `actors.pid` is diagnostic only and never grants ownership. That lock outlives runtime resources and covers Context storage, Agent conversations and screening logs.
 
-## Local Pi process ownership
+## Local process ownership
 
-Every production Pi directory opener uses `PiStorageLease` from the Agent adapter, for retained Agent conversations. The host holds a SQLite exclusive transaction on a permanent lock file in the canonical directory. This local-filesystem kernel lock survives symlink aliases and competing recovery processes; a paused live owner cannot be evicted, while process death releases the lock. No stale PID file is deleted to acquire Pi ownership. This is not a distributed lease protocol.
+The host supplies `AgentConversations.layer` with the resolved `<config.durable.root>/conversations` path. Relative roots resolve beside the configuration file, exactly as Context and screening storage do. The existing root lock supplies process exclusion for all these writers; the Agent adapter has no separate Pi lease or storage-owner inspection fields.
 
-The lease outlives all Pi writers and callbacks in its Scope. SDK close failure quarantines ownership until process exit; accepted mutations and cancellation cleanup drain before a normal release. Session/Harness reopen retains the same lease and rejects a retired or quarantined owner. Logical owner identity is still validated against Pi documents; acquiring an OS lock does not authorize adopting another owner's conversation. Runtime inspection includes redacted storage owner identities, lease identities and held/quarantined status. Lock descriptors on disk are diagnostics only, and lock database files are never removed by acquisition or release.
+Runtime and adapter finalizers finish before the root lock is released. A defective runtime exit, including failed Harness drain during cancellation, retains the lock until process exit. Ordinary completion, typed failure and interruption release it after successful cleanup. The agent still rejects access to retired or quarantined writers in memory. This is local-filesystem ownership, not distributed failover.
 
 ## Package boundaries
 

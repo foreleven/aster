@@ -1,4 +1,4 @@
-import { DurableHarness, PiStorageLease, AgentConversations } from "@aster/agent/harness";
+import { DurableHarness, AgentConversations } from "@aster/agent/harness";
 import { registerGoalQueries } from "../goals/view.js";
 import { registerTaskQueries, taskCapture } from "../tasks/view.js";
 import { registerSignalQueries } from "../signals/queries.js";
@@ -247,7 +247,6 @@ const acquireRuntime = Effect.gen(function* () {
       const actors = yield* system.inspect({ metadata: ["contextPath"] });
       return {
         actors,
-        storageOwners: yield* PiStorageLease.inspect,
         ...(yield* Ref.get(diagnostics)),
       };
     }),

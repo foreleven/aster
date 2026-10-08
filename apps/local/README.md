@@ -1,14 +1,14 @@
 # Aster local application
 
-The local application observes Lark mail and work IM, evaluates Signals, pursues YAML-defined Goals through pi, and executes auto Signals in DoubaoWork. It manages agentmemory and persists public Contexts through configurable Local/Pi durable storage. The independent Goal web client uses streaming RPC over HTTP.
+The local application observes Lark mail and work IM, evaluates Signals, pursues YAML-defined Goals through pi, and executes auto Signals in DoubaoWork. It manages agentmemory and persists public Contexts through Local durable storage. The independent Goal web client uses streaming RPC over HTTP.
 
 ## Application composition
 
 `src/cli.ts` parses commands. `src/services.ts` selects `LarkIntegration.layer`, `MailIntegration.layer` from `@aster/integrations` and concrete Layers from `@aster/infra` for `AsterRuntime.layer`. `src/application.ts` installs the configuration provider, owns process signals and the store lock, and runs the HTTP/runtime graph in a Scope. Cancellation covers Layer acquisition as well as the running application.
 
-`AsterRuntime` in core owns domain service construction, root Actors, Context reactions, integration activation, readiness and shutdown. Lark owns IM readiness; memory owns its capture consumer. Local does not inspect IM state, bind ActorRefs, select Signals or initialize Goals. The host mounts `@aster/api/server` with HTTP/NDJSON; that package injects Runtime/domain services, constructs typed Actor commands and adapts replies. The API remains available while integrations catch up. During shutdown HTTP closes first, then runtime stops sources, subscriptions and Actors, drains captures and releases infrastructure. The process lock remains held until cleanup completes.
+`AsterRuntime` in core owns domain service construction, root Actors, Context reactions, integration activation, readiness and shutdown. Lark owns IM readiness; memory owns its capture consumer. Local does not inspect IM state, bind ActorRefs, select Signals or initialize Goals. The host mounts `@aster/api/server` with HTTP/NDJSON; that package injects Runtime/domain services, constructs typed Actor commands and adapts replies. The API remains available while integrations catch up. During shutdown HTTP closes first, then runtime stops sources, subscriptions and Actors, drains captures and releases infrastructure. The root store lock remains held until cleanup completes; a defective shutdown retains it until process exit. Conversation storage uses the same resolved root, including paths relative to the configuration file.
 
-External Layers are `ConfiguredDurableInfrastructure.layer`, `FileGoalScreening.layer`, `Models.configured`, `SystemOneClientLive.layer` and `AgentMemoryBackend.layer`. Runtime builds `ContextRegistry`, internal reasoning, Pi conversations, Tasks and Goal services. Tests replace these capability Layers with isolated implementations. See [runtime design](../../docs/runtime-design.md) for the graph and contracts.
+External Layers are `ConfiguredDurableInfrastructure.layer`, `FileGoalScreening.layer`, `Models.configured`, the host-configured `AgentConversations.layer(root)`, `SystemOneClientLive.layer` and `AgentMemoryBackend.layer`. Runtime builds `ContextRegistry`, internal reasoning, Tasks and Goal services. Tests replace these capability Layers with isolated implementations. See [runtime design](../../docs/runtime-design.md) for the graph and contracts.
 
 ## Configuration sources
 

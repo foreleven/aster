@@ -1,3 +1,4 @@
+import { Cause, Effect, Exit, type Scope } from "effect";
 import { mkdirSync, realpathSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -29,3 +30,22 @@ export const acquireActorStoreLock = (root = join(homedir(), ".aster")) => {
     }
   };
 };
+
+// Keep failed owners reachable: garbage collection must not release a native
+// lock while a defective runtime may still have live writers.
+const retainedLocks = new Set<() => void>();
+
+/** The runtime and all its finalizers finish before its host releases ownership. */
+export const withActorStoreLock = <A, E, R>(
+  root: string,
+  use: Effect.Effect<A, E, R | Scope.Scope>,
+) =>
+  Effect.acquireUseRelease(
+    Effect.try(() => acquireActorStoreLock(root)),
+    () => Effect.scoped(use),
+    (release, exit) =>
+      Effect.sync(() => {
+        if (Exit.isFailure(exit) && Cause.hasDies(exit.cause)) retainedLocks.add(release);
+        else release();
+      }),
+  );

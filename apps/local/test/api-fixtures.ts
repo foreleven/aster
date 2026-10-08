@@ -20,9 +20,7 @@ export const apiServices = (options: ApiFixture) =>
         select: (path) => ({ path, resolve: () => Effect.fail(new ActorNotFound(path)) }),
       },
       ready: Effect.void,
-      inspect:
-        options.inspect ??
-        Effect.succeed({ phase: "ready", actors: [], events: [], storageOwners: [] }),
+      inspect: options.inspect ?? Effect.succeed({ phase: "ready", actors: [], events: [] }),
     }),
     Layer.succeed(ContextRegistry, options.registry),
     Layer.succeed(AgentConversations, options.conversations ?? testConversations()),

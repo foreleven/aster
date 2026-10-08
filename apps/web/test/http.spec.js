@@ -49,7 +49,7 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   page.on("console", (message) => {
     if (message.type() === "error" || message.type() === "warning") errors.push(message.text());
   });
-  const { AgentConversations } = await import("../../../packages/agent/dist/index.js");
+  const { AgentConversations } = await import("../../../packages/agent/dist/harness/index.js");
   const history = await Effect.runPromise(
     AgentConversations.makeMemory().pipe(Effect.provideService(Scope.Scope, scope)),
   );
@@ -66,9 +66,7 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
             ready: Effect.void,
             inspect: system
               .inspect({ metadata: ["contextPath"] })
-              .pipe(
-                Effect.map((actors) => ({ actors, events: [], phase: "ready", storageOwners: [] })),
-              ),
+              .pipe(Effect.map((actors) => ({ actors, events: [], phase: "ready" }))),
           }),
           Layer.succeed(ContextRegistry, registry),
           Layer.succeed(AgentConversations, history),

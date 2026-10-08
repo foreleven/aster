@@ -1,4 +1,4 @@
-import { Cause, Deferred, Effect, Fiber, Result } from "effect";
+import { Cause, Deferred, Effect, Fiber, FiberSet, Result, Scope } from "effect";
 
 export type AgentCallbackInvoker<R> = <A, E>(
   effect: Effect.Effect<A, E, R>,
@@ -10,36 +10,28 @@ export const withAgentCallbacks = <A, E, R>(
   use: (invoke: AgentCallbackInvoker<R>) => Effect.Effect<A, E, R>,
 ): Effect.Effect<A, E, R> =>
   Effect.scoped(
-    Effect.gen(function* () {
-      const runPromise = Effect.runPromiseWith(yield* Effect.context<R>());
-      const callbacks = new AbortController();
-      const callbackFailure = yield* Deferred.make<never>();
-      const invoke: AgentCallbackInvoker<R> = (effect, signal) => {
-        callbacks.signal.throwIfAborted();
-        return runPromise(
-          effect.pipe(
-            Effect.tapCause((cause) => {
-              // SDK tool-error recovery must not turn a domain defect into a successful plan.
-              const defect = Cause.findDefect(cause);
-              return Result.isSuccess(defect)
-                ? Deferred.die(callbackFailure, defect.success)
-                : Effect.void;
-            }),
-          ),
-          { signal: signal ? AbortSignal.any([callbacks.signal, signal]) : callbacks.signal },
-        );
-      };
-      // Register the worker and its callback finalizer atomically with respect to
-      // interruption; cancellation between the two registrations could deadlock idle.
-      return yield* Effect.uninterruptibleMask((restore) =>
+    Effect.flatMap(Scope.Scope, (workerScope) =>
+      // Close callback fibers before interrupting the SDK worker: its cleanup may await them.
+      Effect.scoped(
         Effect.gen(function* () {
-          const worker = yield* restore(Effect.suspend(() => use(invoke))).pipe(Effect.forkScoped);
-          // Release callback waits before Agent.run's finalizer waits for SDK idle.
-          yield* Effect.addFinalizer(() => Effect.sync(() => callbacks.abort()));
-          return yield* restore(
-            Effect.raceFirst(Fiber.join(worker), Deferred.await(callbackFailure)),
-          );
+          const runPromise = yield* FiberSet.makeRuntimePromise<R>();
+          const callbackFailure = yield* Deferred.make<never>();
+          const invoke: AgentCallbackInvoker<R> = (effect, signal) =>
+            runPromise(
+              effect.pipe(
+                Effect.tapCause((cause) => {
+                  // Pi may recover typed tool errors, but must not swallow Effect defects.
+                  const defect = Cause.findDefect(cause);
+                  return Result.isSuccess(defect)
+                    ? Deferred.die(callbackFailure, defect.success)
+                    : Effect.void;
+                }),
+              ),
+              { signal },
+            );
+          const worker = yield* Effect.suspend(() => use(invoke)).pipe(Effect.forkIn(workerScope));
+          return yield* Effect.raceFirst(Fiber.join(worker), Deferred.await(callbackFailure));
         }),
-      );
-    }),
+      ),
+    ),
   );

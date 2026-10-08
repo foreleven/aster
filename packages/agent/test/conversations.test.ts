@@ -5,9 +5,26 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Option } from "effect";
+import { Effect, Exit, Option, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import { AgentConversations } from "../src/harness/index.js";
+
+test("retired conversation writers reject access after their scope closes", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const scope = yield* Scope.fork(yield* Scope.Scope);
+        const messages = yield* AgentConversations.makeMemory().pipe(
+          Effect.provideService(Scope.Scope, scope),
+        );
+        yield* messages.append("/goals/a", "one", "goal.input", { text: "Hello" });
+        yield* Scope.close(scope, Exit.void);
+        const error = yield* messages.read("/goals/a").pipe(Effect.flip);
+        assert.equal(error.kind, "unavailable");
+      }),
+    ),
+  );
+});
 
 test("Pi messages deduplicate exact inputs, reject changed identities and isolate owners", async () => {
   await Effect.runPromise(

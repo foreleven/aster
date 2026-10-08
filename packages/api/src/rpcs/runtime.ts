@@ -38,17 +38,6 @@ export type RuntimeEvent = typeof RuntimeEvent.Type;
 export const RuntimePhase = Schema.Literals(["starting", "ready", "failed", "stopping"]);
 export type RuntimePhase = typeof RuntimePhase.Type;
 export const RuntimeSnapshot = Schema.Struct({
-  storageOwners: Schema.optional(
-    Schema.Array(
-      Schema.Struct({
-        ownerId: Schema.String,
-        leaseId: Schema.String,
-        storageId: Schema.String,
-        pid: Schema.Int,
-        status: Schema.Literals(["held", "quarantined"]),
-      }),
-    ),
-  ),
   phase: RuntimePhase,
   actors: Schema.Array(
     Schema.Struct({

@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { Effect, Fiber, Layer } from "effect";
-import { LocalConfig, acquireActorStoreLock, storageSettings } from "@aster/infra";
+import { LocalConfig, withActorStoreLock, storageSettings } from "@aster/infra";
 import { localRuntimeLayer } from "./services.js";
 import { LocalHttpApi } from "./http-api.js";
 import { waitForShutdown } from "./shutdown.js";
@@ -22,10 +22,6 @@ export const startApplication = async (
         // Process signals and the ownership lock outlive every runtime/adapter finalizer.
         const shutdown = yield* waitForShutdown.pipe(Effect.forkScoped);
         const { root } = yield* storageSettings;
-        yield* Effect.acquireRelease(
-          Effect.try(() => acquireActorStoreLock(root)),
-          (release) => Effect.sync(release),
-        );
         const stopped = Fiber.join(shutdown);
         const running = Effect.gen(function* () {
           const api = yield* LocalHttpApi;
@@ -35,7 +31,7 @@ export const startApplication = async (
           yield* stopped;
         }).pipe(Effect.provide(configured));
         // Cancellation covers the whole Layer graph, including interrupted acquisition.
-        yield* Effect.scoped(running).pipe(Effect.raceFirst(stopped));
+        yield* withActorStoreLock(root, running).pipe(Effect.raceFirst(stopped));
       }),
     ).pipe(Effect.provide(sources)),
   );

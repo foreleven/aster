@@ -2,12 +2,9 @@ import { makeHarness } from "./harness-fixtures.js";
 import { ContextRegistry } from "../src/context/registry.js";
 import { submitGoal } from "./goal-command-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentConversations, DurableHarness, PiStorageLease } from "@aster/agent/harness";
+import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdtemp, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { Models } from "@aster/agent";
 import { Cause, ConfigProvider, Context, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import {
@@ -153,38 +150,6 @@ test("closing a runtime before readiness also settles later readiness callers", 
   const exit = await Effect.runPromiseExit(runtime.ready.pipe(Effect.timeout("200 millis")));
   assert.ok(Exit.isFailure(exit));
   assert.ok(Cause.hasInterruptsOnly(exit.cause));
-});
-
-test("runtime inspection exposes current storage ownership without local filesystem paths", async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), "aster-runtime-lease-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  const live = AsterRuntime.layer({ integrations: [] }).pipe(
-    Layer.provide(infrastructure()),
-    Layer.provide(config),
-  );
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const runtime = yield* AsterRuntime;
-      yield* runtime.ready;
-      const token = yield* Effect.scoped(
-        Effect.gen(function* () {
-          const lease = yield* PiStorageLease.acquire(directory, "goal:test");
-          const view = (yield* runtime.inspect).storageOwners?.find(
-            (owner) => owner.leaseId === lease.identity.token,
-          );
-          assert.equal(view?.ownerId, "goal:test");
-          assert.equal(view?.status, "held");
-          assert.equal(view?.pid, process.pid);
-          assert.equal(JSON.stringify(view).includes(directory), false);
-          return lease.identity.token;
-        }),
-      );
-      assert.equal(
-        (yield* runtime.inspect).storageOwners?.some((owner) => owner.leaseId === token),
-        false,
-      );
-    }).pipe(Effect.provide(live)),
-  );
 });
 
 test("restored Goals admit input while integration readiness gates execution", async () => {

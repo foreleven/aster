@@ -32,6 +32,8 @@ const text =
 
 `withConversation` captures the caller's Effect Context and owns model/tool callbacks for its scope. A per-owner permit prevents two scopes from replacing each other's implementations. Short business message transactions remain independent of this permit. Tools and response observers return Effects, preserve their service requirements, and propagate defects through native SDK error recovery.
 
+Both execution paths use `FiberSet.makeRuntimePromise` to bridge Effect callbacks into Pi. Callback fibers close before the SDK worker is interrupted, so SDK idle cleanup cannot wait on live callbacks. A separate defect notification preserves fatal failures even when Pi recovers a rejected tool Promise; ordinary typed tool errors retain Pi's recovery behavior.
+
 The conversation exposes `submit`, `submission(requestId)` and `abort`. Submission handles expose `status` and `wait`. `submission` returns an Option without submitting or scheduling work. `submit` reuses an existing native receipt before admitting a new input. Pi's native submission table owns admission, queueing, execution status and answer references. Existing request keys remain `["aster.agent.input", requestId, "initial"]`. Callers must validate stable input identity: native deduplication does not compare changed payloads.
 
 `wait` resumes queued or placed work through Pi, then reads the referenced assistant entry directly. Terminal status reads do not resume scheduling. An unanswered input maps to `AgentError` with `outcome: "failed"`; transport/storage failures remain unknown. Missing native answer references fail explicitly. A terminating tool round returns the native assistant tool-call entry; tool results remain available through conversation history. The adapter does not reconstruct, merge or sort a generated-message transcript.
@@ -58,8 +60,8 @@ Ordinary Agent execution retains native message/tool types and supports one boun
 
 AsterRuntime assembles both execution capabilities. Goal screening uses AgentRunner, Goal conversations and internal Tasks use DurableHarness, and Lark owns its ordinary Agent summarization flow.
 
-## Local Pi storage ownership
+## Local storage ownership
 
-All production Pi openers for retained Agent conversations share `PiStorageLease`. It uses Node 24 built-in SQLite with a nonblocking exclusive transaction on a permanent `.aster-owner.sqlite` file in the canonical storage directory. This provides a kernel-enforced local-filesystem lock across processes and symlink aliases; no extra native dependency or PID-file deletion protocol is used. Competing owners fail before opening Pi or invoking a model. The OS releases ownership after process death, and the next owner replays authoritative Pi storage normally. Never remove the lock database while an owner may be live. Network filesystems and distributed lease failover are not supported.
+`AgentConversations.layer(root)` receives a resolved conversation directory from the host. The local host places it under `<config.durable.root>/conversations` and holds the existing root store lock for the entire runtime lifetime. Pi requires one process per storage; the agent package does not acquire a second filesystem lock or expose lease diagnostics.
 
-Acquisition and release belong to Effect Scope. Native synchronous calls are confined to the lock boundary because Effect FileSystem does not expose advisory locks. Pi closes before lease release; failed Harness/Session close quarantines the lease until process exit, rather than admitting a replacement writer while drain is uncertain. Retired lease handles reject reuse. `.aster-owner.json` is a diagnostic descriptor, not lock authority. `RuntimeSnapshot.storageOwners` exposes owner identity, random lease identity, hashed storage identity, PID and held/quarantined status without directory paths. Ownerless JSONL opens now explicitly request fsync.
+Effect Scope closes each Harness before host ownership ends. A retired or quarantined writer rejects further access. A failed close is a defect, so the host retains its root lock until process exit when drain is uncertain. JSONL opens explicitly request fsync.

@@ -19,7 +19,6 @@ import {
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import {
   Clock,
-  Config,
   Context,
   Data,
   Effect,
@@ -31,7 +30,6 @@ import {
   Ref,
   Option,
 } from "effect";
-import { PiStorageLease } from "./storage-lease.js";
 
 /** Package-private access key; deliberately absent from the package exports. */
 export const conversationDriver = Symbol("agent/ConversationDriver");
@@ -129,18 +127,6 @@ export class AgentConversations extends Context.Service<
       const resourceScope = yield* Scope.fork(scope);
       const resource = yield* Effect.gen(function* () {
         const directory = join(root, createHash("sha256").update(owner).digest("hex"));
-        const lease = options.openStorage
-          ? undefined
-          : yield* PiStorageLease.acquire(directory, owner).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ConversationError({
-                    kind: "unavailable",
-                    message: "Cannot acquire conversation writer",
-                    cause,
-                  }),
-              ),
-            );
         const turnLock = yield* Semaphore.make(1);
         const quarantined = yield* Ref.make(false);
         const assertAvailable = Effect.gen(function* () {
@@ -149,17 +135,6 @@ export class AgentConversations extends Context.Service<
               kind: "unavailable",
               message: "Conversation writer requires reconciliation",
             });
-          if (lease)
-            yield* lease.assertHeld.pipe(
-              Effect.mapError(
-                (cause) =>
-                  new ConversationError({
-                    kind: "unavailable",
-                    message: "Conversation writer is closed",
-                    cause,
-                  }),
-              ),
-            );
         });
         const registry = createRegistry();
         const models = createModels();
@@ -186,17 +161,18 @@ export class AgentConversations extends Context.Service<
               }),
           }),
           (harness) =>
-            Effect.tryPromise({
-              try: () => harness.close(BACKGROUND_CONTEXT),
-              catch: (cause) =>
-                new ConversationError({
-                  kind: "unavailable",
-                  message: "Cannot drain conversation writer",
-                  cause,
-                }),
-            }).pipe(
-              Effect.tapError(() => lease?.quarantine ?? Effect.void),
-              Effect.orDie,
+            Ref.set(quarantined, true).pipe(
+              Effect.andThen(
+                Effect.tryPromise({
+                  try: () => harness.close(BACKGROUND_CONTEXT),
+                  catch: (cause) =>
+                    new ConversationError({
+                      kind: "unavailable",
+                      message: "Cannot drain conversation writer",
+                      cause,
+                    }),
+                }).pipe(Effect.orDie),
+              ),
             ),
         );
         return {
@@ -208,9 +184,7 @@ export class AgentConversations extends Context.Service<
           acquire: Effect.acquireRelease(turnLock.take(1).pipe(Effect.interruptible), () =>
             turnLock.release(1),
           ).pipe(Effect.andThen(assertAvailable)),
-          quarantine: Ref.set(quarantined, true).pipe(
-            Effect.andThen(lease?.quarantine ?? Effect.void),
-          ),
+          quarantine: Ref.set(quarantined, true),
         };
       }).pipe(
         Effect.provideService(Scope.Scope, resourceScope),
@@ -379,13 +353,7 @@ export class AgentConversations extends Context.Service<
   static readonly makeMemory = () =>
     AgentConversations.make({ openStorage: async () => new MemoryStorage() });
   static readonly memory = Layer.effect(AgentConversations, AgentConversations.makeMemory());
-  static readonly layer = Layer.effect(
-    AgentConversations,
-    Effect.gen(function* () {
-      const root = yield* Config.String("config.durable.root").pipe(
-        Config.withDefault(join(homedir(), ".aster")),
-      );
-      return yield* AgentConversations.make({ root: join(root, "conversations") });
-    }),
-  );
+  /** The host supplies a resolved directory and owns process-level exclusion. */
+  static readonly layer = (root: string) =>
+    Layer.effect(AgentConversations, AgentConversations.make({ root }));
 }

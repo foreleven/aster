@@ -2,7 +2,7 @@ import type { EffectCallbacks } from "../src/shared/effect-tools.js";
 import { DurableHarness, AgentConversations } from "../src/harness/index.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Cause, Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Option } from "effect";
+import { Cause, Clock, Context, Data, Deferred, Effect, Exit, Fiber, Layer, Option } from "effect";
 import { TestClock } from "effect/testing";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
@@ -16,6 +16,7 @@ import {
 import { AgentRunner, type AgentInvocation } from "../src/agent/index.js";
 
 class Caller extends Context.Service<Caller, { readonly name: string }>()("test/Caller") {}
+class ToolRejected extends Data.TaggedError("ToolRejected") {}
 const parameters = Type.Object({});
 const response: AssistantMessage = {
   role: "assistant",
@@ -154,6 +155,79 @@ const boundaries = [
   },
 ];
 for (const { label, make } of boundaries) {
+  test(`${label}: typed tool errors remain recoverable and successful calls retire callbacks`, async () => {
+    let saved: NativeCallbacks | undefined;
+    let calls = 0;
+    const runner = make((native) => {
+      saved = native;
+      return Effect.promise(async () => {
+        await assert.rejects(native.tools![0]!.execute("rejected", {}));
+        const result = await native.tools![0]!.execute("retry", {});
+        assert.equal(result.details, "recovered");
+        return { messages: [] };
+      });
+    });
+    await Effect.runPromise(
+      runner.run({
+        tools: [
+          {
+            ...readCaller,
+            execute: (id) =>
+              Effect.gen(function* () {
+                calls++;
+                if (id === "rejected") return yield* new ToolRejected();
+                return { content: [], details: "recovered" };
+              }),
+          },
+        ],
+      }),
+    );
+    await assert.rejects(saved!.tools![0]!.execute("late", {}));
+    assert.equal(calls, 2);
+  });
+
+  test(`${label}: an SDK signal cancels only its callback and waits for its finalizer`, async () => {
+    await Effect.runPromise(
+      Effect.scoped(
+        Effect.gen(function* () {
+          const entered = yield* Deferred.make<void>();
+          const released = yield* Deferred.make<void>();
+          const controller = new AbortController();
+          const runner = make((native) =>
+            Effect.promise(async () => {
+              await assert.rejects(native.tools![0]!.execute("cancel", {}, controller.signal));
+              const result = await native.tools![0]!.execute("next", {});
+              assert.equal(result.details, "continued");
+              return { messages: [] };
+            }),
+          );
+          const worker = yield* runner
+            .run({
+              tools: [
+                {
+                  ...readCaller,
+                  execute: (id) =>
+                    id === "cancel"
+                      ? Deferred.succeed(entered, undefined).pipe(
+                          Effect.andThen(Effect.never),
+                          Effect.ensuring(Deferred.succeed(released, undefined)),
+                        )
+                      : Effect.gen(function* () {
+                          assert.equal(yield* Deferred.isDone(released), true);
+                          return { content: [], details: "continued" };
+                        }),
+                },
+              ],
+            })
+            .pipe(Effect.forkScoped);
+          yield* Deferred.await(entered);
+          controller.abort();
+          yield* Fiber.join(worker);
+        }),
+      ).pipe(Effect.timeout("5 seconds")),
+    );
+  });
+
   test(`${label}: runner captures each invocation's injected services for tools and response observers`, async () => {
     await Effect.runPromise(
       Effect.scoped(
@@ -212,6 +286,7 @@ for (const { label, make } of boundaries) {
       native = invocation;
       return Effect.promise(async () => {
         // A provider may turn a rejected Promise into an ordinary tool-error response.
+        await invocation.tools![0]!.execute("rejected", {}).catch(() => undefined);
         await invocation.tools![0]!.execute("read", {}).catch(() => undefined);
         return { messages: [] };
       });
@@ -222,10 +297,12 @@ for (const { label, make } of boundaries) {
           tools: [
             {
               ...readCaller,
-              execute: () =>
-                Effect.sync(() => {
-                  calls++;
-                }).pipe(Effect.andThen(Effect.die(defect))),
+              execute: (id) =>
+                id === "rejected"
+                  ? Effect.fail(new ToolRejected())
+                  : Effect.sync(() => {
+                      calls++;
+                    }).pipe(Effect.andThen(Effect.die(defect))),
             },
           ],
         })
