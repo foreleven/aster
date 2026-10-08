@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { AgentConversations, AgentRunner } from "@aster/agent";
+import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { Context, Deferred, Effect, Fiber, Layer, Match, Option, Ref, Schema, Scope } from "effect";
 import type { ActorContext } from "@aster/actor";
 import { ContextActor, contextPath } from "../context/actor.js";
@@ -15,7 +15,7 @@ import { TaskState } from "./state/model.js";
 import { TaskCommand } from "./protocol.js";
 import { deliverTaskFeedback } from "./delivery.js";
 
-export type TaskServices = ExternalAgents | AgentConversations | AgentRunner | GoalSettings;
+export type TaskServices = ExternalAgents | AgentConversations | DurableHarness | GoalSettings;
 type Owner = ActorContext<TaskCommand, TaskServices | ContextRegistry>;
 const makeHandlers = Effect.gen(function* () {
   const scope = yield* Effect.scope;

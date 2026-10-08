@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { ApplicationError } from "../src/operations.js";
 import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";

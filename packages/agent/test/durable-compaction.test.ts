@@ -5,20 +5,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Effect, Deferred } from "effect";
 import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
-import {
-  CompactionTask,
-  GenerationTask,
-  Harness,
-  configure,
-  createRegistry,
-  defineExtension,
-  hook,
-} from "@earendil-works/pi-durable";
+import { Harness, configure, createRegistry, defineExtension } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import type { ResolvedModel } from "../src/index.js";
-import { durableModels } from "../src/durable.js";
-import { generationFence } from "../src/durable-tools.js";
+import { durableModels } from "../src/harness/runtime.js";
 
 const context = BACKGROUND_CONTEXT;
 const message = (stopReason: "stop" | "aborted" = "stop"): AssistantMessage => ({
@@ -52,13 +43,8 @@ const model: ResolvedModel["model"] = {
 };
 const open = async (directory: string, stream: ResolvedModel["stream"]) => {
   const registry = createRegistry();
-  const fence = generationFence(() => harness, new Set(["write"]));
   const extension = defineExtension({
     name: "aster-compaction-test",
-    hooks: [
-      hook(GenerationTask, { beforeRequest: fence.beforeRequest }),
-      hook(CompactionTask, { beforeCompact: fence.beforeCompact }),
-    ],
   });
   registry.install(extension);
   const storage = await openNodeJsonlStorage(directory, context, { fsync: true });
@@ -66,7 +52,7 @@ const open = async (directory: string, stream: ResolvedModel["stream"]) => {
     storage,
     {
       registry,
-      models: durableModels({ model, getApiKey: () => "unused", stream }, fence.beforeModel),
+      models: durableModels({ model, getApiKey: () => "unused", stream }),
       settings: {
         compaction: { keepRecentTokens: 1, reserveTokens: 100 },
         retry: { enabled: false },
@@ -124,7 +110,7 @@ const unknown = async ({ harness, root }: Awaited<ReturnType<typeof open>>) => {
 };
 
 for (const uncertain of [false, true]) {
-  test(`native compaction ${uncertain ? "declines unknown work" : "summarizes safe retained evidence"}`, async (t) => {
+  test(`native compaction ${uncertain ? "compacts retained interrupted tool evidence" : "summarizes safe retained evidence"}`, async (t) => {
     const directory = mkdtempSync(join(tmpdir(), "aster-compaction-"));
     t.after(() => rmSync(directory, { recursive: true, force: true }));
     let calls = 0;
@@ -142,16 +128,14 @@ for (const uncertain of [false, true]) {
       const result = await runtime.harness.waitForTask(task, context);
       assert.equal(result.state.status, "terminal");
       assert.equal(result.state.outcome.status, "completed");
-      assert.equal(calls, uncertain ? 0 : 1);
-      if (uncertain && result.state.outcome.status === "completed")
-        assert.deepEqual(result.state.outcome.result, {});
+      assert.equal(calls, 1);
     } finally {
       await runtime.harness.close(context);
     }
   });
 }
 
-test("recovered native summarize checkpoint cannot bypass the unknown-outcome fence", async (t) => {
+test("native compaction resumes its summarize checkpoint after reopen", async (t) => {
   const directory = mkdtempSync(join(tmpdir(), "aster-compaction-recovery-"));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const entered = Deferred.makeUnsafe<void>();
@@ -175,23 +159,22 @@ test("recovered native summarize checkpoint cannot bypass the unknown-outcome fe
     task = await runtime.root.compact(undefined, context);
     runtime.harness.resume();
     await Effect.runPromise(Deferred.await(entered).pipe(Effect.timeout("5 seconds")));
-    // A concurrent tool's unknown outcome commits after range selection. The
-    // resumed summarize phase has no beforeCompact callback to catch it.
+    // Evidence committed during compaction survives its saved summarize checkpoint.
     await unknown(runtime);
   } finally {
     await runtime.harness.close(context);
   }
   const recovered = await open(directory, () => {
     calls++;
-    assert.fail("Unattributed model invocation must not reach the provider");
+    const stream = createAssistantMessageEventStream();
+    stream.push({ type: "done", reason: "stop", message: message() });
+    return stream;
   });
   try {
     recovered.harness.resume();
     const result = await recovered.harness.waitForTask(task!, context);
-    assert.equal(result.state.outcome.status, "failed");
-    if (result.state.outcome.status === "failed")
-      assert.match(result.state.outcome.error.message, /outcome is unknown/);
-    assert.equal(calls, 1);
+    assert.equal(result.state.outcome.status, "completed");
+    assert.equal(calls, 2);
   } finally {
     await recovered.harness.close(context);
   }

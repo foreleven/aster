@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import {

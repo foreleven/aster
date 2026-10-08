@@ -1,8 +1,8 @@
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, TSchema } from "@earendil-works/pi-ai";
 import { Effect } from "effect";
-import type { AgentInvocation } from "./index.js";
-import type { AgentCallbackInvoker } from "./agent-callbacks.js";
+import type { AgentOptionsBase } from "./contracts.js";
+import type { AgentCallbackInvoker } from "./callbacks.js";
 
 /** Domain tools describe Effects; the runner owns their SDK callback lifetime. */
 export interface EffectTool<T extends TSchema = TSchema, E = never, R = never> extends Omit<
@@ -15,22 +15,19 @@ export interface EffectTool<T extends TSchema = TSchema, E = never, R = never> e
   ): Effect.Effect<AgentToolResult<unknown>, E, R>;
 }
 
-type EffectInvocation<I, E, R> = I extends unknown
-  ? Omit<I, "tools" | "onResponse"> & {
-      readonly tools?: readonly EffectTool<TSchema, E, R>[];
-      readonly onResponse?: (message: AssistantMessage) => Effect.Effect<void, E, R>;
-    }
-  : never;
-export type AgentRequest<E = never, R = never> = EffectInvocation<AgentInvocation, E, R>;
+export interface EffectCallbacks<E = never, R = never> {
+  readonly tools?: readonly EffectTool<TSchema, E, R>[];
+  readonly onResponse?: (message: AssistantMessage) => Effect.Effect<void, E, R>;
+}
+export type EffectInvocation<I, E, R> = Omit<I, "tools" | "onResponse"> & EffectCallbacks<E, R>;
 
 /** The only Effect-to-Promise adaptation for runner tools and observational callbacks. */
-export const nativeInvocation = <E, R>(
-  request: AgentRequest<E, R>,
+export const nativeCallbacks = <E, R>(
+  request: EffectCallbacks<E, R>,
   invoke: AgentCallbackInvoker<R>,
-): AgentInvocation => {
-  const { tools, onResponse, ...options } = request;
+): { tools: AgentOptionsBase["tools"]; onResponse: AgentOptionsBase["onResponse"] } => {
+  const { tools, onResponse } = request;
   return {
-    ...options,
     tools: tools?.map(({ execute, ...definition }) => ({
       ...definition,
       execute: (id, args, signal) =>

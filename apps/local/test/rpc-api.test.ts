@@ -1,8 +1,9 @@
+import { DurableHarness, AgentConversations } from "@aster/agent/harness";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer } from "node:http";
 import { Actor, ActorSystem } from "@aster/actor";
-import { AgentConversations, AgentRunner } from "@aster/agent";
+import { AgentRunner } from "@aster/agent/agent";
 import {
   ApplicationError,
   ContextRegistry,
@@ -60,6 +61,10 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
               expand: () => Effect.succeed({ results: [] }),
             }),
             Layer.succeed(ExternalAgents, {}),
+            Layer.succeed(
+              DurableHarness,
+              DurableHarness.make(() => Effect.die("No durable model expected")),
+            ),
             Layer.succeed(
               AgentRunner,
               AgentRunner.make(() => Effect.die("No model expected")),

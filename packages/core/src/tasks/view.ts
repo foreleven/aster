@@ -8,7 +8,7 @@ import { ApplicationError } from "../operations.js";
 import { TaskDeliveryInput, TaskPath } from "./contracts.js";
 import { contextView } from "../context/definition.js";
 
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { type ContextRegistry } from "../context/registry.js";
 import { approvalEntries } from "../approvals/actor.js";
 import { type CapturePolicy } from "../memory/capture.js";

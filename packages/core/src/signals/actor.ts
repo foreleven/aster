@@ -1,6 +1,6 @@
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { type ActorContext } from "@aster/actor";
-import { Clock, Context, Deferred, Effect, Fiber, Layer, Match, Ref, Scope } from "effect";
+import { Clock, Context, Deferred, Effect, Fiber, Layer, Match, Ref, Scope, Schema } from "effect";
 import { ContextActor, contextPath } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
@@ -8,7 +8,6 @@ import { deliverTask, taskDeliveryReceipt } from "../tasks/delivery.js";
 import { SignalSnapshot } from "./state/snapshot.js";
 import { SignalState } from "./state/model.js";
 import { SignalCommand, SignalDefinitions } from "./protocol.js";
-import { Schema } from "effect";
 
 type Owner = ActorContext<SignalCommand>;
 const handlers = Effect.gen(function* () {

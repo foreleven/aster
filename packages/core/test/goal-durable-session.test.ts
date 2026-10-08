@@ -1,8 +1,10 @@
+import { DurableHarness, AgentConversations } from "@aster/agent/harness";
 import { GoalState } from "../src/goals/state/model.js";
 import { CurrentActors } from "../src/services/actors.js";
 import { toolSystem } from "./tool-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentConversations, AgentRunner, Models, type ResolvedModel } from "@aster/agent";
+import { Models, type ResolvedModel } from "@aster/agent";
+import { AgentRunner } from "@aster/agent/agent";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -129,7 +131,6 @@ test("reopened Goal sessions keep their policy and history while tools read the 
         return yield* GoalAgent.use((agent) =>
           agent.converse({
             goal: { slug: "test", description: `PRIVATE_goal_${turn}` },
-            reconcile: false,
             input: {
               kind: "UserInput",
               entryId: 0,
@@ -157,7 +158,7 @@ test("reopened Goal sessions keep their policy and history while tools read the 
         );
       }).pipe(
         Effect.provide(
-          AgentRunner.layer.pipe(
+          Layer.mergeAll(AgentRunner.layer, DurableHarness.layer).pipe(
             Layer.provide(models),
             Layer.provide(Layer.succeed(AgentConversations, conversations)),
           ),

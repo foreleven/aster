@@ -14,7 +14,6 @@ import {
   type EntryId,
   type EntryRecord,
   type Storage,
-  type Submission,
   type HarnessSettings,
 } from "@earendil-works/pi-durable";
 import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
@@ -32,7 +31,10 @@ import {
   Ref,
   Option,
 } from "effect";
-import { PiStorageLease } from "./pi-storage-lease.js";
+import { PiStorageLease } from "./storage-lease.js";
+
+/** Package-private access key; deliberately absent from the package exports. */
+export const conversationDriver = Symbol("agent/ConversationDriver");
 
 export class ConversationError extends Data.TaggedError("ConversationError")<{
   readonly kind: "conflict" | "unavailable" | "invalid-input" | "not-found";
@@ -65,13 +67,9 @@ export interface ConversationDriver {
   readonly registry: ReturnType<typeof createRegistry>;
   readonly models: ReturnType<typeof createModels>;
   readonly assertAvailable: Effect.Effect<void, ConversationError>;
-  readonly exclusive: <A, E, R>(
-    effect: Effect.Effect<A, E, R>,
-  ) => Effect.Effect<A, E | ConversationError, R>;
+  readonly acquire: Effect.Effect<void, ConversationError, Scope.Scope>;
   readonly quarantine: Effect.Effect<void>;
   readonly settings: { compaction?: HarnessSettings["compaction"] };
-  /** The runner owns registration and drains every accepted submission before releasing callbacks. */
-  steering?: (requestId: string, text: string, context: NativeContext) => Promise<Submission>;
 }
 
 /** One scoped writer per conversation. Message admission never waits for model execution. */
@@ -84,11 +82,6 @@ export class AgentConversations extends Context.Service<
       kind: string,
       data: unknown,
     ) => Effect.Effect<ConversationEntry, ConversationError>;
-    readonly steer: (
-      owner: string,
-      requestId: string,
-      text: string,
-    ) => Effect.Effect<boolean, ConversationError>;
     readonly read: (
       owner: string,
     ) => Effect.Effect<readonly ConversationEntry[], ConversationError>;
@@ -106,8 +99,10 @@ export class AgentConversations extends Context.Service<
       owner: string,
       requestId: string,
     ) => Effect.Effect<Option.Option<ConversationEntry>, ConversationError>;
-    /** SDK boundary used by AgentRunner, never by business workflows. */
-    readonly driver: (owner: string) => Effect.Effect<ConversationDriver, ConversationError>;
+    /** SDK boundary used by DurableHarness, never by business workflows. */
+    readonly [conversationDriver]: (
+      owner: string,
+    ) => Effect.Effect<ConversationDriver, ConversationError>;
   }
 >()("agent/Conversations") {
   static readonly make = Effect.fn("AgentConversations.make")(function* (
@@ -210,8 +205,9 @@ export class AgentConversations extends Context.Service<
           models,
           settings,
           assertAvailable,
-          exclusive: <A, E, R>(effect: Effect.Effect<A, E, R>) =>
-            turnLock.withPermit(Effect.andThen(assertAvailable, effect)),
+          acquire: Effect.acquireRelease(turnLock.take(1).pipe(Effect.interruptible), () =>
+            turnLock.release(1),
+          ).pipe(Effect.andThen(assertAvailable)),
           quarantine: Ref.set(quarantined, true).pipe(
             Effect.andThen(lease?.quarantine ?? Effect.void),
           ),
@@ -259,7 +255,7 @@ export class AgentConversations extends Context.Service<
         return entries.reverse();
       });
     return AgentConversations.of({
-      driver,
+      [conversationDriver]: driver,
       read,
       tools: (owner) =>
         access(owner, async ({ harness }, context) => {
@@ -298,14 +294,6 @@ export class AgentConversations extends Context.Service<
             cursor = page.next;
           } while (cursor);
           return records.reverse();
-        }),
-      steer: (owner, requestId, text) =>
-        access(owner, async (driver, context) => {
-          // The callback synchronously registers the submission before its first await.
-          // An idle owner returns false; only the Task mailbox starts a new turn.
-          if (!driver.steering) return false;
-          await driver.steering(requestId, text, context);
-          return true;
         }),
       get: (owner, id) =>
         access(owner, async ({ harness }, context) => {

@@ -10,7 +10,7 @@ import { defineContext } from "../context/definition.js";
 import { ContextActor, contextPath } from "../context/actor.js";
 import { GoalSettings } from "../config/settings.js";
 import { Context, Deferred, Effect, Layer, Match, Ref, Result, Schema } from "effect";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import type { ActorContext, ActorRef } from "@aster/actor";
 import { randomUUID } from "node:crypto";
 import { CurrentActors } from "../services/actors.js";
@@ -109,7 +109,6 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
             .converse({
               goal,
               input: resolved,
-              reconcile: input.status === "running",
             })
             .pipe(
               Effect.provideService(CurrentActors, context),
@@ -154,7 +153,7 @@ export class GoalActor extends ContextActor.Service<GoalActor, Services>()("goal
         yield* screenNext(context, model);
         if (yield* Ref.get(running)) return;
         const pending = state.inputs.filter((input) => input.status === "pending");
-        // Recover the original Pi exchange first. Otherwise users precede ready background inputs.
+        // Recover the original Pi submission first. Otherwise users precede ready background inputs.
         const input =
           state.inputs.find((input) => input.status === "running") ??
           pending.find((input) => input.kind === "UserInput") ??

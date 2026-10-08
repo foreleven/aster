@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
-import { PiStorageLease } from "../src/pi-storage-lease.js";
+import { PiStorageLease } from "../src/harness/storage-lease.js";
 
 const Reply = Schema.Struct({ status: Schema.Literals(["acquired", "released", "rejected"]) });
 const child = (directory: string, quarantine = false) => {

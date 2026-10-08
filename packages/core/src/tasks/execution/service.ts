@@ -1,4 +1,6 @@
-import { AgentConversations, AgentError, AgentRunner } from "@aster/agent";
+import { AgentError } from "@aster/agent";
+import { AgentConversations, DurableHarness, type HarnessConversation } from "@aster/agent/harness";
+import { answerText } from "../../services/agent-input.js";
 import { ApplicationError } from "../../operations.js";
 import { TaskDeliveryInput, type PreparedTask } from "../contracts.js";
 import { Context, Deferred, Effect, Layer, Option, Ref, Schedule, Schema, Semaphore } from "effect";
@@ -16,16 +18,17 @@ import {
 import { ExternalAgents, ExternalAgentError, type ExecutionStatus } from "./contracts.js";
 import { executionCheckpoint } from "./checkpoint.js";
 import { DEFAULT_EXECUTOR_PROMPT, taskPrompt } from "./external.js";
-import { executeTask } from "./agent.js";
+import { taskConversation } from "./agent.js";
 
 const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
   const messages = yield* AgentConversations;
   const agents = yield* ExternalAgents;
-  const runner = yield* AgentRunner;
+  const harness = yield* DurableHarness;
   const settings = yield* GoalSettings;
   const actors = yield* CurrentActors;
   const journal = yield* executionCheckpoint(path, DEFAULT_EXECUTOR_PROMPT);
   const writer = yield* Semaphore.make(1);
+  const internal = yield* Ref.make<HarnessConversation | undefined>(undefined);
   const changed = yield* Ref.make(yield* Deferred.make<void>());
   const save = Effect.fnUntraced(function* (patch: Parameters<typeof journal.save>[0]) {
     yield* journal.save(patch);
@@ -187,9 +190,17 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
     }
     if (admission.agent === "internal") {
       if (input._tag !== "Message") return;
-      // Native steering owns its durable admission before the checkpoint mirrors it.
-      if (yield* messages.steer(path, ref.requestId, input.input.text).pipe(Effect.orDie))
-        yield* mark(ref.requestId, work.roundId, "instruction", "accepted");
+      const conversation = yield* Ref.get(internal);
+      if (!conversation) return;
+      // Task's delivery marker owns the admission handoff, including a crash
+      // after Pi commits but before this checkpoint records acceptance.
+      yield* mark(ref.requestId, work.roundId, "instruction", "sending");
+      yield* conversation.submit({
+        requestId: ref.requestId,
+        content: input.input.text,
+        whenBusy: "steer",
+      });
+      yield* mark(ref.requestId, work.roundId, "instruction", "accepted");
       return;
     }
     if (!saved.approved) return;
@@ -358,20 +369,6 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
           work.inputs.every((input) => saved.outcome!.covered.includes(input.requestId))
         )
           return yield* finish(saved.outcome);
-        // An acknowledged Pi steer can precede the executor checkpoint during interruption.
-        if (admission.agent === "internal") {
-          for (const entry of yield* messages.read(path).pipe(Effect.orDie)) {
-            if (entry.kind !== "task.steer") continue;
-            const requestId = Schema.decodeUnknownSync(Schema.Struct({ requestId: Schema.String }))(
-              entry.data,
-            ).requestId;
-            if (
-              work.inputs.some((input) => input.requestId === requestId) &&
-              !saved.deliveries.some((item) => item.requestId === requestId)
-            )
-              yield* mark(requestId, work.roundId, "instruction", "accepted");
-          }
-        }
         const checked = yield* reconcile(work, admission);
         if (checked && "status" in checked) return yield* finish(checked);
         for (const ref of work.inputs) {
@@ -437,6 +434,14 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
           resolved.find(({ ref }) => ref.requestId === interrupted?.requestId) ??
           resolved.find(
             ({ ref }) => !saved.deliveries.some((item) => item.requestId === ref.requestId),
+          ) ??
+          resolved.find(({ ref }) =>
+            saved.deliveries.some(
+              (item) =>
+                item.requestId === ref.requestId &&
+                item.kind === "instruction" &&
+                item.status === "accepted",
+            ),
           );
         if (!next) return yield* Effect.die(new Error("Internal execution has no input"));
         const { ref, input } = next;
@@ -471,19 +476,66 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
         return {
           requestId,
           task,
-          reconcile: input._tag === "Check" || (!!interrupted && input._tag !== "Retry"),
         };
       }),
     );
-    const result = yield* executeTask({
+    const preparedConversation = taskConversation({
       ...invocation,
       path,
       model: settings.reasoning!.model,
-    }).pipe(
-      Effect.provideService(AgentRunner, runner),
-      Effect.provideService(CurrentActors, actors),
-      Effect.result,
-    );
+    });
+    const result = yield* harness
+      .withConversation(preparedConversation.options, (conversation) =>
+        Effect.gen(function* () {
+          const submission = yield* writer.withPermit(
+            Effect.gen(function* () {
+              const submission = yield* conversation.submit({
+                requestId: invocation.requestId,
+                content: preparedConversation.content,
+              });
+              // Follow-ups cannot overtake admission of the round's first input.
+              yield* Ref.set(internal, conversation);
+              return submission;
+            }),
+          );
+          let answer = yield* submission.wait;
+          const deliveries = yield* writer.withPermit(
+            Effect.gen(function* () {
+              // Seal this Task round's steering before choosing its completion set.
+              yield* Ref.set(internal, undefined);
+              const saved = yield* journal.read;
+              const completed =
+                saved.outcome?.roundId === work.roundId ? saved.outcome.covered : [];
+              return saved.deliveries.filter(
+                (item) =>
+                  !completed.includes(item.requestId) &&
+                  item.roundId === work.roundId &&
+                  item.kind === "instruction" &&
+                  item.requestId !== invocation.requestId &&
+                  ["accepted", "sending"].includes(item.status),
+              );
+            }),
+          );
+          for (const delivery of deliveries) {
+            const retained = yield* conversation.submission(delivery.requestId);
+            if (Option.isNone(retained)) {
+              if (delivery.status === "accepted")
+                return yield* Effect.fail(
+                  new AgentError("Accepted Task input has no native submission", [], {
+                    outcome: "unknown",
+                  }),
+                );
+              continue;
+            }
+            answer = yield* retained.value.wait;
+            yield* writer.withPermit(
+              mark(delivery.requestId, work.roundId, "instruction", "accepted"),
+            );
+          }
+          return answerText(answer);
+        }).pipe(Effect.ensuring(writer.withPermit(Ref.set(internal, undefined)))),
+      )
+      .pipe(Effect.provideService(CurrentActors, actors), Effect.result);
     return yield* writer.withPermit(
       Effect.gen(function* () {
         yield* mark(
@@ -511,7 +563,7 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
   return {
     run: (work: TaskWork) =>
       run(work).pipe(
-        Effect.catchTag("ExternalAgentError", (error) =>
+        Effect.catchTag(["ExternalAgentError", "AgentError"], (error) =>
           writer.withPermit(failure(work, error).pipe(Effect.flatMap(finish))),
         ),
         Effect.ensuring(Ref.set(active, undefined)),
@@ -533,7 +585,11 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
         Effect.gen(function* () {
           const current = yield* Ref.get(active);
           if (!current) return false;
-          if (current.admission.agent === "internal") return true;
+          if (current.admission.agent === "internal") {
+            const conversation = yield* Ref.get(internal);
+            if (conversation) yield* conversation.abort;
+            return true;
+          }
           const agent = yield* executor(current.admission.agent);
           const saved = yield* journal.read;
           if (!saved.session || !agent.cancel)

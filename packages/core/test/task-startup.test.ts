@@ -1,7 +1,8 @@
+import { makeHarness } from "./harness-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { AgentConversations, AgentRunner } from "@aster/agent";
+import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import {
@@ -33,8 +34,8 @@ const taskSystem = (
       Layer.succeed(ExternalAgents, {}),
       Layer.succeed(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
       Layer.succeed(
-        AgentRunner,
-        AgentRunner.make(() => Effect.die("Completed Task must not execute again")),
+        DurableHarness,
+        makeHarness(() => Effect.die("Completed Task must not execute again")),
       ),
       Layer.succeed(Clock.Clock, clock),
     ),

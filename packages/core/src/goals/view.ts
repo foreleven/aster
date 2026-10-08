@@ -5,7 +5,7 @@ import { type ContextViewPolicy, contextView } from "../context/definition.js";
 
 import { Option, Schema, Effect } from "effect";
 import type { ContextRegistry } from "../context/registry.js";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { ApplicationError } from "../operations.js";
 import { GoalInputPayload } from "./contracts.js";
 

@@ -1,5 +1,5 @@
 import { after } from "node:test";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { Effect, Exit, Scope } from "effect";
 
 /** Native Pi memory storage, with writer lifetime owned by the enclosing node:test case. */

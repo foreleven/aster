@@ -1,6 +1,6 @@
 import { submitGoal, goalCommand } from "./goal-command-fixtures.js";
 import type { ApprovalReply } from "../src/approvals/actor.js";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { testConversations } from "./conversation-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import assert from "node:assert/strict";

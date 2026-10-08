@@ -7,7 +7,8 @@ import {
   SystemOneClientLive,
 } from "@aster/infra";
 import { LarkIntegration, MailIntegration, AppsIntegration } from "@aster/integrations";
-import { AgentConversations, Models } from "@aster/agent";
+import { Models } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { Layer } from "effect";
 
 /** Product choices only: modules own their dependency graphs and lifecycle. */

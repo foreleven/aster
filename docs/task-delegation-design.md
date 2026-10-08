@@ -51,9 +51,9 @@ A Task retains its identity across follow-ups and completed-work reactivation. E
 
 ## Execution and follow-up
 
-Internal execution uses a retained Pi conversation and AgentRunner. Busy instructions use native Pi steering while the runner accepts it; otherwise they remain pending for another invocation. Lightweight Context and memory tools use the shared implementations in `tools/`. The Goal remains the user-facing speaker and Task tool records stay in execution details.
+Internal execution uses a retained Pi conversation and DurableHarness. TaskExecution registers its active scoped conversation. Busy instructions commit a delivery marker before native Pi steering submission and commit acceptance afterward; otherwise they remain pending for another scope. The Task seals admission and waits for every retained submission covered by its round before publishing a result. Lightweight Context and memory tools use the shared implementations in `tools/`. The Goal remains the user-facing speaker and Task tool records stay in execution details.
 
-External execution freezes executor policy and requires confirmation through ApprovalQueue. Only a matching persisted decision permits submission. The adapter owns follow-up behavior: Codex steers an active turn and starts a later turn in the same thread; Pi retains its execution conversation. Doubao rejects unsupported follow-up delivery explicitly.
+External execution freezes executor policy and requires confirmation through ApprovalQueue. Only a matching persisted decision permits submission. The adapter owns follow-up behavior: Codex steers an active turn and starts a later turn in the same thread. Doubao rejects unsupported follow-up delivery explicitly.
 
 Executor delivery markers precede external I/O. A returned handle and accepted delivery marker commit together. Polling wakes when the checkpoint changes and ignores observations from a superseded revision. A provider round ending cannot complete inputs not covered by that execution. Inputs arriving during the transition to waiting are scheduled rather than stranded.
 
@@ -61,13 +61,13 @@ Task outcomes commit to Pi before business settlement. Retained outcomes can com
 
 ## Recovery, cancellation and approvals
 
-`CheckTask` observes the original execution. External checking uses status or read-only `lookupSubmission`; it does not call submit or resume. Internal checking reconciles the original native request identity. `RetryTask` is a distinct command accepted only for known failed work: external resumption requires an authoritative resumable failure, and a definitely rejected initial submission can be explicitly submitted again. Internal retry uses a new request identity and the failed instruction in the retained conversation. Both commands carry request identity and expected revision; exact retries preserve the original receipt.
+`CheckTask` observes the original execution. External checking uses status or read-only `lookupSubmission`; it does not call submit or resume. Internal checking reacquires the original native submission and lets Pi resume pending work. `RetryTask` is a distinct command accepted only for known failed work: external resumption requires an authoritative resumable failure, and a definitely rejected initial submission can be explicitly submitted again. Internal retry uses a new request identity and the failed instruction in the retained conversation. Both commands carry request identity and expected revision; exact retries preserve the original receipt.
 
 Unknown submission, follow-up, response or resume outcomes never authorize automatic resubmission. An older provider handle cannot prove that a later input was delivered. Task remains uncertain when the adapter cannot reconcile that input.
 
 ApprovalQueue owns confirmation, permission and information requests. Resolve commits the validated answer before acknowledgement; the execution owner acknowledges delivery after persisting acceptance. Interrupted response delivery retains a sending/unknown marker and is not automatically repeated. Cancelled unstarted work revokes outstanding confirmation requests.
 
-Local interruption does not prove external cancellation. Internal cancellation interrupts the scoped invocation; external cancellation requires a provider capability that confirms the operation stopped. An unsupported cancellation leaves the Task running. Ending a Goal cancels unstarted work; already-submitted work retains its Task owner.
+Local interruption does not prove external cancellation. Internal cancellation explicitly aborts the native conversation and interrupts its scoped invocation; external cancellation requires a provider capability that confirms the operation stopped. An unsupported cancellation leaves the Task running. Ending a Goal cancels unstarted work; already-submitted work retains its Task owner.
 
 ## Result delivery and inspection
 

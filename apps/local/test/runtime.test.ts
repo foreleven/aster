@@ -1,10 +1,6 @@
-import { ContextQueries } from "@aster/core";
-import { AgentConversations } from "@aster/agent";
-import { IntegrationError } from "@aster/core";
-import assert from "node:assert/strict";
-import { test } from "node:test";
-import { ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Redacted, Schema } from "effect";
 import {
+  ContextQueries,
+  IntegrationError,
   AsterRuntime,
   ConfigLocation,
   ContextActor,
@@ -18,11 +14,15 @@ import {
   contextView,
   defineIntegration,
   contextPath,
+  makeDurableContext,
+  MemoryBackend,
 } from "@aster/core";
-import { makeDurableContext } from "@aster/core";
+import { AgentConversations } from "@aster/agent/harness";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Redacted, Schema } from "effect";
 import { Models } from "@aster/agent";
 import { MailFetcher, MailIntegration, MailSettings } from "@aster/integrations";
-import { MemoryBackend } from "@aster/core";
 
 class Source extends ContextActor.Service<Source>()("test/Source", {
   command: Schema.TaggedStruct("Ping", {}),

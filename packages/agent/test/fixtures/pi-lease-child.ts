@@ -1,5 +1,5 @@
 import { Deferred, Effect } from "effect";
-import { PiStorageLease } from "../../src/pi-storage-lease.js";
+import { PiStorageLease } from "../../src/harness/storage-lease.js";
 
 const release = Deferred.makeUnsafe<void>();
 process.on("message", () => {

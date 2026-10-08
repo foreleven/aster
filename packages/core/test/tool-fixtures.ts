@@ -1,5 +1,7 @@
+import { makeHarness } from "./harness-fixtures.js";
+import { DurableHarness, AgentConversations } from "@aster/agent/harness";
 import { ActorSystem } from "@aster/actor";
-import { AgentConversations, AgentRunner } from "@aster/agent";
+import { AgentRunner } from "@aster/agent/agent";
 import { Deferred, Effect, Layer } from "effect";
 import { ContextRegistry } from "../src/context/registry.js";
 import { ContextQueries } from "../src/context/queries/routes.js";
@@ -48,6 +50,10 @@ export const toolSystem = Effect.fnUntraced(function* (
       }),
       Layer.succeed(ExternalAgents, {}),
 
+      Layer.succeed(
+        DurableHarness,
+        makeHarness(() => Effect.die("No durable model expected")),
+      ),
       Layer.succeed(
         AgentRunner,
         AgentRunner.make(() => Effect.die("Query fixture cannot execute a model")),

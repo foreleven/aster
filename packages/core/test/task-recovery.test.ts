@@ -1,6 +1,8 @@
+import type { HarnessCall } from "./harness-fixtures.js";
+import { makeHarness } from "./harness-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgentError, AgentRunner, type AgentInvocation } from "@aster/agent";
+import { AgentError } from "@aster/agent";
 import { Deferred, Effect, Schema } from "effect";
 import {
   TaskSnapshot,
@@ -87,9 +89,9 @@ for (const mode of ["session", "rejected-submission"] as const) {
 test("internal Check preserves the failed native identity; Retry executes the failed follow-up with a new identity", async () => {
   await run(
     Effect.gen(function* () {
-      const calls: AgentInvocation[] = [];
+      const calls: HarnessCall[] = [];
       const env = yield* taskFixture({
-        runner: AgentRunner.make((input) =>
+        harness: makeHarness((input) =>
           Effect.suspend(() => {
             calls.push(input);
             return calls.length === 2 || calls.length === 3
@@ -124,8 +126,7 @@ test("internal Check preserves the failed native identity; Retry executes the fa
         replyTo,
       }));
       yield* env.wait(() => state().status === "failed" && state().inputs.length === 3);
-      assert.equal(calls[2]!.durable!.requestId, "follow");
-      assert.equal(calls[2]!.durable!.reconcile, true);
+      assert.equal(calls[2]!.requestId, "follow");
       const input = {
         requestId: "retry",
         target: initial.target,
@@ -135,9 +136,8 @@ test("internal Check preserves the failed native identity; Retry executes the fa
         env.tasks.ask<TaskAdmissionReply>((replyTo) => ({ _tag: "RetryTask", input, replyTo }));
       const receipt = yield* retry();
       yield* env.wait(() => state().status === "completed");
-      assert.equal(calls[3]!.durable!.requestId, "retry");
-      assert.equal(calls[3]!.durable!.reconcile, false);
-      assert.match(JSON.stringify(calls[3]!.messages), /Analyze the new evidence/);
+      assert.equal(calls[3]!.requestId, "retry");
+      assert.match(JSON.stringify(calls[3]), /Analyze the new evidence/);
       assert.deepEqual(yield* retry(), receipt);
       assert.equal(calls.length, 4);
     }),
@@ -150,7 +150,7 @@ for (const agent of ["internal", "test"] as const) {
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const env = yield* taskFixture({
-          runner: AgentRunner.make(() =>
+          harness: makeHarness(() =>
             Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
           ),
           agent: fakeAgent({

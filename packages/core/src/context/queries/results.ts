@@ -1,4 +1,4 @@
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { ApplicationError } from "../../operations.js";
 import { ContextQueryInput } from "../contracts.js";
 import { Effect, Option, Schema } from "effect";

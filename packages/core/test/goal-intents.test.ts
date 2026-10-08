@@ -15,7 +15,7 @@ import {
   type GoalCommandReply,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
-import { ConversationError } from "@aster/agent";
+import { ConversationError } from "@aster/agent/harness";
 import { type GoalIntentInput } from "../src/goals/screening/intent.js";
 
 const input: GoalIntentInput = {

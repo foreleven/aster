@@ -1,6 +1,7 @@
 import { publicImMessage } from "./model.js";
 import { ImSummaryError } from "../shared/errors.js";
-import { Agent, Models, Type } from "@aster/agent";
+import { Models, Type } from "@aster/agent";
+import { Agent } from "@aster/agent/agent";
 import { LarkConfig } from "../config.js";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
 import type { ImChat, ImMessage } from "./model.js";

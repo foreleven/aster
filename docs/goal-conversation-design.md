@@ -61,3 +61,7 @@ The implementation replaces the old contracts without migration or compatibility
 Use fake models and external executors with temporary Pi storage. Cover main-conversation responsiveness, internal Task execution, busy follow-up, completed-Task reactivation, concurrent independent Tasks, Context gating, public-message filtering, compaction history reads and restart recovery. Inject crashes at message admission, Actor handoff and result delivery boundaries. Retain approval and unknown external outcome tests.
 
 Run the affected package tests during implementation, then `pnpm build`, `pnpm check`, cross-package `pnpm test`, `pnpm test:web`, and Effect diagnostics for affected packages. No real external Agent, model or messaging service is needed for verification. Update the Goal, Task, runtime and agent design documents to describe the final replacement.
+
+### Execution adapter boundary
+
+Core prepares Goal/Task evidence and chooses owner paths and stable extension names. Goal and Task open an Effect conversation scope through DurableHarness, submit stable input IDs, and read native assistant answers. Task owns steering delivery markers in its execution journal, waits for the corresponding native submissions, and settles their business coverage. AgentConversations has no steering admission or receipt API; no separate `app.aster.steers` document is read or written.

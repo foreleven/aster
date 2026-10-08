@@ -1,4 +1,4 @@
-import { type EffectTool, type AgentTool, type TSchema, rejectedToolResult } from "@aster/agent";
+import { type EffectTool, type AgentTool, type TSchema } from "@aster/agent";
 import { ApplicationError } from "../operations.js";
 import { Effect } from "effect";
 import type { CurrentActors } from "../services/actors.js";
@@ -14,7 +14,7 @@ type Execute<T extends TSchema, R> = (
   callId: string,
 ) => Effect.Effect<unknown, ApplicationError, R>;
 
-/** Domain errors become tool results; only an unconfirmed write retains uncertainty. */
+/** Validation errors are model-visible results; unavailable writes preserve their typed failure at the SDK boundary. */
 const defineTool = <T extends TSchema, R>(
   definition: Definition<T>,
   execute: Execute<T, R>,
@@ -27,7 +27,11 @@ const defineTool = <T extends TSchema, R>(
       Effect.catchTag("ApplicationError", (error) =>
         mode === "write" && error.kind === "unavailable"
           ? Effect.fail(error)
-          : Effect.succeed(rejectedToolResult(error.message)),
+          : Effect.succeed({
+              isError: true,
+              content: [{ type: "text" as const, text: error.message }],
+              details: undefined,
+            }),
       ),
     ),
 });

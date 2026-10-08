@@ -1,4 +1,4 @@
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { CurrentActors } from "../src/services/actors.js";
 import type { CoreTool } from "../src/tools/define.js";
 import { toolSystem } from "./tool-fixtures.js";

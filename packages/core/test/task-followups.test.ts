@@ -1,7 +1,7 @@
+import { makeHarness } from "./harness-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgentRunner } from "@aster/agent";
 import { Deferred, Effect, Schema } from "effect";
 import {
   TaskSnapshot,
@@ -28,10 +28,10 @@ test("internal Tasks admit follow-ups while working, retain exact receipts, and 
       const release = yield* Deferred.make<void>();
       let calls = 0;
       const env = yield* taskFixture({
-        runner: AgentRunner.make((input) =>
+        harness: makeHarness((input) =>
           Effect.gen(function* () {
             calls++;
-            assert.equal(input.durable?.owner, "tasks");
+            assert.match(input.owner, /^\/tasks\//);
             if (calls === 1) {
               yield* Deferred.succeed(entered, undefined);
               yield* Deferred.await(release);
@@ -69,7 +69,7 @@ test("internal Tasks admit follow-ups while working, retain exact receipts, and 
         (yield* env.conversations.read(input.target)).filter(
           (entry) => entry.kind === "task.result",
         ).length,
-        3,
+        2,
       );
     }),
   );
@@ -158,7 +158,7 @@ test("Pi result admission recovers an interrupted Actor handoff without executin
       const env = yield* taskFixture({
         conversations,
         records,
-        runner: AgentRunner.make(() =>
+        harness: makeHarness(() =>
           Effect.sync(() => {
             calls++;
             return { messages: [] };

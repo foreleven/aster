@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { ApplicationError } from "../../operations.js";
 import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { ContextRegistry } from "../../context/registry.js";

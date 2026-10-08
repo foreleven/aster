@@ -11,6 +11,16 @@
       "aster-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./agent": {
+      "aster-source": "./src/agent/index.ts",
+      "types": "./dist/agent/index.d.ts",
+      "default": "./dist/agent/index.js"
+    },
+    "./harness": {
+      "aster-source": "./src/harness/index.ts",
+      "types": "./dist/harness/index.d.ts",
+      "default": "./dist/harness/index.js"
     }
   },
   "scripts": {
@@ -19,10 +29,10 @@
     "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js"
   },
   "dependencies": {
-    "@earendil-works/chord": "1.0.0",
-    "@earendil-works/pi-agent-core": "1.0.0",
-    "@earendil-works/pi-ai": "1.0.0",
-    "@earendil-works/pi-durable": "1.0.0",
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-agent-core": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
     "effect": "4.0.0"
   }
 }

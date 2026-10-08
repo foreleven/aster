@@ -1,4 +1,4 @@
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { Effect, Ref, Schema } from "effect";
 import { ExecutionSession } from "./contracts.js";
 import { TaskOutcome } from "../state/snapshot.js";

@@ -3,7 +3,6 @@ import { test } from "node:test";
 import { Cause, Deferred, Effect, Fiber, Layer } from "effect";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import {
-  Agent,
   AgentError,
   Models,
   Type,
@@ -11,6 +10,7 @@ import {
   type AgentTool,
   type StreamFn,
 } from "../src/index.js";
+import { Agent } from "../src/agent/index.js";
 
 const model = {
   id: "test",

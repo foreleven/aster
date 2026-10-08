@@ -1,5 +1,5 @@
 import { ActorNotFound, type ActorSystem } from "@aster/actor";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { AsterRuntime, ContextRegistry, ContextQueries } from "@aster/core";
 import { NodeFileSystem } from "@effect/platform-node";
 import { Effect, Exit, Layer, Scope } from "effect";

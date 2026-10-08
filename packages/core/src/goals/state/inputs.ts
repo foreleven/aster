@@ -1,7 +1,7 @@
 import type { StoredGoalInput, GoalSnapshot } from "./snapshot.js";
 import { GoalReceipt } from "../protocol.js";
 import type { GoalStore } from "./store.js";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { RemainingAgentTurns } from "../../tasks/contracts.js";
 import { GoalInputPayload } from "../contracts.js";
 import { Effect, Schema } from "effect";

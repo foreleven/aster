@@ -46,7 +46,7 @@ After `pnpm build`, run `node --use-env-proxy apps/local/scripts/verify-chat-sum
 
 Follow the JSON event names `chat.summary.*`, `system-one.goals.*`, `goal.planning.*` and `delegation.*` by Context path in startup logs. Live tests reached Goal planning but also exposed inconsistent relevance classification in the configured Laya service; see `docs/im-summary-design.md`.
 
-The app supplies `Models.configured` from `@aster/agent`. Lark summarization and Goal reasoning select independent configured model aliases. AgentRunner owns SDK callback lifetime; AgentConversations owns durable Goal and Task writers.
+The app supplies `Models.configured` from `@aster/agent`. Lark summarization and Goal reasoning select independent configured model aliases. AgentRunner and DurableHarness own their SDK callback lifetimes; AgentConversations owns durable Goal and Task writers.
 
 ## Tasks and approvals
 
@@ -95,15 +95,6 @@ See [Reactive application API](../../docs/reactive-api-design.md) for the scoped
 
 The HTTP host composes `@aster/api/server`, `static-assets`, `source-assets` and `http-policy`. These are implementation modules, not new externally supplied Layers. Host/Origin and body-size checks wrap every route through the same policy.
 
-## Context backend migration
+## Local storage
 
-The default backend remains Local. Set `config.durable.root` to choose the directory covered by the process lock (default `~/.aster`). Context files, Pi conversations, screening logs and routing authority live beneath this root. Relative storage paths resolve beside the config file. Optional `config.durable.pi` and `config.durable.routes` route Context path prefixes to Pi; `agents.pi.model` enables execution on the same Pi owner. See the sample YAML and integrations README for the fields.
-
-Stop the app before changing routes, then run:
-
-```sh
-pnpm aster storage migrate --config /absolute/path/to/aster.config.yaml
-pnpm aster start --config /absolute/path/to/aster.config.yaml
-```
-
-Migration uses no models or integrations. It copies and verifies complete snapshots before publishing new authority. Startup rejects a configuration that differs from authority, and rejects stale, missing or conflicting selected data. To roll back, change the routes to Local and run the same migration command; new Pi Context writes are copied back. Retain the Pi directory/owner configuration. This command does not relocate stores or migrate native agent sessions. Do not clear an ownership lock without reconciling the prior process and its unfinished writes.
+Set `config.durable.root` to choose the directory covered by the process lock (default `~/.aster`). Context files, Agent conversations and screening logs live beneath this root. Relative paths resolve beside the configuration file. Context persistence uses the Local file backend; Pi conversations are owned by the agent package. External execution uses the Codex or Doubao adapters.

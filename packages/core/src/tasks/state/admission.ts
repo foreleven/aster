@@ -1,4 +1,4 @@
-import type { AgentConversations } from "@aster/agent";
+import type { AgentConversations } from "@aster/agent/harness";
 import { signalMessage } from "../../signals/state/store.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";

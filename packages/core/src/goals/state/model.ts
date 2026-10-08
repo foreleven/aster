@@ -8,7 +8,8 @@ import type { GoalDefinition } from "../../config/schema.js";
 import { Context, Effect, Layer, Match, Ref, Result, Schema, Semaphore } from "effect";
 import { ApplicationError } from "../../operations.js";
 import { TaskPath } from "../../tasks/contracts.js";
-import { AgentConversations, type AgentError } from "@aster/agent";
+import { type AgentError } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 
 /** One instance per Actor incarnation. All mutations, including local tools, share its writer. */
 const makeGoalState = Effect.fn("GoalState.make")(function* (

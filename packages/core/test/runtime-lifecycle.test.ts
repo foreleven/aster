@@ -1,13 +1,14 @@
+import { makeHarness } from "./harness-fixtures.js";
 import { ContextRegistry } from "../src/context/registry.js";
 import { submitGoal } from "./goal-command-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentConversations, AgentRunner } from "@aster/agent";
+import { AgentConversations, DurableHarness, PiStorageLease } from "@aster/agent/harness";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Models, PiStorageLease } from "@aster/agent";
+import { Models } from "@aster/agent";
 import { Cause, ConfigProvider, Context, Deferred, Effect, Exit, Fiber, Layer } from "effect";
 import {
   AsterRuntime,
@@ -25,7 +26,7 @@ const integration = (
   phase: "source" | "consumer",
   stop: Effect.Effect<void>,
   ready: Effect.Effect<void, Error> = Effect.void,
-  runner?: AgentRunner["Service"],
+  harness?: DurableHarness["Service"],
 ) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -34,7 +35,7 @@ const integration = (
         defineIntegration({
           name,
           phase,
-          services: runner ? Context.make(AgentRunner, runner) : Context.empty(),
+          services: harness ? Context.make(DurableHarness, harness) : Context.empty(),
           activate: () => Effect.succeed({ stop, ready }),
         }),
       );
@@ -199,7 +200,7 @@ test("restored Goals admit input while integration readiness gates execution", a
               "source",
               Effect.void,
               Deferred.await(release),
-              AgentRunner.make(() =>
+              makeHarness(() =>
                 Deferred.succeed(called, undefined).pipe(Effect.as({ messages: [] })),
               ),
             ),
@@ -244,8 +245,8 @@ test("runtime becomes ready while a Goal restores; its mailbox resumes after res
             ),
         }).pipe(
           Context.add(
-            AgentRunner,
-            AgentRunner.make(() =>
+            DurableHarness,
+            makeHarness(() =>
               Deferred.succeed(called, undefined).pipe(Effect.as({ messages: [] })),
             ),
           ),

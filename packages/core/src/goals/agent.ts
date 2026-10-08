@@ -1,12 +1,13 @@
+import { DurableHarness } from "@aster/agent/harness";
+import { answerText, conversationInput } from "../services/agent-input.js";
 import {
-  conversationText,
   Type,
   type EffectTool,
-  AgentRunner,
   type AgentMessage,
   AgentError,
   type AssistantMessage,
 } from "@aster/agent";
+import { AgentRunner } from "@aster/agent/agent";
 import { goalTools } from "../tools/catalogues.js";
 import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { GoalState } from "./state/model.js";
@@ -23,7 +24,6 @@ import { output } from "../tools/define.js";
 export interface GoalConversation {
   readonly goal: GoalDefinition;
   readonly input: ResolvedGoalInput;
-  readonly reconcile: boolean;
 }
 
 /** Model execution consumes resolved input and injected business capabilities; it never appends public replies. */
@@ -43,6 +43,7 @@ export class GoalAgent extends Context.Service<
     GoalAgent,
     Effect.gen(function* () {
       const runner = yield* AgentRunner;
+      const harness = yield* DurableHarness;
       const settings = yield* GoalSettings;
       const executors = Object.keys(yield* ExternalAgents);
       return GoalAgent.of({
@@ -62,39 +63,41 @@ export class GoalAgent extends Context.Service<
             remainingAgentTurns: Math.max(0, input.remainingAgentTurns - 1),
           });
           const timestamp = yield* Clock.currentTimeMillis;
-          const result = yield* runner.run({
-            name: settings.reasoning!.model,
-            tools: goalTools({
-              goal: goal.slug,
-              origin,
-              executors,
-            }),
-            onResponse: (message) =>
-              logGoalResponse(message, {
-                goalPath: `/goals/${goal.slug}`,
-                phase: "conversation",
-                inputId: input.inputId,
+          const { instructions, input: content } = conversationInput([
+            { role: "system", timestamp, content: goalAgentPrompt },
+            inputMessage(input),
+          ]);
+          return yield* harness.withConversation(
+            {
+              name: settings.reasoning!.model,
+              tools: goalTools({
+                goal: goal.slug,
+                origin,
+                executors,
               }),
-            durable: {
-              sessionId: goal.slug,
-              requestId: input.inputId,
-              reconcile: options.reconcile,
-              catalogueId: "aster.goal.conversation.v3",
+              onResponse: (message) =>
+                logGoalResponse(message, {
+                  goalPath: `/goals/${goal.slug}`,
+                  phase: "conversation",
+                  inputId: input.inputId,
+                }),
+              owner: source,
+              extensionName: `aster-goal-tools:${goal.slug}`,
+              instructions,
               contextBudget: {
                 contextTokens: settings.reasoning?.contextTokens ?? 200000,
                 reserveTokens: settings.reasoning?.reserveTokens ?? 8192,
               },
             },
-            messages: [
-              {
-                role: "system" as const,
-                timestamp,
-                content: goalAgentPrompt,
-              },
-              inputMessage(input),
-            ],
-          });
-          return conversationText(result.messages);
+            (conversation) =>
+              Effect.gen(function* () {
+                const submission = yield* conversation.submit({
+                  requestId: input.inputId,
+                  content,
+                });
+                return answerText(yield* submission.wait);
+              }),
+          );
         }),
       });
     }),

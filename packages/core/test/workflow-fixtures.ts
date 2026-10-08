@@ -1,7 +1,10 @@
+import type { HarnessCall } from "./harness-fixtures.js";
+import { makeHarness } from "./harness-fixtures.js";
+import { DurableHarness, AgentConversations } from "@aster/agent/harness";
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentConversations } from "@aster/agent";
-import { AgentRunner, AgentError, type AgentInvocation, type AgentResult } from "@aster/agent";
-import { Context, ConfigProvider, Effect, Layer, Option, Schema } from "effect";
+import { AgentError, type AgentResult } from "@aster/agent";
+import { AgentRunner, type AgentInvocation } from "@aster/agent/agent";
+import { ConfigProvider, Effect, Layer, Schema } from "effect";
 
 import { MemoryRecall, GoalSettings, type ContextInput } from "../src/index.js";
 
@@ -27,35 +30,44 @@ export const agentResult = (toolName: string, details: unknown): AgentResult => 
     },
   ],
 });
+const Evidence = Schema.Struct({
+  evidence: Schema.Array(
+    Schema.Struct({
+      role: Schema.Literal("user"),
+      content: Schema.Union([
+        Schema.String,
+        Schema.mutable(
+          Schema.Array(Schema.Struct({ type: Schema.Literal("text"), text: Schema.String })),
+        ),
+      ]),
+      timestamp: Schema.Number,
+    }),
+  ),
+});
+export const conversationEvidence = (input: HarnessCall) =>
+  Schema.decodeUnknownSync(Evidence)(JSON.parse(input.content)).evidence;
+
 const agentFailure = (cause: Error) => new AgentError(cause.message, [], { cause });
 
-class ModelResponder extends Context.Service<
-  ModelResponder,
-  (invocation: AgentInvocation) => Effect.Effect<AgentResult, AgentError>
->()("test/ModelResponder") {}
-
-/** Compose fake native responders beneath the runner's single SDK adaptation boundary. */
 export const modelReplyLayer = (
-  resultTool: string | undefined,
+  resultTool: string,
   execute: (invocation: AgentInvocation) => Effect.Effect<AgentResult, AgentError>,
 ) =>
-  Layer.effectContext(
-    Effect.gen(function* () {
-      const previous = yield* Effect.serviceOption(ModelResponder);
-      const respond = (options: AgentInvocation) =>
-        options.resultTool === resultTool
-          ? execute(options)
-          : Option.isSome(previous)
-            ? previous.value(options)
-            : Effect.die(new Error(`Unexpected model invocation: ${options.resultTool}`));
-      return Context.make(ModelResponder, respond).pipe(
-        Context.add(AgentRunner, AgentRunner.make(respond)),
-      );
-    }),
+  Layer.succeed(
+    AgentRunner,
+    AgentRunner.make((request) =>
+      request.resultTool === resultTool
+        ? execute(request)
+        : Effect.die(new Error(`Unexpected result tool: ${request.resultTool}`)),
+    ),
   );
 
+export const harnessReplyLayer = (
+  execute: (invocation: HarnessCall) => Effect.Effect<AgentResult, AgentError>,
+) => Layer.succeed(DurableHarness, makeHarness(execute));
+
 // The SDK tool boundary is exercised by the fake model, just like a real model tool call.
-const callTool = (input: AgentInvocation, name: string, args: object) =>
+const callTool = (input: HarnessCall, name: string, args: object) =>
   Effect.tryPromise({
     try: (signal) => input.tools!.find((tool) => tool.name === name)!.execute("test", args, signal),
     catch: (cause) => new AgentError(String(cause), [], { cause }),
@@ -101,7 +113,7 @@ export const goalWorkflowLayer = (scenario: GoalScenario) =>
         }),
       ),
     ),
-    modelReplyLayer(undefined, (input) =>
+    harnessReplyLayer((input) =>
       Effect.gen(function* () {
         const current = yield* callTool(input, "goal_current", {});
         const response = yield* scenario.reasoner
@@ -112,7 +124,7 @@ export const goalWorkflowLayer = (scenario: GoalScenario) =>
               state: current.state,
               messages: [],
             },
-            messages: input.messages.filter((message) => message.role !== "system"),
+            messages: conversationEvidence(input),
           })
           .pipe(Effect.mapError(agentFailure));
         yield* callTool(input, "update_summary", { summary: response.progress });

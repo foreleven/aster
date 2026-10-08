@@ -1,8 +1,9 @@
+import { makeHarness } from "./harness-fixtures.js";
 import {
   readExecutionCheckpoint,
   type ExecutionCheckpoint,
 } from "../src/tasks/execution/checkpoint.js";
-import { AgentConversations, AgentRunner } from "@aster/agent";
+import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { testConversations } from "./conversation-fixtures.js";
 import { emptyRecall } from "./workflow-fixtures.js";
 import {
@@ -43,7 +44,7 @@ export const taskFixture = Effect.fnUntraced(function* (
     records?: Map<string, StoredContext>;
     agent?: ExternalAgent;
     agents?: ExternalAgents["Service"];
-    runner?: AgentRunner["Service"];
+    harness?: DurableHarness["Service"];
     clock?: Clock.Clock;
     conversations?: AgentConversations["Service"];
     saved?: (record: StoredContext) => void;
@@ -111,8 +112,8 @@ export const taskFixture = Effect.fnUntraced(function* (
       Layer.succeed(AgentConversations, conversations),
       Layer.succeed(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
       Layer.succeed(
-        AgentRunner,
-        options.runner ?? AgentRunner.make(() => Effect.die("Unexpected internal execution")),
+        DurableHarness,
+        options.harness ?? makeHarness(() => Effect.die("Unexpected internal execution")),
       ),
       ContextQueries.layer.pipe(Layer.provide(Layer.succeed(ContextRegistry, registry))),
       emptyRecall,

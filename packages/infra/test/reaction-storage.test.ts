@@ -20,7 +20,6 @@ import {
 } from "@aster/core";
 import { LocalDurableContext } from "../src/storage/local-durable.js";
 import { makeFileContextStore } from "../src/storage/file-context-store.js";
-import { PiDurableContext } from "../src/storage/pi-durable-context.js";
 
 const definition = defineContext({
   state: Schema.Struct({ summary: Schema.String, credential: Schema.String }),
@@ -76,18 +75,15 @@ test("file pending recovery restores the source and reaction handoff after a nat
   );
 });
 
-test("Pi reopens atomic source handoffs and preserves them through later owner writes", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "aster-reaction-pi-"));
+test("Local storage reopens atomic source handoffs and preserves them through later owner writes", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aster-reaction-reopen-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   let committed: StoredContext | undefined;
   for (const restart of [false, true]) {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const backend = yield* PiDurableContext.directory({
-            directory: root,
-            shardId: "reactions",
-          });
+          const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
           const registry = makeContextRegistryWithBackend(backend);
           yield* registry.register(source.path, definition);
           if (!restart) {

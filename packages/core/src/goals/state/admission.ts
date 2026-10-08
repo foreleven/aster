@@ -1,7 +1,7 @@
 import { goalInputs, goalInputId } from "./inputs.js";
 import { goalRequestFingerprint, type GoalRequestData, type GoalReceipt } from "../protocol.js";
 import type { ContextRegistry } from "../../context/registry.js";
-import type { AgentConversations } from "@aster/agent";
+import type { AgentConversations } from "@aster/agent/harness";
 import type { GoalStore } from "./store.js";
 import { ApplicationError } from "../../operations.js";
 import { RemainingAgentTurns, TaskPath } from "../../tasks/contracts.js";

@@ -1,15 +1,12 @@
+import type { HarnessCall } from "./harness-fixtures.js";
+import type { AgentInvocation } from "@aster/agent/agent";
 import { registerGoalQueries } from "../src/goals/view.js";
 import { registerTaskQueries } from "../src/tasks/view.js";
 import { registerSignalQueries } from "../src/signals/queries.js";
 import { ContextsActor } from "../src/context/queries/actor.js";
 import { testConversations } from "./conversation-fixtures.js";
-import {
-  AgentConversations,
-  AgentError,
-  type AgentInvocation,
-  type AgentResult,
-  type AssistantMessage,
-} from "@aster/agent";
+import { AgentError, type AgentResult, type AssistantMessage } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -34,9 +31,15 @@ import {
 import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
 import type { GoalSubmission } from "../src/goals/protocol.js";
 import { fakeAgent } from "./fixtures.js";
-import { agentResult, emptyRecall, modelReplyLayer } from "./workflow-fixtures.js";
+import {
+  agentResult,
+  emptyRecall,
+  modelReplyLayer,
+  harnessReplyLayer,
+  conversationEvidence,
+} from "./workflow-fixtures.js";
 
-const tool = (input: AgentInvocation, name: string, args: object, id = name) =>
+const tool = (input: HarnessCall, name: string, args: object, id = name) =>
   Effect.tryPromise({
     try: (signal) => input.tools!.find((tool) => tool.name === name)!.execute(id, args, signal),
     catch: (cause) => new AgentError("Fake model tool failed", [], { cause }),
@@ -44,7 +47,7 @@ const tool = (input: AgentInvocation, name: string, args: object, id = name) =>
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>
   Effect.runPromise(Effect.scoped(effect).pipe(Effect.timeout("8 seconds")));
 const setup = Effect.fnUntraced(function* (
-  conversation: (input: AgentInvocation) => Effect.Effect<AgentResult, AgentError>,
+  conversation: (input: HarnessCall) => Effect.Effect<AgentResult, AgentError>,
   options: {
     store?: ContextStore;
     goals?: GoalSettings["Service"]["definitions"];
@@ -85,7 +88,7 @@ const setup = Effect.fnUntraced(function* (
               agentResult("submit_context_relevance", { relevant: true, reason: "Related" }),
             )),
       ),
-      modelReplyLayer(undefined, conversation),
+      harnessReplyLayer(conversation),
     ),
   );
   yield* system.spawn("contexts", ContextsActor);
@@ -193,7 +196,7 @@ test("Goal conversation and gate log live responses with their identities withou
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
   };
-  const observe = (input: AgentInvocation) =>
+  const observe = (input: Pick<HarnessCall, "onResponse">) =>
     Effect.promise(async (signal) => {
       assert.ok(input.onResponse);
       await input.onResponse(response, signal);
@@ -272,7 +275,7 @@ test("a slow Context gate does not delay a user reply or start another gate", as
       const env = yield* setup(
         (input) =>
           Effect.sync(() => {
-            calls.push(input.durable!.requestId);
+            calls.push(input.requestId);
             return { messages: [] };
           }),
         {
@@ -324,7 +327,7 @@ test("queued users precede ready Context and Task inputs without overlapping mai
         Effect.gen(function* () {
           active++;
           maximum = Math.max(maximum, active);
-          calls.push(input.durable!.requestId);
+          calls.push(input.requestId);
           if (calls.length === 1) {
             yield* Deferred.succeed(entered, undefined);
             yield* Deferred.await(release);
@@ -374,7 +377,7 @@ test("a failed gate releases screening without releasing the active main convers
       const env = yield* setup(
         (input) =>
           Effect.gen(function* () {
-            calls.push(input.durable!.requestId);
+            calls.push(input.requestId);
             if (calls.length === 1) {
               yield* Deferred.succeed(entered, undefined);
               yield* Deferred.await(release);
@@ -470,7 +473,7 @@ test("an interrupted read-only gate reruns on restart without reconciling a Pi d
   await run(
     Effect.gen(function* () {
       let gates = 0;
-      const calls: AgentInvocation[] = [];
+      const calls: HarnessCall[] = [];
       const env = yield* setup(
         (input) =>
           Effect.sync(() => {
@@ -491,7 +494,6 @@ test("an interrupted read-only gate reruns on restart without reconciling a Pi d
       yield* env.wait(() => env.state().inputs[1]?.status === "completed");
       assert.equal(gates, 1);
       assert.equal(calls.length, 1);
-      assert.equal(calls[0]!.durable!.reconcile, false);
     }),
   );
 });
@@ -630,7 +632,7 @@ test("Context changes pass the Agent Gate before Pi; user and Task inputs bypass
 test("End interrupts Pi without waiting, rejects late writes and leaves accepted input durable", async () => {
   await run(
     Effect.gen(function* () {
-      const entered = yield* Deferred.make<AgentInvocation>();
+      const entered = yield* Deferred.make<HarnessCall>();
       const interrupted = yield* Deferred.make<void>();
       const env = yield* setup((input) =>
         Deferred.succeed(entered, input).pipe(
@@ -673,7 +675,7 @@ test("known failures can retry once; uncertain delivery blocks new work and resu
         (input) =>
           Effect.suspend(() => {
             calls++;
-            original = input.durable!.requestId;
+            original = input.requestId;
             return calls === 1
               ? Effect.fail(new AgentError("Known failure", [], { outcome: "failed" }))
               : Effect.fail(new AgentError("Connection lost", [], { outcome: "unknown" }));
@@ -692,7 +694,7 @@ test("known failures can retry once; uncertain delivery blocks new work and resu
   );
   await run(
     Effect.gen(function* () {
-      const seen: AgentInvocation[] = [];
+      const seen: HarnessCall[] = [];
       const env = yield* setup(
         (input) =>
           Effect.sync(() => {
@@ -703,8 +705,7 @@ test("known failures can retry once; uncertain delivery blocks new work and resu
       );
       yield* env.activate;
       yield* env.wait(() => env.state().inputs.at(-1)?.status === "completed");
-      assert.equal(seen[0]!.durable!.requestId, original);
-      assert.equal(seen[0]!.durable!.reconcile, true);
+      assert.equal(seen[0]!.requestId, original);
       assert.equal(seen.length, 2);
     }),
   );
@@ -717,7 +718,7 @@ test("Goal tracks multiple Tasks before tool acknowledgement and reuses referenc
       let turns = 0;
       const env = yield* setup((input) =>
         Effect.gen(function* () {
-          if (input.durable?.owner === "tasks") return yield* Effect.never;
+          if (input.owner.startsWith("/tasks/")) return yield* Effect.never;
           if (++turns === 1) {
             const external = {
               task: {
@@ -808,7 +809,7 @@ test("Goal delegates evidence reads to an internal Task and answers users while 
         (input) =>
           Effect.gen(function* () {
             const names = input.tools!.map((tool) => tool.name);
-            if (input.durable?.owner === "tasks") {
+            if (input.owner.startsWith("/tasks/")) {
               assert.ok(names.includes("describe_context"));
               assert.ok(names.includes("memory_search"));
               assert.ok(!names.includes("update_summary"));
@@ -832,7 +833,9 @@ test("Goal delegates evidence reads to an internal Task and answers users while 
               "memory_expand",
             ])
               assert.ok(!names.includes(name), `Goal must not execute ${name}`);
-            const message = input.messages.findLast((message) => message.role === "user");
+            const message = conversationEvidence(input).findLast(
+              (message) => message.role === "user",
+            );
             let text = "";
             if (message?.content === "Review project evidence") {
               const accepted = yield* tool(input, "start_task", {
@@ -980,7 +983,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
 test("a lost delivery-commit acknowledgement reopens the same Pi exchange without duplicating accepted input", async () => {
   const records = new Map<string, StoredContext>();
   let loseAck = true;
-  const calls: AgentInvocation[] = [];
+  const calls: HarnessCall[] = [];
   await run(
     Effect.gen(function* () {
       const env = yield* setup(
@@ -1010,7 +1013,6 @@ test("a lost delivery-commit acknowledgement reopens the same Pi exchange withou
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       assert.equal(env.state().inputs.length, 1);
       assert.equal(calls.length, 1);
-      assert.equal(calls[0]!.durable!.reconcile, true);
     }),
   );
 });
@@ -1199,7 +1201,7 @@ test("summary tools persist before acknowledgement and keep the Goal available f
   await run(
     Effect.gen(function* () {
       let calls = 0;
-      let previous: AgentInvocation | undefined;
+      let previous: HarnessCall | undefined;
       const env = yield* setup((input) =>
         Effect.gen(function* () {
           calls++;

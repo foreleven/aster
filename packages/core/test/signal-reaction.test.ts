@@ -11,7 +11,7 @@ import {
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { SignalReactionInput } from "../src/signals/protocol.js";
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { testConversations } from "./conversation-fixtures.js";
 import { readSignalHistory } from "../src/signals/state/store.js";
 const definition = {

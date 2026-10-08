@@ -89,6 +89,16 @@ Goal reasoning now lives in core/goals and uses the Agent package. Integrations 
 
 Internal Tasks discover active capability entry points with `list_contexts`, inspect argument schemas with `describe_context`, and retrieve specific domain evidence with `query_context`. `read_query_result` pages the result retained in Pi. Discovery never serializes Context state or enumerates every historical email. Main Goal conversations expose only Goal, Task and Signal coordination tools and delegate Context and memory retrieval to Tasks. See [Agent Context access](context-agent-access-design.md) for registration and cancellation boundaries.
 
-Isolated `Agent.make({ resultTool })` requires a successful result-tool message; it cannot be combined with `durable`. An ordinary prose completion gets at most one correction in the same conversation. Provider errors, interruption and `length` truncation fail explicitly; truncation reports token counts and is not blindly retried. Goal plans use `submit_plan`; internal extraction, description and Task preparation use `submit_result`. No free-form text is accepted as a structured plan, and this correction does not resubmit external Tasks.
+Isolated `Agent.make({ resultTool })` requires a successful result-tool message; it belongs exclusively to the ordinary Agent entrypoint. An ordinary prose completion gets at most one correction in the same conversation. Provider errors, interruption and `length` truncation fail explicitly; truncation reports token counts and is not blindly retried. Goal plans use `submit_plan`; internal extraction, description and Task preparation use `submit_result`. No free-form text is accepted as a structured plan, and this correction does not resubmit external Tasks.
 
 Context stream errors are isolated inside the per-change handler. A failed description or evaluation is logged with its path; subsequent changes remain subscribed. Cancellation continues to propagate. A failed item itself is not automatically replayed.
+
+## Explicit execution capabilities
+
+`@aster/agent/agent` exports ordinary `AgentRunner` and the native `Agent.make` handle. Their execution input is a caller-supplied transcript; optional result-tool correction stays in `src/agent/`. Both require only Models. Goal relevance screening uses AgentRunner; Lark summarization uses Agent.make.
+
+`@aster/agent/harness` exports DurableHarness and AgentConversations. Goal conversations and internal Tasks use `withConversation({ owner, name, instructions, tools }, use)`. The callback explicitly submits input and waits for its native assistant answer. Durable execution does not share the ordinary AgentResult message-list contract.
+
+Pi owns submission admission, checkpoint recovery, steering queues, tool replay and compaction. The adapter owns Effect Context/callback lifetimes, model/tool registration, native Promise boundaries and storage leases. Goal owns input/reply settlement; Task owns steering delivery markers and the submissions covered by a business round. Neither an exchange document nor a steering ledger duplicates these responsibilities in the adapter.
+
+Each service has an independent request type, Layer and injectable boundary. AsterRuntime assembles both and provides them to Actors. Shared callback adaptation preserves dependencies, defects and interruption. See the [agent package README](../packages/agent/README.md) for the native submission and scoped cancellation contracts.

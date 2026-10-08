@@ -1,4 +1,4 @@
-import { AgentConversations } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import { type ActorContext, type ActorRef } from "@aster/actor";
 import { ApplicationError } from "../operations.js";
 import { Effect, Layer, Match, Schema } from "effect";

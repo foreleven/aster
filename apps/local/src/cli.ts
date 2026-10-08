@@ -5,13 +5,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Effect } from "effect";
-import {
-  LocalConfig,
-  openMemoryReader,
-  configuredMemoryReader,
-  storageSettings,
-  migrateContextStorage,
-} from "@aster/infra";
+import { LocalConfig, openMemoryReader, configuredMemoryReader } from "@aster/infra";
 import { startApplication } from "./application.js";
 
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -98,24 +92,6 @@ const main = async () => {
       .join(",");
   const args = process.argv.slice(2);
   const [command, subcommand, value] = args;
-  if (command === "storage" && subcommand === "migrate") {
-    const { values } = parseArgs({ args: args.slice(2), options: { config: { type: "string" } } });
-    const result = await Effect.runPromise(
-      storageSettings.pipe(
-        Effect.flatMap(migrateContextStorage),
-        Effect.scoped,
-        Effect.provide(
-          LocalConfig.layer({
-            configPath: values.config ?? defaultConfigPath,
-            projectRoot,
-            envPath: resolve(projectRoot, ".env"),
-          }),
-        ),
-      ),
-    );
-    console.log(JSON.stringify(result, null, 2));
-    return;
-  }
   if (command === "context" && subcommand === "get" && value) {
     readContext(value);
     return;
@@ -132,7 +108,7 @@ const main = async () => {
     return;
   }
   throw new Error(
-    "Usage: aster start [--config FILE] | aster storage migrate [--config FILE] | aster context get <path> | aster memory search <query> [--limit N] [--config FILE] | aster memory expand <obs-id> [<obs-id>...] [--session ID] [--config FILE]",
+    "Usage: aster start [--config FILE] | aster context get <path> | aster memory search <query> [--limit N] [--config FILE] | aster memory expand <obs-id> [<obs-id>...] [--session ID] [--config FILE]",
   );
 };
 

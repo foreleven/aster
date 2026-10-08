@@ -1,7 +1,10 @@
+import { makeHarness } from "./harness-fixtures.js";
+import { DurableHarness, AgentConversations } from "@aster/agent/harness";
 import { CurrentActors } from "../src/services/actors.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgentConversations, AgentError, AgentRunner, type AssistantMessage } from "@aster/agent";
+import { AgentError, type AssistantMessage } from "@aster/agent";
+import { AgentRunner } from "@aster/agent/agent";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Result, Schema, Scope } from "effect";
 import {
   GoalActor,
@@ -333,6 +336,10 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
         };
         const agent = yield* GoalAgent.pipe(
           Effect.provide(GoalAgent.layer),
+          Effect.provideService(
+            AgentRunner,
+            AgentRunner.make(() => Effect.die("Unexpected screening")),
+          ),
           Effect.provideService(ContextRegistry, registry),
           Effect.provideService(GoalSettings, {
             definitions: [definition],
@@ -344,8 +351,8 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
           }),
           Effect.provideService(ExternalAgents, {}),
           Effect.provideService(
-            AgentRunner,
-            AgentRunner.make((invocation) =>
+            DurableHarness,
+            makeHarness((invocation) =>
               Effect.gen(function* () {
                 const update = invocation.tools!.find((tool) => tool.name === "update_summary")!;
                 yield* Effect.tryPromise({
@@ -368,7 +375,6 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
         const reply = yield* agent
           .converse({
             goal: definition,
-            reconcile: false,
             input: {
               kind: "UserInput",
               inputId: "one",

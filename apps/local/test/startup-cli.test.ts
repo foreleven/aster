@@ -82,26 +82,3 @@ test("startup locks the configured root before acquiring model and integration s
     await rm(home, { recursive: true, force: true });
   }
 });
-
-test("storage migrate CLI runs offline with no configured model and supports route rollback", async () => {
-  const home = await mkdtemp(join(tmpdir(), "aster-migrate-cli-"));
-  const root = join(home, "data");
-  const config = join(home, "config.yaml");
-  try {
-    const durable = { root, pi: {}, routes: [{ prefix: "/personal", backend: "pi" }] };
-    // Invalid execution model is intentional: migration must never resolve or start it.
-    await writeFile(
-      config,
-      JSON.stringify({ config: { durable }, agents: { pi: { model: "missing" } } }),
-    );
-    const result = await cli(["storage", "migrate", "--config", config], home);
-    assert.equal(result.code, undefined, result.stderr);
-    assert.deepEqual(JSON.parse(result.stdout), { checked: 0, copied: 0, routes: durable.routes });
-    await writeFile(config, JSON.stringify({ config: { durable: { ...durable, routes: [] } } }));
-    const reverse = await cli(["storage", "migrate", "--config", config], home);
-    assert.equal(reverse.code, undefined, reverse.stderr);
-    assert.deepEqual(JSON.parse(reverse.stdout), { checked: 0, copied: 0, routes: [] });
-  } finally {
-    await rm(home, { recursive: true, force: true });
-  }
-});
