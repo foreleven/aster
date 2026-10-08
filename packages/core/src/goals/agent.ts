@@ -19,7 +19,6 @@ import { Effect, Clock, Context, Layer, Schema, Match } from "effect";
 
 import type { CurrentActors } from "../services/actors.js";
 import { createHash } from "node:crypto";
-import { output } from "../tools/define.js";
 
 export interface GoalConversation {
   readonly goal: GoalDefinition;
@@ -148,7 +147,8 @@ const submitContextRelevance: EffectTool<typeof contextRelevanceParameters> = {
   parameters: contextRelevanceParameters,
   execute: (_id, args) =>
     Effect.succeed({
-      ...output(args),
+      content: [{ type: "text", text: "Relevance decision accepted." }],
+      details: args,
       terminate: true,
     }),
 };

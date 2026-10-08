@@ -85,7 +85,7 @@ export const makeChatSummarizer = (
                   )
                     throw new Error("References must come from the supplied evidence");
                   return {
-                    content: [{ type: "text", text: JSON.stringify(value) }],
+                    content: [{ type: "text", text: "Summary accepted." }],
                     details: value,
                     terminate: true,
                   };
