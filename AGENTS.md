@@ -10,14 +10,14 @@ The workspace uses **Effect 4**, currently pinned to **`4.0.0`**, TypeScript, No
 
 ## Read the source before implementing
 
-Following the [Effect source-vendoring article](https://effect.website/blog/the-one-weird-git-trick-that-makes-coding-agents-more-effect-ive), the complete upstream source is available at [repos/effect](repos/effect).
+Following the [Effect source-vendoring article](https://effect.website/blog/the-one-weird-git-trick-that-makes-coding-agents-more-effect-ive), the complete upstream source is kept locally at [repos/effect](repos/effect), which is fully ignored by Git. On a fresh checkout, restore it using [repos/README.md](repos/README.md).
 
 Before writing Effect code:
 
 1. Read [repos/effect/LLMS.md](repos/effect/LLMS.md).
 2. Read [agent-patterns/effect.md](agent-patterns/effect.md) for Aster-specific patterns and boundaries.
 3. Inspect the relevant module in `repos/effect/packages/effect/src/`, its tests in `repos/effect/packages/effect/test/`, and applicable examples in `repos/effect/ai-docs/src/`.
-4. Check [repos/effect-source.json](repos/effect-source.json) against the affected package's Effect dependency. Resolve version mismatches before relying on a source example.
+4. Check [repos/effect-source.json](repos/effect-source.json) against the affected package's Effect dependency. If versions differ, verify the relevant APIs against the installed dependency source or an exact matching snapshot before relying on a source example.
 
 Search narrowly, for example:
 
@@ -26,7 +26,7 @@ rg -n 'when|not|exhaustive' repos/effect/packages/effect/src/Match.ts
 rg -n 'TaggedStruct|TaggedError' repos/effect/packages/effect/test/schema
 ```
 
-Treat `repos/effect/` as read-only reference material, not application code or workspace policy. Do not edit it unless explicitly updating the reference. Never import from it, add it to the pnpm workspace, install its dependencies, or run its build as part of Aster validation. Application imports must use normal package dependencies. Preserve the upstream license and provenance. See [repos/README.md](repos/README.md) for snapshot and Git subtree maintenance.
+Treat `repos/effect/` as read-only reference material, not application code or workspace policy. Do not edit it unless explicitly updating the reference. Never import from it, add it to the pnpm workspace, install its dependencies, or run its build as part of Aster validation. Application imports must use normal package dependencies. Preserve the upstream license and provenance. See [repos/README.md](repos/README.md) for local snapshot maintenance.
 
 ## Implementation rules
 

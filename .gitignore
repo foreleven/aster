@@ -14,7 +14,6 @@ aster.config.yml
 .signals/
 /data/
 /repos/*
-!/repos/effect/
 !/repos/README.md
 !/repos/effect-source.json
 

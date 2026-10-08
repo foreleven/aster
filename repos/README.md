@@ -2,26 +2,49 @@
 
 `effect/` contains the complete, unmodified Effect source at the release recorded in
 [`effect-source.json`](effect-source.json). Its upstream MIT license is retained in
-`effect/LICENSE`. It is reference material, excluded from the pnpm workspace,
-application builds, linting, and formatting. Application imports use installed
-packages, never this directory.
+`effect/LICENSE`. The entire directory is local reference material, fully ignored
+by Git and excluded from the pnpm workspace, application builds, linting, and
+formatting. Only this guide and the source manifest are tracked. Application imports
+use installed packages, never this directory.
+
+## Restoring Effect
+
+Fresh checkouts do not contain `repos/effect/`. Run the following from the workspace
+root to restore the exact snapshot recorded in the manifest. The destination must
+not already exist; move any existing directory to a backup before restoring it.
+
+```sh
+effect_repository=$(node -p 'require("./repos/effect-source.json").repository')
+effect_tag=$(node -p 'require("./repos/effect-source.json").tag')
+effect_commit=$(node -p 'require("./repos/effect-source.json").commit')
+effect_temp=$(mktemp -d)
+git clone --depth 1 --single-branch --branch "$effect_tag" "$effect_repository" "$effect_temp/upstream" &&
+  test "$(git -C "$effect_temp/upstream" rev-parse HEAD)" = "$effect_commit" &&
+  git -C "$effect_temp/upstream" archive --format=tar --output="$effect_temp/effect.tar" HEAD &&
+  mkdir repos/effect &&
+  tar -xf "$effect_temp/effect.tar" -C repos/effect
+```
+
+The temporary clone and archive can be removed after verifying the restored tree.
+Do not install dependencies or run builds inside the reference directory.
 
 ## Updating Effect
 
-Update the workspace's Effect dependencies and this snapshot together. Verify the
-release tag against the official npm package version and record the tag's exact
-commit. Before replacing the snapshot, ensure `git status --short -- repos/effect`
-shows no local changes.
+Resolve the latest stable release with `npm view effect dist-tags.latest`, verify
+its `effect@<version>` tag in `https://github.com/Effect-TS/effect.git`, and record
+the tag's exact commit and package version in `effect-source.json`. Back up the
+existing directory before replacing it: Git cannot report or recover local changes
+inside this ignored directory. Restore the new snapshot using the steps above,
+preserving the entire upstream tree and license without local edits.
 
-Fetch the release tag from `https://github.com/Effect-TS/effect.git` without changing
-the application branch. Export that commit with `git archive` to a temporary
-directory, then synchronize it into `repos/effect/`, including removal of files
-deleted upstream. Preserve the entire tree and license without local edits. Update
-`effect-source.json`, maintained version references, and the lockfile. Do not install
-dependencies or run builds inside the reference directory.
+Reference updates do not automatically upgrade application dependencies. When the
+snapshot differs from the installed Effect version, verify relevant APIs against
+the installed source or an exact matching snapshot before implementing changes.
+Dependency upgrades must update package manifests, the lockfile, and maintained
+version references together, then run the workspace validation required by
+`AGENTS.md`.
 
-The original import used a squashed Git subtree. Subsequent release snapshots are
-recorded as ordinary source changes with an exact upstream commit in the manifest;
-the original subtree trailer is not the version authority. Review snapshot changes
-separately from application changes, then run the workspace build, tests, browser
-tests, and Effect diagnostics against the installed release.
+The source was previously tracked as a subtree and release snapshots. It is now
+local-only; do not re-add it with `git add -f` or `git subtree`. Verify that
+`git ls-files -- repos/effect` is empty and `git check-ignore repos/effect/LLMS.md`
+matches the root ignore rule.
