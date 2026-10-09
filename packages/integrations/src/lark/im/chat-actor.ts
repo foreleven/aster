@@ -57,28 +57,28 @@ const Commit = Schema.Struct({
   evaluate: Schema.Boolean,
   updatedAt: Schema.String,
 });
-const ChatCommand = Schema.Union([
-  Schema.TaggedStruct("Update", {
+const ChatCommand = Schema.TaggedUnion({
+  Update: {
     chat: ImChat,
     messages: Schema.Array(ImMessage),
-  }),
-  Schema.TaggedStruct("Summarize", {}),
-  Schema.TaggedStruct("Flush", { date: Schema.String }),
-  Schema.TaggedStruct("Checkpoint", {
+  },
+  Summarize: {},
+  Flush: { date: Schema.String },
+  Checkpoint: {
     date: Schema.String,
     generation: Schema.String,
     change: SummaryCheckpoint,
     replyTo: ReplyTo<ChatDay | undefined>(),
-  }),
-  Schema.TaggedStruct("Summarized", {
+  },
+  Summarized: {
     generation: Schema.String,
     date: Schema.String,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: Schema.optional(Commit) }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(ImSummaryError) }),
-    ]),
-  }),
-]);
+    result: Schema.TaggedUnion({
+      Success: { value: Schema.optional(Commit) },
+      Failure: { error: Schema.instanceOf(ImSummaryError) },
+    }),
+  },
+});
 export type ChatCommand = typeof ChatCommand.Type;
 type ChatContext = Pick<ActorContext<ChatCommand>, "path" | "metadata" | "self" | "pipeToSelf">;
 export class LarkChatActor extends ContextActor.Service<

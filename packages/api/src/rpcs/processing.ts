@@ -9,11 +9,11 @@ import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 
 /** Per-target routing decisions; independent of work and delivery lifecycle. */
-export const ReactionMatch = Schema.Union([
-  Schema.TaggedStruct("Matched", { target: Schema.String, reason: Schema.String }),
-  Schema.TaggedStruct("NotMatched", { target: Schema.String, reason: Schema.String }),
-  Schema.TaggedStruct("Failed", { target: Schema.String, error: Schema.String }),
-]);
+export const ReactionMatch = Schema.TaggedUnion({
+  Matched: { target: Schema.String, reason: Schema.String },
+  NotMatched: { target: Schema.String, reason: Schema.String },
+  Failed: { target: Schema.String, error: Schema.String },
+});
 export type ReactionMatch = typeof ReactionMatch.Type;
 
 export const ProcessingOwner = Schema.Literal("system-one");

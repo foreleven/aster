@@ -9,33 +9,33 @@ import { createHash } from "node:crypto";
 import { AgentError } from "@aster/agent";
 
 /** Producer-specific envelopes preserve provenance; only UserInput crosses public ingress. */
-export const GoalSubmission = Schema.Union([
-  Schema.TaggedStruct("TaskMessage", { delivery: TaskMessage }),
-  Schema.TaggedStruct("UserInput", { text: Schema.NonEmptyString }),
-  Schema.TaggedStruct("GoalIntent", { delivery: GoalIntentInput }),
-  GoalExecutionFeedback,
-]);
+export const GoalSubmission = Schema.TaggedUnion({
+  TaskMessage: { delivery: TaskMessage },
+  UserInput: { text: Schema.NonEmptyString },
+  GoalIntent: { delivery: GoalIntentInput },
+  ExecutionFeedback: GoalExecutionFeedback.fields,
+});
 export type GoalSubmission = typeof GoalSubmission.Type;
 const submit = { requestId: Schema.NonEmptyString, input: GoalSubmission };
 const end = { requestId: Schema.NonEmptyString };
 const retry = { requestId: Schema.NonEmptyString, turnId: Schema.NonEmptyString };
-export const GoalRequestData = Schema.Union([
-  Schema.TaggedStruct("SubmitInput", submit),
-  Schema.TaggedStruct("End", end),
-  Schema.TaggedStruct("RetryTurn", retry),
-]);
+export const GoalRequestData = Schema.TaggedUnion({
+  SubmitInput: submit,
+  End: end,
+  RetryTurn: retry,
+});
 export type GoalRequestData = typeof GoalRequestData.Type;
-export const GoalCommandReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-]);
+export const GoalCommandReply = Schema.TaggedUnion({
+  Accepted: { receipt: CommandReceipt },
+  Rejected: { error: ApplicationError },
+});
 export type GoalCommandReply = typeof GoalCommandReply.Type;
 const replyTo = ReplyTo<GoalCommandReply>();
-export const GoalCommand = Schema.Union([
-  Schema.TaggedStruct("SubmitInput", { ...submit, replyTo }),
-  Schema.TaggedStruct("End", { ...end, replyTo }),
-  Schema.TaggedStruct("RetryTurn", { ...retry, replyTo }),
-]);
+export const GoalCommand = Schema.TaggedUnion({
+  SubmitInput: { ...submit, replyTo },
+  End: { ...end, replyTo },
+  RetryTurn: { ...retry, replyTo },
+});
 export type GoalCommand = typeof GoalCommand.Type;
 /** Receipts retain identity and content equality without duplicating the accepted input. */
 export const GoalReceipt = Schema.Struct({
@@ -61,43 +61,45 @@ export const goalRequestFingerprint = (request: GoalRequestData): string =>
       ),
     )
     .digest("hex");
-export const GoalTaskReply = Schema.Union([
-  Schema.TaggedStruct("Attached", {}),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-]);
+export const GoalTaskReply = Schema.TaggedUnion({
+  Attached: {},
+  Rejected: { error: ApplicationError },
+});
 export type GoalTaskReply = typeof GoalTaskReply.Type;
 
-export const GoalMailbox = Schema.Union([
-  GoalCommand,
-  Schema.TaggedStruct("AttachTask", {
+export const GoalMailbox = Schema.TaggedUnion({
+  SubmitInput: GoalCommand.cases.SubmitInput.fields,
+  End: GoalCommand.cases.End.fields,
+  RetryTurn: GoalCommand.cases.RetryTurn.fields,
+  AttachTask: {
     taskPath: TaskPath,
     replyTo: ReplyTo<GoalTaskReply>(),
-  }),
-  Schema.TaggedStruct("RunNext", {}),
-  Schema.TaggedStruct("GateSettled", {
+  },
+  RunNext: {},
+  GateSettled: {
     generation: Schema.String,
     inputId: Schema.String,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", {
+    result: Schema.TaggedUnion({
+      Success: {
         value: Schema.Struct({ relevant: Schema.Boolean, reason: Schema.String }),
-      }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(AgentError) }),
-    ]),
-  }),
-  Schema.TaggedStruct("ConversationSettled", {
+      },
+      Failure: { error: Schema.instanceOf(AgentError) },
+    }),
+  },
+  ConversationSettled: {
     generation: Schema.String,
     inputId: Schema.String,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: Schema.String }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(AgentError) }),
-    ]),
-  }),
-  Schema.TaggedStruct("PeersEnded", {
+    result: Schema.TaggedUnion({
+      Success: { value: Schema.String },
+      Failure: { error: Schema.instanceOf(AgentError) },
+    }),
+  },
+  PeersEnded: {
     generation: Schema.String,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: Schema.Void }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
-    ]),
-  }),
-]);
+    result: Schema.TaggedUnion({
+      Success: { value: Schema.Void },
+      Failure: { error: Schema.instanceOf(Error) },
+    }),
+  },
+});
 export type GoalMailbox = typeof GoalMailbox.Type;

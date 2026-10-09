@@ -9,10 +9,10 @@ export class CurrentActors extends Context.Service<
 >()("services/CurrentActors") {}
 
 /** Transient query replies and cancellation are never persisted in Context state. */
-export const QueryReply = Schema.Union([
-  Schema.TaggedStruct("Success", { value: Schema.Unknown }),
-  Schema.TaggedStruct("Failure", { error: ApplicationError }),
-]);
+export const QueryReply = Schema.TaggedUnion({
+  Success: { value: Schema.Unknown },
+  Failure: { error: ApplicationError },
+});
 export type QueryReply = typeof QueryReply.Type;
 export const queryReplyTo = ReplyTo<QueryReply>();
 export const queryCancelled = Schema.declare<Deferred.Deferred<void>>(Deferred.isDeferred);

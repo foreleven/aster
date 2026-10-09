@@ -6,34 +6,34 @@ const FailureSummary = Schema.Struct({
   message: Schema.String,
   stack: Schema.optional(Schema.String),
 });
-export const RuntimeEvent = Schema.Union([
-  Schema.TaggedStruct("CommandProcessed", {
+export const RuntimeEvent = Schema.TaggedUnion({
+  CommandProcessed: {
     path: Schema.String,
     incarnation: Schema.String,
     commandTag: Schema.optional(Schema.String),
     success: Schema.Boolean,
     timestamp: Schema.String,
-  }),
-  Schema.TaggedStruct("DeadLetter", {
+  },
+  DeadLetter: {
     target: Schema.String,
     incarnation: Schema.String,
     commandTag: Schema.optional(Schema.String),
     reason: Schema.String,
     timestamp: Schema.String,
-  }),
-  Schema.TaggedStruct("ActorRestarting", {
+  },
+  ActorRestarting: {
     path: Schema.String,
     incarnation: Schema.String,
     cause: FailureSummary,
     timestamp: Schema.String,
-  }),
-  Schema.TaggedStruct("ActorStopped", {
+  },
+  ActorStopped: {
     path: Schema.String,
     incarnation: Schema.String,
     cause: Schema.optional(FailureSummary),
     timestamp: Schema.String,
-  }),
-]);
+  },
+});
 export type RuntimeEvent = typeof RuntimeEvent.Type;
 export const RuntimePhase = Schema.Literals(["starting", "ready", "failed", "stopping"]);
 export type RuntimePhase = typeof RuntimePhase.Type;

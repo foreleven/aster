@@ -4,10 +4,10 @@ import { TaskDeliveryInput, TaskRecoveryInput, FollowupTaskInput } from "./contr
 import { Schema } from "effect";
 import { ApprovalResolved } from "../approvals/actor.js";
 import { TaskOutcome } from "./state/snapshot.js";
-export const TaskAdmissionReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-]);
+export const TaskAdmissionReply = Schema.TaggedUnion({
+  Accepted: { receipt: CommandReceipt },
+  Rejected: { error: ApplicationError },
+});
 export type TaskAdmissionReply = typeof TaskAdmissionReply.Type;
 export const StartTask = Schema.TaggedStruct("StartTask", {
   input: TaskDeliveryInput,
@@ -25,23 +25,23 @@ export const RetryTask = Schema.TaggedStruct("RetryTask", {
   input: TaskRecoveryInput,
   replyTo: ReplyTo<TaskAdmissionReply>(),
 });
-export const TaskCommand = Schema.Union([
-  StartTask,
-  Input,
-  CheckTask,
-  RetryTask,
-  ApprovalResolved,
-  Schema.TaggedStruct("ExecutionSettled", { generation: Schema.String, outcome: TaskOutcome }),
-  Schema.TaggedStruct("DeliverySettled", { error: Schema.optional(Schema.String) }),
-  Schema.TaggedStruct("CancellationChecked", {
+export const TaskCommand = Schema.TaggedUnion({
+  StartTask: StartTask.fields,
+  Input: Input.fields,
+  CheckTask: CheckTask.fields,
+  RetryTask: RetryTask.fields,
+  ApprovalResolved: ApprovalResolved.fields,
+  ExecutionSettled: { generation: Schema.String, outcome: TaskOutcome },
+  DeliverySettled: { error: Schema.optional(Schema.String) },
+  CancellationChecked: {
     generation: Schema.String,
     reason: Schema.String,
     confirmed: Schema.Boolean,
     replyTo: Schema.optional(ReplyTo<void>()),
-  }),
-  Schema.TaggedStruct("Cancel", {
+  },
+  Cancel: {
     reason: Schema.String,
     replyTo: Schema.optional(ReplyTo<void>()),
-  }),
-]);
+  },
+});
 export type TaskCommand = typeof TaskCommand.Type;

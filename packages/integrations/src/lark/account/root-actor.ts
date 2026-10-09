@@ -15,12 +15,12 @@ import { ImSummaryGate } from "../im/summary-gate.js";
 import { ImStorage } from "../im/storage.js";
 import { ChatSummarizer } from "../im/summarizer.js";
 const LarkRootCommand = Schema.TaggedStruct("AccountLoaded", {
-  result: Schema.Union([
-    Schema.TaggedStruct("Success", { value: AccountProfile }),
-    Schema.TaggedStruct("Failure", {
+  result: Schema.TaggedUnion({
+    Success: { value: AccountProfile },
+    Failure: {
       error: Schema.instanceOf(Error),
-    }),
-  ]),
+    },
+  }),
 });
 type LarkRootCommand = typeof LarkRootCommand.Type;
 

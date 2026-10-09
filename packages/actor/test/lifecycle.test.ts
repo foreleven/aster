@@ -11,11 +11,11 @@ import {
   type ActorRef,
 } from "../src/index.js";
 
-const ChildCommand = Schema.Union([
-  Schema.TaggedStruct("Add", { value: Schema.Number }),
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
-  Schema.TaggedStruct("Stop", {}),
-]);
+const ChildCommand = Schema.TaggedUnion({
+  Add: { value: Schema.Number },
+  Read: { replyTo: ReplyTo<number>() },
+  Stop: {},
+});
 type ChildCommand = typeof ChildCommand.Type;
 
 class ChildActor extends Actor.Service<ChildActor>()("test/ChildActor", { command: ChildCommand }) {
@@ -40,12 +40,12 @@ class ChildActor extends Actor.Service<ChildActor>()("test/ChildActor", { comman
   );
 }
 
-const ParentCommand = Schema.Union([
-  Schema.TaggedStruct("Add", { value: Schema.Number }),
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
-  Schema.TaggedStruct("StopChild", { replyTo: ReplyTo<string>() }),
-  Schema.TaggedStruct("Fail", {}),
-]);
+const ParentCommand = Schema.TaggedUnion({
+  Add: { value: Schema.Number },
+  Read: { replyTo: ReplyTo<number>() },
+  StopChild: { replyTo: ReplyTo<string>() },
+  Fail: {},
+});
 type ParentCommand = typeof ParentCommand.Type;
 
 class ParentActor extends Actor.Service<ParentActor>()("test/ParentActor", {
@@ -126,18 +126,18 @@ test("stopping a root awaits its children and leaves sibling roots available", a
   );
 });
 
-const AsyncCommand = Schema.Union([
-  Schema.TaggedStruct("Run", {
+const AsyncCommand = Schema.TaggedUnion({
+  Run: {
     replyTo: ReplyTo<number>(),
-  }),
-  Schema.TaggedStruct("RunFailure", {
+  },
+  RunFailure: {
     replyTo: ReplyTo<number>(),
-  }),
-  Schema.TaggedStruct("Completed", {
+  },
+  Completed: {
     replyTo: ReplyTo<number>(),
     value: Schema.Number,
-  }),
-]);
+  },
+});
 type AsyncCommand = typeof AsyncCommand.Type;
 
 class AsyncActor extends Actor.Service<AsyncActor>()("test/AsyncActor", { command: AsyncCommand }) {
@@ -426,10 +426,10 @@ class GateService extends Context.Service<
   }
 >()("test/GateService") {}
 
-const GateCommand = Schema.Union([
-  Schema.TaggedStruct("Wait", {}),
-  Schema.TaggedStruct("Queued", {}),
-]);
+const GateCommand = Schema.TaggedUnion({
+  Wait: {},
+  Queued: {},
+});
 type GateCommand = typeof GateCommand.Type;
 
 class GateActor extends Actor.Service<GateActor, GateService>()("test/GateActor", {
@@ -620,10 +620,10 @@ class CountsService extends Context.Service<CountsService, InstanceCounts>()(
   "test/CountsService",
 ) {}
 
-const ScopedCommand = Schema.Union([
-  Schema.TaggedStruct("Fail", {}),
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<InstanceCounts>() }),
-]);
+const ScopedCommand = Schema.TaggedUnion({
+  Fail: {},
+  Read: { replyTo: ReplyTo<InstanceCounts>() },
+});
 type ScopedCommand = typeof ScopedCommand.Type;
 
 class ScopedActor extends Actor.Service<ScopedActor, CountsService>()("test/ScopedActor", {
@@ -669,10 +669,10 @@ test("restart closes the old Behavior Layer scope before building a new one", as
   assert.deepEqual(counts, { built: 2, closed: 2 });
 });
 
-const PipeFailureCommand = Schema.Union([
-  Schema.TaggedStruct("Start", {}),
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
-]);
+const PipeFailureCommand = Schema.TaggedUnion({
+  Start: {},
+  Read: { replyTo: ReplyTo<number>() },
+});
 type PipeFailureCommand = typeof PipeFailureCommand.Type;
 
 class DefectivePipeActor extends Actor.Service<DefectivePipeActor, CountsService>()(
@@ -807,10 +807,10 @@ class BoomChild extends Actor.Service<BoomChild>()("test/BoomChild", {
   );
 }
 
-const EscalationCommand = Schema.Union([
-  Schema.TaggedStruct("Trigger", {}),
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
-]);
+const EscalationCommand = Schema.TaggedUnion({
+  Trigger: {},
+  Read: { replyTo: ReplyTo<number>() },
+});
 type EscalationCommand = typeof EscalationCommand.Type;
 
 class EscalatingParent extends Actor.Service<EscalatingParent, CountsService>()(

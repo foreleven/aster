@@ -50,10 +50,10 @@ Keep separate rule families separate: entry existence/status, approval decisions
 ```ts
 import { Effect, Schema } from "effect";
 
-const TaskCommand = Schema.Union([
-  Schema.TaggedStruct("Execute", { taskId: Schema.String }),
-  Schema.TaggedStruct("Cancel", { taskId: Schema.String }),
-]);
+const TaskCommand = Schema.TaggedUnion({
+  Execute: { taskId: Schema.String },
+  Cancel: { taskId: Schema.String },
+});
 type TaskCommand = typeof TaskCommand.Type;
 
 class InvalidTaskCommand extends Schema.TaggedError<InvalidTaskCommand>()("InvalidTaskCommand", {

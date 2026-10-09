@@ -73,36 +73,36 @@ class MailMessageActor extends ContextActor.Service<MailMessageActor>()("mail/Me
   );
 }
 
-const MailboxCommand = Schema.Union([
-  Schema.TaggedStruct("Poll", {}),
-  Schema.TaggedStruct("Rotate", {}),
-  Schema.TaggedStruct("Baseline", {
+const MailboxCommand = Schema.TaggedUnion({
+  Poll: {},
+  Rotate: {},
+  Baseline: {
     generation: Schema.String,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: Schema.Array(Schema.String) }),
-      Schema.TaggedStruct("Failure", { error: MailFetchError }),
-    ]),
-  }),
-  Schema.TaggedStruct("Polled", {
+    result: Schema.TaggedUnion({
+      Success: { value: Schema.Array(Schema.String) },
+      Failure: { error: MailFetchError },
+    }),
+  },
+  Polled: {
     generation: Schema.String,
     window: MailboxWindow,
     caughtUp: Schema.Boolean,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: MailBatch }),
-      Schema.TaggedStruct("Failure", { error: MailFetchError }),
-    ]),
-  }),
-  Schema.TaggedStruct("Published", {
+    result: Schema.TaggedUnion({
+      Success: { value: MailBatch },
+      Failure: { error: MailFetchError },
+    }),
+  },
+  Published: {
     generation: Schema.String,
     window: MailboxWindow,
     caughtUp: Schema.Boolean,
     batch: MailBatch,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: Schema.Void }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
-    ]),
-  }),
-]);
+    result: Schema.TaggedUnion({
+      Success: { value: Schema.Void },
+      Failure: { error: Schema.instanceOf(Error) },
+    }),
+  },
+});
 
 class MailboxActor extends ContextActor.Service<
   MailboxActor,

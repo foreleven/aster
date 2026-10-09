@@ -21,24 +21,24 @@ import { ImAgentQueue } from "./agent-queue.js";
 import { ImSummaryGate } from "./summary-gate.js";
 import { parseImPolicy } from "./policy.js";
 import { pollIm } from "./poll.js";
-const ImCommand = Schema.Union([
-  Schema.TaggedStruct("Poll", {}),
-  Schema.TaggedStruct("Polled", {
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", {
+const ImCommand = Schema.TaggedUnion({
+  Poll: {},
+  Polled: {
+    result: Schema.TaggedUnion({
+      Success: {
         value: Schema.Struct({
           start: Schema.String,
           through: Schema.String,
           caughtUp: Schema.Boolean,
           batches: Schema.Array(Schema.Struct({ chat: ImChat, messages: Schema.Array(ImMessage) })),
         }),
-      }),
-      Schema.TaggedStruct("Failure", {
+      },
+      Failure: {
         error: Schema.instanceOf(ImPollError),
-      }),
-    ]),
-  }),
-]);
+      },
+    }),
+  },
+});
 type ImCommand = typeof ImCommand.Type;
 type ImServices = LarkConfig | ChatSummarizer | ImStorage | ImSearch | ImAgentQueue | ImSummaryGate;
 

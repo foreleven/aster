@@ -20,28 +20,28 @@ import {
   workStatus,
 } from "./state.js";
 
-export const ReactionCommand = Schema.Union([
-  Schema.TaggedStruct("Ingest", { events: Schema.Array(ContextEvent) }),
-  Schema.TaggedStruct("Recover", { input: RecoveryInput, replyTo: ReplyTo<RecoveryReply>() }),
-  Schema.TaggedStruct("Continue", { deliveryId: Schema.String, generation: Schema.String }),
-  Schema.TaggedStruct("Planned", {
+export const ReactionCommand = Schema.TaggedUnion({
+  Ingest: { events: Schema.Array(ContextEvent) },
+  Recover: { input: RecoveryInput, replyTo: ReplyTo<RecoveryReply>() },
+  Continue: { deliveryId: Schema.String, generation: Schema.String },
+  Planned: {
     generation: Schema.String,
     requestId: Schema.String,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: ReactionPlan }),
-      Schema.TaggedStruct("Failure", { error: ReactionFailure }),
-    ]),
-  }),
-  Schema.TaggedStruct("Delivered", {
+    result: Schema.TaggedUnion({
+      Success: { value: ReactionPlan },
+      Failure: { error: ReactionFailure },
+    }),
+  },
+  Delivered: {
     generation: Schema.String,
     requestId: Schema.String,
     deliveryId: Schema.String,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: ReactionReply }),
-      Schema.TaggedStruct("Failure", { error: ReactionFailure }),
-    ]),
-  }),
-]);
+    result: Schema.TaggedUnion({
+      Success: { value: ReactionReply },
+      Failure: { error: ReactionFailure },
+    }),
+  },
+});
 export type ReactionCommand = typeof ReactionCommand.Type;
 /** The sole writer of the reaction inbox, frozen decisions and delivery outcomes. */
 export class SystemOneActor extends ContextActor.Service<

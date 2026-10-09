@@ -25,15 +25,15 @@ export const GoalExecutionFeedback = Schema.TaggedStruct("ExecutionFeedback", {
   text: Schema.String,
 });
 
-export const GoalInputPayload = Schema.Union([
-  Schema.TaggedStruct("GoalIntent", { intent: GoalIntent }),
-  Schema.TaggedStruct("UserInput", { text: Schema.NonEmptyString }),
-  Schema.TaggedStruct("TaskMessage", {
+export const GoalInputPayload = Schema.TaggedUnion({
+  GoalIntent: { intent: GoalIntent },
+  UserInput: { text: Schema.NonEmptyString },
+  TaskMessage: {
     requestId: Schema.String,
     source: Schema.String,
     text: Schema.String,
-  }),
-  GoalExecutionFeedback,
-  Schema.TaggedStruct("GoalStarted", {}),
-]);
+  },
+  ExecutionFeedback: GoalExecutionFeedback.fields,
+  GoalStarted: {},
+});
 export type GoalInputPayload = typeof GoalInputPayload.Type;

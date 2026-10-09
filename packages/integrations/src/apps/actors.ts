@@ -16,10 +16,10 @@ import { OpenCli } from "./client.js";
 import { appCommands, queryArgv } from "./commands.js";
 import { AppsState, AppState, appsView, appView } from "./contexts.js";
 
-const QueryReply = Schema.Union([
-  Schema.TaggedStruct("Success", { value: ContextQueryResult }),
-  Schema.TaggedStruct("Failure", { error: ContextQueryError }),
-]);
+const QueryReply = Schema.TaggedUnion({
+  Success: { value: ContextQueryResult },
+  Failure: { error: ContextQueryError },
+});
 type QueryReply = typeof QueryReply.Type;
 const Ready = Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() });
 const Query = Schema.TaggedStruct("Query", {
@@ -28,11 +28,11 @@ const Query = Schema.TaggedStruct("Query", {
   replyTo: ReplyTo<QueryReply>(),
 });
 type Query = typeof Query.Type;
-const Command = Schema.Union([
-  Ready,
-  Query,
-  Schema.TaggedStruct("Finished", { requestId: Schema.String, result: QueryReply }),
-]);
+const Command = Schema.TaggedUnion({
+  Ready: Ready.fields,
+  Query: Query.fields,
+  Finished: { requestId: Schema.String, result: QueryReply },
+});
 
 class AppActor extends ContextActor.Service<AppActor, AppsSettings | OpenCli | ContextQueries>()(
   "apps/AppActor",

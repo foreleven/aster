@@ -18,30 +18,30 @@ const MemoryState = Schema.Struct({
   llm: Schema.optional(Schema.Struct({ provider: Schema.String, model: Schema.String })),
 });
 
-export const MemoryCommand = Schema.Union([
-  Schema.TaggedStruct("Search", {
+export const MemoryCommand = Schema.TaggedUnion({
+  Search: {
     query: Schema.String,
     cancelled: queryCancelled,
     replyTo: queryReplyTo,
-  }),
-  Schema.TaggedStruct("Expand", {
+  },
+  Expand: {
     items: Schema.Array(
       Schema.Struct({ obsId: Schema.String, sessionId: Schema.optional(Schema.String) }),
     ),
     cancelled: queryCancelled,
     replyTo: queryReplyTo,
-  }),
-  Schema.TaggedStruct("RecallSettled", { id: Schema.String, result: QueryReply }),
-  Schema.TaggedStruct("Retry", {}),
-  Schema.TaggedStruct("Capture", { input: Capture, replyTo: ReplyTo<void>() }),
-  Schema.TaggedStruct("Captured", {
+  },
+  RecallSettled: { id: Schema.String, result: QueryReply },
+  Retry: {},
+  Capture: { input: Capture, replyTo: ReplyTo<void>() },
+  Captured: {
     sessionId: Schema.String,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: Schema.Void }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(MemoryCaptureError) }),
-    ]),
-  }),
-]);
+    result: Schema.TaggedUnion({
+      Success: { value: Schema.Void },
+      Failure: { error: Schema.instanceOf(MemoryCaptureError) },
+    }),
+  },
+});
 export type MemoryCommand = typeof MemoryCommand.Type;
 
 export const memoryView = contextView({

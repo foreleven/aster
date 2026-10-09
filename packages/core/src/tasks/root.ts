@@ -12,7 +12,12 @@ import { taskPathFor } from "./state/admission.js";
 import { StartTask, CheckTask, RetryTask, Input, type TaskCommand } from "./protocol.js";
 import type { ActorRef } from "@aster/actor";
 
-const Command = Schema.Union([StartTask, CheckTask, RetryTask, Input]);
+const Command = Schema.TaggedUnion({
+  StartTask: StartTask.fields,
+  CheckTask: CheckTask.fields,
+  RetryTask: RetryTask.fields,
+  Input: Input.fields,
+});
 export type TasksRootCommand = typeof Command.Type;
 /** Owns asynchronous Tasks sent to delegate Actors; conversations do not own execution. */
 export class TasksRootActor extends ContextActor.Service<TasksRootActor, TaskServices>()(

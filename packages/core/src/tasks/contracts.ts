@@ -14,15 +14,15 @@ export const PreparedTask = Schema.Struct({
 });
 export type PreparedTask = typeof PreparedTask.Type;
 /** A Task is a message with a typed Actor destination. External execution replies to a Goal. */
-export const Task = Schema.Union([
-  Schema.TaggedStruct("Goal", { target: GoalPath, text: Schema.NonEmptyString }),
-  Schema.TaggedStruct("Agent", { task: PreparedTask, replyTo: GoalPath }),
-  Schema.TaggedStruct("Delegate", {
+export const Task = Schema.TaggedUnion({
+  Goal: { target: GoalPath, text: Schema.NonEmptyString },
+  Agent: { task: PreparedTask, replyTo: GoalPath },
+  Delegate: {
     agent: Schema.NonEmptyString,
     task: PreparedTask,
     replyTo: GoalPath,
-  }),
-]);
+  },
+});
 export type Task = typeof Task.Type;
 export const TaskMessage = Schema.Struct({
   requestId: CommandIdentifier,

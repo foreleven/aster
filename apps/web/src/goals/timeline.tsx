@@ -3,7 +3,7 @@ import { useAtomValue, useAtomSet, useAtomRefresh } from "@effect/atom-react";
 import { goalTimeline } from "../api/timeline";
 import { resultError, resultValue } from "../api/client";
 import { Button } from "../components/ui/button";
-import { Message, MessageContent, MessageHeader, MessageFooter } from "../components/ui/message";
+import { Message, MessageContent, MessageFooter } from "../components/ui/message";
 import { Bubble, BubbleContent } from "../components/ui/bubble";
 import {
   MessageScroller,
@@ -58,7 +58,6 @@ export function Timeline({ slug }: { slug: string }) {
                   aria-label={`${message.role} message`}
                 >
                   <MessageContent>
-                    <MessageHeader>{message.role === "user" ? "You" : "Aster"}</MessageHeader>
                     <Bubble
                       align={message.role === "user" ? "end" : "start"}
                       variant={message.role === "user" ? "secondary" : "ghost"}

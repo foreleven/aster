@@ -14,8 +14,8 @@ export const SignalSchedule = Schema.Union([
   }),
 ]);
 export type SignalSchedule = typeof SignalSchedule.Type;
-export const SignalTrigger = Schema.Union([
-  Schema.TaggedStruct("Context", { when: Schema.NonEmptyString }),
-  Schema.TaggedStruct("Schedule", { schedule: SignalSchedule }),
-]);
+export const SignalTrigger = Schema.TaggedUnion({
+  Context: { when: Schema.NonEmptyString },
+  Schedule: { schedule: SignalSchedule },
+});
 export type SignalTrigger = typeof SignalTrigger.Type;

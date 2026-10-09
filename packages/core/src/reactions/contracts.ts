@@ -7,19 +7,19 @@ import {
 } from "../operations.js";
 
 const identity = { requestId: CommandIdentifier, expectedRevision: ContextRevision };
-export const RecoveryInput = Schema.Union([
-  Schema.TaggedStruct("RetryScreening", { ...identity, workId: CommandIdentifier }),
-  Schema.TaggedStruct("RetryReactionDelivery", {
+export const RecoveryInput = Schema.TaggedUnion({
+  RetryScreening: { ...identity, workId: CommandIdentifier },
+  RetryReactionDelivery: {
     ...identity,
     workId: CommandIdentifier,
     deliveryId: CommandIdentifier,
-  }),
-]);
+  },
+});
 export type RecoveryInput = typeof RecoveryInput.Type;
-export const RecoveryReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-]);
+export const RecoveryReply = Schema.TaggedUnion({
+  Accepted: { receipt: CommandReceipt },
+  Rejected: { error: ApplicationError },
+});
 export type RecoveryReply = typeof RecoveryReply.Type;
 export const RecoveryReceipt = Schema.Struct({
   input: RecoveryInput,

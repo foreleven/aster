@@ -9,13 +9,13 @@ import { InputRequest, ApprovalResponse } from "../../approvals/contracts.js";
 
 import { Schema } from "effect";
 
-export const TaskInput = Schema.Union([
-  Schema.TaggedStruct("Initial", { input: TaskDeliveryInput }),
-  Schema.TaggedStruct("Message", { input: FollowupTaskInput }),
-  Schema.TaggedStruct("Answer", { requestId: Schema.String, response: ApprovalResponse }),
-  Schema.TaggedStruct("Check", { input: TaskRecoveryInput }),
-  Schema.TaggedStruct("Retry", { input: TaskRecoveryInput }),
-]);
+export const TaskInput = Schema.TaggedUnion({
+  Initial: { input: TaskDeliveryInput },
+  Message: { input: FollowupTaskInput },
+  Answer: { requestId: Schema.String, response: ApprovalResponse },
+  Check: { input: TaskRecoveryInput },
+  Retry: { input: TaskRecoveryInput },
+});
 export type TaskInput = typeof TaskInput.Type;
 export const StoredTaskInput = Schema.Struct({ input: TaskInput, receipt: CommandReceipt });
 export const TaskInputRef = Schema.Struct({

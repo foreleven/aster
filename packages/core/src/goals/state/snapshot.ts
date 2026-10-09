@@ -8,7 +8,7 @@ import { Schema } from "effect";
 export const StoredGoalInput = Schema.Struct({
   inputId: Schema.String,
   entryId: Schema.Int,
-  kind: Schema.Union(GoalInputPayload.members.map((member) => member.fields._tag)),
+  kind: Schema.Union(Object.values(GoalInputPayload.cases).map((member) => member.fields._tag)),
   status: Schema.Literals(["pending", "running", "completed", "failed", "unknown", "ignored"]),
   relevant: Schema.optional(Schema.Boolean),
   error: Schema.optional(Schema.String),

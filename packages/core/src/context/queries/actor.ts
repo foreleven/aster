@@ -12,29 +12,29 @@ import {
 } from "../../services/actors.js";
 import { queryResults } from "./results.js";
 
-export const ContextsCommand = Schema.Union([
-  Schema.TaggedStruct("ListContexts", {
+export const ContextsCommand = Schema.TaggedUnion({
+  ListContexts: {
     parent: Schema.optional(Schema.String),
     offset: Schema.Int,
     replyTo: queryReplyTo,
-  }),
-  Schema.TaggedStruct("DescribeContext", { path: Schema.String, replyTo: queryReplyTo }),
-  Schema.TaggedStruct("QueryContext", {
+  },
+  DescribeContext: { path: Schema.String, replyTo: queryReplyTo },
+  QueryContext: {
     input: ContextQueryInput,
     owner: Schema.String,
     requestId: Schema.String,
     cancelled: queryCancelled,
     replyTo: queryReplyTo,
-  }),
-  Schema.TaggedStruct("ReadQueryResult", {
+  },
+  ReadQueryResult: {
     owner: Schema.String,
     resultId: Schema.Int,
     offset: Schema.Int,
     cancelled: queryCancelled,
     replyTo: queryReplyTo,
-  }),
-  Schema.TaggedStruct("QuerySettled", { id: Schema.String, result: QueryReply }),
-]);
+  },
+  QuerySettled: { id: Schema.String, result: QueryReply },
+});
 export type ContextsCommand = typeof ContextsCommand.Type;
 
 type Pending = Extract<ContextsCommand, { _tag: "QueryContext" | "ReadQueryResult" }>;

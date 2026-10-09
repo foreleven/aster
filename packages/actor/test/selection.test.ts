@@ -2,10 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Layer, Match, Schema } from "effect";
 import { Actor, ActorSystem, actorSelectionPath, ReplyTo } from "../src/index.js";
-const Command = Schema.Union([
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<string>() }),
-  Schema.TaggedStruct("Sibling", { replyTo: ReplyTo<string>() }),
-]);
+const Command = Schema.TaggedUnion({
+  Read: { replyTo: ReplyTo<string>() },
+  Sibling: { replyTo: ReplyTo<string>() },
+});
 class Selected extends Actor.Service<Selected>()("test/Selected", { command: Command }) {
   static readonly layer = Layer.succeed(
     Selected,

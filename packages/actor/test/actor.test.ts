@@ -17,11 +17,11 @@ import {
   type ActorRef,
 } from "../src/index.js";
 
-const CounterCommand = Schema.Union([
-  Schema.TaggedStruct("Add", { value: Schema.Number }),
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
-  Schema.TaggedStruct("Fail", {}),
-]);
+const CounterCommand = Schema.TaggedUnion({
+  Add: { value: Schema.Number },
+  Read: { replyTo: ReplyTo<number>() },
+  Fail: {},
+});
 type CounterCommand = typeof CounterCommand.Type;
 
 class CounterActor extends Actor.Service<CounterActor>()("test/CounterActor", {
@@ -125,10 +125,10 @@ test("ask accepts one reply and reports a duplicate as a redacted DeadLetter", a
   }
 });
 
-const LateCommand = Schema.Union([
-  Schema.TaggedStruct("Ask", { replyTo: ReplyTo<number>() }),
-  Schema.TaggedStruct("Release", {}),
-]);
+const LateCommand = Schema.TaggedUnion({
+  Ask: { replyTo: ReplyTo<number>() },
+  Release: {},
+});
 type LateCommand = typeof LateCommand.Type;
 
 class LateReplyActor extends Actor.Service<LateReplyActor>()("test/LateReplyActor", {
@@ -177,19 +177,19 @@ test("a reply after ask timeout becomes a DeadLetter", async () => {
   }
 });
 
-const PersistentCommand = Schema.Union([
-  Schema.TaggedStruct("Add", { value: Schema.Number }),
-  Schema.TaggedStruct("AddBatch", { values: Schema.Array(Schema.Number) }),
-  Schema.TaggedStruct("Snapshot", {}),
-  Schema.TaggedStruct("Stop", {}),
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
-]);
+const PersistentCommand = Schema.TaggedUnion({
+  Add: { value: Schema.Number },
+  AddBatch: { values: Schema.Array(Schema.Number) },
+  Snapshot: {},
+  Stop: {},
+  Read: { replyTo: ReplyTo<number>() },
+});
 type PersistentCommand = typeof PersistentCommand.Type;
 
-const SchemaCounterCommand = Schema.Union([
-  Schema.TaggedStruct("Add", { value: Schema.Number }),
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
-]);
+const SchemaCounterCommand = Schema.TaggedUnion({
+  Add: { value: Schema.Number },
+  Read: { replyTo: ReplyTo<number>() },
+});
 
 class SchemaCounter extends PersistentActor.Service<SchemaCounter>()("test/SchemaCounter", {
   command: SchemaCounterCommand,
@@ -414,11 +414,11 @@ test("a PersistentActor can use a stable identity independent of its path", asyn
   assert.equal(value, 8);
 });
 
-const ObjectCommand = Schema.Union([
-  Schema.TaggedStruct("Add", { value: Schema.Number }),
-  Schema.TaggedStruct("AttemptMutation", {}),
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
-]);
+const ObjectCommand = Schema.TaggedUnion({
+  Add: { value: Schema.Number },
+  AttemptMutation: {},
+  Read: { replyTo: ReplyTo<number>() },
+});
 type ObjectCommand = typeof ObjectCommand.Type;
 
 class ObjectCounter extends PersistentActor.Service<ObjectCounter>()("test/ObjectCounter", {
@@ -501,11 +501,11 @@ test("recovery retries cleanup after a snapshot was saved", async () => {
   assert.equal(cleanupCalls, 2);
 });
 
-const BigIntCommand = Schema.Union([
-  Schema.TaggedStruct("Add", { value: Schema.BigInt }),
-  Schema.TaggedStruct("Snapshot", {}),
-  Schema.TaggedStruct("Read", { replyTo: ReplyTo<bigint>() }),
-]);
+const BigIntCommand = Schema.TaggedUnion({
+  Add: { value: Schema.BigInt },
+  Snapshot: {},
+  Read: { replyTo: ReplyTo<bigint>() },
+});
 type BigIntCommand = typeof BigIntCommand.Type;
 
 class BigIntCounter extends PersistentActor.Service<BigIntCounter>()("test/BigIntCounter", {

@@ -6,10 +6,10 @@ import { GoalIntentInput } from "../goals/screening/intent.js";
 import { SignalReactionInput } from "../signals/protocol.js";
 
 const Attempts = Schema.Int.check(Schema.isGreaterThanOrEqualTo(0));
-export const ReactionDeliveryInput = Schema.Union([
-  Schema.TaggedStruct("Goal", { input: GoalIntentInput }),
-  Schema.TaggedStruct("Signal", { input: SignalReactionInput }),
-]);
+export const ReactionDeliveryInput = Schema.TaggedUnion({
+  Goal: { input: GoalIntentInput },
+  Signal: { input: SignalReactionInput },
+});
 export type ReactionDeliveryInput = typeof ReactionDeliveryInput.Type;
 const delivery = { command: ReactionDeliveryInput, attempts: Attempts };
 export const ReactionDelivery = Schema.Union([
@@ -22,32 +22,37 @@ export const ReactionDelivery = Schema.Union([
 export type ReactionDelivery = typeof ReactionDelivery.Type;
 
 /** Only the evidence required to repeat the same target decision. */
-export const ReactionCandidate = Schema.Union([
-  Schema.TaggedStruct("Signal", {
+export const ReactionCandidate = Schema.TaggedUnion({
+  Signal: {
     slug: Schema.String,
     when: Schema.String,
     version: Schema.Int.check(Schema.isGreaterThan(0)),
-  }),
-  Schema.TaggedStruct("Goal", {
+  },
+  Goal: {
     slug: Schema.String,
     title: Schema.String,
     description: Schema.String,
     summary: Schema.String,
-  }),
-]);
+  },
+});
 export type ReactionCandidate = typeof ReactionCandidate.Type;
 export const targetPath = (input: ReactionCandidate): string =>
   `/${input._tag === "Goal" ? "goals" : "signals"}/${input.slug}`;
 
-export const ReactionDecision = Schema.Union([
-  Schema.TaggedStruct("Failed", { error: Schema.String }),
-  Schema.TaggedStruct("NotMatched", { reason: Schema.String }),
-  Schema.TaggedStruct("Matched", { reason: Schema.String, delivery: ReactionDelivery }),
-]);
+export const ReactionDecision = Schema.TaggedUnion({
+  Failed: { error: Schema.String },
+  NotMatched: { reason: Schema.String },
+  Matched: { reason: Schema.String, delivery: ReactionDelivery },
+});
 export type ReactionDecision = typeof ReactionDecision.Type;
 export const ReactionTarget = Schema.Struct({
   input: ReactionCandidate,
-  result: Schema.Union([Schema.TaggedStruct("Pending", {}), ReactionDecision]),
+  result: Schema.TaggedUnion({
+    Pending: {},
+    Failed: ReactionDecision.cases.Failed.fields,
+    NotMatched: ReactionDecision.cases.NotMatched.fields,
+    Matched: ReactionDecision.cases.Matched.fields,
+  }),
 });
 export type ReactionTarget = typeof ReactionTarget.Type;
 export const ReactionPlan = Schema.Array(
@@ -148,8 +153,8 @@ export const ReactionSnapshot = Schema.Struct({
   ),
 );
 export type ReactionSnapshot = typeof ReactionSnapshot.Type;
-export const ReactionReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-]);
+export const ReactionReply = Schema.TaggedUnion({
+  Accepted: { receipt: CommandReceipt },
+  Rejected: { error: ApplicationError },
+});
 export type ReactionReply = typeof ReactionReply.Type;

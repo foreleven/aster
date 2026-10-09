@@ -13,31 +13,31 @@ import { EmailData, MailboxProfile } from "./model.js";
 import { LarkMailCli, LarkResponseError } from "./client.js";
 import { LarkMailMessageActor, type MailMessageCommand } from "./message-actor.js";
 import { MailWindow, mailDayStart, mailWindow } from "./window.js";
-const EmailChannelCommand = Schema.Union([
-  Schema.TaggedStruct("ProfileLoaded", {
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: MailboxProfile }),
-      Schema.TaggedStruct("Failure", {
+const EmailChannelCommand = Schema.TaggedUnion({
+  ProfileLoaded: {
+    result: Schema.TaggedUnion({
+      Success: { value: MailboxProfile },
+      Failure: {
         error: Schema.instanceOf(Error),
-      }),
-    ]),
-  }),
-  Schema.TaggedStruct("Poll", {}),
-  Schema.TaggedStruct("Polled", {
+      },
+    }),
+  },
+  Poll: {},
+  Polled: {
     window: MailWindow,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: Schema.Array(EmailData) }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
-    ]),
-  }),
-  Schema.TaggedStruct("Published", {
+    result: Schema.TaggedUnion({
+      Success: { value: Schema.Array(EmailData) },
+      Failure: { error: Schema.instanceOf(Error) },
+    }),
+  },
+  Published: {
     window: MailWindow,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: Schema.Void }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(Error) }),
-    ]),
-  }),
-]);
+    result: Schema.TaggedUnion({
+      Success: { value: Schema.Void },
+      Failure: { error: Schema.instanceOf(Error) },
+    }),
+  },
+});
 type EmailChannelCommand = typeof EmailChannelCommand.Type;
 
 const MailboxState = Schema.Struct({

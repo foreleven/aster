@@ -9,13 +9,13 @@ import { SignalChangeInput, SignalReactionInput } from "../protocol.js";
 import { SignalSnapshot, SignalTime } from "./snapshot.js";
 
 const { sourceContext: _evidence, ...reactionIdentity } = SignalReactionInput.fields;
-const SignalReceipt = Schema.Union([
-  Schema.TaggedStruct("Command", { input: SignalChangeInput, receipt: CommandReceipt }),
-  Schema.TaggedStruct("Reaction", {
+const SignalReceipt = Schema.TaggedUnion({
+  Command: { input: SignalChangeInput, receipt: CommandReceipt },
+  Reaction: {
     input: Schema.Struct(reactionIdentity),
     receipt: CommandReceipt,
-  }),
-]);
+  },
+});
 const DeliveryStatus = Schema.Literals(["pending", "sending", "delivered", "failed", "cancelled"]);
 export const SignalDelivery = Schema.Struct({
   message: TaskMessage,
@@ -23,23 +23,23 @@ export const SignalDelivery = Schema.Struct({
   error: Schema.optional(Schema.String),
 });
 export type SignalDelivery = typeof SignalDelivery.Type;
-const Event = Schema.Union([
-  Schema.TaggedStruct("Changed", {
+const Event = Schema.TaggedUnion({
+  Changed: {
     snapshot: SignalSnapshot,
     remainingAgentTurns: Schema.optional(RemainingAgentTurns),
     receipt: Schema.optional(SignalReceipt),
-  }),
-  Schema.TaggedStruct("Triggered", {
+  },
+  Triggered: {
     message: TaskMessage,
     nextDue: Schema.optional(Schema.NullOr(SignalTime)),
     receipt: Schema.optional(SignalReceipt),
-  }),
-  Schema.TaggedStruct("DeliveryChanged", {
+  },
+  DeliveryChanged: {
     requestId: Schema.String,
     status: Schema.Literals(["sending", "delivered", "failed"]),
     error: Schema.optional(Schema.String),
-  }),
-]);
+  },
+});
 type Event = typeof Event.Type;
 interface History {
   readonly sequence: number;

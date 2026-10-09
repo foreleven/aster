@@ -53,10 +53,10 @@ export class SignalDefinitions extends Context.Service<
   SignalDefinitions,
   readonly SignalDefinition[]
 >()("signals/Definitions") {}
-export const SignalCommandReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", { receipt: CommandReceipt }),
-  Schema.TaggedStruct("Rejected", { error: Schema.instanceOf(ApplicationError) }),
-]);
+export const SignalCommandReply = Schema.TaggedUnion({
+  Accepted: { receipt: CommandReceipt },
+  Rejected: { error: Schema.instanceOf(ApplicationError) },
+});
 export type SignalCommandReply = typeof SignalCommandReply.Type;
 const React = Schema.TaggedStruct("React", {
   input: SignalReactionInput,
@@ -70,26 +70,26 @@ const PauseByOwner = Schema.TaggedStruct("PauseByOwner", {
   owner: GoalPath,
   replyTo: ReplyTo<void>(),
 });
-export const SignalCommand = Schema.Union([
-  React,
-  Change,
-  PauseByOwner,
-  Schema.TaggedStruct("Tick", { version: Schema.Int, due: SignalTime }),
-  Schema.TaggedStruct("Dispatch", {}),
-  Schema.TaggedStruct("Delivered", {
+export const SignalCommand = Schema.TaggedUnion({
+  React: React.fields,
+  Change: Change.fields,
+  PauseByOwner: PauseByOwner.fields,
+  Tick: { version: Schema.Int, due: SignalTime },
+  Dispatch: {},
+  Delivered: {
     id: Schema.String,
-    result: Schema.Union([
-      Schema.TaggedStruct("Success", { value: Schema.optional(CommandReceipt) }),
-      Schema.TaggedStruct("Failure", { error: Schema.instanceOf(ApplicationError) }),
-    ]),
-  }),
-]);
+    result: Schema.TaggedUnion({
+      Success: { value: Schema.optional(CommandReceipt) },
+      Failure: { error: Schema.instanceOf(ApplicationError) },
+    }),
+  },
+});
 export type SignalCommand = typeof SignalCommand.Type;
-export const SignalRootCommand = Schema.Union([
-  Schema.TaggedStruct("ListByOwner", { owner: GoalPath, replyTo: queryReplyTo }),
-  React,
-  Change,
-  PauseByOwner,
-  Schema.TaggedStruct("OwnerPaused", { replyTo: ReplyTo<void>() }),
-]);
+export const SignalRootCommand = Schema.TaggedUnion({
+  ListByOwner: { owner: GoalPath, replyTo: queryReplyTo },
+  React: React.fields,
+  Change: Change.fields,
+  PauseByOwner: PauseByOwner.fields,
+  OwnerPaused: { replyTo: ReplyTo<void>() },
+});
 export type SignalRootCommand = typeof SignalRootCommand.Type;

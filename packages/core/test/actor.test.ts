@@ -12,14 +12,14 @@ import {
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
-const Command = Schema.Union([
-  Schema.TaggedStruct("Set", { value: Schema.Number }),
-  Schema.TaggedStruct("Read", {
+const Command = Schema.TaggedUnion({
+  Set: { value: Schema.Number },
+  Read: {
     replyTo: ReplyTo<{ path: string; value: number }>(),
-  }),
-  Schema.TaggedStruct("Fail", {}),
-  Schema.TaggedStruct("Stop", {}),
-]);
+  },
+  Fail: {},
+  Stop: {},
+});
 class Counter extends ContextActor.Service<Counter>()("test/ContextCounter", {
   command: Command,
   context: defineContext({

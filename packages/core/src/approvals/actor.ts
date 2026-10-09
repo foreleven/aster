@@ -12,22 +12,22 @@ export const ApprovalResolved = Schema.TaggedStruct("ApprovalResolved", {
   requestId: Schema.String,
   response: ApprovalResponse,
 });
-export const ApprovalReply = Schema.Union([
-  Schema.TaggedStruct("Accepted", {}),
-  Schema.TaggedStruct("Rejected", { error: ApplicationError }),
-]);
+export const ApprovalReply = Schema.TaggedUnion({
+  Accepted: {},
+  Rejected: { error: ApplicationError },
+});
 export type ApprovalReply = typeof ApprovalReply.Type;
-export const ApprovalCommand = Schema.Union([
-  Schema.TaggedStruct("Revoke", { id: Schema.String }),
-  Schema.TaggedStruct("Enqueue", { entry: ApprovalEntry }),
-  Schema.TaggedStruct("Resolve", {
+export const ApprovalCommand = Schema.TaggedUnion({
+  Revoke: { id: Schema.String },
+  Enqueue: { entry: ApprovalEntry },
+  Resolve: {
     id: Schema.String,
     response: ApprovalResponse,
     replyTo: ReplyTo<ApprovalReply>(),
-  }),
-  Schema.TaggedStruct("Acknowledge", { id: Schema.String, target: Schema.String }),
-  Schema.TaggedStruct("Deliver", {}),
-]);
+  },
+  Acknowledge: { id: Schema.String, target: Schema.String },
+  Deliver: {},
+});
 export type ApprovalCommand = typeof ApprovalCommand.Type;
 export const sendApproval = (
   context: Pick<ActorContext<unknown>, "select">,

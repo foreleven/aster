@@ -10,11 +10,11 @@ import type { ImSummaryError } from "../shared/errors.js";
 export const batchFingerprint = (messages: readonly ImMessage[]) =>
   createHash("sha256").update(JSON.stringify(messages)).digest("hex");
 
-export const SummaryCheckpoint = Schema.Union([
-  Schema.TaggedStruct("Assessed", { fingerprint: Schema.String, needed: Schema.Boolean }),
-  Schema.TaggedStruct("Stage", {}),
-  Schema.TaggedStruct("Daily", { summary: ChatSummary }),
-]);
+export const SummaryCheckpoint = Schema.TaggedUnion({
+  Assessed: { fingerprint: Schema.String, needed: Schema.Boolean },
+  Stage: {},
+  Daily: { summary: ChatSummary },
+});
 export type SummaryCheckpoint = typeof SummaryCheckpoint.Type;
 
 const FrozenStage = Schema.Struct({
