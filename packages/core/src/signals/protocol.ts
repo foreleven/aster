@@ -1,11 +1,12 @@
-import { ReplyTo } from "@aster/actor";
-import { ApplicationError, CommandReceipt } from "../operations.js";
-import { RemainingAgentTurns } from "../tasks/contracts.js";
-import { GoalPath } from "../goals/contracts.js";
-import { PublicContext } from "../context/contracts.js";
+import type { MailboxOf } from "@aster/actor";
+import { Command as ActorCommand, ReplyTo } from "@aster/actor";
 import { Context, Schema } from "effect";
-import { queryReplyTo } from "../services/actors.js";
 import { SignalDefinition } from "../config/schema.js";
+import { PublicContext } from "../context/contracts.js";
+import { GoalPath } from "../goals/contracts.js";
+import { ApplicationError, CommandReceipt } from "../operations.js";
+import { QueryReply } from "../services/actors.js";
+import { RemainingAgentTurns } from "../tasks/contracts.js";
 import { SignalTime } from "./state/snapshot.js";
 
 export const SignalReactionInput = Schema.Struct({
@@ -58,22 +59,20 @@ export const SignalCommandReply = Schema.TaggedUnion({
   Rejected: { error: Schema.instanceOf(ApplicationError) },
 });
 export type SignalCommandReply = typeof SignalCommandReply.Type;
-const React = Schema.TaggedStruct("React", {
-  input: SignalReactionInput,
-  replyTo: ReplyTo<SignalCommandReply>(),
-});
-const Change = Schema.TaggedStruct("Change", {
-  input: SignalChangeInput,
-  replyTo: ReplyTo<SignalCommandReply>(),
-});
-const PauseByOwner = Schema.TaggedStruct("PauseByOwner", {
-  owner: GoalPath,
-  replyTo: ReplyTo<void>(),
-});
-export const SignalCommand = Schema.TaggedUnion({
-  React: React.fields,
-  Change: Change.fields,
-  PauseByOwner: PauseByOwner.fields,
+export class React extends ActorCommand.Class<React>()("React", {
+  payload: { input: SignalReactionInput },
+  reply: SignalCommandReply,
+}) {}
+export class Change extends ActorCommand.Class<Change>()("Change", {
+  payload: { input: SignalChangeInput },
+  reply: SignalCommandReply,
+}) {}
+export class PauseByOwner extends ActorCommand.Class<PauseByOwner>()("PauseByOwner", {
+  payload: { owner: GoalPath },
+  reply: Schema.Void,
+}) {}
+export const SignalCommands = [React, Change, PauseByOwner] as const;
+export const SignalInternal = Schema.TaggedUnion({
   Tick: { version: Schema.Int, due: SignalTime },
   Dispatch: {},
   Delivered: {
@@ -84,12 +83,13 @@ export const SignalCommand = Schema.TaggedUnion({
     }),
   },
 });
-export type SignalCommand = typeof SignalCommand.Type;
-export const SignalRootCommand = Schema.TaggedUnion({
-  ListByOwner: { owner: GoalPath, replyTo: queryReplyTo },
-  React: React.fields,
-  Change: Change.fields,
-  PauseByOwner: PauseByOwner.fields,
+export type SignalCommand = MailboxOf<typeof SignalCommands, typeof SignalInternal>;
+export class ListByOwner extends ActorCommand.Class<ListByOwner>()("ListByOwner", {
+  payload: { owner: GoalPath },
+  reply: QueryReply,
+}) {}
+export const SignalRootCommands = [ListByOwner, React, Change, PauseByOwner] as const;
+export const SignalRootInternal = Schema.TaggedUnion({
   OwnerPaused: { replyTo: ReplyTo<void>() },
 });
-export type SignalRootCommand = typeof SignalRootCommand.Type;
+export type SignalRootCommand = MailboxOf<typeof SignalRootCommands, typeof SignalRootInternal>;

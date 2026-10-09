@@ -1,10 +1,10 @@
 import { Effect, Schema } from "effect";
 import { SignalSnapshot } from "./state/snapshot.js";
 
-import { registerCollectionQueries } from "../context/queries/commands.js";
+import { makeCollectionQueries } from "../context/queries/commands.js";
 import { publicJson } from "../json.js";
-export const registerSignalQueries = () =>
-  registerCollectionQueries(
+export const makeSignalQueries = () =>
+  makeCollectionQueries(
     "/signals",
     Effect.fnUntraced(function* (record, detail) {
       const state = yield* Schema.decodeUnknownEffect(SignalSnapshot)(record.state).pipe(

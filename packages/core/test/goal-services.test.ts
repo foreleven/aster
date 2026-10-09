@@ -1,26 +1,26 @@
-import { makeHarness } from "./harness-fixtures.js";
-import { DurableHarness, AgentConversations } from "@aster/agent/harness";
-import { CurrentActors } from "../src/services/actors.js";
-import assert from "node:assert/strict";
-import { test } from "node:test";
 import { AgentError, type AssistantMessage } from "@aster/agent";
 import { AgentRunner } from "@aster/agent/agent";
+import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Result, Schema, Scope } from "effect";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { GoalState } from "../src/goals/state/model.js";
+import { GoalSnapshot } from "../src/goals/state/snapshot.js";
 import {
+  ContextRegistry,
+  defineContext,
+  ExternalAgents,
   GoalActor,
   GoalAgent,
   GoalSettings,
-  ContextRegistry,
   MemoryRecall,
-  ExternalAgents,
-  defineContext,
   TaskSnapshot,
 } from "../src/index.js";
+import { CurrentActors } from "../src/services/actors.js";
 import { taskPathFor } from "../src/tasks/state/admission.js";
-import { GoalState } from "../src/goals/state/model.js";
-import { GoalSnapshot } from "../src/goals/state/snapshot.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
+import { makeHarness } from "./harness-fixtures.js";
 
 const definition = { slug: "personal", description: "Assist the user" };
 const path = "/goals/personal";
@@ -37,7 +37,7 @@ test("GoalState serializes local summary updates with concurrent durable admissi
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        yield* registry.register(path, GoalActor.context);
+        yield* registry.register(path, GoalActor.contextDefinition);
         const messages = testConversations();
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -102,7 +102,7 @@ test("GoalState drains an admitted commit into its Ref despite interruption and 
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        yield* registry.register(path, GoalActor.context);
+        yield* registry.register(path, GoalActor.contextDefinition);
         const stored = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         const messages = testConversations();
@@ -163,7 +163,7 @@ test("failed Goal persistence leaves the committed Ref unchanged and remains a d
               throw new Error("Injected storage failure");
           },
         });
-        yield* registry.register(path, GoalActor.context);
+        yield* registry.register(path, GoalActor.contextDefinition);
         const goal = yield* openGoal(registry, testConversations());
         const result = yield* goal.updateSummary("Uncommitted finding").pipe(Effect.exit);
         assert.ok(Exit.hasDies(result));
@@ -182,7 +182,7 @@ test("Goal task references recover interrupted attachment and reject unrelated T
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        yield* registry.register(path, GoalActor.context);
+        yield* registry.register(path, GoalActor.contextDefinition);
         const messages = testConversations();
         const lifetime = yield* Scope.make();
         const goal = yield* openGoal(registry, messages).pipe(
@@ -250,7 +250,7 @@ test("GoalState persists replies before state settlement and resumes the handoff
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        yield* registry.register(path, GoalActor.context);
+        yield* registry.register(path, GoalActor.contextDefinition);
         const messages = testConversations();
         const appended = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -315,7 +315,7 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        yield* registry.register(path, GoalActor.context);
+        yield* registry.register(path, GoalActor.contextDefinition);
         const goal = yield* openGoal(registry, testConversations());
         const message: AssistantMessage = {
           role: "assistant",

@@ -1,33 +1,33 @@
-import { makeHarness } from "./harness-fixtures.js";
+import { Actor, ActorSystem } from "@aster/actor";
+import { AgentConversations, DurableHarness } from "@aster/agent/harness";
+import { Clock, Effect, Layer, Schema, Stream } from "effect";
+import {
+  ApprovalQueueActor,
+  ContextQueries,
+  ContextRegistry,
+  ExternalAgents,
+  GoalSettings,
+  SignalDefinitions,
+  TaskSnapshot,
+  TasksRootActor,
+  defineContext,
+  type ExternalAgent,
+  type StoredContext,
+} from "../src/index.js";
 import {
   readExecutionCheckpoint,
   type ExecutionCheckpoint,
 } from "../src/tasks/execution/checkpoint.js";
-import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { testConversations } from "./conversation-fixtures.js";
+import { makeHarness } from "./harness-fixtures.js";
 import { emptyRecall } from "./workflow-fixtures.js";
-import {
-  GoalSettings,
-  ContextQueries,
-  ApprovalQueueActor,
-  SignalDefinitions,
-  ContextRegistry,
-  ExternalAgents,
-  TasksRootActor,
-  TaskSnapshot,
-  defineContext,
-  type StoredContext,
-  type ExternalAgent,
-} from "../src/index.js";
-import { Actor, ActorSystem } from "@aster/actor";
-import { Clock, Effect, Layer, Schema, Stream } from "effect";
 
-import { GoalCommand, GoalMailbox } from "../src/goals/protocol.js";
+import { GoalCommands, type GoalCommand } from "../src/goals/protocol.js";
 
+import type { TaskDeliveryInput } from "../src/tasks/contracts.js";
+import { taskPathFor } from "../src/tasks/state/admission.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { fakeAgent } from "./fixtures.js";
-import { taskPathFor } from "../src/tasks/state/admission.js";
-import type { TaskDeliveryInput } from "../src/tasks/contracts.js";
 
 export const taskInput = (requestId = "task", source = "/goals/personal"): TaskDeliveryInput => ({
   requestId,
@@ -59,38 +59,30 @@ export const taskFixture = Effect.fnUntraced(function* (
     },
   });
   const feedback: GoalCommand[] = [];
-  class GoalSink extends Actor.Service<GoalSink>()("test/TaskGoal", { command: GoalMailbox }) {
-    static readonly layer = Layer.succeed(
-      GoalSink,
-      GoalSink.of({
-        receive: (command) =>
-          Effect.gen(function* () {
-            if (command._tag === "AttachTask")
-              return yield* command.replyTo.tell({ _tag: "Attached" });
-            if (
-              command._tag !== "SubmitInput" &&
-              command._tag !== "End" &&
-              command._tag !== "RetryTurn"
-            )
-              return yield* Effect.die(new Error(`Unexpected Goal command ${command._tag}`));
-            feedback.push(command);
-            yield* command.replyTo.tell({
-              _tag: "Accepted",
-              receipt: { requestId: command.requestId, revision: 1 },
-            });
-          }),
-      }),
-    );
-  }
-  class GoalRoot extends Actor.Service<GoalRoot>()("test/TaskGoals", { command: Schema.Never }) {
-    static readonly layer = Layer.succeed(
-      GoalRoot,
-      GoalRoot.of({
-        started: (actor) => actor.spawn("personal", GoalSink).pipe(Effect.asVoid),
-        receive: () => Effect.void,
-      }),
-    );
-  }
+  const GoalSink = Actor.define("test/TaskGoal", {
+    commands: GoalCommands,
+  })(
+    Effect.succeed({
+      receive: (command) =>
+        Effect.gen(function* () {
+          if (command._tag === "AttachTask")
+            return yield* command.replyTo.tell({ _tag: "Attached" });
+          feedback.push(command);
+          yield* command.replyTo.tell({
+            _tag: "Accepted",
+            receipt: { requestId: command.requestId, revision: 1 },
+          });
+        }),
+    }),
+  );
+  const GoalRoot = Actor.define("test/TaskGoals", {
+    commands: [],
+  })(
+    Effect.succeed({
+      started: (actor) => actor.spawn("personal", GoalSink).pipe(Effect.asVoid),
+      receive: () => Effect.void,
+    }),
+  );
   yield* registry.register(
     "/goals/personal",
     defineContext({ state: Schema.Struct({ status: Schema.String }), message: Schema.Never }),

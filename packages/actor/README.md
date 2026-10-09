@@ -2,7 +2,11 @@
 
 The Actor API and runtime semantics are specified in [docs/actor-design.md](../../docs/actor-design.md). This package implements them with `effect@4.0.0` on Node 24 or later.
 
-It exports `Actor`, `PersistentActor`, `ActorSystem`, `ActorPersistence`, SQLite and in-memory persistence Layers, and `ActorTestKit`. Actor definitions provide a static Effect Layer. `Actor.Service<Self, Services>()(key, { command })` and `PersistentActor.Service<Self, Services>()(key, { command, event, state })` infer protocol and state types from Effect Schemas. The `ReplyTo<Response>` type and `ReplyTo<Response>()` Schema helper describe response references in Commands. All repository Actor implementations and tests use the Schema forms; `Services` is optional and declares required dependencies. Command aliases use `typeof CommandSchema.Type`. The Schema argument is required. Command Schemas provide types only; Commands are not decoded or persisted. `ActorSystem.make().pipe(ActorSystem.provide(...layers))` acquires the service environment in a Scope; `system.spawn` creates top-level actors and `ActorContext.spawn` creates children.
+The package exports `Command`, `Actor`, `PersistentActor`, `ActorSystem`, persistence Layers and `ActorTestKit`. Define public messages with `Command.Class`, then declare `Actor.define(key, { commands: [Search], internal })(acquire)`. The public reference accepts the declared classes; handlers and `self` additionally accept the internal schema. Tags, payloads and replies come from the command class. Dependencies are inferred from acquisition, handler Effects and child spawning.
+
+`Command.Class` supports payload-only notifications, explicit `reply` schemas, and `success`/`error` replies. Generated `replyTo` references are local and explicit; `Command.Reply<typeof Search>` derives their response type. `PersistentActor.define` adds `event` and `state` schemas and automatically requires persistence. `Actor.provide(layer)` and `PersistentActor.provide(layer)` supply Behavior-local dependencies.
+
+`ActorSystem.make().pipe(ActorSystem.provide(...layers))` acquires the shared environment in a Scope. `system.spawn` creates roots; `ActorContext.spawn` creates children. Local commands are transient and `tell` does not perform decoding. Command constructors and external boundary decoders validate values. Duplicate public/internal tags fail acquisition.
 
 ## Ownership and Layers
 

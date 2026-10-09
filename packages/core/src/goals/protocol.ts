@@ -1,12 +1,13 @@
-import { GoalIntentInput } from "./screening/intent.js";
-import { ApplicationError, CommandReceipt } from "../operations.js";
-import { GoalExecutionFeedback } from "./contracts.js";
-import { TaskMessage, TaskPath } from "../tasks/contracts.js";
-import { Predicate, Schema } from "effect";
-import { ReplyTo } from "@aster/actor";
-import { publicJson } from "../json.js";
-import { createHash } from "node:crypto";
+import type { MailboxOf } from "@aster/actor";
+import { Command as ActorCommand } from "@aster/actor";
 import { AgentError } from "@aster/agent";
+import { Predicate, Schema } from "effect";
+import { createHash } from "node:crypto";
+import { publicJson } from "../json.js";
+import { ApplicationError, CommandReceipt } from "../operations.js";
+import { TaskMessage, TaskPath } from "../tasks/contracts.js";
+import { GoalExecutionFeedback } from "./contracts.js";
+import { GoalIntentInput } from "./screening/intent.js";
 
 /** Producer-specific envelopes preserve provenance; only UserInput crosses public ingress. */
 export const GoalSubmission = Schema.TaggedUnion({
@@ -30,11 +31,22 @@ export const GoalCommandReply = Schema.TaggedUnion({
   Rejected: { error: ApplicationError },
 });
 export type GoalCommandReply = typeof GoalCommandReply.Type;
-const replyTo = ReplyTo<GoalCommandReply>();
+export class SubmitInput extends ActorCommand.Class<SubmitInput>()("SubmitInput", {
+  payload: { ...submit },
+  reply: GoalCommandReply,
+}) {}
+export class End extends ActorCommand.Class<End>()("End", {
+  payload: { ...end },
+  reply: GoalCommandReply,
+}) {}
+export class RetryTurn extends ActorCommand.Class<RetryTurn>()("RetryTurn", {
+  payload: { ...retry },
+  reply: GoalCommandReply,
+}) {}
 export const GoalCommand = Schema.TaggedUnion({
-  SubmitInput: { ...submit, replyTo },
-  End: { ...end, replyTo },
-  RetryTurn: { ...retry, replyTo },
+  SubmitInput: SubmitInput.fields,
+  End: End.fields,
+  RetryTurn: RetryTurn.fields,
 });
 export type GoalCommand = typeof GoalCommand.Type;
 /** Receipts retain identity and content equality without duplicating the accepted input. */
@@ -67,14 +79,12 @@ export const GoalTaskReply = Schema.TaggedUnion({
 });
 export type GoalTaskReply = typeof GoalTaskReply.Type;
 
-export const GoalMailbox = Schema.TaggedUnion({
-  SubmitInput: GoalCommand.cases.SubmitInput.fields,
-  End: GoalCommand.cases.End.fields,
-  RetryTurn: GoalCommand.cases.RetryTurn.fields,
-  AttachTask: {
-    taskPath: TaskPath,
-    replyTo: ReplyTo<GoalTaskReply>(),
-  },
+export class AttachTask extends ActorCommand.Class<AttachTask>()("AttachTask", {
+  payload: { taskPath: TaskPath },
+  reply: GoalTaskReply,
+}) {}
+export const GoalCommands = [SubmitInput, End, RetryTurn, AttachTask] as const;
+export const GoalInternal = Schema.TaggedUnion({
   RunNext: {},
   GateSettled: {
     generation: Schema.String,
@@ -102,4 +112,4 @@ export const GoalMailbox = Schema.TaggedUnion({
     }),
   },
 });
-export type GoalMailbox = typeof GoalMailbox.Type;
+export type GoalMailbox = MailboxOf<typeof GoalCommands, typeof GoalInternal>;

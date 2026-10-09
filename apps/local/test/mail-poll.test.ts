@@ -1,17 +1,19 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { ContextQueries } from "@aster/core";
+// Tests inject internal completion and timer messages through untyped selections.
 import { ActorSystem } from "@aster/actor";
 import { ContextRegistry, contextSpawnOptions } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import {
+  LarkCliError,
   LarkConfig,
   LarkEmailChannelActor,
   LarkMailCli,
-  LarkCliError,
   type EmailData,
 } from "@aster/integrations";
 import { Clock, Deferred, Effect, Layer, Queue, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import assert from "node:assert/strict";
+import { test } from "node:test";
 
 const midnight = Date.parse("2026-10-03T00:00:00+08:00");
 const email: EmailData = {
@@ -50,6 +52,7 @@ test("mail retries failed windows, waits for durable publication, and deduplicat
           let fetches = 0;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              ContextQueries.layer,
               Layer.succeed(ContextRegistry, controlledRegistry),
               Layer.succeed(LarkConfig, {
                 description: "Mail",
@@ -91,7 +94,7 @@ test("mail retries failed windows, waits for durable publication, and deduplicat
           yield* clock.adjust(30_000);
           assert.deepEqual(yield* Queue.take(windows), [midnight, midnight + 30 * 60_000 + 30_000]);
           yield* Deferred.await(fetched);
-          yield* actor.tell({ _tag: "Poll" });
+          yield* (yield* system.select(actor.path).resolve()).tell({ _tag: "Poll" });
           yield* clock.adjust(10_000);
           assert.equal(registry.get("/lark/mail/me/one"), undefined);
           assert.equal(yield* Queue.size(windows), 0);
@@ -127,6 +130,7 @@ for (const failure of ["transport", "incomplete"] as const)
             const registry = yield* makeContextRegistry();
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
+                ContextQueries.layer,
                 Layer.succeed(ContextRegistry, registry),
                 Layer.succeed(LarkConfig, {
                   description: "Mail",
@@ -166,6 +170,7 @@ test("empty mail windows catch up immediately, then wait for the polling interva
           const registry = yield* makeContextRegistry();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              ContextQueries.layer,
               Layer.succeed(ContextRegistry, registry),
               Layer.succeed(LarkConfig, {
                 description: "Mail",
@@ -217,6 +222,7 @@ test("stopping a mailbox interrupts its active retrieval", async () => {
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(LarkConfig, {
               description: "Mail",

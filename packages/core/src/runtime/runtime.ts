@@ -1,47 +1,45 @@
-import { DurableHarness, AgentConversations } from "@aster/agent/harness";
-import { registerGoalQueries } from "../goals/view.js";
-import { registerTaskQueries, taskCapture } from "../tasks/view.js";
-import { registerSignalQueries } from "../signals/queries.js";
+import { ActorSystem, type ActorSystemEvent } from "@aster/actor";
+import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { ContextsActor } from "../context/queries/actor.js";
-import { ContextCaptures } from "../memory/capture.js";
-import { DurableContext } from "../context/store.js";
-import { coreContextViews } from "./context-views.js";
 import { ContextQueries } from "../context/queries/routes.js";
+import { DurableContext } from "../context/store.js";
+import { GoalScreeningStore } from "../goals/screening/decision.js";
 import { MemoryActor, memoryView } from "../memory/actor.js";
+import { ContextCaptures } from "../memory/capture.js";
 import { ApplicationError } from "../operations.js";
 import { SystemOneActor } from "../reactions/actor.js";
 import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
-import { GoalScreeningStore } from "../goals/screening/decision.js";
 import { TasksRootActor } from "../tasks/root.js";
-import { type ActorSystemEvent, ActorSystem } from "@aster/actor";
+import { taskCapture } from "../tasks/view.js";
+import { coreContextViews } from "./context-views.js";
 import { RuntimeConfigurationError } from "./errors.js";
 
 import { AgentRunner } from "@aster/agent/agent";
 import {
   Cause,
   Clock,
-  Context,
   ConfigProvider,
+  Context,
   Deferred,
   Effect,
   Exit,
   Fiber,
   Layer,
-  Ref,
   Option,
+  Ref,
   Scope,
   Stream,
 } from "effect";
+import { GoalSettings, signalSettings } from "../config/settings.js";
 import { ContextRegistry } from "../context/registry.js";
 import { MemoryBackend } from "../memory/contracts.js";
-import { GoalSettings, signalSettings } from "../config/settings.js";
+import { SystemOneClient } from "../services/system-one.js";
 import { SignalDefinitions } from "../signals/protocol.js";
 import { SignalRootActor } from "../signals/root.js";
-import { SystemOneClient } from "../services/system-one.js";
 
+import { ApprovalQueueActor } from "../approvals/actor.js";
 import { GoalsRootActor } from "../goals/root.js";
 import { ExternalAgents } from "../tasks/execution/contracts.js";
-import { ApprovalQueueActor } from "../approvals/actor.js";
 
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
 
@@ -77,7 +75,6 @@ const acquireRuntime = Effect.gen(function* () {
       message: "Signals and Goals require config.system-one",
     });
   const conversations = yield* AgentConversations;
-  yield* Effect.all([registerGoalQueries(), registerTaskQueries(), registerSignalQueries()]);
   const memoryBackend = yield* MemoryBackend;
   yield* (yield* ContextCaptures).register([taskCapture(conversations)]);
   const modules = (yield* RuntimeIntegrations).installed();

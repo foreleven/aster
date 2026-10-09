@@ -40,3 +40,5 @@ pnpm exec effect-language-service diagnostics --project packages/core/tsconfig.j
 ```
 
 Memory and reactions own their subscriptions and Behavior-scoped workers. Their defects enter Actor supervision, and Runtime reports permanent core-owner termination as failed health. Context maintenance no longer uses a shared Fiber or capture-sink bridge. Module Settings consume the host ConfigProvider directly; there is no legacy whole-file CoreConfig parser. Private state models and reasoning helpers are not exported from the public package entry point.
+
+Actor owners use `ContextActor.define(key, { commands: [Search], internal, context })(acquire)`. Public commands use `Command.Class`; discoverable queries use core's `ContextCommand.Class`. The wrapper derives argument schemas and descriptions from those classes, registers after initialization and unregisters with the Behavior Scope. Query callbacks receive typed command instances. Acquisition and child Actor dependencies are inferred, and business owners no longer register query routes manually.

@@ -1,16 +1,14 @@
-import { submitGoal, goalCommand } from "./goal-command-fixtures.js";
-import type { ApprovalReply } from "../src/approvals/actor.js";
-import { AgentConversations } from "@aster/agent/harness";
-import { testConversations } from "./conversation-fixtures.js";
-import { goalWorkflowLayer } from "./workflow-fixtures.js";
-import assert from "node:assert/strict";
-import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
+import { AgentConversations } from "@aster/agent/harness";
 import { Clock, Deferred, Effect, Fiber, Layer, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import type { ApprovalReply } from "../src/approvals/actor.js";
+import { ContextQueries } from "../src/context/queries/routes.js";
 import {
-  ApprovalQueueActor,
   approvalEntries,
+  ApprovalQueueActor,
   ContextRegistry,
   ExternalAgents,
   GoalsRootActor,
@@ -18,6 +16,9 @@ import {
   SignalDefinitions,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
+import { testConversations } from "./conversation-fixtures.js";
+import { goalCommand, submitGoal } from "./goal-command-fixtures.js";
+import { goalWorkflowLayer } from "./workflow-fixtures.js";
 
 const definition = {
   slug: "review",
@@ -45,6 +46,7 @@ test("Goal command waits for durable input and history; stopped roots fail inste
         };
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ContextRegistry, registry),
 
             Layer.succeed(ExternalAgents, {}),
@@ -111,7 +113,7 @@ test("invalid option stays pending and can be corrected without losing the origi
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(Layer.succeed(ContextRegistry, registry)),
+          ActorSystem.provide(ContextQueries.layer, Layer.succeed(ContextRegistry, registry)),
         );
         const queue = yield* system.spawn("approvals", ApprovalQueueActor);
         yield* queue.tell({
@@ -178,6 +180,7 @@ test("malformed Signal delivery state stops before recovery writes or execution"
         });
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ContextRegistry, registry),
 
             Layer.succeed(ExternalAgents, {}),

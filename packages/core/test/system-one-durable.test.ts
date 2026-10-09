@@ -1,33 +1,33 @@
-import { inspectReactions } from "../src/reactions/inspection.js";
-import { DurableContext } from "../src/context/store.js";
-import { type TestContextRegistry, makeContextRegistry } from "../src/testing/context.js";
-import {
-  deliveriesOf,
-  workStatus,
-  targetPath,
-  ReactionSnapshot,
-  type ReactionWork,
-  type FrozenReaction,
-  type ReactionDeliveryInput,
-  type ReactionPlan,
-} from "../src/reactions/state.js";
-import { type RecoveryReply } from "../src/reactions/contracts.js";
-import assert from "node:assert/strict";
-import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import { ConfigProvider, Deferred, Effect, Layer, Schema, Stream } from "effect";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { DurableContext } from "../src/context/store.js";
 import {
-  DecisionError,
   ContextRegistry,
+  DecisionError,
   GoalSettings,
   contextView,
   defineContext,
-  type StoredContext,
   type ContextSnapshot,
+  type StoredContext,
 } from "../src/index.js";
+import { type RecoveryReply } from "../src/reactions/contracts.js";
+import { inspectReactions } from "../src/reactions/inspection.js";
+import {
+  ReactionSnapshot,
+  deliveriesOf,
+  targetPath,
+  workStatus,
+  type FrozenReaction,
+  type ReactionDeliveryInput,
+  type ReactionPlan,
+  type ReactionWork,
+} from "../src/reactions/state.js";
+import { makeContextRegistry, type TestContextRegistry } from "../src/testing/context.js";
 
 import { SystemOneActor } from "../src/reactions/actor.js";
-import { ReactionPolicy, ReactionFailure, makeReactionPolicy } from "../src/reactions/policy.js";
+import { ReactionFailure, ReactionPolicy, makeReactionPolicy } from "../src/reactions/policy.js";
 
 const sourceDefinition = defineContext({
   changes: "durable-state",
@@ -427,7 +427,7 @@ test("System One rejects corrupted recovered work before any planning or deliver
           save: () => assert.fail("Corrupted recovery must never rewrite stored state"),
         });
         const result = yield* recovered
-          .register("/system-one", SystemOneActor.context)
+          .register("/system-one", SystemOneActor.contextDefinition)
           .pipe(Effect.exit);
         assert.equal(result._tag, "Failure");
       }

@@ -1,6 +1,6 @@
-import { askQuery } from "../actors.js";
 import { Type } from "@aster/agent";
-import { ContextsCommand } from "../../context/queries/actor.js";
+import { ListContexts, type ContextsCommand } from "../../context/queries/actor.js";
+import { askQuery } from "../actors.js";
 import { queryTool } from "../define.js";
 export const listContexts = () =>
   queryTool(
@@ -16,7 +16,8 @@ export const listContexts = () =>
       }),
     },
     ({ parent, offset = 0 }) =>
-      askQuery<ContextsCommand>("/user/contexts", (replyTo) =>
-        ContextsCommand.cases.ListContexts.make({ parent, offset, replyTo }),
+      askQuery<ContextsCommand>(
+        "/user/contexts",
+        (replyTo) => new ListContexts({ parent, offset, replyTo }),
       ),
   );

@@ -1,25 +1,25 @@
-import { ContextCaptures } from "@aster/core";
-import { larkCaptures } from "./context-policies.js";
-import { larkContextViews } from "./public-views.js";
-import { RuntimeConfigurationError } from "@aster/core";
-import { Layer, Effect, Context, Deferred, Stream, Fiber } from "effect";
 import {
+  ContextCaptures,
   ContextQueries,
   ContextRegistry,
-  RuntimeIntegrations,
   defineIntegration,
+  RuntimeConfigurationError,
+  RuntimeIntegrations,
   SystemOneClient,
 } from "@aster/core";
-import { LarkRootActor } from "./account/root-actor.js";
-import { parseImPolicy } from "./im/policy.js";
-import { LarkConfig } from "./config.js";
+import { Context, Deferred, Effect, Fiber, Layer, Stream } from "effect";
 import { LarkAccountCli, makeAccountClient } from "./account/client.js";
-import { LarkMailCli, liveCli } from "./mail/client.js";
-import { ChatSummarizer } from "./im/summarizer.js";
-import { ImSearch } from "./im/client.js";
+import { LarkRootActor } from "./account/root-actor.js";
+import { LarkConfig } from "./config.js";
+import { larkCaptures } from "./context-policies.js";
 import { ImAgentQueue } from "./im/agent-queue.js";
-import { ImSummaryGate } from "./im/summary-gate.js";
+import { ImSearch } from "./im/client.js";
+import { parseImPolicy } from "./im/policy.js";
 import { ImStorage } from "./im/storage.js";
+import { ChatSummarizer } from "./im/summarizer.js";
+import { ImSummaryGate } from "./im/summary-gate.js";
+import { LarkMailCli, liveCli } from "./mail/client.js";
+import { larkContextViews } from "./public-views.js";
 const services = Layer.effect(
   LarkMailCli,
   Effect.gen(function* () {
@@ -104,7 +104,7 @@ export const LarkIntegration = {
               const actor = yield* system.spawn("lark", LarkRootActor);
               if (im === undefined) yield* Deferred.succeed(ready, undefined);
               return {
-                ready: Deferred.await(ready),
+                ready: actor.awaitStarted.pipe(Effect.andThen(Deferred.await(ready))),
                 stop: system.stop(actor).pipe(Effect.andThen(Fiber.interrupt(observer))),
               };
             }),

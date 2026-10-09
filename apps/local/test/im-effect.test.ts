@@ -1,24 +1,25 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
-import { Clock, Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect";
-import { TestClock } from "effect/testing";
+// Tests inject internal completion and timer messages through untyped selections.
 import { ActorSystem } from "@aster/actor";
 import { ContextRegistry, contextSpawnOptions } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import {
   ChatSummarizer,
   ImAgentQueue,
+  imDate,
   ImStorage,
   ImSummaryGate,
   LarkChatActor,
   makeImStorage,
   makeImSummaryGate,
-  imDate,
   type ChatSummaryInput,
 } from "@aster/integrations";
+import { Clock, Deferred, Effect, Fiber, Layer, Ref, Stream } from "effect";
+import { TestClock } from "effect/testing";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
 
 const chat = { id: "review", name: "Review", mode: "group", description: "" };
 const message = {
@@ -108,7 +109,7 @@ test("Chat stop interrupts model work and stale checkpoint commands cannot mutat
         yield* Deferred.await(entered);
         const date = imDate(message.at);
         const before = storage.get(date, chat.id);
-        yield* actor.tell({
+        yield* (yield* system.select(actor.path).resolve()).tell({
           _tag: "Summarized",
           date,
           generation: "retired",
@@ -124,7 +125,7 @@ test("Chat stop interrupts model work and stale checkpoint commands cannot mutat
           },
         });
         // This mailbox acknowledgement also fences the preceding stale completion.
-        const reply = yield* actor.ask((replyTo) => ({
+        const reply = yield* (yield* system.select(actor.path).resolve()).ask((replyTo) => ({
           _tag: "Checkpoint",
           date,
           generation: "retired",
@@ -201,7 +202,7 @@ test("concurrent Chat Actors keep summary state isolated and retain arrivals dur
         yield* Deferred.await(firstStarted);
         yield* Deferred.await(otherStarted);
         yield* actor.tell({ _tag: "Update", chat, messages: [second] });
-        yield* actor.ask((replyTo) => ({
+        yield* (yield* system.select(actor.path).resolve()).ask((replyTo) => ({
           _tag: "Checkpoint",
           date,
           generation: "mailbox-barrier",

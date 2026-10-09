@@ -1,22 +1,19 @@
-import { randomUUID } from "node:crypto";
-import { AgentConversations, DurableHarness } from "@aster/agent/harness";
-import { Context, Deferred, Effect, Fiber, Layer, Match, Option, Ref, Schema, Scope } from "effect";
 import type { ActorContext } from "@aster/actor";
+import { AgentConversations } from "@aster/agent/harness";
+import { Context, Deferred, Effect, Fiber, Layer, Match, Option, Ref, Schema, Scope } from "effect";
+import { randomUUID } from "node:crypto";
+import { approvalEntries, sendApproval } from "../approvals/actor.js";
 import { ContextActor, contextPath } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
-import { GoalSettings } from "../config/settings.js";
 import { CurrentActors } from "../services/actors.js";
-import { approvalEntries, sendApproval } from "../approvals/actor.js";
-import { ExternalAgents } from "./execution/contracts.js";
-import { TaskExecution } from "./execution/service.js";
-import { TaskSnapshot, TaskOutcome, type TaskInput } from "./state/snapshot.js";
-import { TaskState } from "./state/model.js";
-import { TaskCommand } from "./protocol.js";
 import { deliverTaskFeedback } from "./delivery.js";
+import { TaskExecution } from "./execution/service.js";
+import { TaskCommands, TaskInternal, type TaskCommand } from "./protocol.js";
+import { TaskState } from "./state/model.js";
+import { TaskOutcome, TaskSnapshot, type TaskInput } from "./state/snapshot.js";
 
-export type TaskServices = ExternalAgents | AgentConversations | DurableHarness | GoalSettings;
-type Owner = ActorContext<TaskCommand, TaskServices | ContextRegistry>;
+type Owner = ActorContext<TaskCommand>;
 const makeHandlers = Effect.gen(function* () {
   const scope = yield* Effect.scope;
   const state = yield* TaskState;
@@ -187,36 +184,32 @@ const makeHandlers = Effect.gen(function* () {
       ),
   };
 });
-export class TaskActor extends ContextActor.Service<TaskActor, TaskServices>()("tasks/Actor", {
-  command: TaskCommand,
+export const TaskActor = ContextActor.define("tasks/Actor", {
+  commands: TaskCommands,
+  internal: TaskInternal,
   context: defineContext({ state: TaskSnapshot, message: Schema.Never }),
-}) {
-  static readonly layer = Layer.effect(
-    TaskActor,
-    Effect.gen(function* () {
-      const scope = yield* Effect.scope;
-      const initialized = yield* Deferred.make<Effect.Success<typeof makeHandlers>>();
-      return TaskActor.of({
-        started: (owner) =>
-          Effect.gen(function* () {
-            const path = contextPath(owner);
-            const services = yield* Layer.buildWithScope(
-              Layer.merge(TaskState.layer(path), TaskExecution.layer(path)),
-              scope,
-            ).pipe(Effect.provideService(CurrentActors, owner));
-            const handlers = yield* makeHandlers.pipe(
-              Effect.provideService(TaskState, Context.get(services, TaskState)),
-              Effect.provideService(TaskExecution, Context.get(services, TaskExecution)),
-              Effect.provideService(Scope.Scope, scope),
-            );
-            yield* Deferred.succeed(initialized, handlers);
-            yield* handlers.restore(owner);
-          }),
-        receive: (command, owner) =>
-          Effect.flatMap(Deferred.await(initialized), (handlers) =>
-            handlers.receive(command, owner),
-          ),
-      });
-    }),
-  );
-}
+})(
+  Effect.gen(function* () {
+    const scope = yield* Effect.scope;
+    const initialized = yield* Deferred.make<Effect.Success<typeof makeHandlers>>();
+    return {
+      started: (owner) =>
+        Effect.gen(function* () {
+          const path = contextPath(owner);
+          const services = yield* Layer.buildWithScope(
+            Layer.merge(TaskState.layer(path), TaskExecution.layer(path)),
+            scope,
+          ).pipe(Effect.provideService(CurrentActors, owner));
+          const handlers = yield* makeHandlers.pipe(
+            Effect.provideService(TaskState, Context.get(services, TaskState)),
+            Effect.provideService(TaskExecution, Context.get(services, TaskExecution)),
+            Effect.provideService(Scope.Scope, scope),
+          );
+          yield* Deferred.succeed(initialized, handlers);
+          yield* handlers.restore(owner);
+        }),
+      receive: (command, owner) =>
+        Effect.flatMap(Deferred.await(initialized), (handlers) => handlers.receive(command, owner)),
+    };
+  }),
+);

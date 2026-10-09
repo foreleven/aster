@@ -1,14 +1,14 @@
-import type { ApprovalReply } from "../src/approvals/actor.js";
+import { Actor, ActorSystem } from "@aster/actor";
+import { Effect, Layer, Match } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Layer, Match } from "effect";
-import { Actor, ActorSystem } from "@aster/actor";
+import type { ApprovalReply } from "../src/approvals/actor.js";
 import {
   ApprovalQueueActor,
   ApprovalResolved,
+  ContextRegistry,
   approvalEntries,
   sendApproval,
-  ContextRegistry,
   type ApprovalEntry,
   type ApprovalResponse,
   type InputRequest,
@@ -187,30 +187,27 @@ test("persisted approval answers reach a recreated Actor only after it exists, w
     },
   };
   let received = 0;
-  class Receiver extends Actor.Service<Receiver>()("test/approvalReceiver", {
-    command: ApprovalResolved,
-  }) {
-    static readonly layer = Layer.succeed(
-      Receiver,
-      Receiver.of({
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("ApprovalResolved", ({ requestId, response }) =>
-              Effect.gen(function* () {
-                assert.equal(response.decision, "approve");
-                received++;
-                yield* sendApproval(context, {
-                  _tag: "Acknowledge",
-                  id: requestId,
-                  target: context.path,
-                });
-              }),
-            ),
-            Match.exhaustive,
+  const Receiver = Actor.define("test/approvalReceiver", {
+    commands: [ApprovalResolved],
+  })(
+    Effect.succeed({
+      receive: (command, context) =>
+        Match.value(command).pipe(
+          Match.tag("ApprovalResolved", ({ requestId, response }) =>
+            Effect.gen(function* () {
+              assert.equal(response.decision, "approve");
+              received++;
+              yield* sendApproval(context, {
+                _tag: "Acknowledge",
+                id: requestId,
+                target: context.path,
+              });
+            }),
           ),
-      }),
-    );
-  }
+          Match.exhaustive,
+        ),
+    }),
+  );
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

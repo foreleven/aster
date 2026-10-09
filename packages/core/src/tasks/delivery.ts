@@ -1,24 +1,24 @@
-import { createHash } from "node:crypto";
 import { type ActorContext, type ActorRef } from "@aster/actor";
-import { ApplicationError, CommandReceipt } from "../operations.js";
-import { GoalPath } from "../goals/contracts.js";
-import { TaskPath, type TaskDeliveryInput, TaskMessage } from "./contracts.js";
-import { Effect, Schedule, Schema, Match } from "effect";
-import { type TasksRootCommand } from "./root.js";
-import { type TaskAdmissionReply, type TaskCommand } from "./protocol.js";
+import { Effect, Match, Schedule, Schema } from "effect";
+import { createHash } from "node:crypto";
 import { type ContextRegistry } from "../context/registry.js";
-import { TaskSnapshot, type TaskOutcome } from "./state/snapshot.js";
+import { GoalPath } from "../goals/contracts.js";
 import {
-  type GoalMailbox,
-  type GoalTaskReply,
   type GoalCommand,
   type GoalCommandReply,
+  type GoalMailbox,
+  type GoalTaskReply,
 } from "../goals/protocol.js";
+import { ApplicationError, CommandReceipt } from "../operations.js";
+import { TaskMessage, TaskPath, type TaskDeliveryInput } from "./contracts.js";
+import { type TaskAdmissionReply, type TaskCommand } from "./protocol.js";
+import { type TasksRootCommand } from "./root.js";
 import { delegateInput, taskPathFor } from "./state/admission.js";
+import { TaskSnapshot, type TaskOutcome } from "./state/snapshot.js";
 
 /** Submission creates a durable Task. Its lifetime is independent of the calling conversation. */
-export const startTask = Effect.fn("Tasks.start")(function* <C, R>(
-  actor: Pick<ActorContext<C, R>, "select">,
+export const startTask = Effect.fn("Tasks.start")(function* <C>(
+  actor: Pick<ActorContext<C>, "select">,
   input: TaskDeliveryInput,
 ) {
   const root = yield* actor
@@ -65,8 +65,8 @@ export const startTask = Effect.fn("Tasks.start")(function* <C, R>(
 });
 
 /** Ending a Goal revokes unstarted work. Submitted external work retains its execution owner. */
-export const cancelGoalTasks = Effect.fn("Tasks.cancelGoal")(function* <C, R>(
-  actor: Pick<ActorContext<C, R>, "select">,
+export const cancelGoalTasks = Effect.fn("Tasks.cancelGoal")(function* <C>(
+  actor: Pick<ActorContext<C>, "select">,
   registry: ContextRegistry["Service"],
   source: string,
 ) {
@@ -84,8 +84,8 @@ export const cancelGoalTasks = Effect.fn("Tasks.cancelGoal")(function* <C, R>(
   }
 });
 
-export const followupTask = Effect.fn("Tasks.followUp")(function* <C, R>(
-  actor: Pick<ActorContext<C, R>, "select">,
+export const followupTask = Effect.fn("Tasks.followUp")(function* <C>(
+  actor: Pick<ActorContext<C>, "select">,
   input: import("./contracts.js").FollowupTaskInput,
 ) {
   const target = yield* actor
@@ -110,8 +110,8 @@ export const followupTask = Effect.fn("Tasks.followUp")(function* <C, R>(
 });
 
 /** The caller owns durable retry: Signal occurrence or Pi tool identity. Targets acknowledge commits. */
-export const deliverTask = Effect.fn("Task.deliver")(function* <C, R>(
-  actor: Pick<ActorContext<C, R>, "select">,
+export const deliverTask = Effect.fn("Task.deliver")(function* <C>(
+  actor: Pick<ActorContext<C>, "select">,
   raw: TaskMessage,
 ): Effect.fn.Return<CommandReceipt, ApplicationError> {
   const input = yield* Schema.decodeUnknownEffect(TaskMessage)(raw).pipe(
@@ -163,8 +163,8 @@ export const deliverTask = Effect.fn("Task.deliver")(function* <C, R>(
 export const taskActorPath = (path: string) => `/user${path}`;
 
 /** Feedback uses a stable identity and retries only missing acknowledgements in the caller scope. */
-export const deliverTaskFeedback = Effect.fn("Tasks.feedback")(function* <C, R>(
-  owner: Pick<ActorContext<C, R>, "select">,
+export const deliverTaskFeedback = Effect.fn("Tasks.feedback")(function* <C>(
+  owner: Pick<ActorContext<C>, "select">,
   path: string,
   saved: TaskSnapshot,
   outcome: TaskOutcome,

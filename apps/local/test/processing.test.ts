@@ -1,27 +1,27 @@
 import {
-  ContextCaptures,
-  TaskActor,
   ApprovalQueueActor,
+  ContextCaptures,
+  ContextRegistry,
   ExternalAgents,
   MemoryActor,
   MemoryBackend,
-  type ContextCapture as MemoryCapture,
-  ContextRegistry,
+  TaskActor,
   type ContextInput,
+  type ContextCapture as MemoryCapture,
 } from "@aster/core";
-import { testConversations } from "./conversation-fixtures.js";
-import { taskCapture, makeContextRegistry } from "@aster/core/testing";
+import { makeContextRegistry, taskCapture } from "@aster/core/testing";
 import {
   larkCaptures,
   larkContextViews,
-  LarkRootActor,
   LarkEmailChannelActor,
   LarkMailMessageActor,
+  LarkRootActor,
 } from "@aster/integrations";
+import { testConversations } from "./conversation-fixtures.js";
 
+import { ActorSystem } from "@aster/actor";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem } from "@aster/actor";
 
 import { Effect, Layer } from "effect";
 
@@ -58,9 +58,9 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         const conversations = testConversations();
         yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
 
-        yield* registry.register("/lark", LarkRootActor.context);
-        yield* registry.register("/lark/mail", LarkEmailChannelActor.context);
-        yield* registry.register("/lark/mail/me/test", LarkMailMessageActor.context);
+        yield* registry.register("/lark", LarkRootActor.contextDefinition);
+        yield* registry.register("/lark/mail", LarkEmailChannelActor.contextDefinition);
+        yield* registry.register("/lark/mail/me/test", LarkMailMessageActor.contextDefinition);
         const captures: MemoryCapture[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
@@ -112,7 +112,7 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
           remainingAgentTurns: 3,
         };
         const entry = yield* conversations.append(taskPath, "task", "task.admission", input);
-        yield* registry.register(taskPath, TaskActor.context);
+        yield* registry.register(taskPath, TaskActor.contextDefinition);
         yield* registry.commit(
           {
             path: taskPath,
@@ -168,9 +168,9 @@ test("discovered account and mailbox identities use separate sessions; no captur
         const conversations = testConversations();
         yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
 
-        yield* registry.register("/lark", LarkRootActor.context);
-        yield* registry.register("/lark/mail", LarkEmailChannelActor.context);
-        yield* registry.register("/lark/mail/me/test", LarkMailMessageActor.context);
+        yield* registry.register("/lark", LarkRootActor.contextDefinition);
+        yield* registry.register("/lark/mail", LarkEmailChannelActor.contextDefinition);
+        yield* registry.register("/lark/mail/me/test", LarkMailMessageActor.contextDefinition);
         const captures: MemoryCapture[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(

@@ -1,6 +1,6 @@
+import { Context, Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Context, Deferred, Effect, Fiber, Layer, Schema } from "effect";
 import { Actor, ActorSystem, ReplyTo } from "../src/index.js";
 
 class Resource extends Context.Service<Resource, { readonly id: number }>()(
@@ -9,18 +9,15 @@ class Resource extends Context.Service<Resource, { readonly id: number }>()(
 class Dependent extends Context.Service<Dependent, { readonly resource: Resource["Service"] }>()(
   "test/SharedDependent",
 ) {}
-class Reader extends Actor.Service<Reader, Resource | Dependent>()("test/SharedReader", {
-  command: Schema.TaggedStruct("Read", { replyTo: ReplyTo<boolean>() }),
-}) {
-  static readonly layer = Layer.effect(
-    Reader,
-    Effect.gen(function* () {
-      const resource = yield* Resource;
-      const dependent = yield* Dependent;
-      return Reader.of({ receive: ({ replyTo }) => replyTo.tell(resource === dependent.resource) });
-    }),
-  );
-}
+const Reader = Actor.define("test/SharedReader", {
+  commands: [Schema.TaggedStruct("Read", { replyTo: ReplyTo<boolean>() })],
+})(
+  Effect.gen(function* () {
+    const resource = yield* Resource;
+    const dependent = yield* Dependent;
+    return { receive: ({ replyTo }) => replyTo.tell(resource === dependent.resource) };
+  }),
+);
 
 test("provided Layers share one memo map across acquisition steps", async () => {
   let acquired = 0;
@@ -58,11 +55,9 @@ test("provided Layers share one memo map across acquisition steps", async () => 
   assert.equal(released, 1);
 });
 
-class Idle extends Actor.Service<Idle>()("test/IdleBoundary", {
-  command: Schema.TaggedStruct("Noop", {}),
-}) {
-  static readonly layer = Layer.succeed(Idle, Idle.of({ receive: () => Effect.void }));
-}
+const Idle = Actor.define("test/IdleBoundary", {
+  commands: [Schema.TaggedStruct("Noop", {})],
+})(Effect.succeed({ receive: () => Effect.void }));
 
 test("inspection reads the live registry each time the same Effect runs", async () => {
   await Effect.runPromise(
@@ -91,17 +86,13 @@ test("interrupting graceful termination still closes the system", { timeout: 300
     Effect.scoped(
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
-        class Blocked extends Actor.Service<Blocked>()("test/BlockedShutdown", {
-          command: Schema.TaggedStruct("Block", {}),
-        }) {
-          static readonly layer = Layer.succeed(
-            Blocked,
-            Blocked.of({
-              receive: () =>
-                Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
-            }),
-          );
-        }
+        const Blocked = Actor.define("test/BlockedShutdown", {
+          commands: [Schema.TaggedStruct("Block", {})],
+        })(
+          Effect.succeed({
+            receive: () => Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
+          }),
+        );
         const resource = Layer.effect(
           Resource,
           Effect.acquireRelease(Effect.succeed({ id: 1 }), () =>
@@ -157,42 +148,36 @@ test("parent resources outlive descendant behavior cleanup", async () => {
     Effect.scoped(
       Effect.gen(function* () {
         const childReady = yield* Deferred.make<void>();
-        class Child extends Actor.Service<Child>()("test/OrderChild", {
-          command: Schema.TaggedStruct("Noop", {}),
-        }) {
-          static readonly layer = Layer.effect(
-            Child,
-            Effect.gen(function* () {
-              yield* Effect.addFinalizer(() =>
-                Effect.sync(() => {
-                  closed.push("child");
-                }),
-              );
-              return Child.of({
-                started: () => Deferred.succeed(childReady, undefined).pipe(Effect.asVoid),
-                receive: () => Effect.void,
-              });
-            }),
-          );
-        }
-        class Parent extends Actor.Service<Parent>()("test/OrderParent", {
-          command: Schema.TaggedStruct("Noop", {}),
-        }) {
-          static readonly layer = Layer.effect(
-            Parent,
-            Effect.gen(function* () {
-              yield* Effect.addFinalizer(() =>
-                Effect.sync(() => {
-                  closed.push("parent");
-                }),
-              );
-              return Parent.of({
-                started: (context) => context.spawn("child", Child).pipe(Effect.asVoid),
-                receive: () => Effect.void,
-              });
-            }),
-          );
-        }
+        const Child = Actor.define("test/OrderChild", {
+          commands: [Schema.TaggedStruct("Noop", {})],
+        })(
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                closed.push("child");
+              }),
+            );
+            return {
+              started: () => Deferred.succeed(childReady, undefined).pipe(Effect.asVoid),
+              receive: () => Effect.void,
+            };
+          }),
+        );
+        const Parent = Actor.define("test/OrderParent", {
+          commands: [Schema.TaggedStruct("Noop", {})],
+        })(
+          Effect.gen(function* () {
+            yield* Effect.addFinalizer(() =>
+              Effect.sync(() => {
+                closed.push("parent");
+              }),
+            );
+            return {
+              started: (context) => context.spawn("child", Child).pipe(Effect.asVoid),
+              receive: () => Effect.void,
+            };
+          }),
+        );
         const system = yield* ActorSystem.make();
         const parent = yield* system.spawn("parent", Parent);
         yield* Deferred.await(childReady);

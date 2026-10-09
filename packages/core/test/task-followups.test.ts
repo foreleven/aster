@@ -1,22 +1,22 @@
-import { makeHarness } from "./harness-fixtures.js";
-import { testConversations } from "./conversation-fixtures.js";
+import { Deferred, Effect, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Schema } from "effect";
 import {
   TaskSnapshot,
   approvalEntries,
   type StoredContext,
   type TaskAdmissionReply,
 } from "../src/index.js";
+import { testConversations } from "./conversation-fixtures.js";
+import { fakeAgent } from "./fixtures.js";
+import { makeHarness } from "./harness-fixtures.js";
 import {
+  checkpoint,
+  retainedTask,
+  seedCheckpoint,
   taskFixture,
   taskInput,
-  retainedTask,
-  checkpoint,
-  seedCheckpoint,
 } from "./task-fixtures.js";
-import { fakeAgent } from "./fixtures.js";
 
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>
   Effect.runPromise(Effect.scoped(effect).pipe(Effect.timeout("6 seconds")));
@@ -116,7 +116,7 @@ test("external follow-up supersedes late completion from the earlier execution",
         response: { decision: "approve" },
         replyTo,
       }));
-      yield* env.approvals.tell({ _tag: "Deliver" });
+      yield* (yield* env.system.select(env.approvals.path).resolve()).tell({ _tag: "Deliver" });
       yield* Deferred.await(waiting);
       yield* env.tasks.ask((replyTo) => ({
         _tag: "Input",
@@ -358,11 +358,11 @@ test("follow-up does not discard a successful answer to an earlier approval requ
         approvalEntries(env.registry).some((entry) => entry.id === `${input.target}:confirm`),
       );
       yield* resolve(`${input.target}:confirm`, { decision: "approve" });
-      yield* env.approvals.tell({ _tag: "Deliver" });
+      yield* (yield* env.system.select(env.approvals.path).resolve()).tell({ _tag: "Deliver" });
       const question = `${input.target}:input:question`;
       yield* env.wait(() => approvalEntries(env.registry).some((entry) => entry.id === question));
       yield* resolve(question, { text: "Europe" });
-      yield* env.approvals.tell({ _tag: "Deliver" });
+      yield* (yield* env.system.select(env.approvals.path).resolve()).tell({ _tag: "Deliver" });
       yield* Deferred.await(answering);
       yield* env.tasks.ask((replyTo) => ({
         _tag: "Input",

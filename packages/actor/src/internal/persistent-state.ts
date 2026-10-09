@@ -1,5 +1,5 @@
-import { deserialize, serialize } from "node:v8";
 import { Effect, Schema } from "effect";
+import { deserialize, serialize } from "node:v8";
 import type { ActorContext, PersistentActorBehavior, PersistentActorContext } from "../actor.js";
 import type { ActorPersistence } from "../persistence.js";
 
@@ -67,7 +67,7 @@ export class PersistentState {
     });
   }
 
-  context(base: ActorContext<any, any>): PersistentActorContext<any, any, any, any> {
+  context(base: ActorContext<any>): PersistentActorContext<any, any, any> {
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- The getter reads the current journal state.
     const journal = this;
     return {

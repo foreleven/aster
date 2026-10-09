@@ -1,13 +1,13 @@
+import { Clock, Context, Deferred, Effect, Fiber, Layer, Match, Schema, Stream } from "effect";
+import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Clock, Context, Deferred, Effect, Match, Fiber, Layer, Schema, Stream } from "effect";
-import { TestClock } from "effect/testing";
 import {
-  ReplyTo,
   Actor,
   ActorSystem,
   ActorTestKit,
   PersistentActor,
+  ReplyTo,
   type ActorRef,
 } from "../src/index.js";
 
@@ -18,27 +18,26 @@ const ChildCommand = Schema.TaggedUnion({
 });
 type ChildCommand = typeof ChildCommand.Type;
 
-class ChildActor extends Actor.Service<ChildActor>()("test/ChildActor", { command: ChildCommand }) {
-  static readonly layer = Layer.effect(
-    ChildActor,
-    Effect.sync(() => {
-      let value = 0;
-      return ChildActor.of({
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Add", (command) =>
-              Effect.sync(() => {
-                value += command.value;
-              }),
-            ),
-            Match.tag("Stop", (_command) => context.stopSelf()),
-            Match.tag("Read", (command) => command.replyTo.tell(value)),
-            Match.exhaustive,
+const ChildActor = Actor.define("test/ChildActor", {
+  commands: Object.values(ChildCommand.cases),
+})(
+  Effect.sync(() => {
+    let value = 0;
+    return {
+      receive: (command, context) =>
+        Match.value(command).pipe(
+          Match.tag("Add", (command) =>
+            Effect.sync(() => {
+              value += command.value;
+            }),
           ),
-      });
-    }),
-  );
-}
+          Match.tag("Stop", (_command) => context.stopSelf()),
+          Match.tag("Read", (command) => command.replyTo.tell(value)),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 
 const ParentCommand = Schema.TaggedUnion({
   Add: { value: Schema.Number },
@@ -48,42 +47,39 @@ const ParentCommand = Schema.TaggedUnion({
 });
 type ParentCommand = typeof ParentCommand.Type;
 
-class ParentActor extends Actor.Service<ParentActor>()("test/ParentActor", {
-  command: ParentCommand,
-}) {
-  static readonly layer = Layer.effect(
-    ParentActor,
-    Effect.sync(() => {
-      let child: ActorRef<ChildCommand>;
-      let stoppedReply: ActorRef<string> | undefined;
-      return ParentActor.of({
-        started: (context) =>
-          Effect.gen(function* () {
-            child =
-              ((yield* context.child("child")) as ActorRef<ChildCommand> | undefined) ??
-              (yield* context.spawn("child", ChildActor));
-            yield* context.watch(child);
+const ParentActor = Actor.define("test/ParentActor", {
+  commands: Object.values(ParentCommand.cases),
+})(
+  Effect.sync(() => {
+    let child: ActorRef<ChildCommand>;
+    let stoppedReply: ActorRef<string> | undefined;
+    return {
+      started: (context) =>
+        Effect.gen(function* () {
+          child =
+            ((yield* context.child("child")) as ActorRef<ChildCommand> | undefined) ??
+            (yield* context.spawn("child", ChildActor));
+          yield* context.watch(child);
+        }),
+      receive: (command, context) =>
+        Match.value(command).pipe(
+          Match.tag("Fail", (_command) => Effect.die(new Error("parent failure"))),
+          Match.tag("Add", "Read", (command) => child.tell(command)),
+          Match.tag("StopChild", (command) => {
+            stoppedReply = command.replyTo;
+            return context.stop(child);
           }),
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Fail", (_command) => Effect.die(new Error("parent failure"))),
-            Match.tag("Add", "Read", (command) => child.tell(command)),
-            Match.tag("StopChild", (command) => {
-              stoppedReply = command.replyTo;
-              return context.stop(child);
-            }),
-            Match.exhaustive,
-          ),
-        receiveSignal: (signal) =>
-          Effect.gen(function* () {
-            if (signal._tag === "Terminated" && stoppedReply !== undefined) {
-              yield* stoppedReply.tell(signal.ref.path);
-            }
-          }),
-      });
-    }),
-  );
-}
+          Match.exhaustive,
+        ),
+      receiveSignal: (signal) =>
+        Effect.gen(function* () {
+          if (signal._tag === "Terminated" && stoppedReply !== undefined) {
+            yield* stoppedReply.tell(signal.ref.path);
+          }
+        }),
+    };
+  }),
+);
 
 test("a parent restart keeps its child, and watch receives Terminated", async () => {
   const result = await Effect.runPromise(
@@ -140,42 +136,39 @@ const AsyncCommand = Schema.TaggedUnion({
 });
 type AsyncCommand = typeof AsyncCommand.Type;
 
-class AsyncActor extends Actor.Service<AsyncActor>()("test/AsyncActor", { command: AsyncCommand }) {
-  static readonly layer = Layer.effect(
-    AsyncActor,
-    Effect.succeed(
-      AsyncActor.of({
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Run", (command) =>
-              context.pipeToSelf(Effect.succeed(7), (outcome) => ({
-                _tag: "Completed",
-                replyTo: command.replyTo,
-                value: Match.value(outcome).pipe(
-                  Match.tag("Success", (result) => result.value),
-                  Match.tag("Failure", () => -1),
-                  Match.exhaustive,
-                ),
-              })),
+const AsyncActor = Actor.define("test/AsyncActor", {
+  commands: Object.values(AsyncCommand.cases),
+})(
+  Effect.succeed({
+    receive: (command, context) =>
+      Match.value(command).pipe(
+        Match.tag("Run", (command) =>
+          context.pipeToSelf(Effect.succeed(7), (outcome) => ({
+            _tag: "Completed",
+            replyTo: command.replyTo,
+            value: Match.value(outcome).pipe(
+              Match.tag("Success", (result) => result.value),
+              Match.tag("Failure", () => -1),
+              Match.exhaustive,
             ),
-            Match.tag("RunFailure", (command) =>
-              context.pipeToSelf(Effect.fail("expected"), (outcome) => ({
-                _tag: "Completed",
-                replyTo: command.replyTo,
-                value: Match.value(outcome).pipe(
-                  Match.tag("Success", (result) => result.value),
-                  Match.tag("Failure", () => -1),
-                  Match.exhaustive,
-                ),
-              })),
+          })),
+        ),
+        Match.tag("RunFailure", (command) =>
+          context.pipeToSelf(Effect.fail("expected"), (outcome) => ({
+            _tag: "Completed",
+            replyTo: command.replyTo,
+            value: Match.value(outcome).pipe(
+              Match.tag("Success", (result) => result.value),
+              Match.tag("Failure", () => -1),
+              Match.exhaustive,
             ),
-            Match.tag("Completed", (command) => command.replyTo.tell(command.value)),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+          })),
+        ),
+        Match.tag("Completed", (command) => command.replyTo.tell(command.value)),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 test("pipeToSelf sends an asynchronous result back through the mailbox", async () => {
   const values = await Effect.runPromise(
@@ -197,45 +190,35 @@ test("pipeToSelf sends an asynchronous result back through the mailbox", async (
 
 const TimeoutCommand = Schema.TaggedStruct("Ping", {});
 type TimeoutCommand = typeof TimeoutCommand.Type;
-class TimeoutActor extends Actor.Service<TimeoutActor>()("test/TimeoutActor", {
-  command: TimeoutCommand,
-}) {
-  static readonly layer = Layer.effect(
-    TimeoutActor,
-    Effect.succeed(
-      TimeoutActor.of({
-        started: (context) => context.receiveTimeout(15),
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Ping", (_command) => Effect.void),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+const TimeoutActor = Actor.define("test/TimeoutActor", {
+  commands: [TimeoutCommand],
+})(
+  Effect.succeed({
+    started: (context) => context.receiveTimeout(15),
+    receive: (command) =>
+      Match.value(command).pipe(
+        Match.tag("Ping", (_command) => Effect.void),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 const LongTimeoutCommand = Schema.TaggedStruct("Ping", {
   replyTo: ReplyTo<void>(),
 });
 type LongTimeoutCommand = typeof LongTimeoutCommand.Type;
-class LongTimeoutActor extends Actor.Service<LongTimeoutActor>()("test/LongTimeoutActor", {
-  command: LongTimeoutCommand,
-}) {
-  static readonly layer = Layer.effect(
-    LongTimeoutActor,
-    Effect.succeed(
-      LongTimeoutActor.of({
-        started: (context) => context.receiveTimeout("1 hour"),
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Ping", (command) => command.replyTo.tell(undefined)),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+const LongTimeoutActor = Actor.define("test/LongTimeoutActor", {
+  commands: [LongTimeoutCommand],
+})(
+  Effect.succeed({
+    started: (context) => context.receiveTimeout("1 hour"),
+    receive: (command) =>
+      Match.value(command).pipe(
+        Match.tag("Ping", (command) => command.replyTo.tell(undefined)),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 test("ReceiveTimeout stops an idle actor and stale delivery becomes a redacted DeadLetter", async () => {
   const result = await Effect.runPromise(
@@ -272,23 +255,20 @@ class NumberService extends Context.Service<NumberService, { readonly value: num
   "test/NumberService",
 ) {}
 
-class ServiceActor extends Actor.Service<ServiceActor, NumberService>()("test/ServiceActor", {
-  command: Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
-}) {
-  static readonly layer = Layer.effect(
-    ServiceActor,
-    Effect.gen(function* () {
-      const service = yield* NumberService;
-      return ServiceActor.of({
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Read", (command) => command.replyTo.tell(service.value)),
-            Match.exhaustive,
-          ),
-      });
-    }),
-  );
-}
+const ServiceActor = Actor.define("test/ServiceActor", {
+  commands: [Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() })],
+})(
+  Effect.gen(function* () {
+    const service = yield* NumberService;
+    return {
+      receive: (command) =>
+        Match.value(command).pipe(
+          Match.tag("Read", (command) => command.replyTo.tell(service.value)),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 
 class DependentService extends Context.Service<DependentService, { readonly doubled: number }>()(
   "test/DependentService",
@@ -301,24 +281,20 @@ const dependentLayer = Layer.effect(
   }),
 );
 
-class DependentActor extends Actor.Service<DependentActor, DependentService>()(
-  "test/DependentActor",
-  { command: Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }) },
-) {
-  static readonly layer = Layer.effect(
-    DependentActor,
-    Effect.gen(function* () {
-      const service = yield* DependentService;
-      return DependentActor.of({
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Read", (command) => command.replyTo.tell(service.doubled)),
-            Match.exhaustive,
-          ),
-      });
-    }),
-  );
-}
+const DependentActor = Actor.define("test/DependentActor", {
+  commands: [Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() })],
+})(
+  Effect.gen(function* () {
+    const service = yield* DependentService;
+    return {
+      receive: (command) =>
+        Match.value(command).pipe(
+          Match.tag("Read", (command) => command.replyTo.tell(service.doubled)),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 
 test("ActorSystem provides services to actor layers and terminates idempotently", async () => {
   const value = await Effect.runPromise(
@@ -432,30 +408,27 @@ const GateCommand = Schema.TaggedUnion({
 });
 type GateCommand = typeof GateCommand.Type;
 
-class GateActor extends Actor.Service<GateActor, GateService>()("test/GateActor", {
-  command: GateCommand,
-}) {
-  static readonly layer = Layer.effect(
-    GateActor,
-    Effect.gen(function* () {
-      const gate = yield* GateService;
-      return GateActor.of({
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Queued", (_command) => Effect.void),
-            Match.tag("Wait", (_command) =>
-              Effect.gen(function* () {
-                yield* Deferred.succeed(gate.entered, undefined);
-                yield* Deferred.await(gate.release);
-                gate.completed();
-              }),
-            ),
-            Match.exhaustive,
+const GateActor = Actor.define("test/GateActor", {
+  commands: Object.values(GateCommand.cases),
+})(
+  Effect.gen(function* () {
+    const gate = yield* GateService;
+    return {
+      receive: (command) =>
+        Match.value(command).pipe(
+          Match.tag("Queued", (_command) => Effect.void),
+          Match.tag("Wait", (_command) =>
+            Effect.gen(function* () {
+              yield* Deferred.succeed(gate.entered, undefined);
+              yield* Deferred.await(gate.release);
+              gate.completed();
+            }),
           ),
-      });
-    }),
-  );
-}
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 
 test("terminate waits for the current handler and drops queued commands", async () => {
   let completed = false;
@@ -564,23 +537,18 @@ test("a stopped path can be reused without reviving its stale ActorRef", async (
   assert.equal(observed.deadEvent._tag, "Some");
 });
 
-class AlwaysFails extends Actor.Service<AlwaysFails>()("test/AlwaysFails", {
-  command: Schema.TaggedStruct("Noop", {}),
-}) {
-  static readonly layer = Layer.effect(
-    AlwaysFails,
-    Effect.succeed(
-      AlwaysFails.of({
-        started: () => Effect.die(new Error("cannot start")),
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Noop", (_command) => Effect.void),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+const AlwaysFails = Actor.define("test/AlwaysFails", {
+  commands: [Schema.TaggedStruct("Noop", {})],
+})(
+  Effect.succeed({
+    started: () => Effect.die(new Error("cannot start")),
+    receive: (command) =>
+      Match.value(command).pipe(
+        Match.tag("Noop", (_command) => Effect.void),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 test("default supervision stops after five restarts within one minute", async () => {
   const events = await Effect.runPromise(
@@ -626,30 +594,27 @@ const ScopedCommand = Schema.TaggedUnion({
 });
 type ScopedCommand = typeof ScopedCommand.Type;
 
-class ScopedActor extends Actor.Service<ScopedActor, CountsService>()("test/ScopedActor", {
-  command: ScopedCommand,
-}) {
-  static readonly layer = Layer.effect(
-    ScopedActor,
-    Effect.gen(function* () {
-      const counts = yield* CountsService;
-      counts.built++;
-      yield* Effect.addFinalizer(() =>
-        Effect.sync(() => {
-          counts.closed++;
-        }),
-      );
-      return ScopedActor.of({
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Fail", (_command) => Effect.die(new Error("restart"))),
-            Match.tag("Read", (command) => command.replyTo.tell({ ...counts })),
-            Match.exhaustive,
-          ),
-      });
-    }),
-  );
-}
+const ScopedActor = Actor.define("test/ScopedActor", {
+  commands: Object.values(ScopedCommand.cases),
+})(
+  Effect.gen(function* () {
+    const counts = yield* CountsService;
+    counts.built++;
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        counts.closed++;
+      }),
+    );
+    return {
+      receive: (command) =>
+        Match.value(command).pipe(
+          Match.tag("Fail", (_command) => Effect.die(new Error("restart"))),
+          Match.tag("Read", (command) => command.replyTo.tell({ ...counts })),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 
 test("restart closes the old Behavior Layer scope before building a new one", async () => {
   const counts: InstanceCounts = { built: 0, closed: 0 };
@@ -675,30 +640,26 @@ const PipeFailureCommand = Schema.TaggedUnion({
 });
 type PipeFailureCommand = typeof PipeFailureCommand.Type;
 
-class DefectivePipeActor extends Actor.Service<DefectivePipeActor, CountsService>()(
-  "test/DefectivePipeActor",
-  { command: PipeFailureCommand },
-) {
-  static readonly layer = Layer.effect(
-    DefectivePipeActor,
-    Effect.gen(function* () {
-      const counts = yield* CountsService;
-      counts.built++;
-      return DefectivePipeActor.of({
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Start", (_command) =>
-              context.pipeToSelf(Effect.die(new Error("background defect")), () => ({
-                _tag: "Start",
-              })),
-            ),
-            Match.tag("Read", (command) => command.replyTo.tell(counts.built)),
-            Match.exhaustive,
+const DefectivePipeActor = Actor.define("test/DefectivePipeActor", {
+  commands: Object.values(PipeFailureCommand.cases),
+})(
+  Effect.gen(function* () {
+    const counts = yield* CountsService;
+    counts.built++;
+    return {
+      receive: (command, context) =>
+        Match.value(command).pipe(
+          Match.tag("Start", (_command) =>
+            context.pipeToSelf(Effect.die(new Error("background defect")), () => ({
+              _tag: "Start",
+            })),
           ),
-      });
-    }),
-  );
-}
+          Match.tag("Read", (command) => command.replyTo.tell(counts.built)),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 
 test("a pipeToSelf defect fails the actor and invokes supervision", async () => {
   const counts: InstanceCounts = { built: 0, closed: 0 };
@@ -748,31 +709,28 @@ class WatchReport extends Context.Service<WatchReport, { readonly report: ActorR
   "test/WatchReport",
 ) {}
 
-class WatchingParent extends Actor.Service<WatchingParent, WatchReport>()("test/WatchingParent", {
-  command: Schema.TaggedStruct("Noop", {}),
-}) {
-  static readonly layer = Layer.effect(
-    WatchingParent,
-    Effect.gen(function* () {
-      const report = yield* WatchReport;
-      return WatchingParent.of({
-        started: (context) =>
-          Effect.gen(function* () {
-            const child = yield* context.spawn("broken", AlwaysFails, {
-              supervision: () => "stop",
-            });
-            yield* context.watch(child);
-          }),
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Noop", (_command) => Effect.void),
-            Match.exhaustive,
-          ),
-        receiveSignal: (signal) => report.report.tell(signal.cause?.message ?? "missing cause"),
-      });
-    }),
-  );
-}
+const WatchingParent = Actor.define("test/WatchingParent", {
+  commands: [Schema.TaggedStruct("Noop", {})],
+})(
+  Effect.gen(function* () {
+    const report = yield* WatchReport;
+    return {
+      started: (context) =>
+        Effect.gen(function* () {
+          const child = yield* context.spawn("broken", AlwaysFails, {
+            supervision: () => "stop",
+          });
+          yield* context.watch(child);
+        }),
+      receive: (command) =>
+        Match.value(command).pipe(
+          Match.tag("Noop", (_command) => Effect.void),
+          Match.exhaustive,
+        ),
+      receiveSignal: (signal) => report.report.tell(signal.cause?.message ?? "missing cause"),
+    };
+  }),
+);
 
 test("DeathWatch carries the terminal failure cause", async () => {
   const message = await Effect.runPromise(
@@ -790,22 +748,17 @@ test("DeathWatch carries the terminal failure cause", async () => {
   assert.match(message, /cannot start/);
 });
 
-class BoomChild extends Actor.Service<BoomChild>()("test/BoomChild", {
-  command: Schema.TaggedStruct("Boom", {}),
-}) {
-  static readonly layer = Layer.effect(
-    BoomChild,
-    Effect.succeed(
-      BoomChild.of({
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Boom", (_command) => Effect.die(new Error("child defect"))),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+const BoomChild = Actor.define("test/BoomChild", {
+  commands: [Schema.TaggedStruct("Boom", {})],
+})(
+  Effect.succeed({
+    receive: (command) =>
+      Match.value(command).pipe(
+        Match.tag("Boom", (_command) => Effect.die(new Error("child defect"))),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 const EscalationCommand = Schema.TaggedUnion({
   Trigger: {},
@@ -813,33 +766,29 @@ const EscalationCommand = Schema.TaggedUnion({
 });
 type EscalationCommand = typeof EscalationCommand.Type;
 
-class EscalatingParent extends Actor.Service<EscalatingParent, CountsService>()(
-  "test/EscalatingParent",
-  { command: EscalationCommand },
-) {
-  static readonly layer = Layer.effect(
-    EscalatingParent,
-    Effect.gen(function* () {
-      const counts = yield* CountsService;
-      counts.built++;
-      let child: ActorRef<{ readonly _tag: "Boom" }>;
-      return EscalatingParent.of({
-        started: (context) =>
-          Effect.gen(function* () {
-            child =
-              ((yield* context.child("child")) as typeof child | undefined) ??
-              (yield* context.spawn("child", BoomChild, { supervision: () => "escalate" }));
-          }),
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Trigger", (_command) => child.tell({ _tag: "Boom" })),
-            Match.tag("Read", (command) => command.replyTo.tell(counts.built)),
-            Match.exhaustive,
-          ),
-      });
-    }),
-  );
-}
+const EscalatingParent = Actor.define("test/EscalatingParent", {
+  commands: Object.values(EscalationCommand.cases),
+})(
+  Effect.gen(function* () {
+    const counts = yield* CountsService;
+    counts.built++;
+    let child: ActorRef<{ readonly _tag: "Boom" }>;
+    return {
+      started: (context) =>
+        Effect.gen(function* () {
+          child =
+            ((yield* context.child("child")) as typeof child | undefined) ??
+            (yield* context.spawn("child", BoomChild, { supervision: () => "escalate" }));
+        }),
+      receive: (command) =>
+        Match.value(command).pipe(
+          Match.tag("Trigger", (_command) => child.tell({ _tag: "Boom" })),
+          Match.tag("Read", (command) => command.replyTo.tell(counts.built)),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 
 test("escalate forwards a child defect into its parent's supervision", async () => {
   const counts: InstanceCounts = { built: 0, closed: 0 };
@@ -866,70 +815,50 @@ test("escalate forwards a child defect into its parent's supervision", async () 
   assert.equal(built, 2);
 });
 
-class NeedsPersistence extends PersistentActor.Service<NeedsPersistence>()(
-  "test/NeedsPersistence",
-  {
-    command: Schema.TaggedStruct("Noop", {}),
-    event: Schema.Number,
-    state: Schema.Number,
-  },
-) {
-  static readonly layer = Layer.effect(
-    NeedsPersistence,
-    Effect.succeed(
-      NeedsPersistence.of({
-        initialState: 0,
-        applyEvent: (state, event) => state + event,
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Noop", (_command) => Effect.void),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+const NeedsPersistence = PersistentActor.define("test/NeedsPersistence", {
+  commands: [Schema.TaggedStruct("Noop", {})],
+  event: Schema.Number,
+  state: Schema.Number,
+})(
+  Effect.succeed({
+    initialState: 0,
+    applyEvent: (state, event) => state + event,
+    receive: (command) =>
+      Match.value(command).pipe(
+        Match.tag("Noop", (_command) => Effect.void),
+        Match.exhaustive,
+      ),
+  }),
+);
 
-class UndeclaredServiceActor extends Actor.Service<UndeclaredServiceActor>()(
-  "test/UndeclaredServiceActor",
-  { command: Schema.TaggedStruct("Noop", {}) },
-) {
-  static readonly layer = Layer.effect(
-    UndeclaredServiceActor,
-    Effect.gen(function* () {
-      yield* NumberService;
-      return UndeclaredServiceActor.of({
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Noop", (_command) => Effect.void),
-            Match.exhaustive,
-          ),
-      });
-    }),
-  );
-}
+const UndeclaredServiceActor = Actor.define("test/UndeclaredServiceActor", {
+  commands: [Schema.TaggedStruct("Noop", {})],
+})(
+  Effect.gen(function* () {
+    yield* NumberService;
+    return {
+      receive: (command) =>
+        Match.value(command).pipe(
+          Match.tag("Noop", (_command) => Effect.void),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 
-class MissingChildServices extends Actor.Service<MissingChildServices>()(
-  "test/MissingChildServices",
-  { command: Schema.TaggedStruct("Noop", {}) },
-) {
-  static readonly layer = Layer.effect(
-    MissingChildServices,
-    Effect.succeed(
-      MissingChildServices.of({
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Noop", (_command) => {
-              // @ts-expect-error The parent's Services declaration cannot satisfy this child's dependency.
-              void context.spawn("child", ServiceActor);
-              return Effect.void;
-            }),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+const MissingChildServices = Actor.define("test/MissingChildServices", {
+  commands: [Schema.TaggedStruct("Noop", {})],
+})(
+  Effect.succeed({
+    receive: (command, context) =>
+      Match.value(command).pipe(
+        Match.tag("Noop", (_command) => {
+          return context.spawn("child", ServiceActor).pipe(Effect.asVoid, Effect.orDie);
+        }),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 // Keep the fixture type-checked without spawning it at runtime.
 void MissingChildServices;
@@ -937,6 +866,8 @@ void MissingChildServices;
 const compileTimeSpawnChecks = Effect.scoped(
   Effect.gen(function* () {
     const system = yield* ActorSystem.make();
+    // @ts-expect-error Child dependencies are inferred into the parent definition.
+    yield* system.spawn("parent", MissingChildServices);
     // @ts-expect-error A persistent actor requires ActorPersistence in the system environment.
     yield* system.spawn("persistent", NeedsPersistence);
     // @ts-expect-error A layer's direct input service must be present.

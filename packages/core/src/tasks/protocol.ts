@@ -1,36 +1,46 @@
-import { ReplyTo } from "@aster/actor";
-import { ApplicationError, CommandReceipt } from "../operations.js";
-import { TaskDeliveryInput, TaskRecoveryInput, FollowupTaskInput } from "./contracts.js";
+import type { MailboxOf } from "@aster/actor";
+import { Command as ActorCommand, ReplyTo } from "@aster/actor";
 import { Schema } from "effect";
 import { ApprovalResolved } from "../approvals/actor.js";
+import { ApplicationError, CommandReceipt } from "../operations.js";
+import { FollowupTaskInput, TaskDeliveryInput, TaskRecoveryInput } from "./contracts.js";
 import { TaskOutcome } from "./state/snapshot.js";
 export const TaskAdmissionReply = Schema.TaggedUnion({
   Accepted: { receipt: CommandReceipt },
   Rejected: { error: ApplicationError },
 });
 export type TaskAdmissionReply = typeof TaskAdmissionReply.Type;
-export const StartTask = Schema.TaggedStruct("StartTask", {
-  input: TaskDeliveryInput,
-  replyTo: ReplyTo<TaskAdmissionReply>(),
-});
-export const Input = Schema.TaggedStruct("Input", {
-  input: FollowupTaskInput,
-  replyTo: ReplyTo<TaskAdmissionReply>(),
-});
-export const CheckTask = Schema.TaggedStruct("CheckTask", {
-  input: TaskRecoveryInput,
-  replyTo: ReplyTo<TaskAdmissionReply>(),
-});
-export const RetryTask = Schema.TaggedStruct("RetryTask", {
-  input: TaskRecoveryInput,
-  replyTo: ReplyTo<TaskAdmissionReply>(),
-});
-export const TaskCommand = Schema.TaggedUnion({
-  StartTask: StartTask.fields,
-  Input: Input.fields,
-  CheckTask: CheckTask.fields,
-  RetryTask: RetryTask.fields,
-  ApprovalResolved: ApprovalResolved.fields,
+export class StartTask extends ActorCommand.Class<StartTask>()("StartTask", {
+  payload: { input: TaskDeliveryInput },
+  reply: TaskAdmissionReply,
+}) {}
+export class Input extends ActorCommand.Class<Input>()("Input", {
+  payload: { input: FollowupTaskInput },
+  reply: TaskAdmissionReply,
+}) {}
+export class CheckTask extends ActorCommand.Class<CheckTask>()("CheckTask", {
+  payload: { input: TaskRecoveryInput },
+  reply: TaskAdmissionReply,
+}) {}
+export class RetryTask extends ActorCommand.Class<RetryTask>()("RetryTask", {
+  payload: { input: TaskRecoveryInput },
+  reply: TaskAdmissionReply,
+}) {}
+export class Cancel extends ActorCommand.Class<Cancel>()("Cancel", {
+  payload: {
+    reason: Schema.String,
+    replyTo: Schema.optional(ReplyTo<void>()),
+  },
+}) {}
+export const TaskCommands = [
+  StartTask,
+  Input,
+  CheckTask,
+  RetryTask,
+  ApprovalResolved,
+  Cancel,
+] as const;
+export const TaskInternal = Schema.TaggedUnion({
   ExecutionSettled: { generation: Schema.String, outcome: TaskOutcome },
   DeliverySettled: { error: Schema.optional(Schema.String) },
   CancellationChecked: {
@@ -39,9 +49,5 @@ export const TaskCommand = Schema.TaggedUnion({
     confirmed: Schema.Boolean,
     replyTo: Schema.optional(ReplyTo<void>()),
   },
-  Cancel: {
-    reason: Schema.String,
-    replyTo: Schema.optional(ReplyTo<void>()),
-  },
 });
-export type TaskCommand = typeof TaskCommand.Type;
+export type TaskCommand = MailboxOf<typeof TaskCommands, typeof TaskInternal>;

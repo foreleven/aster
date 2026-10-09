@@ -1,7 +1,7 @@
+import { ActorSystem, ReplyTo, type ActorRef } from "@aster/actor";
+import { Effect, Fiber, Layer, Match, Schema, Stream } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem, ReplyTo, type ActorRef } from "@aster/actor";
-import { Effect, Match, Fiber, Layer, Schema, Stream } from "effect";
 import {
   ContextActor,
   ContextRegistry,
@@ -20,91 +20,83 @@ const Command = Schema.TaggedUnion({
   Fail: {},
   Stop: {},
 });
-class Counter extends ContextActor.Service<Counter>()("test/ContextCounter", {
-  command: Command,
+const Counter = ContextActor.define("test/ContextCounter", {
+  commands: Object.values(Command.cases),
   context: defineContext({
     state: Schema.Struct({ value: Schema.Number }),
     message: Schema.String,
   }),
-}) {
-  static readonly layer = Layer.effect(
-    Counter,
-    Effect.gen(function* () {
-      const registry = yield* ContextRegistry;
-      return Counter.of({
-        started: (actor) => {
-          const path = contextPath(actor);
-          return registry
-            .commit(
-              registry.get(path) ?? {
-                path,
-                description: "Counter",
-                state: { value: 0 },
-                messages: [],
-              },
-              { expectedRevision: registry.get(path)?.revision ?? 0 },
-            )
-            .pipe(Effect.asVoid);
-        },
-        receive: (command, actor) => {
-          const path = contextPath(actor);
-          const record = registry.get(path)!;
-          return Match.value(command).pipe(
-            Match.tag("Fail", (_command) => Effect.die(new Error("restart"))),
-            Match.tag("Stop", (_command) => actor.stopSelf()),
-            Match.tag("Read", (command) =>
-              command.replyTo.tell({ path, value: (record.state as { value: number }).value }),
-            ),
-            Match.tag("Set", (command) =>
-              registry
-                .commit(
-                  {
-                    ...record,
-                    state: { value: command.value },
-                    messages: [...record.messages, "updated"],
-                  },
-                  { expectedRevision: record.revision ?? 0 },
-                )
-                .pipe(Effect.asVoid, Effect.orDie),
-            ),
-            Match.exhaustive,
-          );
-        },
-      });
-    }),
-  );
-}
-
-class Parent extends ContextActor.Service<Parent>()("test/ContextParent", {
-  command: Schema.TaggedStruct("Children", {
-    replyTo: ReplyTo<readonly ActorRef<typeof Command.Type>[]>(),
+})(
+  Effect.gen(function* () {
+    const registry = yield* ContextRegistry;
+    return {
+      started: (actor) => {
+        const path = contextPath(actor);
+        return registry
+          .commit(
+            registry.get(path) ?? {
+              path,
+              description: "Counter",
+              state: { value: 0 },
+              messages: [],
+            },
+            { expectedRevision: registry.get(path)?.revision ?? 0 },
+          )
+          .pipe(Effect.asVoid);
+      },
+      receive: (command, actor) => {
+        const path = contextPath(actor);
+        const record = registry.get(path)!;
+        return Match.value(command).pipe(
+          Match.tag("Fail", (_command) => Effect.die(new Error("restart"))),
+          Match.tag("Stop", (_command) => actor.stopSelf()),
+          Match.tag("Read", (command) =>
+            command.replyTo.tell({ path, value: (record.state as { value: number }).value }),
+          ),
+          Match.tag("Set", (command) =>
+            registry
+              .commit(
+                {
+                  ...record,
+                  state: { value: command.value },
+                  messages: [...record.messages, "updated"],
+                },
+                { expectedRevision: record.revision ?? 0 },
+              )
+              .pipe(Effect.asVoid, Effect.orDie),
+          ),
+          Match.exhaustive,
+        );
+      },
+    };
   }),
+);
+
+const Parent = ContextActor.define("test/ContextParent", {
+  commands: [
+    Schema.TaggedStruct("Children", {
+      replyTo: ReplyTo<readonly ActorRef<typeof Command.Type>[]>(),
+    }),
+  ],
   context: defineContext({
     state: Schema.Struct({}),
     message: Schema.Never,
   }),
-}) {
-  static readonly layer = Layer.effect(
-    Parent,
-    Effect.succeed(
-      Parent.of({
-        receive: (command, actor) =>
-          Match.value(command).pipe(
-            Match.tag("Children", (command) =>
-              Effect.gen(function* () {
-                const virtual = yield* spawnContextChild(actor, "me/one", Counter).pipe(
-                  Effect.orDie,
-                );
-                const direct = yield* actor.spawn("direct", Counter).pipe(Effect.orDie);
-                yield* command.replyTo.tell([virtual, direct]);
-              }),
-            ),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+})(
+  Effect.succeed({
+    receive: (command, actor) =>
+      Match.value(command).pipe(
+        Match.tag("Children", (command) =>
+          Effect.gen(function* () {
+            const virtual = yield* spawnContextChild(actor, "me/one", Counter).pipe(Effect.orDie);
+            const direct = yield* actor.spawn("direct", Counter).pipe(Effect.orDie);
+            yield* command.replyTo.tell([virtual, direct]);
+          }),
+        ),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 test("Context definition registers before started and commands, and survives restart and stop", async () => {
   await Effect.runPromise(

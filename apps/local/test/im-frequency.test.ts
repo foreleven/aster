@@ -1,33 +1,35 @@
-import { gateStub, summaryStub } from "./summary-fixtures.js";
+import { ContextQueries } from "@aster/core";
 import { LarkConfig, parseLarkConfig } from "@aster/integrations";
-import assert from "node:assert/strict";
-import { test } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { gateStub, summaryStub } from "./summary-fixtures.js";
+// Tests inject internal completion and timer messages through untyped selections.
 import { ActorSystem } from "@aster/actor";
 import { ContextRegistry, contextSpawnOptions } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import {
-  ImAgentQueue,
-  ImSummaryGate,
-  ImStorage,
-  ImSearch,
-  LarkImActor,
-  LarkChatActor,
   ChatSummarizer,
-  makeImAgentQueue,
-  makeImSummaryGate,
-  makeImStorage,
-  parseImPolicy,
+  ImAgentQueue,
   imDate,
   imDayStart,
+  ImSearch,
+  ImStorage,
+  ImSummaryGate,
+  LarkChatActor,
+  LarkImActor,
+  makeImAgentQueue,
+  makeImStorage,
+  makeImSummaryGate,
+  parseImPolicy,
   pollIm,
-  type ChatSummaryInput,
   type ChatSummary,
+  type ChatSummaryInput,
 } from "@aster/integrations";
-import { Clock, Deferred, Effect, Fiber, Layer, Scope, Exit } from "effect";
+import { Clock, Deferred, Effect, Exit, Fiber, Layer, Scope } from "effect";
 import { TestClock } from "effect/testing";
+import assert from "node:assert/strict";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
 
 const until = (check: () => boolean) =>
   Effect.gen(function* () {
@@ -185,6 +187,7 @@ test("deferral survives restart and repeated updates; new evidence is assessed t
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(ImStorage, storage),
             gate,
@@ -202,11 +205,11 @@ test("deferral survives restart and repeated updates; new evidence is assessed t
           return;
         }
         yield* actor.tell({ _tag: "Update", chat, messages: [message] });
-        yield* actor.tell({ _tag: "Summarize" });
+        yield* (yield* system.select(actor.path).resolve()).tell({ _tag: "Summarize" });
         yield* Effect.sleep(30);
         assert.equal(judgments, 1);
         yield* actor.tell({ _tag: "Update", chat, messages: [{ ...message, id: "two" }] });
-        yield* actor.tell({ _tag: "Summarize" });
+        yield* (yield* system.select(actor.path).resolve()).tell({ _tag: "Summarize" });
         yield* until(() => judgments === 2);
         assert.equal(assessed[1]?.messages.length, 2);
         assert.equal(storage.get(today, chat.id)?.pending.length, 2);
@@ -229,6 +232,7 @@ test("queued arrivals merge once; restart reuses the completed daily stage", asy
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(ImStorage, storage),
             Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
@@ -276,6 +280,7 @@ test("queued arrivals merge once; restart reuses the completed daily stage", asy
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(Clock.Clock, clock),
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(ImStorage, makeImStorage(storage.root)),
@@ -316,6 +321,7 @@ test("System One failure retries after thirty seconds instead of deferring", asy
           runs = 0;
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(Clock.Clock, clock),
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(ImStorage, storage),
@@ -367,6 +373,7 @@ test("cross-midnight retrieval failure delays day-end flush; successful tail ret
           runs = 0;
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(Clock.Clock, clock),
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(ImStorage, storage),
@@ -422,6 +429,7 @@ test("channel commits each catch-up window, resumes a failed window, then waits 
         let fail = true;
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(Clock.Clock, clock),
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(ImStorage, storage),

@@ -1,9 +1,9 @@
-import { TaskState } from "../src/tasks/state/model.js";
-import assert from "node:assert/strict";
-import { test } from "node:test";
 import { AgentConversations } from "@aster/agent/harness";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import assert from "node:assert/strict";
+import { test } from "node:test";
 import { ContextRegistry, ExternalAgents, TaskActor, TaskSnapshot } from "../src/index.js";
+import { TaskState } from "../src/tasks/state/model.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { retainedTask, taskInput } from "./task-fixtures.js";
@@ -23,7 +23,7 @@ test("TaskState drains committed storage into its Ref despite interruption", asy
         const history = testConversations();
         const retained = yield* retainedTask(history, "running");
         const registry = yield* makeContextRegistry({ loadAll: () => [retained], save: () => {} });
-        yield* registry.register(retained.snapshot.path, TaskActor.context);
+        yield* registry.register(retained.snapshot.path, TaskActor.contextDefinition);
         const stored = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         const task = yield* openTask(
@@ -73,7 +73,7 @@ test("failed Task persistence leaves the committed Ref unchanged", async () => {
             throw new Error("Injected storage failure");
           },
         });
-        yield* registry.register(retained.snapshot.path, TaskActor.context);
+        yield* registry.register(retained.snapshot.path, TaskActor.contextDefinition);
         const task = yield* openTask(registry, history);
         const result = yield* task
           .settle({ roundId: "task", status: "waiting_input", text: "Need input", covered: [] })
@@ -97,7 +97,7 @@ test("settlement covers only the executed inputs and leaves later input ready", 
         const history = testConversations();
         const retained = yield* retainedTask(history, "running");
         const registry = yield* makeContextRegistry({ loadAll: () => [retained], save: () => {} });
-        yield* registry.register(retained.snapshot.path, TaskActor.context);
+        yield* registry.register(retained.snapshot.path, TaskActor.contextDefinition);
         const task = yield* openTask(registry, history);
         const state = yield* task.snapshot;
         // A persisted input not covered by this execution survives its result.

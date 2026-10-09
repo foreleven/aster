@@ -1,13 +1,13 @@
-import { TaskDeliveryInput } from "../src/tasks/contracts.js";
-import { SignalRootActor } from "../src/signals/root.js";
+import { Deferred, Effect, Fiber, Schema, Stream } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Fiber, Stream, Schema } from "effect";
 import { approvalEntries, DEFAULT_EXECUTOR_PROMPT } from "../src/index.js";
-import { TaskSnapshot } from "../src/tasks/state/snapshot.js";
+import { SignalRootActor } from "../src/signals/root.js";
+import { TaskDeliveryInput } from "../src/tasks/contracts.js";
 import type { TaskAdmissionReply } from "../src/tasks/protocol.js";
-import { taskFixture, taskInput } from "./task-fixtures.js";
+import { TaskSnapshot } from "../src/tasks/state/snapshot.js";
 import { fakeAgent } from "./fixtures.js";
+import { taskFixture, taskInput } from "./task-fixtures.js";
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>
   Effect.runPromise(Effect.scoped(effect).pipe(Effect.timeout("6 seconds")));
 

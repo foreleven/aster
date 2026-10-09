@@ -30,55 +30,69 @@ The core package maps domain Context paths to actor paths and defines concrete A
 
 ## Actor definitions and behaviors
 
-Actor implementations are Effect service definitions, not mutable subclasses instantiated with `new`. The actor module provides `Actor.Service`, analogous to `Context.Service`; an implementation class is the service key and exposes a static Layer that builds its Behavior:
+Actor definitions are values built with `Actor.define(key, protocol)(acquire)`. The protocol is supplied first so TypeScript can infer the parameters of handlers returned by an `Effect.gen`. Each definition carries its service key, Behavior Layer, public commands and inferred dependency requirements.
 
 ```ts
-class WorkerActor extends Actor.Service<WorkerActor, WorkerServices>()("@app/WorkerActor", {
-  command: WorkerCommand,
-}) {
-  static readonly layer = Layer.effect(
-    WorkerActor,
-    Effect.gen(function* () {
-      const dependency = yield* Dependency;
+class Read extends Command.Class<Read>()("Read", {
+  payload: { id: Schema.String },
+  success: Schema.String,
+  error: ReadError,
+  description: "Read a retained value.",
+}) {}
 
-      return WorkerActor.of({
-        receive: (command, context) => Effect.void,
-        started: (context) => Effect.void,
-        receiveSignal: (signal, context) => Effect.void,
-      });
-    }),
-  );
-}
+const Internal = Schema.TaggedUnion({ Refresh: {} });
+const WorkerActor = Actor.define("@app/WorkerActor", {
+  commands: [Read],
+  internal: Internal,
+})(
+  Effect.gen(function* () {
+    const store = yield* Store;
+    return {
+      receive: (command, actor) =>
+        Match.value(command).pipe(
+          Match.tag("Read", ({ id, replyTo }) =>
+            store.read(id).pipe(
+              Effect.matchEffect({
+                onSuccess: (value) => replyTo.tell({ _tag: "Success", value }),
+                onFailure: (error) => replyTo.tell({ _tag: "Failure", error }),
+              }),
+            ),
+          ),
+          Match.tag("Refresh", () => Effect.void),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 ```
 
-`receive` is required. `started` and `receiveSignal` have no-op defaults and may be omitted. Every behavior method receives that ActorCell's typed `ActorContext<Command, Services>` explicitly; per-actor Context is not installed as a system-wide Effect service. `Services` is the minimum Runtime capability set required by the Actor's own Layer and any children it may spawn. The Layer resolves and captures its direct services from the ActorSystem Runtime and may acquire scoped resources, so the built Behavior is environment-closed: `receive` and `receiveSignal` return `Effect<void>`, while `started` may return `Effect<void, unknown>`. The runtime builds the Layer once in each Actor instance Scope and extracts the implementation service. Restart closes that Scope and rebuilds the same Layer to obtain a fresh Behavior.
+The public `ActorRef` accepts only the union inferred from `commands`. The Behavior and `actor.self` accept that union plus `internal`. There is no separately maintained mailbox or service type parameter. Child spawning contributes the child's requirements to the parent's handler Effect, and the parent definition includes those requirements. `Actor.provide(layer)` satisfies dependencies locally while retaining the remaining requirements. The ActorSystem checks them when spawning.
 
-`PersistentActor.Service` extends the same definition model with Schema-defined Event and State types, recovery, persistence operations, Snapshots, and compaction semantics. The Schema form of `Service` infers Command, Event, and State types from the Schemas supplied at definition time. Its Layer returns `initialState`, required `receive`, and pure `applyEvent`, plus the same optional lifecycle methods; `Service.of` attaches the Event and State Schemas to the Behavior. Command, Event, and State types are inferred from these Schemas rather than supplied as explicit generics. `ActorPersistence` is automatically included in every PersistentActor's required Services, so spawning one without a persistence Layer is a static type error. Guardians and runtime coordinators use ordinary `Actor.Service`; domain Context actors normally use `PersistentActor.Service`. Temporary ask reply references use a one-shot Deferred without building an Actor Behavior.
+`Command.Class` uses Effect Schema classes. A command defines its tag once; `commands: [Read]` needs no additional keyed map. A payload-only command is a notification. `success` and optional `error` generate an explicit `replyTo` carrying a Success/Failure union; `reply` supplies an existing response schema when admission receipts or other response protocols must be preserved. `Command.Reply<typeof Read>` derives the reply type. Optional acknowledgements may still be explicit payload fields. Plain tagged schemas remain supported for internal protocols and small runtime test fixtures.
 
-Persistent behavior methods receive a `PersistentActorContext<Command, Event, State>`, which extends ordinary `ActorContext` with a dynamic read-only `state` getter and `persist`, `persistAll`, and `saveSnapshot` Effects. After a successful persist, another `context.state` read in the same `receive` observes the new State. The Behavior never owns or assigns State directly; the runtime owns recovery, write ordering, and state replacement.
+Command constructors and explicit Schema decoding validate inputs. Local `tell` only enqueues a typed value; it does not decode or persist it. The wire payload schema excludes generated reply references. Reply references remain explicit and transient. Duplicate command tags, including collisions between public and internal protocols, fail Behavior acquisition.
 
-A Persistent Behavior may provide a pure synchronous `persistenceId(path)` function, evaluated after Layer construction and before recovery. If omitted, the normalized ActorPath is used directly. An override is responsible for returning a stable, collision-free identity; it cannot access Effect services or change between restarts.
+`receive` is required; `started` and `receiveSignal` are optional. Every method receives the instance's `ActorContext<Mailbox>` explicitly. Dependencies are inferred from acquisition and handler Effects. The definition captures the handler environment during acquisition, so the runtime executes closed Effects. The runtime builds the Layer in each instance Scope. Restart closes that Scope and builds a fresh Behavior.
+
+`PersistentActor.define` adds `event` and `state` schemas to the protocol. Its Behavior supplies `initialState` and pure `applyEvent`; the definition attaches persistence schemas automatically. `ActorPersistence` is included in the inferred requirements. For example:
 
 ```ts
-class ChatActor extends PersistentActor.Service<ChatActor, ChatServices>()("@app/ChatActor", {
-  command: ChatCommand,
+const ChatActor = PersistentActor.define("@app/ChatActor", {
+  commands: [Post],
   event: ChatEvent,
   state: ChatState,
-}) {
-  static readonly layer = Layer.effect(
-    ChatActor,
-    Effect.succeed(
-      ChatActor.of({
-        initialState: ChatState.empty,
-        receive: (command, context) => context.persist(toEvent(command)),
-        applyEvent: (state, event) => ChatState.apply(state, event),
-      }),
-    ),
-  );
-}
+})(
+  Effect.succeed({
+    initialState: ChatState.empty,
+    receive: (command, actor) => actor.persist(toEvent(command)),
+    applyEvent: (state, event) => ChatState.apply(state, event),
+  }),
+);
 ```
 
-All Actor implementations define their Commands with Schemas. Ordinary actors use `Actor.Service<WorkerActor, WorkerServices>()("@app/WorkerActor", { command: WorkerCommand })` to infer their Command type; the optional second generic declares dependencies needed by the Actor and its children. Command type aliases are derived with `typeof WorkerCommand.Type`. A Command Schema in either form supplies a TypeScript type only: local Commands are not decoded, validated, or persisted by the Actor runtime. For response Commands, the actor package provides both a `ReplyTo<Response>` type alias for `ActorRef<Response>` and a `ReplyTo<Response>()` Schema helper, so a field can be written as `replyTo: ReplyTo<number>()`. The helper checks the reference shape when decoded explicitly; the response type is a TypeScript type and cannot be checked at runtime. The Schema argument is required for both ordinary and persistent Actor definitions.
+Persistent handlers receive `PersistentActorContext<Mailbox, Event, State>`, which adds the read-only dynamic `state` getter and `persist`, `persistAll`, and `saveSnapshot`. Reading `actor.state` after persistence observes the committed state. A pure `persistenceId(path)` can override the default ActorPath identity when the domain requires a different stable, collision-free identity.
+
+Core's `ContextActor.define` adds Context registration. Commands declared with `ContextCommand.Class` opt into discovery; ordinary local commands and internal messages stay outside the query catalogue. The class carries the argument schema and description, and the Context Actor's `query` callback receives the command union inferred from the list. Core decodes external query envelopes into those classes, enters through the owner's mailbox, runs cancellable query work with `pipeToSelf`, and replies from the mailbox. Registration follows successful `started` and is released with the Behavior Scope. Stop, restart and caller cancellation release owned query work; defects still enter supervision. Business Actors do not call `queries.register`.
 
 When no Snapshot or Event exists, persistent recovery starts from the Behavior's `initialState`. Events are encoded and decoded with the Event Schema; Snapshot State uses the State Schema. Commands remain local in-memory values and require no persistence Schema. Current immutable State is owned by the Actor runtime and exposed read-only through the `PersistentActorContext` passed to behavior methods. `applyEvent` is a pure synchronous function that returns the next State. The runtime replaces current State only after successful persistence or during recovery. It never calls `receive` while replaying Events. Restart builds a fresh Behavior service. Journal and Snapshot failures enter supervision rather than appearing as domain errors that behavior must interpret.
 
@@ -142,7 +156,7 @@ const system = yield * ActorSystem.make().pipe(ActorSystem.provide(Database.laye
 const ref = yield * system.spawn("worker", WorkerActor);
 ```
 
-An Actor definition declares a minimum Services capability set containing both its Layer's direct inputs and the requirements of children it may spawn. Its `ActorContext<Command, Services>` uses that set to type-check child spawn. `ActorSystem.spawn` then checks the top-level Actor's Services against `ActorSystem<Services>` before the Layer is built from that Runtime. `ActorRef<Command>` carries only the Command type. Layer construction, persistence recovery, `started`, `receive`, `receiveSignal`, and Scope finalizers execute on the system Runtime. Restart creates a new instance Scope and rebuilds the Behavior while continuing to use that Runtime.
+An Actor definition declares a minimum Services capability set containing both its Layer's direct inputs and the requirements of children it may spawn. Its `ActorContext<Command>` uses that set to type-check child spawn. `ActorSystem.spawn` then checks the top-level Actor's Services against `ActorSystem<Services>` before the Layer is built from that Runtime. `ActorRef<Command>` carries only the Command type. Layer construction, persistence recovery, `started`, `receive`, `receiveSignal`, and Scope finalizers execute on the system Runtime. Restart creates a new instance Scope and rebuilds the Behavior while continuing to use that Runtime.
 
 An Actor implementation exposes `static readonly layer = Layer.effect(...)`; there is no separate public `ActorFactory` or `make` protocol. `context.spawn(name, ActorType)` locates and builds that Layer in the new instance Scope. Normal application code provides shared services once around the scoped ActorSystem program.
 

@@ -1,5 +1,6 @@
+import type { QueryCommand } from "@aster/core";
+import { ContextCommand, ContextQueryError } from "@aster/core";
 import { Effect, Schema } from "effect";
-import { ContextQueryError } from "@aster/core";
 
 export const AppName = Schema.Literals(["xiaohongshu", "ctrip"]);
 export type AppName = typeof AppName.Type;
@@ -40,163 +41,229 @@ const noteUrl = Schema.String.check(
 );
 
 type Args = Readonly<Record<string, string | number | boolean | undefined>>;
-interface CommandSpec {
-  readonly description: string;
-  readonly schema: Schema.ConstraintDecoder<Args>;
+interface AppQueryCommand extends QueryCommand {
   readonly positional: readonly string[];
   readonly flags?: Readonly<Record<string, string>>;
   readonly defaultLimit?: number;
   readonly dateRange?: readonly [string, string, boolean];
+  readonly payloadSchema: Schema.Codec<Args, unknown>;
 }
-const search = (description: string): CommandSpec => ({
-  description,
-  schema: Schema.Struct({ query: text, limit: limit() }),
-  positional: ["query"],
-  flags: { limit: "limit" },
-  defaultLimit: 10,
-});
-const route = (description: string, flight = false): CommandSpec => ({
-  description,
-  schema: Schema.Struct({
-    from: flight ? airport : text,
-    to: flight ? airport : text,
-    date,
-    limit: limit(),
-  }),
-  positional: ["from", "to"],
-  flags: { date: "date", limit: "limit" },
-  defaultLimit: 10,
-});
-const destination = (description: string, name: string): CommandSpec => ({
-  description,
-  schema: Schema.Struct({ [name]: text, limit: limit() }),
-  positional: [name],
-  flags: { limit: "limit" },
-  defaultLimit: 10,
-});
-
 /** Explicit query allowlist, checked against OpenCLI 1.8.8. Never dispatch arbitrary adapter commands. */
-export const appCommands: Record<AppName, Readonly<Record<string, CommandSpec>>> = {
-  xiaohongshu: {
-    search: {
-      description:
-        "Search travel experiences and recommendations. Preserve signed URLs for note/comments.",
-      schema: Schema.Struct({
-        query: text,
-        limit: limit(),
-        sort: Schema.optional(
-          Schema.Literals([
-            "comprehensive",
-            "latest",
-            "most-liked",
-            "most-commented",
-            "most-collected",
-          ]),
-        ),
-        noteType: Schema.optional(Schema.Literals(["all", "video", "image"])),
-        publishTime: Schema.optional(Schema.Literals(["anytime", "day", "week", "half-year"])),
-      }),
-      positional: ["query"],
-      flags: { limit: "limit", sort: "sort", noteType: "note-type", publishTime: "publish-time" },
-      defaultLimit: 10,
-    },
-    note: {
-      description: "Read a full note using its signed Xiaohongshu URL with xsec_token from search.",
-      schema: Schema.Struct({ url: noteUrl }),
-      positional: ["url"],
-    },
-    comments: {
-      description: "Read note comments; url must be a signed Xiaohongshu note URL with xsec_token.",
-      schema: Schema.Struct({
-        url: noteUrl,
-        limit: limit(),
-        withReplies: Schema.optional(Schema.Boolean),
-      }),
-      positional: ["url"],
-      flags: { limit: "limit", withReplies: "with-replies" },
-      defaultLimit: 10,
-    },
-    user: {
-      description: "Read a user's public notes by profile ID.",
-      schema: Schema.Struct({
-        id: Schema.String.check(Schema.isPattern(/^[a-fA-F0-9]{24}$/)),
-        limit: limit(),
-      }),
-      positional: ["id"],
-      flags: { limit: "limit" },
-      defaultLimit: 10,
-    },
-    feed: {
-      description: "Read home feed recommendations.",
-      schema: Schema.Struct({ limit: limit() }),
-      positional: [],
-      flags: { limit: "limit" },
-      defaultLimit: 10,
-    },
-  },
-  ctrip: {
-    search: search("Find destinations, landmarks and city IDs for hotel/attraction queries."),
-    "hotel-suggest": search("Find hotel names, IDs and city suggestions."),
-    "hotel-search": {
-      description:
-        "List hotels for a numeric city ID and check-in/out dates; checkout must be after checkin.",
-      schema: Schema.Struct({ city: id, checkin: date, checkout: date, limit: limit(30) }),
-      positional: ["city"],
-      flags: { checkin: "checkin", checkout: "checkout", limit: "limit" },
-      defaultLimit: 10,
-      dateRange: ["checkin", "checkout", false],
-    },
-    hotel: {
-      description: "Read hotel details by numeric hotel ID.",
-      schema: Schema.Struct({ id }),
-      positional: ["id"],
-    },
-    attraction: {
-      description: "List attractions for a numeric city ID.",
-      schema: Schema.Struct({ city: id, limit: limit() }),
-      positional: ["city"],
-      flags: { limit: "limit" },
-      defaultLimit: 10,
-    },
-    flight: route(
-      "Find one-way flights using three-letter uppercase IATA codes and a departure date.",
-      true,
+export class XiaohongshuSearch extends ContextCommand.Class<XiaohongshuSearch>()("search", {
+  description:
+    "Search travel experiences and recommendations. Preserve signed URLs for note/comments.",
+  payload: Schema.Struct({
+    query: text,
+    limit: limit(),
+    sort: Schema.optional(
+      Schema.Literals([
+        "comprehensive",
+        "latest",
+        "most-liked",
+        "most-commented",
+        "most-collected",
+      ]),
     ),
-    "flight-round": {
-      description: "Find round-trip flights; return must be on or after depart.",
-      schema: Schema.Struct({
-        from: airport,
-        to: airport,
-        depart: date,
-        return: date,
-        limit: limit(),
-      }),
-      positional: ["from", "to"],
-      flags: { depart: "depart", return: "return", limit: "limit" },
-      defaultLimit: 10,
-      dateRange: ["depart", "return", true],
-    },
-    train: route("Find trains by station/city names and departure date."),
-    bus: route("Find intercity buses by city names and departure date."),
-    ferry: route("Find ferries by city names and departure date."),
-    cruise: destination("Find cruise packages from a departure port.", "port"),
-    tour: destination("Find group/self-guided tours for a destination.", "destination"),
-    package: destination("Find flight-plus-hotel packages for a destination.", "destination"),
-  },
-};
+    noteType: Schema.optional(Schema.Literals(["all", "video", "image"])),
+    publishTime: Schema.optional(Schema.Literals(["anytime", "day", "week", "half-year"])),
+  }).fields,
+}) {
+  static readonly positional = ["query"] as const;
+  static readonly flags = {
+    limit: "limit",
+    sort: "sort",
+    noteType: "note-type",
+    publishTime: "publish-time",
+  } as const;
+  static readonly defaultLimit = 10 as const;
+}
+export class XiaohongshuNote extends ContextCommand.Class<XiaohongshuNote>()("note", {
+  description: "Read a full note using its signed Xiaohongshu URL with xsec_token from search.",
+  payload: Schema.Struct({ url: noteUrl }).fields,
+}) {
+  static readonly positional = ["url"] as const;
+}
+export class XiaohongshuComments extends ContextCommand.Class<XiaohongshuComments>()("comments", {
+  description: "Read note comments; url must be a signed Xiaohongshu note URL with xsec_token.",
+  payload: Schema.Struct({
+    url: noteUrl,
+    limit: limit(),
+    withReplies: Schema.optional(Schema.Boolean),
+  }).fields,
+}) {
+  static readonly positional = ["url"] as const;
+  static readonly flags = { limit: "limit", withReplies: "with-replies" } as const;
+  static readonly defaultLimit = 10 as const;
+}
+export class XiaohongshuUser extends ContextCommand.Class<XiaohongshuUser>()("user", {
+  description: "Read a user's public notes by profile ID.",
+  payload: Schema.Struct({
+    id: Schema.String.check(Schema.isPattern(/^[a-fA-F0-9]{24}$/)),
+    limit: limit(),
+  }).fields,
+}) {
+  static readonly positional = ["id"] as const;
+  static readonly flags = { limit: "limit" } as const;
+  static readonly defaultLimit = 10 as const;
+}
+export class XiaohongshuFeed extends ContextCommand.Class<XiaohongshuFeed>()("feed", {
+  description: "Read home feed recommendations.",
+  payload: Schema.Struct({ limit: limit() }).fields,
+}) {
+  static readonly positional = [] as const;
+  static readonly flags = { limit: "limit" } as const;
+  static readonly defaultLimit = 10 as const;
+}
+export class CtripHotelSearch extends ContextCommand.Class<CtripHotelSearch>()("hotel-search", {
+  description:
+    "List hotels for a numeric city ID and check-in/out dates; checkout must be after checkin.",
+  payload: Schema.Struct({ city: id, checkin: date, checkout: date, limit: limit(30) }).fields,
+}) {
+  static readonly positional = ["city"] as const;
+  static readonly flags = { checkin: "checkin", checkout: "checkout", limit: "limit" } as const;
+  static readonly defaultLimit = 10 as const;
+  static readonly dateRange = ["checkin", "checkout", false] as const;
+}
+export class CtripHotel extends ContextCommand.Class<CtripHotel>()("hotel", {
+  description: "Read hotel details by numeric hotel ID.",
+  payload: Schema.Struct({ id }).fields,
+}) {
+  static readonly positional = ["id"] as const;
+}
+export class CtripAttraction extends ContextCommand.Class<CtripAttraction>()("attraction", {
+  description: "List attractions for a numeric city ID.",
+  payload: Schema.Struct({ city: id, limit: limit() }).fields,
+}) {
+  static readonly positional = ["city"] as const;
+  static readonly flags = { limit: "limit" } as const;
+  static readonly defaultLimit = 10 as const;
+}
+export class CtripFlightRound extends ContextCommand.Class<CtripFlightRound>()("flight-round", {
+  description: "Find round-trip flights; return must be on or after depart.",
+  payload: Schema.Struct({
+    from: airport,
+    to: airport,
+    depart: date,
+    return: date,
+    limit: limit(),
+  }).fields,
+}) {
+  static readonly positional = ["from", "to"] as const;
+  static readonly flags = { depart: "depart", return: "return", limit: "limit" } as const;
+  static readonly defaultLimit = 10 as const;
+  static readonly dateRange = ["depart", "return", true] as const;
+}
+export class CtripSearch extends ContextCommand.Class<CtripSearch>()("search", {
+  description: "Find destinations, landmarks and city IDs for hotel/attraction queries.",
+  payload: { query: text, limit: limit() },
+}) {
+  static readonly positional = ["query"] as const;
+  static readonly flags = { limit: "limit" };
+  static readonly defaultLimit = 10;
+}
+export class CtripHotelSuggest extends ContextCommand.Class<CtripHotelSuggest>()("hotel-suggest", {
+  description: "Find hotel names, IDs and city suggestions.",
+  payload: { query: text, limit: limit() },
+}) {
+  static readonly positional = ["query"] as const;
+  static readonly flags = { limit: "limit" };
+  static readonly defaultLimit = 10;
+}
+export class CtripFlight extends ContextCommand.Class<CtripFlight>()("flight", {
+  description: "Find one-way flights using three-letter uppercase IATA codes and a departure date.",
+  payload: { from: airport, to: airport, date, limit: limit() },
+}) {
+  static readonly positional = ["from", "to"] as const;
+  static readonly flags = { date: "date", limit: "limit" };
+  static readonly defaultLimit = 10;
+}
+export class CtripTrain extends ContextCommand.Class<CtripTrain>()("train", {
+  description: "Find trains by station/city names and departure date.",
+  payload: { from: text, to: text, date, limit: limit() },
+}) {
+  static readonly positional = ["from", "to"] as const;
+  static readonly flags = { date: "date", limit: "limit" };
+  static readonly defaultLimit = 10;
+}
+export class CtripBus extends ContextCommand.Class<CtripBus>()("bus", {
+  description: "Find intercity buses by city names and departure date.",
+  payload: { from: text, to: text, date, limit: limit() },
+}) {
+  static readonly positional = ["from", "to"] as const;
+  static readonly flags = { date: "date", limit: "limit" };
+  static readonly defaultLimit = 10;
+}
+export class CtripFerry extends ContextCommand.Class<CtripFerry>()("ferry", {
+  description: "Find ferries by city names and departure date.",
+  payload: { from: text, to: text, date, limit: limit() },
+}) {
+  static readonly positional = ["from", "to"] as const;
+  static readonly flags = { date: "date", limit: "limit" };
+  static readonly defaultLimit = 10;
+}
+export class CtripCruise extends ContextCommand.Class<CtripCruise>()("cruise", {
+  description: "Find cruise packages from a departure port.",
+  payload: { port: text, limit: limit() },
+}) {
+  static readonly positional = ["port"] as const;
+  static readonly flags = { limit: "limit" };
+  static readonly defaultLimit = 10;
+}
+export class CtripTour extends ContextCommand.Class<CtripTour>()("tour", {
+  description: "Find group/self-guided tours for a destination.",
+  payload: { destination: text, limit: limit() },
+}) {
+  static readonly positional = ["destination"] as const;
+  static readonly flags = { limit: "limit" };
+  static readonly defaultLimit = 10;
+}
+export class CtripPackage extends ContextCommand.Class<CtripPackage>()("package", {
+  description: "Find flight-plus-hotel packages for a destination.",
+  payload: { destination: text, limit: limit() },
+}) {
+  static readonly positional = ["destination"] as const;
+  static readonly flags = { limit: "limit" };
+  static readonly defaultLimit = 10;
+}
+export const appCommands = {
+  xiaohongshu: [
+    XiaohongshuSearch,
+    XiaohongshuNote,
+    XiaohongshuComments,
+    XiaohongshuUser,
+    XiaohongshuFeed,
+  ],
+  ctrip: [
+    CtripSearch,
+    CtripHotelSuggest,
+    CtripHotelSearch,
+    CtripHotel,
+    CtripAttraction,
+    CtripFlight,
+    CtripFlightRound,
+    CtripTrain,
+    CtripBus,
+    CtripFerry,
+    CtripCruise,
+    CtripTour,
+    CtripPackage,
+  ],
+} as const satisfies Record<AppName, readonly AppQueryCommand[]>;
 
 export const queryArgv = Effect.fn("Apps.queryArgv")(function* (
   app: AppName,
   command: string,
   raw: unknown,
 ) {
-  const spec = Object.hasOwn(appCommands[app], command) ? appCommands[app][command] : undefined;
+  const spec: AppQueryCommand | undefined = appCommands[app].find(
+    (candidate) => candidate._tag === command,
+  );
   if (!spec)
     return yield* new ContextQueryError({
       kind: "invalid-input",
       message: "Unsupported query command; read the Context commands catalogue",
     });
-  const args = yield* Schema.decodeUnknownEffect(spec.schema, { onExcessProperty: "error" })(
+  const args = yield* Schema.decodeUnknownEffect(spec.payloadSchema, { onExcessProperty: "error" })(
     raw,
   ).pipe(
     Effect.mapError(

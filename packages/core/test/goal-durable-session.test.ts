@@ -1,25 +1,25 @@
-import { DurableHarness, AgentConversations } from "@aster/agent/harness";
-import { GoalState } from "../src/goals/state/model.js";
-import { CurrentActors } from "../src/services/actors.js";
-import { toolSystem } from "./tool-fixtures.js";
-import { testConversations } from "./conversation-fixtures.js";
 import { Models, type ResolvedModel } from "@aster/agent";
 import { AgentRunner } from "@aster/agent/agent";
+import { AgentConversations, DurableHarness } from "@aster/agent/harness";
+import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
+import { GoalState } from "../src/goals/state/model.js";
+import { CurrentActors } from "../src/services/actors.js";
+import { testConversations } from "./conversation-fixtures.js";
+import { toolSystem } from "./tool-fixtures.js";
 
 import { Effect, Layer } from "effect";
 import {
+  ContextRegistry,
+  ExternalAgents,
   GoalActor,
   GoalAgent,
   GoalSettings,
-  ContextRegistry,
   MemoryRecall,
-  ExternalAgents,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
@@ -130,7 +130,7 @@ test("reopened Goal sessions keep their policy and history while tools read the 
           ],
           save: () => {},
         });
-        yield* registry.register("/goals/test", GoalActor.context);
+        yield* registry.register("/goals/test", GoalActor.contextDefinition);
         const { system } = yield* toolSystem({
           registry,
           messages: conversations,

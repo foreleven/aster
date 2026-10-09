@@ -1,14 +1,14 @@
-import assert from "node:assert/strict";
-import { serialize } from "node:v8";
-import { test } from "node:test";
 import { Cause, Context, Data, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { serialize } from "node:v8";
 import {
   Actor,
   ActorPersistence,
-  PersistentActor,
-  InMemoryActorPersistence,
   ActorStartupError,
   ActorSystem,
+  InMemoryActorPersistence,
+  PersistentActor,
   ReplyTo,
 } from "../src/index.js";
 
@@ -20,21 +20,18 @@ class Hooks extends Context.Service<
     readonly start: Effect.Effect<void, StartupFailure>;
   }
 >()("test/StartupHooks") {}
-class Worker extends Actor.Service<Worker, Hooks>()("test/StartupWorker", {
-  command: Schema.TaggedStruct("Read", { replyTo: ReplyTo<string>() }),
-}) {
-  static readonly layer = Layer.effect(
-    Worker,
-    Effect.gen(function* () {
-      const hooks = yield* Hooks;
-      yield* hooks.acquire;
-      return Worker.of({
-        started: () => hooks.start,
-        receive: (command) => command.replyTo.tell("handled"),
-      });
-    }),
-  );
-}
+const Worker = Actor.define("test/StartupWorker", {
+  commands: [Schema.TaggedStruct("Read", { replyTo: ReplyTo<string>() })],
+})(
+  Effect.gen(function* () {
+    const hooks = yield* Hooks;
+    yield* hooks.acquire;
+    return {
+      started: () => hooks.start,
+      receive: (command) => command.replyTo.tell("handled"),
+    };
+  }),
+);
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>
   Effect.runPromise(Effect.scoped(effect).pipe(Effect.timeout("5 seconds")));
 const systemWith = (hooks: Hooks["Service"]) =>
@@ -156,20 +153,17 @@ test("Scope shutdown interrupts a pending startup and future waiters", async () 
   assert.ok(Exit.hasInterrupts(await Effect.runPromiseExit(ref.awaitStarted)));
 });
 
-class Counter extends PersistentActor.Service<Counter>()("test/StartupCounter", {
-  command: Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
+const Counter = PersistentActor.define("test/StartupCounter", {
+  commands: [Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() })],
   event: Schema.Number,
   state: Schema.Number,
-}) {
-  static readonly layer = Layer.succeed(
-    Counter,
-    Counter.of({
-      initialState: 0,
-      applyEvent: (state, event) => state + event,
-      receive: (command, context) => command.replyTo.tell(context.state),
-    }),
-  );
-}
+})(
+  Effect.succeed({
+    initialState: 0,
+    applyEvent: (state, event) => state + event,
+    receive: (command, context) => command.replyTo.tell(context.state),
+  }),
+);
 
 test("startup waits for persistent recovery before releasing callers", async () => {
   await run(

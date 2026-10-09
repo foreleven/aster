@@ -1,13 +1,14 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema } from "effect";
 import { TestClock } from "effect/testing";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { ContextQueries } from "../src/context/queries/routes.js";
 import {
   ContextRegistry,
   ExternalAgents,
-  GoalsRootActor,
   GoalSnapshot,
+  GoalsRootActor,
   type GoalCommandReply,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
@@ -33,6 +34,7 @@ for (const fails of [false, true]) {
           const registry = yield* makeContextRegistry();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              ContextQueries.layer,
               Layer.succeed(Clock.Clock, clock),
               Logger.layer([
                 Logger.make<unknown, void>(({ message }) => {

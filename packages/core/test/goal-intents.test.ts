@@ -1,22 +1,23 @@
-import { testConversations } from "./conversation-fixtures.js";
-import { goalIntentRecords } from "./goal-fixtures.js";
-import { goalWorkflowLayer } from "./workflow-fixtures.js";
-import { goalInputId } from "../src/goals/state/inputs.js";
+import { ActorSystem } from "@aster/actor";
+import { ConversationError } from "@aster/agent/harness";
+import { Deferred, Effect, Layer, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem } from "@aster/actor";
-import { Deferred, Effect, Layer, Schema } from "effect";
+import { ContextQueries } from "../src/context/queries/routes.js";
+import { type GoalIntentInput } from "../src/goals/screening/intent.js";
+import { goalInputId } from "../src/goals/state/inputs.js";
 import {
   ContextRegistry,
   ExternalAgents,
   GoalSnapshot,
   GoalsRootActor,
-  type StoredContext,
   type GoalCommandReply,
+  type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
-import { ConversationError } from "@aster/agent/harness";
-import { type GoalIntentInput } from "../src/goals/screening/intent.js";
+import { testConversations } from "./conversation-fixtures.js";
+import { goalIntentRecords } from "./goal-fixtures.js";
+import { goalWorkflowLayer } from "./workflow-fixtures.js";
 
 const input: GoalIntentInput = {
   requestId: "source-revision-one-to-project",
@@ -71,6 +72,7 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
             });
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
+                ContextQueries.layer,
                 Layer.succeed(ContextRegistry, registry),
                 Layer.succeed(ExternalAgents, {}),
                 goalWorkflowLayer({
@@ -188,6 +190,7 @@ test("a Context intent remains admissible after user input advances the Goal rev
         const history = testConversations();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(ExternalAgents, {}),
             goalWorkflowLayer({

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import {
   Cause,
   Clock,
@@ -14,15 +13,16 @@ import {
   Result,
   Scope,
 } from "effect";
+import { randomUUID } from "node:crypto";
 import {
   actorSelectionPath,
   ActorStartupError,
   type ActorBehavior,
   type ActorContext,
   type ActorRef,
+  type ActorSelection,
   type ActorSignal,
   type ActorSystemEvent,
-  type ActorSelection,
   type AnyActorDefinition,
   type FailureSummary,
   type PersistentActorBehavior,
@@ -31,8 +31,8 @@ import {
   type SupervisionDirective,
 } from "../actor.js";
 import { ActorPersistence } from "../persistence.js";
-import { ActorRefImpl } from "./ref.js";
 import { PersistentState } from "./persistent-state.js";
+import { ActorRefImpl } from "./ref.js";
 import { commandTag, failureSummary } from "./telemetry.js";
 
 export type Envelope =
@@ -40,7 +40,7 @@ export type Envelope =
   | { readonly _tag: "Signal"; readonly value: ActorSignal }
   | { readonly _tag: "Failure"; readonly cause: Cause.Cause<unknown> };
 
-type AnyBehavior = ActorBehavior<any, any> | PersistentActorBehavior<any, any, any, any>;
+type AnyBehavior = ActorBehavior<any> | PersistentActorBehavior<any, any, any>;
 
 export interface CellRuntime {
   readonly select: (path: string) => ActorSelection;
@@ -164,7 +164,7 @@ export class ActorCell {
     }).pipe(Effect.uninterruptible);
   }
 
-  private context(): ActorContext<any, any> {
+  private context(): ActorContext<any> {
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- Preserve the actor instance inside generators and getters.
     const cell = this;
     return {
@@ -237,7 +237,7 @@ export class ActorCell {
     };
   }
 
-  private initialize(): Effect.Effect<ActorContext<any, any>, unknown> {
+  private initialize(): Effect.Effect<ActorContext<any>, unknown> {
     return Effect.gen({ self: this }, function* () {
       const instanceScope = yield* Scope.make();
       this.instanceScope = instanceScope;
@@ -248,7 +248,7 @@ export class ActorCell {
       );
       const behavior = Context.get(built, this.definition as any) as AnyBehavior;
       this.behavior = behavior;
-      let context: ActorContext<any, any> = this.context();
+      let context: ActorContext<any> = this.context();
       if (this.definition.actorKind === "persistent") {
         const persistent = behavior as PersistentActorBehavior<any, any, any, any>;
         const store = Context.get(this.system.services, ActorPersistence);

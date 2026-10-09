@@ -1,57 +1,54 @@
+import { Models } from "@aster/agent";
+import { AgentConversations } from "@aster/agent/harness";
 import {
-  ContextQueries,
-  IntegrationError,
   AsterRuntime,
   ConfigLocation,
   ContextActor,
-  ContextRegistry,
   ContextCaptures,
-  DurableContext,
-  SystemOneClient,
-  ExternalAgents,
-  RuntimeIntegrations,
-  defineContext,
-  contextView,
-  defineIntegration,
   contextPath,
+  ContextQueries,
+  ContextRegistry,
+  contextView,
+  defineContext,
+  defineIntegration,
+  DurableContext,
+  ExternalAgents,
+  IntegrationError,
   makeDurableContext,
   MemoryBackend,
+  RuntimeIntegrations,
+  SystemOneClient,
 } from "@aster/core";
-import { AgentConversations } from "@aster/agent/harness";
+import { MailFetcher, MailIntegration, MailSettings } from "@aster/integrations";
+import { ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Redacted, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ConfigProvider, Context, Deferred, Effect, Fiber, Layer, Redacted, Schema } from "effect";
-import { Models } from "@aster/agent";
-import { MailFetcher, MailIntegration, MailSettings } from "@aster/integrations";
 
-class Source extends ContextActor.Service<Source>()("test/Source", {
-  command: Schema.TaggedStruct("Ping", {}),
+const Source = ContextActor.define("test/Source", {
+  commands: [Schema.TaggedStruct("Ping", {})],
   context: defineContext({
     view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
     state: Schema.Struct({ value: Schema.Number }),
     message: Schema.Never,
   }),
-}) {
-  static readonly layer = Layer.effect(
-    Source,
-    Effect.gen(function* () {
-      const registry = yield* ContextRegistry;
-      return Source.of({
-        started: (actor) =>
-          registry.commit(
-            {
-              path: contextPath(actor),
-              description: "Source",
-              state: { value: 1 },
-              messages: [],
-            },
-            { expectedRevision: registry.get(contextPath(actor))?.revision ?? 0 },
-          ),
-        receive: () => Effect.void,
-      });
-    }),
-  );
-}
+})(
+  Effect.gen(function* () {
+    const registry = yield* ContextRegistry;
+    return {
+      started: (actor) =>
+        registry.commit(
+          {
+            path: contextPath(actor),
+            description: "Source",
+            state: { value: 1 },
+            messages: [],
+          },
+          { expectedRevision: registry.get(contextPath(actor))?.revision ?? 0 },
+        ),
+      receive: () => Effect.void,
+    };
+  }),
+);
 
 const sourceLayer = (
   name: string,

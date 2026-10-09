@@ -1,9 +1,8 @@
-import { testConversations } from "./conversation-fixtures.js";
-import { goalWorkflowLayer } from "./workflow-fixtures.js";
-import assert from "node:assert/strict";
-import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import { ConfigProvider, Effect, Layer, Schema } from "effect";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { ContextQueries } from "../src/context/queries/routes.js";
 import {
   ContextRegistry,
   ExternalAgents,
@@ -14,6 +13,8 @@ import {
   type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
+import { testConversations } from "./conversation-fixtures.js";
+import { goalWorkflowLayer } from "./workflow-fixtures.js";
 
 const configFor = (goal: object) => ({
   config: {
@@ -107,6 +108,7 @@ test("Goal startup refreshes the entire definition without losing work", async (
           });
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              ContextQueries.layer,
               Layer.succeed(ContextRegistry, registry),
 
               Layer.succeed(ExternalAgents, {}),

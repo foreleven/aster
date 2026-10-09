@@ -1,4 +1,4 @@
-import { Context, Data, Effect, Layer, Schema, type Duration } from "effect";
+import { Context, Data, Effect, Layer, Schema, SchemaAST, Scope, type Duration } from "effect";
 import type { ActorPersistence } from "./persistence.js";
 
 export type ActorPath = string;
@@ -118,7 +118,7 @@ export const ReplyTo = <Response>() =>
       typeof value.ask === "function",
   );
 
-export interface ActorContext<Command, Services = never> {
+export interface ActorContext<Command> {
   select(path: string): ActorSelection;
   readonly self: ActorRef<Command>;
   readonly path: ActorPath;
@@ -126,9 +126,9 @@ export interface ActorContext<Command, Services = never> {
   /** Register a child immediately; Layer acquisition, recovery and started run asynchronously. */
   spawn<Definition extends AnyActorDefinition>(
     name: string,
-    definition: Definition & RequireServices<Definition, Services>,
+    definition: Definition,
     options?: SpawnOptions,
-  ): Effect.Effect<ActorRef<CommandOf<Definition>>, SpawnError>;
+  ): Effect.Effect<ActorRef<CommandOf<Definition>>, SpawnError, ServicesOf<Definition>>;
   /** Request a direct child's stop without awaiting it; watch observes final termination. */
   stop<Child>(ref: ActorRef<Child>): Effect.Effect<void>;
   /** Finish this handler, discard queued work, then stop descendants and close resources. */
@@ -151,23 +151,16 @@ export interface ActorContext<Command, Services = never> {
 export interface ActorBehavior<Command, Services = never> {
   readonly receive: (
     command: Command,
-    context: ActorContext<Command, Services>,
-  ) => Effect.Effect<void>;
-  readonly started?: (
-    context: ActorContext<Command, Services>,
-  ) => Effect.Effect<void, unknown, Services>;
+    context: ActorContext<Command>,
+  ) => Effect.Effect<void, never, Services>;
+  readonly started?: (context: ActorContext<Command>) => Effect.Effect<void, unknown, Services>;
   readonly receiveSignal?: (
     signal: ActorSignal,
-    context: ActorContext<Command, Services>,
-  ) => Effect.Effect<void>;
+    context: ActorContext<Command>,
+  ) => Effect.Effect<void, never, Services>;
 }
 
-export interface PersistentActorContext<
-  Command,
-  Event,
-  State,
-  Services = never,
-> extends ActorContext<Command, Services | ActorPersistence> {
+export interface PersistentActorContext<Command, Event, State> extends ActorContext<Command> {
   /** Detached view of the latest committed state; read again after persisting to see updates. */
   readonly state: ReadonlyDeep<State>;
   persist(event: Event): Effect.Effect<void>;
@@ -181,16 +174,16 @@ export interface PersistentActorBehavior<Command, Event, State, Services = never
   readonly stateSchema: Schema.Codec<State, any>;
   readonly receive: (
     command: Command,
-    context: PersistentActorContext<Command, Event, State, Services>,
-  ) => Effect.Effect<void>;
+    context: PersistentActorContext<Command, Event, State>,
+  ) => Effect.Effect<void, never, Services>;
   readonly applyEvent: (state: ReadonlyDeep<State>, event: Event) => State;
   readonly started?: (
-    context: PersistentActorContext<Command, Event, State, Services>,
-  ) => Effect.Effect<void, unknown>;
+    context: PersistentActorContext<Command, Event, State>,
+  ) => Effect.Effect<void, unknown, Services>;
   readonly receiveSignal?: (
     signal: ActorSignal,
-    context: PersistentActorContext<Command, Event, State, Services>,
-  ) => Effect.Effect<void>;
+    context: PersistentActorContext<Command, Event, State>,
+  ) => Effect.Effect<void, never, Services>;
   readonly persistenceId?: (path: ActorPath) => string;
 }
 
@@ -218,82 +211,170 @@ export type RequireServices<Definition, Available> = [
   ? unknown
   : never;
 
-type ActorDefinition<Self, Command, Services> = ReturnType<
-  ReturnType<typeof Context.Service<Self, ActorBehavior<Command, Services>>>
-> & {
-  readonly actorKind: "actor";
-  readonly __command: Command;
-  readonly __services: Services;
-};
+/** Protocol declarations are evaluated before behavior inference so handler parameters stay precise. */
+export interface Protocol<Commands extends readonly Schema.Top[], Internal extends Schema.Top> {
+  readonly commands: Commands;
+  readonly internal?: Internal;
+}
+export type MailboxOf<C extends readonly Schema.Top[], I extends Schema.Top> =
+  C[number]["Type"] | I["Type"];
 
-type PersistentActorDefinition<Self, Command, Event, State, Services> = ReturnType<
-  ReturnType<typeof Context.Service<Self, PersistentActorBehavior<Command, Event, State, Services>>>
-> & {
-  readonly actorKind: "persistent";
-  readonly __command: Command;
-  readonly __services: Services | ActorPersistence;
-};
-
-type SchemaPersistentActorDefinition<Self, Command, Event, State, Services> =
-  PersistentActorDefinition<Self, Command, Event, State, Services> & {
-    readonly of: (
-      behavior: Omit<
-        PersistentActorBehavior<Command, Event, State, Services>,
-        "eventSchema" | "stateSchema"
-      >,
-    ) => PersistentActorBehavior<Command, Event, State, Services>;
-  };
-
-function actorService<Self, Services = never>(): <CommandSchema extends Schema.Schema<any>>(
-  key: string,
-  schemas: { readonly command: CommandSchema },
-) => ActorDefinition<Self, Schema.Schema.Type<CommandSchema>, Services>;
-function actorService(): any {
-  // Local Commands may contain live ActorRefs. Their Schema supplies types only;
-  // validation/encoding belongs at external boundaries, or to persistent events/state.
-  return (key: string, _schemas: { readonly command: Schema.Schema<any> }) =>
-    Object.assign(Context.Service<any, any>()(key), { actorKind: "actor" as const });
+export interface Definition<Public, Behavior, E, R> extends Context.Service<Behavior, Behavior> {
+  readonly actorKind: "actor" | "persistent";
+  readonly layer: Layer.Layer<Behavior, E, R>;
+  readonly commands: readonly Schema.Top[];
+  readonly __command: Public;
+  readonly __services: R;
 }
 
-function persistentActorService<Self, Services = never>(): <
-  CommandSchema extends Schema.Schema<any>,
-  EventSchema extends Schema.Codec<any, any>,
-  StateSchema extends Schema.Codec<any, any>,
->(
-  key: string,
-  schemas: {
-    readonly command: CommandSchema;
-    readonly event: EventSchema;
-    readonly state: StateSchema;
-  },
-) => SchemaPersistentActorDefinition<
-  Self,
-  Schema.Schema.Type<CommandSchema>,
-  Schema.Schema.Type<EventSchema>,
-  Schema.Schema.Type<StateSchema>,
-  Services
->;
-function persistentActorService(): any {
-  return (
+const protocolTags = (ast: SchemaAST.AST): readonly string[] => {
+  if (SchemaAST.isUnion(ast)) return ast.types.flatMap(protocolTags);
+  if (!SchemaAST.isObjects(ast)) return [];
+  const tag = ast.propertySignatures.find((field) => field.name === "_tag")?.type;
+  return tag && SchemaAST.isLiteral(tag) && typeof tag.literal === "string" ? [tag.literal] : [];
+};
+const validateProtocol = (protocol: Protocol<readonly Schema.Top[], Schema.Top>) =>
+  Effect.gen(function* () {
+    const tags = new Set<string>();
+    for (const schema of [...protocol.commands, protocol.internal ?? Schema.Never]) {
+      for (const tag of protocolTags(Schema.toEncoded(schema).ast)) {
+        if (tags.has(tag))
+          return yield* Effect.die(new Error(`Duplicate Actor command tag: ${tag}`));
+        tags.add(tag);
+      }
+    }
+  });
+
+const actorDefine =
+  <const C extends readonly Schema.Top[], I extends Schema.Top = typeof Schema.Never>(
     key: string,
-    schemas: {
-      readonly command: Schema.Schema<any>;
-      readonly event: Schema.Codec<any, any>;
-      readonly state: Schema.Codec<any, any>;
-    },
-  ) => {
-    const definition = Context.Service<any, any>()(key);
-    const of = definition.of;
-    return Object.assign(definition, {
-      of: (behavior: object) =>
-        of({ ...behavior, eventSchema: schemas.event, stateSchema: schemas.state }),
-      actorKind: "persistent" as const,
+    protocol: Protocol<C, I>,
+  ) =>
+  <E, R, H = never>(
+    acquire: Effect.Effect<ActorBehavior<MailboxOf<C, I>, H>, E, R>,
+  ): Definition<
+    C[number]["Type"],
+    ActorBehavior<MailboxOf<C, I>, H>,
+    E,
+    Exclude<R | H, Scope.Scope>
+  > => {
+    const service = Context.Service<ActorBehavior<MailboxOf<C, I>, H>>(key);
+    const layer = Layer.effect(
+      service,
+      Effect.gen(function* () {
+        yield* validateProtocol(protocol);
+        const environment = yield* Effect.context<H>();
+        const behavior = yield* acquire;
+        return {
+          ...behavior,
+          receive: (command: MailboxOf<C, I>, actor: ActorContext<MailboxOf<C, I>>) =>
+            behavior.receive(command, actor).pipe(Effect.provideContext(environment)),
+          ...(behavior.started
+            ? {
+                started: (actor: ActorContext<MailboxOf<C, I>>) =>
+                  behavior.started!(actor).pipe(Effect.provideContext(environment)),
+              }
+            : {}),
+          ...(behavior.receiveSignal
+            ? {
+                receiveSignal: (signal: ActorSignal, actor: ActorContext<MailboxOf<C, I>>) =>
+                  behavior.receiveSignal!(signal, actor).pipe(Effect.provideContext(environment)),
+              }
+            : {}),
+        };
+      }),
+    );
+    // Phantom protocol/dependency members have no runtime value. The service key and Layer
+    // remain intact for the runtime's heterogeneous registry and per-instance acquisition.
+    return Object.assign(service, {
+      actorKind: "actor" as const,
+      commands: protocol.commands,
+      layer,
+      __command: undefined as never,
+      __services: undefined as never,
     });
   };
-}
 
-export const Actor = { Service: actorService } as const;
-export const PersistentActor = { Service: persistentActorService } as const;
+const persistentDefine =
+  <
+    const C extends readonly Schema.Top[],
+    Event extends Schema.Codec<any, any>,
+    State extends Schema.Codec<any, any>,
+    I extends Schema.Top = typeof Schema.Never,
+  >(
+    key: string,
+    protocol: Protocol<C, I> & { readonly event: Event; readonly state: State },
+  ) =>
+  <E, R, H = never>(
+    acquire: Effect.Effect<
+      Omit<
+        PersistentActorBehavior<MailboxOf<C, I>, Event["Type"], State["Type"], H>,
+        "eventSchema" | "stateSchema"
+      >,
+      E,
+      R
+    >,
+  ): Definition<
+    C[number]["Type"],
+    PersistentActorBehavior<MailboxOf<C, I>, Event["Type"], State["Type"], H>,
+    E,
+    Exclude<R | H, Scope.Scope> | ActorPersistence
+  > => {
+    type Behavior = PersistentActorBehavior<MailboxOf<C, I>, Event["Type"], State["Type"], H>;
+    type Owner = PersistentActorContext<MailboxOf<C, I>, Event["Type"], State["Type"]>;
+    const service = Context.Service<Behavior>(key);
+    const layer = Layer.effect(
+      service,
+      Effect.gen(function* () {
+        yield* validateProtocol(protocol);
+        const environment = yield* Effect.context<H>();
+        const behavior = yield* acquire;
+        return {
+          ...behavior,
+          eventSchema: protocol.event,
+          stateSchema: protocol.state,
+          receive: (command: MailboxOf<C, I>, actor: Owner) =>
+            behavior.receive(command, actor).pipe(Effect.provideContext(environment)),
+          ...(behavior.started
+            ? {
+                started: (actor: Owner) =>
+                  behavior.started!(actor).pipe(Effect.provideContext(environment)),
+              }
+            : {}),
+          ...(behavior.receiveSignal
+            ? {
+                receiveSignal: (signal: ActorSignal, actor: Owner) =>
+                  behavior.receiveSignal!(signal, actor).pipe(Effect.provideContext(environment)),
+              }
+            : {}),
+        };
+      }),
+    );
+    return Object.assign(service, {
+      actorKind: "persistent" as const,
+      commands: protocol.commands,
+      layer,
+      __command: undefined as never,
+      __services: undefined as never,
+    });
+  };
+
+/** Supply behavior-local dependencies without hiding the remaining system requirements. */
+const provide =
+  <Out, E2, R2>(dependency: Layer.Layer<Out, E2, R2>) =>
+  <P, B, E, R>(
+    definition: Definition<P, B, E, R>,
+  ): Definition<P, B, E | E2, Exclude<R, Out> | R2> =>
+    Object.assign(Context.Service<B>(definition.key), {
+      actorKind: definition.actorKind,
+      commands: definition.commands,
+      layer: definition.layer.pipe(Layer.provide(dependency)),
+      __command: undefined as never,
+      __services: undefined as never,
+    });
+
+export const Actor = { define: actorDefine, provide } as const;
+export const PersistentActor = { define: persistentDefine, provide } as const;
 
 export type ActorSystemEvent =
   | {

@@ -1,11 +1,11 @@
-import { registerCollectionQueries } from "../context/queries/commands.js";
+import { type ContextViewPolicy, contextView } from "../context/definition.js";
+import { makeCollectionQueries } from "../context/queries/commands.js";
 import { publicJson } from "../json.js";
 import { GoalSnapshot } from "./state/snapshot.js";
-import { type ContextViewPolicy, contextView } from "../context/definition.js";
 
-import { Option, Schema, Effect } from "effect";
-import type { ContextRegistry } from "../context/registry.js";
 import { AgentConversations } from "@aster/agent/harness";
+import { Effect, Option, Schema } from "effect";
+import type { ContextRegistry } from "../context/registry.js";
 import { ApplicationError } from "../operations.js";
 import { GoalInputPayload } from "./contracts.js";
 
@@ -107,8 +107,8 @@ export const goalTimeline = (
     };
   }).pipe(Effect.withSpan("Goal.timeline"));
 
-export const registerGoalQueries = () =>
-  registerCollectionQueries(
+export const makeGoalQueries = () =>
+  makeCollectionQueries(
     "/goals",
     Effect.fnUntraced(function* (record, detail) {
       const state = yield* Schema.decodeUnknownEffect(GoalSnapshot)(record.state).pipe(

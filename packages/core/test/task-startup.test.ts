@@ -1,10 +1,10 @@
-import { makeHarness } from "./harness-fixtures.js";
-import assert from "node:assert/strict";
-import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { ContextQueries } from "../src/context/queries/routes.js";
 import {
   ContextRegistry,
   ExternalAgents,
@@ -14,6 +14,7 @@ import {
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
+import { makeHarness } from "./harness-fixtures.js";
 import { retainedTask, taskInput } from "./task-fixtures.js";
 
 const TerminationLog = Schema.Struct({
@@ -29,6 +30,7 @@ const taskSystem = (
 ) =>
   ActorSystem.make().pipe(
     ActorSystem.provide(
+      ContextQueries.layer,
       Layer.succeed(ContextRegistry, registry),
       Layer.succeed(AgentConversations, history),
       Layer.succeed(ExternalAgents, {}),
@@ -74,6 +76,7 @@ for (const fails of [false, true]) {
             clock,
           ).pipe(
             ActorSystem.provide(
+              ContextQueries.layer,
               Logger.layer([
                 Logger.make<unknown, void>(({ message }) => {
                   if (!Array.isArray(message)) return;

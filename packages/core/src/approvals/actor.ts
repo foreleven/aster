@@ -1,32 +1,43 @@
-import { ApprovalEntry, ApprovalResponse } from "./contracts.js";
-import { ApplicationError } from "../operations.js";
-export { ApprovalEntry } from "./contracts.js";
-export { approvalEntries } from "./state.js";
-import { ApprovalState, ApprovalSnapshot, ApprovalEvent } from "./state.js";
+import { Command as ActorCommand, type ActorContext } from "@aster/actor";
+import { Effect, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { defineContext } from "../context/definition.js";
-import { ReplyTo, type ActorContext } from "@aster/actor";
-import { Effect, Layer, Match, Schema } from "effect";
+import { ApplicationError } from "../operations.js";
+import { ApprovalEntry, ApprovalResponse } from "./contracts.js";
+import { ApprovalEvent, ApprovalSnapshot, ApprovalState } from "./state.js";
+export { ApprovalEntry } from "./contracts.js";
+export { approvalEntries } from "./state.js";
 
-export const ApprovalResolved = Schema.TaggedStruct("ApprovalResolved", {
-  requestId: Schema.String,
-  response: ApprovalResponse,
-});
+export class ApprovalResolved extends ActorCommand.Class<ApprovalResolved>()("ApprovalResolved", {
+  payload: {
+    requestId: Schema.String,
+    response: ApprovalResponse,
+  },
+}) {}
 export const ApprovalReply = Schema.TaggedUnion({
   Accepted: {},
   Rejected: { error: ApplicationError },
 });
 export type ApprovalReply = typeof ApprovalReply.Type;
+export class Revoke extends ActorCommand.Class<Revoke>()("Revoke", {
+  payload: { id: Schema.String },
+}) {}
+export class Enqueue extends ActorCommand.Class<Enqueue>()("Enqueue", {
+  payload: { entry: ApprovalEntry },
+}) {}
+export class Resolve extends ActorCommand.Class<Resolve>()("Resolve", {
+  payload: { id: Schema.String, response: ApprovalResponse },
+  reply: ApprovalReply,
+}) {}
+export class Acknowledge extends ActorCommand.Class<Acknowledge>()("Acknowledge", {
+  payload: { id: Schema.String, target: Schema.String },
+}) {}
+const Deliver = Schema.TaggedStruct("Deliver", {});
 export const ApprovalCommand = Schema.TaggedUnion({
-  Revoke: { id: Schema.String },
-  Enqueue: { entry: ApprovalEntry },
-  Resolve: {
-    id: Schema.String,
-    response: ApprovalResponse,
-    replyTo: ReplyTo<ApprovalReply>(),
-  },
-  Acknowledge: { id: Schema.String, target: Schema.String },
-  Deliver: {},
+  Revoke: Revoke.fields,
+  Enqueue: Enqueue.fields,
+  Resolve: Resolve.fields,
+  Acknowledge: Acknowledge.fields,
 });
 export type ApprovalCommand = typeof ApprovalCommand.Type;
 export const sendApproval = (
@@ -41,70 +52,65 @@ export const sendApproval = (
       Effect.orDie,
     );
 
-export class ApprovalQueueActor extends ContextActor.Service<ApprovalQueueActor>()(
-  "approvals/Queue",
-  {
-    command: ApprovalCommand,
-    context: defineContext({ changes: "none", state: ApprovalSnapshot, message: ApprovalEvent }),
-  },
-) {
-  static readonly layer = Layer.effect(
-    ApprovalQueueActor,
-    Effect.gen(function* () {
-      const state = yield* ApprovalState;
-      const deliver = Effect.fn("Approvals.deliver")(function* (
-        context: ActorContext<ApprovalCommand>,
-      ) {
-        for (const entry of yield* state.pending) {
-          if (!entry.response) continue;
-          yield* context
-            .select(entry.target)
-            .resolve()
-            .pipe(
-              Effect.flatMap((ref) =>
-                ref.tell({
-                  _tag: "ApprovalResolved",
-                  requestId: entry.id,
-                  response: entry.response,
-                }),
-              ),
-              Effect.catchTag("ActorNotFound", () => Effect.void),
-            );
-        }
-      });
-      return ApprovalQueueActor.of({
-        started: (context) =>
-          state.restore.pipe(Effect.andThen(context.self.tell({ _tag: "Deliver" }))),
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Enqueue", ({ entry }) => state.enqueue(entry)),
-            Match.tag("Revoke", ({ id }) => state.revoke(id)),
-            Match.tag("Acknowledge", ({ id, target }) => state.acknowledge(id, target)),
-            Match.tag("Resolve", ({ id, response, replyTo }) =>
-              Effect.gen(function* () {
-                const result = yield* state.resolve(id, response).pipe(Effect.result);
-                if (result._tag === "Failure")
-                  return yield* replyTo.tell({
-                    _tag: "Rejected",
-                    error: new ApplicationError({
-                      kind: "conflict",
-                      message: result.failure.message,
-                    }),
-                  });
-                yield* replyTo.tell({ _tag: "Accepted" });
-                yield* deliver(context);
+export const ApprovalQueueActor = ContextActor.define("approvals/Queue", {
+  commands: [Revoke, Enqueue, Resolve, Acknowledge],
+  internal: Deliver,
+  context: defineContext({ changes: "none", state: ApprovalSnapshot, message: ApprovalEvent }),
+})(
+  Effect.gen(function* () {
+    const state = yield* ApprovalState;
+    const deliver = Effect.fn("Approvals.deliver")(function* (
+      context: Pick<ActorContext<unknown>, "select">,
+    ) {
+      for (const entry of yield* state.pending) {
+        if (!entry.response) continue;
+        yield* context
+          .select(entry.target)
+          .resolve()
+          .pipe(
+            Effect.flatMap((ref) =>
+              ref.tell({
+                _tag: "ApprovalResolved",
+                requestId: entry.id,
+                response: entry.response,
               }),
             ),
-            Match.tag("Deliver", () =>
-              deliver(context).pipe(
-                Effect.andThen(
-                  context.pipeToSelf(Effect.sleep("1 second"), () => ({ _tag: "Deliver" })),
-                ),
+            Effect.catchTag("ActorNotFound", () => Effect.void),
+          );
+      }
+    });
+    return {
+      started: (context) =>
+        state.restore.pipe(Effect.andThen(context.self.tell({ _tag: "Deliver" }))),
+      receive: (command, context) =>
+        Match.value(command).pipe(
+          Match.tag("Enqueue", ({ entry }) => state.enqueue(entry)),
+          Match.tag("Revoke", ({ id }) => state.revoke(id)),
+          Match.tag("Acknowledge", ({ id, target }) => state.acknowledge(id, target)),
+          Match.tag("Resolve", ({ id, response, replyTo }) =>
+            Effect.gen(function* () {
+              const result = yield* state.resolve(id, response).pipe(Effect.result);
+              if (result._tag === "Failure")
+                return yield* replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({
+                    kind: "conflict",
+                    message: result.failure.message,
+                  }),
+                });
+              yield* replyTo.tell({ _tag: "Accepted" });
+              yield* deliver(context);
+            }),
+          ),
+          Match.tag("Deliver", () =>
+            deliver(context).pipe(
+              Effect.andThen(
+                context.pipeToSelf(Effect.sleep("1 second"), () => ({ _tag: "Deliver" })),
               ),
             ),
-            Match.exhaustive,
           ),
-      });
-    }),
-  ).pipe(Layer.provide(ApprovalState.layer));
-}
+          Match.exhaustive,
+        ),
+    };
+  }),
+).pipe(ContextActor.provide(ApprovalState.layer));

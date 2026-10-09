@@ -1,12 +1,27 @@
+import { ActorSystem } from "@aster/actor";
+import {
+  ContextActor,
+  ContextQueries,
+  ContextRegistry,
+  contextSpawnOptions,
+  defineContext,
+  type StoredContext,
+} from "@aster/core";
+import { makeContextRegistry } from "@aster/core/testing";
+import { Effect, Layer, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ContextQueries, ContextRegistry, type StoredContext } from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
-import { Effect } from "effect";
-import { registerLarkQueries } from "../src/lark/queries.js";
 import { LarkConfig } from "../src/lark/config.js";
 import { LarkMailCli } from "../src/lark/mail/client.js";
 import { larkContextViews } from "../src/lark/public-views.js";
+import {
+  LarkAccountCommands,
+  LarkImCommands,
+  LarkMailCommands,
+  makeLarkAccountQuery,
+  makeLarkImQuery,
+  makeLarkMailQuery,
+} from "../src/lark/queries.js";
 
 test("Lark queries expose selected evidence, identify partial chat coverage and keep historical reads local", async () => {
   await Effect.runPromise(
@@ -83,25 +98,45 @@ test("Lark queries expose selected evidence, identify partial chat coverage and 
         yield* registry.views.register(larkContextViews);
         const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
         let reads = 0;
-        yield* registerLarkQueries().pipe(
-          Effect.provideService(ContextRegistry, registry),
-          Effect.provideService(ContextQueries, queries),
-          Effect.provideService(LarkConfig, {
-            description: "Account",
-            im: {},
-            mail: { mailbox: "me", description: "Inbox", pollIntervalMs: 30_000 },
-          }),
-          Effect.provideService(LarkMailCli, {
-            getMailboxProfile: () =>
-              Effect.succeed({ address: "alice@example.com", name: "Inbox" }),
-            listIds: () => Effect.succeed(["remote"]),
-            getMessages: () =>
-              Effect.sync(() => {
-                reads++;
-                return [{ ...email, messageId: "remote" }];
-              }),
-          }),
+        const system = yield* ActorSystem.make().pipe(
+          ActorSystem.provide(
+            Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(ContextQueries, queries),
+            Layer.succeed(LarkConfig, {
+              description: "Account",
+              im: {},
+              mail: { mailbox: "me", description: "Inbox", pollIntervalMs: 30_000 },
+            }),
+            Layer.succeed(LarkMailCli, {
+              getMailboxProfile: () =>
+                Effect.succeed({ address: "alice@example.com", name: "Inbox" }),
+              listIds: () => Effect.succeed(["remote"]),
+              getMessages: () =>
+                Effect.sync(() => {
+                  reads++;
+                  return [{ ...email, messageId: "remote" }];
+                }),
+            }),
+          ),
         );
+        const context = defineContext({
+          state: Schema.Record(Schema.String, Schema.Unknown),
+          message: Schema.Unknown,
+        });
+        const Account = ContextActor.define("test/query/account", {
+          commands: LarkAccountCommands,
+          context,
+        })(Effect.map(makeLarkAccountQuery, (query) => ({ query, receive: () => Effect.void })));
+        const Im = ContextActor.define("test/query/im", { commands: LarkImCommands, context })(
+          Effect.map(makeLarkImQuery, (query) => ({ query, receive: () => Effect.void })),
+        );
+        const Mail = ContextActor.define("test/query/mail", {
+          commands: LarkMailCommands,
+          context,
+        })(Effect.map(makeLarkMailQuery, (query) => ({ query, receive: () => Effect.void })));
+        yield* (yield* system.spawn("account", Account, contextSpawnOptions("/lark"))).awaitStarted;
+        yield* (yield* system.spawn("im", Im, contextSpawnOptions("/lark/im"))).awaitStarted;
+        yield* (yield* system.spawn("mail", Mail, contextSpawnOptions("/lark/mail"))).awaitStarted;
         const before = registry.snapshot();
         assert.equal((yield* queries.list()).total, 3);
         for (const [path, command, args] of [

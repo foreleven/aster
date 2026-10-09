@@ -1,6 +1,6 @@
+import { Deferred, Effect, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Deferred, Effect, Layer, Schema } from "effect";
 import { Actor, ActorSystem } from "../src/index.js";
 
 test("runtime inspection observes current command and queued work without exposing payloads", async () => {
@@ -9,17 +9,14 @@ test("runtime inspection observes current command and queued work without exposi
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
-        class Worker extends Actor.Service<Worker>()("test/Inspection", {
-          command: Schema.TaggedStruct("Work", { secret: Schema.String }),
-        }) {
-          static readonly layer = Layer.succeed(
-            Worker,
-            Worker.of({
-              receive: () =>
-                Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
-            }),
-          );
-        }
+        const Worker = Actor.define("test/Inspection", {
+          commands: [Schema.TaggedStruct("Work", { secret: Schema.String })],
+        })(
+          Effect.succeed({
+            receive: () =>
+              Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          }),
+        );
         const system = yield* ActorSystem.make();
         const worker = yield* system.spawn("worker", Worker, {
           metadata: { contextPath: "/work", secret: "not-public" },

@@ -1,16 +1,16 @@
-import { registerCollectionQueries } from "../context/queries/commands.js";
+import { Effect, Match, Option, Schema } from "effect";
+import { contextView } from "../context/definition.js";
+import { makeCollectionQueries } from "../context/queries/commands.js";
 import { ContextQueryError } from "../context/queries/routes.js";
 import { publicJson } from "../json.js";
-import { ExecutionCheckpoint } from "./execution/checkpoint.js";
-import { StoredTaskInput, TaskSnapshot, TaskOutcome } from "./state/snapshot.js";
-import { Option, Schema, Effect, Match } from "effect";
 import { ApplicationError } from "../operations.js";
 import { TaskDeliveryInput, TaskPath } from "./contracts.js";
-import { contextView } from "../context/definition.js";
+import { ExecutionCheckpoint } from "./execution/checkpoint.js";
+import { StoredTaskInput, TaskOutcome, TaskSnapshot } from "./state/snapshot.js";
 
 import { AgentConversations } from "@aster/agent/harness";
-import { type ContextRegistry } from "../context/registry.js";
 import { approvalEntries } from "../approvals/actor.js";
+import { type ContextRegistry } from "../context/registry.js";
 import { type CapturePolicy } from "../memory/capture.js";
 const PublicTask = Schema.Struct({
   status: TaskSnapshot.fields.status,
@@ -179,9 +179,9 @@ const renderInput = (data: unknown) =>
     Match.exhaustive,
   );
 
-export const registerTaskQueries = Effect.fn("Task.registerQueries")(function* () {
+export const makeTaskQueries = Effect.fn("Task.makeQueries")(function* () {
   const conversations = yield* AgentConversations;
-  yield* registerCollectionQueries(
+  return yield* makeCollectionQueries(
     "/tasks",
     Effect.fnUntraced(function* (record, detail) {
       const state = yield* Schema.decodeUnknownEffect(TaskSnapshot)(record.state).pipe(

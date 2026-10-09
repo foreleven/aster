@@ -1,41 +1,38 @@
-import type { HarnessCall } from "./harness-fixtures.js";
-import type { AgentInvocation } from "@aster/agent/agent";
-import { registerGoalQueries } from "../src/goals/view.js";
-import { registerTaskQueries } from "../src/tasks/view.js";
-import { registerSignalQueries } from "../src/signals/queries.js";
-import { ContextsActor } from "../src/context/queries/actor.js";
-import { testConversations } from "./conversation-fixtures.js";
+import { ActorSystem } from "@aster/actor";
 import { AgentError, type AgentResult, type AssistantMessage } from "@aster/agent";
+import type { AgentInvocation } from "@aster/agent/agent";
 import { AgentConversations } from "@aster/agent/harness";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem } from "@aster/actor";
+import { ContextsActor } from "../src/context/queries/actor.js";
+import { testConversations } from "./conversation-fixtures.js";
+import type { HarnessCall } from "./harness-fixtures.js";
 
 import { Deferred, Effect, Layer, Logger, Schema, Stream } from "effect";
+import type { GoalSubmission } from "../src/goals/protocol.js";
 import {
-  ContextRegistry,
+  ApprovalQueueActor,
   ContextQueries,
+  ContextRegistry,
   ExternalAgents,
   GoalSettings,
   GoalSnapshot,
   GoalsRootActor,
-  TasksRootActor,
-  SignalRootActor,
   SignalDefinitions,
+  SignalRootActor,
   SignalSnapshot,
-  ApprovalQueueActor,
+  TasksRootActor,
   approvalEntries,
-  type StoredContext,
   type GoalCommandReply,
+  type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
-import type { GoalSubmission } from "../src/goals/protocol.js";
 import { fakeAgent } from "./fixtures.js";
 import {
   agentResult,
   emptyRecall,
-  modelReplyLayer,
   harnessReplyLayer,
+  modelReplyLayer,
 } from "./workflow-fixtures.js";
 
 const tool = (input: HarnessCall, name: string, args: object, id = name) =>
@@ -59,11 +56,6 @@ const setup = Effect.fnUntraced(function* (
   const registry = yield* makeContextRegistry(options.store);
   const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
   const conversations = options.history ?? testConversations();
-  yield* Effect.all([registerGoalQueries(), registerTaskQueries(), registerSignalQueries()]).pipe(
-    Effect.provideService(ContextRegistry, registry),
-    Effect.provideService(ContextQueries, queries),
-    Effect.provideService(AgentConversations, conversations),
-  );
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
       Layer.succeed(ContextRegistry, registry),
@@ -938,7 +930,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
         response: { decision: "approve" },
         replyTo,
       }));
-      yield* env.approvals.tell({ _tag: "Deliver" });
+      yield* (yield* env.system.select(env.approvals.path).resolve()).tell({ _tag: "Deliver" });
       yield* env.wait(() =>
         Object.values(env.registry.snapshot()).some(
           (record) =>
@@ -1060,7 +1052,7 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
         response: { decision: "approve" },
         replyTo,
       }));
-      yield* env.approvals.tell({ _tag: "Deliver" });
+      yield* (yield* env.system.select(env.approvals.path).resolve()).tell({ _tag: "Deliver" });
       yield* Deferred.await(waiting);
       yield* env.wait(() =>
         Object.values(env.registry.snapshot()).some(

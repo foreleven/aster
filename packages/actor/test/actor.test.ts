@@ -1,16 +1,16 @@
+import { Effect, Fiber, Layer, Match, Schema, Stream } from "effect";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
-import { Effect, Match, Fiber, Layer, Schema, Stream } from "effect";
 import {
   Actor,
   ActorPersistence,
-  PersistenceError,
   ActorSystem,
   InMemoryActorPersistence,
+  PersistenceError,
   PersistentActor,
   ReplyTo,
   SqliteActorPersistence,
@@ -24,29 +24,26 @@ const CounterCommand = Schema.TaggedUnion({
 });
 type CounterCommand = typeof CounterCommand.Type;
 
-class CounterActor extends Actor.Service<CounterActor>()("test/CounterActor", {
-  command: CounterCommand,
-}) {
-  static readonly layer = Layer.effect(
-    CounterActor,
-    Effect.sync(() => {
-      let value = 0;
-      return CounterActor.of({
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Add", (command) =>
-              Effect.sync(() => {
-                value += command.value;
-              }),
-            ),
-            Match.tag("Fail", (_command) => Effect.die(new Error("counter failure"))),
-            Match.tag("Read", (command) => command.replyTo.tell(value)),
-            Match.exhaustive,
+const CounterActor = Actor.define("test/CounterActor", {
+  commands: Object.values(CounterCommand.cases),
+})(
+  Effect.sync(() => {
+    let value = 0;
+    return {
+      receive: (command) =>
+        Match.value(command).pipe(
+          Match.tag("Add", (command) =>
+            Effect.sync(() => {
+              value += command.value;
+            }),
           ),
-      });
-    }),
-  );
-}
+          Match.tag("Fail", (_command) => Effect.die(new Error("counter failure"))),
+          Match.tag("Read", (command) => command.replyTo.tell(value)),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 
 test("serializes commands and supports ask", async () => {
   const result = await Effect.runPromise(
@@ -76,27 +73,22 @@ test("restarts an ordinary actor and retains commands queued after a failure", a
   assert.equal(result, 0);
 });
 
-class DoubleReplyActor extends Actor.Service<DoubleReplyActor>()("test/DoubleReplyActor", {
-  command: Schema.TaggedStruct("Ask", { replyTo: ReplyTo<number>() }),
-}) {
-  static readonly layer = Layer.effect(
-    DoubleReplyActor,
-    Effect.succeed(
-      DoubleReplyActor.of({
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Ask", (command) =>
-              Effect.gen(function* () {
-                yield* command.replyTo.tell(1);
-                yield* command.replyTo.tell(2);
-              }),
-            ),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+const DoubleReplyActor = Actor.define("test/DoubleReplyActor", {
+  commands: [Schema.TaggedStruct("Ask", { replyTo: ReplyTo<number>() })],
+})(
+  Effect.succeed({
+    receive: (command) =>
+      Match.value(command).pipe(
+        Match.tag("Ask", (command) =>
+          Effect.gen(function* () {
+            yield* command.replyTo.tell(1);
+            yield* command.replyTo.tell(2);
+          }),
+        ),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 test("ask accepts one reply and reports a duplicate as a redacted DeadLetter", async () => {
   const observed = await Effect.runPromise(
@@ -131,28 +123,25 @@ const LateCommand = Schema.TaggedUnion({
 });
 type LateCommand = typeof LateCommand.Type;
 
-class LateReplyActor extends Actor.Service<LateReplyActor>()("test/LateReplyActor", {
-  command: LateCommand,
-}) {
-  static readonly layer = Layer.effect(
-    LateReplyActor,
-    Effect.sync(() => {
-      let pending: ActorRef<number> | undefined;
-      return LateReplyActor.of({
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Ask", (command) =>
-              Effect.sync(() => {
-                pending = command.replyTo;
-              }),
-            ),
-            Match.tag("Release", (_command) => pending?.tell(9) ?? Effect.void),
-            Match.exhaustive,
+const LateReplyActor = Actor.define("test/LateReplyActor", {
+  commands: Object.values(LateCommand.cases),
+})(
+  Effect.sync(() => {
+    let pending: ActorRef<number> | undefined;
+    return {
+      receive: (command) =>
+        Match.value(command).pipe(
+          Match.tag("Ask", (command) =>
+            Effect.sync(() => {
+              pending = command.replyTo;
+            }),
           ),
-      });
-    }),
-  );
-}
+          Match.tag("Release", (_command) => pending?.tell(9) ?? Effect.void),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 
 test("a reply after ask timeout becomes a DeadLetter", async () => {
   const observed = await Effect.runPromise(
@@ -191,46 +180,38 @@ const SchemaCounterCommand = Schema.TaggedUnion({
   Read: { replyTo: ReplyTo<number>() },
 });
 
-class SchemaCounter extends PersistentActor.Service<SchemaCounter>()("test/SchemaCounter", {
-  command: SchemaCounterCommand,
+const SchemaCounter = PersistentActor.define("test/SchemaCounter", {
+  commands: Object.values(SchemaCounterCommand.cases),
   event: Schema.Number,
   state: Schema.Number,
-}) {
-  static readonly layer = Layer.effect(
-    SchemaCounter,
-    Effect.succeed(
-      SchemaCounter.of({
-        initialState: 0,
-        applyEvent: (state, event) => state + event,
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Add", (command) => context.persist(command.value)),
-            Match.tag("Read", (command) => command.replyTo.tell(context.state)),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+})(
+  Effect.succeed({
+    initialState: 0,
+    applyEvent: (state, event) => state + event,
+    receive: (command, context) =>
+      Match.value(command).pipe(
+        Match.tag("Add", (command) => context.persist(command.value)),
+        Match.tag("Read", (command) => command.replyTo.tell(context.state)),
+        Match.exhaustive,
+      ),
+  }),
+);
 
-class SchemaEcho extends Actor.Service<SchemaEcho>()("test/SchemaEcho", {
-  command: Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() }),
-}) {
-  static readonly layer = Layer.effect(
-    SchemaEcho,
-    Effect.succeed(
-      SchemaEcho.of({
-        receive: (command) =>
-          Match.value(command).pipe(
-            Match.tag("Read", (command) => command.replyTo.tell(42)),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+const SchemaEcho = Actor.define("test/SchemaEcho", {
+  commands: [Schema.TaggedStruct("Read", { replyTo: ReplyTo<number>() })],
+})(
+  Effect.succeed({
+    receive: (command) =>
+      Match.value(command).pipe(
+        Match.tag("Read", (command) => command.replyTo.tell(42)),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 const schemaInferenceChecks = SchemaCounter.of({
+  eventSchema: Schema.Number,
+  stateSchema: Schema.Number,
   initialState: 0,
   applyEvent: (state, event) => {
     // @ts-expect-error Event is inferred as number.
@@ -254,13 +235,13 @@ void schemaInferenceChecks;
 
 const commandSchemaRequiredChecks = () => {
   // @ts-expect-error Ordinary Actor definitions require a Command Schema.
-  void Actor.Service<SchemaEcho>()("test/MissingCommandSchema");
+  void Actor.define("test/MissingCommandSchema");
   // @ts-expect-error Persistent Actor definitions require Command, Event, and State Schemas.
-  void PersistentActor.Service<SchemaCounter>()("test/MissingPersistentSchemas");
+  void PersistentActor.define("test/MissingPersistentSchemas");
 };
 void commandSchemaRequiredChecks;
 
-test("Service infers command, event, and state from Schemas", async () => {
+test("define infers command, event, and state from Schemas", async () => {
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -280,29 +261,25 @@ test("Service infers command, event, and state from Schemas", async () => {
   assert.deepEqual(result, { count: 3, echo: 42 });
 });
 
-class PersistentCounter extends PersistentActor.Service<PersistentCounter>()(
-  "test/PersistentCounter",
-  { command: PersistentCommand, event: Schema.Number, state: Schema.Number },
-) {
-  static readonly layer = Layer.effect(
-    PersistentCounter,
-    Effect.succeed(
-      PersistentCounter.of({
-        initialState: 0,
-        applyEvent: (state, event) => state + event,
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Add", (command) => context.persist(command.value)),
-            Match.tag("AddBatch", (command) => context.persistAll(command.values)),
-            Match.tag("Snapshot", (_command) => context.saveSnapshot()),
-            Match.tag("Stop", (_command) => context.stopSelf()),
-            Match.tag("Read", (command) => command.replyTo.tell(context.state)),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+const PersistentCounter = PersistentActor.define("test/PersistentCounter", {
+  commands: Object.values(PersistentCommand.cases),
+  event: Schema.Number,
+  state: Schema.Number,
+})(
+  Effect.succeed({
+    initialState: 0,
+    applyEvent: (state, event) => state + event,
+    receive: (command, context) =>
+      Match.value(command).pipe(
+        Match.tag("Add", (command) => context.persist(command.value)),
+        Match.tag("AddBatch", (command) => context.persistAll(command.values)),
+        Match.tag("Snapshot", (_command) => context.saveSnapshot()),
+        Match.tag("Stop", (_command) => context.stopSelf()),
+        Match.tag("Read", (command) => command.replyTo.tell(context.state)),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 test("recovers SQLite state across system lifetimes and appends after a snapshot", async () => {
   const directory = await mkdtemp(join(tmpdir(), "actor-test-"));
@@ -367,29 +344,25 @@ test("a new incarnation at the same path recovers from in-memory persistence", a
   assert.equal(value, 5);
 });
 
-class SharedIdentityCounter extends PersistentActor.Service<SharedIdentityCounter>()(
-  "test/SharedIdentityCounter",
-  { command: PersistentCommand, event: Schema.Number, state: Schema.Number },
-) {
-  static readonly layer = Layer.effect(
-    SharedIdentityCounter,
-    Effect.succeed(
-      SharedIdentityCounter.of({
-        initialState: 0,
-        persistenceId: () => "shared-counter",
-        applyEvent: (state, event) => state + event,
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Add", (command) => context.persist(command.value)),
-            Match.tag("Stop", (_command) => context.stopSelf()),
-            Match.tag("Read", (command) => command.replyTo.tell(context.state)),
-            Match.tag("AddBatch", "Snapshot", (_command) => Effect.void),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+const SharedIdentityCounter = PersistentActor.define("test/SharedIdentityCounter", {
+  commands: Object.values(PersistentCommand.cases),
+  event: Schema.Number,
+  state: Schema.Number,
+})(
+  Effect.succeed({
+    initialState: 0,
+    persistenceId: () => "shared-counter",
+    applyEvent: (state, event) => state + event,
+    receive: (command, context) =>
+      Match.value(command).pipe(
+        Match.tag("Add", (command) => context.persist(command.value)),
+        Match.tag("Stop", (_command) => context.stopSelf()),
+        Match.tag("Read", (command) => command.replyTo.tell(context.state)),
+        Match.tag("AddBatch", "Snapshot", (_command) => Effect.void),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 test("a PersistentActor can use a stable identity independent of its path", async () => {
   const value = await Effect.runPromise(
@@ -421,32 +394,27 @@ const ObjectCommand = Schema.TaggedUnion({
 });
 type ObjectCommand = typeof ObjectCommand.Type;
 
-class ObjectCounter extends PersistentActor.Service<ObjectCounter>()("test/ObjectCounter", {
-  command: ObjectCommand,
+const ObjectCounter = PersistentActor.define("test/ObjectCounter", {
+  commands: Object.values(ObjectCommand.cases),
   event: Schema.Number,
   state: Schema.Struct({ count: Schema.Number }),
-}) {
-  static readonly layer = Layer.effect(
-    ObjectCounter,
-    Effect.succeed(
-      ObjectCounter.of({
-        initialState: { count: 0 },
-        applyEvent: (state, event) => ({ count: state.count + event }),
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Add", (command) => context.persist(command.value)),
-            Match.tag("AttemptMutation", (_command) =>
-              Effect.sync(() => {
-                (context.state as { count: number }).count = 999;
-              }),
-            ),
-            Match.tag("Read", (command) => command.replyTo.tell(context.state.count)),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+})(
+  Effect.succeed({
+    initialState: { count: 0 },
+    applyEvent: (state, event) => ({ count: state.count + event }),
+    receive: (command, context) =>
+      Match.value(command).pipe(
+        Match.tag("Add", (command) => context.persist(command.value)),
+        Match.tag("AttemptMutation", (_command) =>
+          Effect.sync(() => {
+            (context.state as { count: number }).count = 999;
+          }),
+        ),
+        Match.tag("Read", (command) => command.replyTo.tell(context.state.count)),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 test("persistent state reads cannot mutate the runtime-owned state", async () => {
   const value = await Effect.runPromise(
@@ -508,28 +476,23 @@ const BigIntCommand = Schema.TaggedUnion({
 });
 type BigIntCommand = typeof BigIntCommand.Type;
 
-class BigIntCounter extends PersistentActor.Service<BigIntCounter>()("test/BigIntCounter", {
-  command: BigIntCommand,
+const BigIntCounter = PersistentActor.define("test/BigIntCounter", {
+  commands: Object.values(BigIntCommand.cases),
   event: Schema.BigInt,
   state: Schema.BigInt,
-}) {
-  static readonly layer = Layer.effect(
-    BigIntCounter,
-    Effect.succeed(
-      BigIntCounter.of({
-        initialState: 0n,
-        applyEvent: (state, event) => state + event,
-        receive: (command, context) =>
-          Match.value(command).pipe(
-            Match.tag("Add", (command) => context.persist(command.value)),
-            Match.tag("Snapshot", (_command) => context.saveSnapshot()),
-            Match.tag("Read", (command) => command.replyTo.tell(context.state)),
-            Match.exhaustive,
-          ),
-      }),
-    ),
-  );
-}
+})(
+  Effect.succeed({
+    initialState: 0n,
+    applyEvent: (state, event) => state + event,
+    receive: (command, context) =>
+      Match.value(command).pipe(
+        Match.tag("Add", (command) => context.persist(command.value)),
+        Match.tag("Snapshot", (_command) => context.saveSnapshot()),
+        Match.tag("Read", (command) => command.replyTo.tell(context.state)),
+        Match.exhaustive,
+      ),
+  }),
+);
 
 test("SQLite recovery preserves Schema encoded bigint events and state", async () => {
   const directory = await mkdtemp(join(tmpdir(), "actor-bigint-test-"));

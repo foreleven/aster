@@ -1,13 +1,13 @@
-import { goalTimeline } from "../src/goals/view.js";
-import { testConversations } from "./conversation-fixtures.js";
+import { Effect, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Schema } from "effect";
-import { GoalActor } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
-import { makeGoalStore } from "../src/goals/state/store.js";
 import { ContextRegistry } from "../src/context/registry.js";
 import { GoalSnapshot } from "../src/goals/state/snapshot.js";
+import { makeGoalStore } from "../src/goals/state/store.js";
+import { goalTimeline } from "../src/goals/view.js";
+import { GoalActor } from "../src/index.js";
+import { makeContextRegistry } from "../src/testing/context.js";
+import { testConversations } from "./conversation-fixtures.js";
 
 test("Goal keeps message references while public conversation reads Pi history", async () => {
   await Effect.runPromise(
@@ -16,7 +16,7 @@ test("Goal keeps message references while public conversation reads Pi history",
         const registry = yield* makeContextRegistry();
         const conversations = testConversations();
         const path = "/goals/demo";
-        yield* registry.register(path, GoalActor.context);
+        yield* registry.register(path, GoalActor.contextDefinition);
         yield* registry.commit(
           {
             path,
@@ -72,7 +72,7 @@ test("Goal public error reflects the latest settled input without storing an err
     Effect.gen(function* () {
       const registry = yield* makeContextRegistry();
       const path = "/goals/errors";
-      yield* registry.register(path, GoalActor.context);
+      yield* registry.register(path, GoalActor.contextDefinition);
       const definition = { slug: "errors", description: "Observe errors" };
       const first = {
         inputId: "first",

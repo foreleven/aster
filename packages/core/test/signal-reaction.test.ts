@@ -1,19 +1,20 @@
+import { ActorSystem } from "@aster/actor";
+import { AgentConversations } from "@aster/agent/harness";
+import { Effect, Layer } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ActorSystem } from "@aster/actor";
-import { Effect, Layer } from "effect";
+import { ContextQueries } from "../src/context/queries/routes.js";
 import {
   ContextRegistry,
   SignalDefinitions,
   SignalRootActor,
-  type StoredContext,
   type SignalCommandReply,
+  type StoredContext,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
 import { SignalReactionInput } from "../src/signals/protocol.js";
-import { AgentConversations } from "@aster/agent/harness";
-import { testConversations } from "./conversation-fixtures.js";
 import { readSignalHistory } from "../src/signals/state/store.js";
+import { makeContextRegistry } from "../src/testing/context.js";
+import { testConversations } from "./conversation-fixtures.js";
 const definition = {
   slug: "review",
   trigger: { _tag: "Context" as const, when: "Release changed" },
@@ -37,6 +38,7 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
           });
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              ContextQueries.layer,
               Layer.succeed(ContextRegistry, registry),
               Layer.succeed(AgentConversations, messages),
               Layer.succeed(SignalDefinitions, [definition]),
@@ -103,6 +105,7 @@ test("scheduled Signals reject Context reactions", async () => {
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(AgentConversations, messages),
             Layer.succeed(SignalDefinitions, [

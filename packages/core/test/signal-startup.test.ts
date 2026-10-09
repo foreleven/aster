@@ -1,9 +1,10 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
 import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { ContextQueries } from "../src/context/queries/routes.js";
 import {
   ContextRegistry,
   SignalDefinitions,
@@ -11,11 +12,11 @@ import {
   type SignalCommandReply,
   type StoredContext,
 } from "../src/index.js";
+import type { SignalChangeInput } from "../src/signals/protocol.js";
+import { readSignalHistory } from "../src/signals/state/store.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { taskFixture } from "./task-fixtures.js";
-import { readSignalHistory } from "../src/signals/state/store.js";
-import type { SignalChangeInput } from "../src/signals/protocol.js";
 
 const definition = {
   slug: "slow",
@@ -40,6 +41,7 @@ for (const fails of [false, true])
           const registry = yield* makeContextRegistry();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              ContextQueries.layer,
               Layer.succeed(ContextRegistry, registry),
               Layer.succeed(Clock.Clock, clock),
               Layer.succeed(SignalDefinitions, [definition, { ...definition, slug: "other" }]),

@@ -1,22 +1,22 @@
-import { DurableHarness, AgentConversations } from "@aster/agent/harness";
-import assert from "node:assert/strict";
-import { test } from "node:test";
-import { createServer } from "node:http";
 import { Actor, ActorSystem } from "@aster/actor";
 import { AgentRunner } from "@aster/agent/agent";
+import { AgentConversations, DurableHarness } from "@aster/agent/harness";
+import * as ApiClient from "@aster/api/client";
+import * as ApiServer from "@aster/api/server";
 import {
   ApplicationError,
+  ApprovalCommand,
+  ContextQueries,
   ContextRegistry,
+  contextView,
+  defineContext,
+  ExternalAgents,
+  GoalActor,
+  GoalSettings,
   GoalsRootActor,
   GoalsRootCommand,
-  GoalSettings,
-  MemoryRecall,
-  ExternalAgents,
   goalTimeline,
-  defineContext,
-  contextView,
-  GoalActor,
-  ApprovalCommand,
+  MemoryRecall,
 } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import { NodeHttpServer, NodeSocket } from "@effect/platform-node";
@@ -24,9 +24,10 @@ import { Deferred, Effect, Exit, Layer, Queue, Schema, Scope, Stream } from "eff
 import { FetchHttpClient, HttpRouter } from "effect/http";
 import { NetAddress } from "effect/net";
 import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
-import * as ApiServer from "@aster/api/server";
-import * as ApiClient from "@aster/api/client";
-import { apiServices, startTestHttp, rpcRequest } from "./api-fixtures.js";
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { test } from "node:test";
+import { apiServices, rpcRequest, startTestHttp } from "./api-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 
 const definition = defineContext({
@@ -49,6 +50,7 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ContextRegistry, registry),
             Layer.succeed(GoalSettings, {
               definitions: [{ slug: "personal", description: "Assistant" }],
@@ -230,26 +232,23 @@ for (const protocol of ["http", "websocket"] as const) {
             yield* registry.register(record.path, definition);
             yield* registry.commit(record, { expectedRevision: 0 });
             let submissions = 0;
-            class Goals extends Actor.Service<Goals>()("test/RpcGoals", {
-              command: GoalsRootCommand,
-            }) {
-              static readonly layer = Layer.succeed(
-                Goals,
-                Goals.of({
-                  receive: (command) =>
-                    Effect.gen(function* () {
-                      submissions++;
-                      yield* command.command.replyTo.tell({
-                        _tag: "Rejected",
-                        error: new ApplicationError({
-                          kind: "conflict",
-                          message: "Rejected input",
-                        }),
-                      });
-                    }),
-                }),
-              );
-            }
+            const Goals = Actor.define("test/RpcGoals", {
+              commands: [GoalsRootCommand],
+            })(
+              Effect.succeed({
+                receive: (command) =>
+                  Effect.gen(function* () {
+                    submissions++;
+                    yield* command.command.replyTo.tell({
+                      _tag: "Rejected",
+                      error: new ApplicationError({
+                        kind: "conflict",
+                        message: "Rejected input",
+                      }),
+                    });
+                  }),
+              }),
+            );
             const system = yield* ActorSystem.make();
             yield* (yield* system.spawn("goals", Goals)).awaitStarted;
             let active = 0;
@@ -375,7 +374,7 @@ test("RPC host rejects cross-origin and oversized input; removed endpoints retur
 test("Goal RPC paginates persisted public conversation entries", async () => {
   const registry = await Effect.runPromise(makeContextRegistry());
   const conversations = testConversations();
-  await Effect.runPromise(registry.register("/goals/feed", GoalActor.context));
+  await Effect.runPromise(registry.register("/goals/feed", GoalActor.contextDefinition));
   await Effect.runPromise(
     registry.commit(
       {
@@ -438,27 +437,24 @@ test("Approval RPC decodes payloads before sending commands and preserves reject
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
         let submissions = 0;
-        class Approvals extends Actor.Service<Approvals>()("test/RpcApprovals", {
-          command: ApprovalCommand,
-        }) {
-          static readonly layer = Layer.succeed(
-            Approvals,
-            Approvals.of({
-              receive: (command) =>
-                Effect.gen(function* () {
-                  if (command._tag !== "Resolve") return;
-                  submissions++;
-                  yield* command.replyTo.tell({
-                    _tag: "Rejected",
-                    error: new ApplicationError({
-                      kind: "conflict",
-                      message: "Approval not found",
-                    }),
-                  });
-                }),
-            }),
-          );
-        }
+        const Approvals = Actor.define("test/RpcApprovals", {
+          commands: Object.values(ApprovalCommand.cases),
+        })(
+          Effect.succeed({
+            receive: (command) =>
+              Effect.gen(function* () {
+                if (command._tag !== "Resolve") return;
+                submissions++;
+                yield* command.replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({
+                    kind: "conflict",
+                    message: "Approval not found",
+                  }),
+                });
+              }),
+          }),
+        );
         const system = yield* ActorSystem.make();
         yield* (yield* system.spawn("approvals", Approvals)).awaitStarted;
         const server = yield* Effect.acquireRelease(

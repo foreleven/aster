@@ -1,19 +1,18 @@
-import { ReplyTo, type ActorRef } from "@aster/actor";
+import { Command as ActorCommand, type ActorRef } from "@aster/actor";
 import {
   ContextActor,
-  ContextRegistry,
-  ContextQueries,
+  contextPath,
+  ContextQueryError,
   ContextQueryInput,
   ContextQueryResult,
-  ContextQueryError,
-  contextPath,
+  ContextRegistry,
   defineContext,
   spawnContextChild,
 } from "@aster/core";
-import { DateTime, Deferred, Effect, Layer, Match, Schema, Scope } from "effect";
-import { AppsSettings } from "./config.js";
+import { DateTime, Deferred, Effect, Match, Schema } from "effect";
 import { OpenCli } from "./client.js";
 import { appCommands, queryArgv } from "./commands.js";
+import { AppsSettings } from "./config.js";
 import { AppsState, AppState, appsView, appView } from "./contexts.js";
 
 const QueryReply = Schema.TaggedUnion({
@@ -21,38 +20,36 @@ const QueryReply = Schema.TaggedUnion({
   Failure: { error: ContextQueryError },
 });
 type QueryReply = typeof QueryReply.Type;
-const Ready = Schema.TaggedStruct("Ready", { replyTo: ReplyTo<void>() });
-const Query = Schema.TaggedStruct("Query", {
-  input: ContextQueryInput,
-  cancelled: Schema.declare<Deferred.Deferred<void>>(Deferred.isDeferred),
-  replyTo: ReplyTo<QueryReply>(),
-});
-type Query = typeof Query.Type;
-const Command = Schema.TaggedUnion({
-  Ready: Ready.fields,
+export class Ready extends ActorCommand.Class<Ready>()("Ready", {
+  payload: {},
+  reply: Schema.Void,
+}) {}
+export class Query extends ActorCommand.Class<Query>()("Query", {
+  payload: {
+    input: ContextQueryInput,
+    cancelled: Schema.declare<Deferred.Deferred<void>>(Deferred.isDeferred),
+  },
+  reply: QueryReply,
+}) {}
+const Internal = Schema.TaggedUnion({
   Query: Query.fields,
   Finished: { requestId: Schema.String, result: QueryReply },
 });
 
-class AppActor extends ContextActor.Service<AppActor, AppsSettings | OpenCli | ContextQueries>()(
-  "apps/AppActor",
-  {
-    command: Command,
+const AppActor = (appName: import("./commands.js").AppName) =>
+  ContextActor.define("apps/AppActor", {
+    commands: [Ready, ...appCommands[appName]],
+    internal: Internal,
     context: defineContext({
       view: appView,
       state: AppState,
       message: Schema.Never,
     }),
-  },
-) {
-  static readonly layer = Layer.effect(
-    AppActor,
+  })(
     Effect.gen(function* () {
       const registry = yield* ContextRegistry;
-      const queries = yield* ContextQueries;
       const settings = yield* AppsSettings;
       const cli = yield* OpenCli;
-      const scope = yield* Scope.Scope;
       let pending: Query | undefined;
       yield* Effect.addFinalizer(() =>
         pending
@@ -65,7 +62,40 @@ class AppActor extends ContextActor.Service<AppActor, AppsSettings | OpenCli | C
             })
           : Effect.void,
       );
-      return AppActor.of({
+      return {
+        query: (command, actor) =>
+          Effect.gen(function* () {
+            const contract = appCommands[appName].find(
+              (candidate) => candidate._tag === command._tag,
+            )!;
+            const args = yield* Schema.encodeUnknownEffect(contract.payloadSchema)(command).pipe(
+              Effect.orDie,
+            );
+            const input = yield* Schema.decodeUnknownEffect(ContextQueryInput)({
+              path: contextPath(actor),
+              command: command._tag,
+              args,
+            }).pipe(Effect.orDie);
+            const cancelled = yield* Deferred.make<void>();
+            const reply = yield* actor.self
+              .ask<QueryReply>(
+                (replyTo) => ({ _tag: "Query", input, cancelled, replyTo }),
+                "100 seconds",
+              )
+              .pipe(
+                Effect.ensuring(Deferred.succeed(cancelled, undefined)),
+                Effect.catchTag("AskTimeoutError", () =>
+                  Effect.fail(
+                    new ContextQueryError({
+                      kind: "timeout",
+                      message: "Context query acknowledgement timed out",
+                    }),
+                  ),
+                ),
+              );
+            if (reply._tag === "Failure") return yield* reply.error;
+            return reply.value;
+          }),
         started: (actor) =>
           Effect.gen(function* () {
             const path = contextPath(actor);
@@ -88,34 +118,6 @@ class AppActor extends ContextActor.Service<AppActor, AppsSettings | OpenCli | C
                 },
                 { expectedRevision: previous?.revision ?? 0, mode: "bootstrap" },
               )
-              .pipe(Effect.orDie);
-            yield* queries
-              .register(
-                path,
-                { description: app.description, commands: appCommands[app.name] },
-                Effect.fn("Apps.query")(function* (input) {
-                  const cancelled = yield* Deferred.make<void>();
-                  const reply = yield* actor.self
-                    .ask<QueryReply>(
-                      (replyTo) => ({ _tag: "Query", input, cancelled, replyTo }),
-                      "100 seconds",
-                    )
-                    .pipe(
-                      Effect.ensuring(Deferred.succeed(cancelled, undefined)),
-                      Effect.catchTag("AskTimeoutError", () =>
-                        Effect.fail(
-                          new ContextQueryError({
-                            kind: "timeout",
-                            message: "Context query acknowledgement timed out",
-                          }),
-                        ),
-                      ),
-                    );
-                  if (reply._tag === "Failure") return yield* reply.error;
-                  return reply.value;
-                }),
-              )
-              .pipe(Effect.provideService(Scope.Scope, scope))
               .pipe(Effect.orDie);
           }),
         receive: (command, actor) =>
@@ -211,60 +213,53 @@ class AppActor extends ContextActor.Service<AppActor, AppsSettings | OpenCli | C
             ),
             Match.exhaustive,
           ),
-      });
+      };
     }),
   );
-}
 
-export class AppsRootActor extends ContextActor.Service<
-  AppsRootActor,
-  AppsSettings | OpenCli | ContextQueries
->()("apps/RootActor", {
-  command: Ready,
+export const AppsRootActor = ContextActor.define("apps/RootActor", {
+  commands: [Ready],
   context: defineContext({
     view: appsView,
     state: AppsState,
     message: Schema.Never,
   }),
-}) {
-  static readonly layer = Layer.effect(
-    AppsRootActor,
-    Effect.gen(function* () {
-      const registry = yield* ContextRegistry;
-      const settings = yield* AppsSettings;
-      const children: ActorRef<typeof Command.Type>[] = [];
-      return AppsRootActor.of({
-        started: (actor) =>
-          Effect.gen(function* () {
-            yield* registry
-              .commit(
-                {
-                  path: "/apps",
-                  description: settings.description,
-                  state: { apps: settings.apps.map((app) => `/apps/${app.name}`) },
-                  messages: [],
-                },
-                { expectedRevision: registry.get("/apps")?.revision ?? 0, mode: "bootstrap" },
-              )
-              .pipe(Effect.orDie);
-            for (const app of settings.apps) {
-              const existing = yield* actor.child(app.name);
-              children.push(
-                (existing as ActorRef<typeof Command.Type> | undefined) ??
-                  (yield* spawnContextChild(actor, app.name, AppActor)),
-              );
-            }
-          }),
-        receive: ({ replyTo }) =>
-          Effect.gen(function* () {
-            yield* Effect.forEach(
-              children,
-              (child) => child.ask<void>((replyTo) => ({ _tag: "Ready", replyTo })),
-              { discard: true },
-            ).pipe(Effect.orDie);
-            yield* replyTo.tell(undefined);
-          }),
-      });
-    }),
-  );
-}
+})(
+  Effect.gen(function* () {
+    const registry = yield* ContextRegistry;
+    const settings = yield* AppsSettings;
+    const children: ActorRef<typeof Ready.Type>[] = [];
+    return {
+      started: (actor) =>
+        Effect.gen(function* () {
+          yield* registry
+            .commit(
+              {
+                path: "/apps",
+                description: settings.description,
+                state: { apps: settings.apps.map((app) => `/apps/${app.name}`) },
+                messages: [],
+              },
+              { expectedRevision: registry.get("/apps")?.revision ?? 0, mode: "bootstrap" },
+            )
+            .pipe(Effect.orDie);
+          for (const app of settings.apps) {
+            const existing = yield* actor.child(app.name);
+            children.push(
+              (existing as ActorRef<typeof Ready.Type> | undefined) ??
+                (yield* spawnContextChild(actor, app.name, AppActor(app.name))),
+            );
+          }
+        }),
+      receive: ({ replyTo }) =>
+        Effect.gen(function* () {
+          yield* Effect.forEach(
+            children,
+            (child) => child.ask<void>((replyTo) => ({ _tag: "Ready", replyTo })),
+            { discard: true },
+          ).pipe(Effect.orDie);
+          yield* replyTo.tell(undefined);
+        }),
+    };
+  }),
+);

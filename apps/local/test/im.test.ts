@@ -1,32 +1,34 @@
-import { gateStub, summaryStub } from "./summary-fixtures.js";
+import { ContextQueries } from "@aster/core";
 import { LarkConfig, parseLarkConfig } from "@aster/integrations";
-import assert from "node:assert/strict";
-import { test } from "node:test";
+import { gateStub, summaryStub } from "./summary-fixtures.js";
+// Tests inject internal completion and timer messages through untyped selections.
 import { ActorSystem } from "@aster/actor";
 import { ContextRegistry, contextSpawnOptions } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
-import { mkdtempSync, readFileSync, existsSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import {
-  ImAgentQueue,
-  ImSummaryGate,
   ChatSummarizer,
-  ImSearch,
-  LarkImActor,
-  ImStorage,
-  makeImStorage,
+  ImAgentQueue,
   imDate,
   imDayStart,
+  ImSearch,
+  ImStorage,
+  ImSummaryGate,
   LarkChatActor,
+  LarkImActor,
   makeImClient,
+  makeImStorage,
   parseImPage,
   pollIm,
   type ChatSummary,
   type ChatSummaryInput,
 } from "@aster/integrations";
+import { Clock, Effect, Layer } from "effect";
 import { TestClock } from "effect/testing";
-import { Effect, Layer, Clock } from "effect";
+import assert from "node:assert/strict";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { test } from "node:test";
 
 test("IM searches recent messages before filtering muted chats and paginates the fixed window", async () => {
   const calls: string[][] = [];
@@ -242,6 +244,7 @@ test("chat updates daily and rolling summaries, retains concurrent arrivals and 
         let finishDaily: ((value: ChatSummary) => void) | undefined;
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
             Layer.succeed(ContextRegistry, registry),
@@ -260,7 +263,7 @@ test("chat updates daily and rolling summaries, retains concurrent arrivals and 
         );
         const actor = yield* system.spawn("chat", LarkChatActor, contextSpawnOptions(path));
         yield* actor.tell({ _tag: "Update", chat, messages: [message] });
-        yield* actor.tell({ _tag: "Summarize" });
+        yield* (yield* system.select(actor.path).resolve()).tell({ _tag: "Summarize" });
         yield* until(() => !!finishDaily);
         const second = { ...message, id: "two" };
         yield* actor.tell({ _tag: "Update", chat, messages: [second] });
@@ -297,6 +300,7 @@ test("a rolling-summary failure retains raw messages and retry saves both summar
         yield* clock.adjust(Date.now());
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(Clock.Clock, clock),
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
@@ -313,14 +317,14 @@ test("a rolling-summary failure retains raw messages and retry saves both summar
         );
         const actor = yield* system.spawn("chat", LarkChatActor, contextSpawnOptions(path));
         yield* actor.tell({ _tag: "Update", chat, messages: [message] });
-        yield* actor.tell({ _tag: "Summarize" });
+        yield* (yield* system.select(actor.path).resolve()).tell({ _tag: "Summarize" });
         yield* until(() => !!storage.get(today, chat.id)?.lastError);
         assert.equal(registry.get(path)?.messages.length, 1);
         assert.equal(storage.get(today, chat.id)?.pending.length, 1);
         assert.ok(storage.get(today, chat.id)?.retryAt);
         yield* Effect.sleep(5);
         yield* clock.adjust("31 seconds");
-        yield* actor.tell({ _tag: "Summarize" });
+        yield* (yield* system.select(actor.path).resolve()).tell({ _tag: "Summarize" });
         yield* until(() => storage.get(today, chat.id)?.pending.length === 0);
         assert.equal(rollingCalls, 2);
         assert.equal(dailyCalls, 1);
@@ -355,6 +359,7 @@ test("startup resumes today's quiet chat backlog but leaves prior-day messages u
         const calls: ChatSummaryInput[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
             Layer.succeed(ContextRegistry, registry),
@@ -392,6 +397,7 @@ test("a mixed midnight batch creates separate daily files for group and direct c
         const calls: ChatSummaryInput[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
             Layer.succeed(ContextRegistry, registry),
@@ -410,7 +416,7 @@ test("a mixed midnight batch creates separate daily files for group and direct c
           chat: { ...chat, mode: "p2p" },
           messages: [before, midnight],
         });
-        yield* actor.tell({ _tag: "Summarize" });
+        yield* (yield* system.select(actor.path).resolve()).tell({ _tag: "Summarize" });
         yield* until(() => calls.length === 4 && registry.get(path)?.messages.length === 0);
         const daily = calls.filter((call) => call.date);
         assert.deepEqual(
@@ -446,6 +452,7 @@ test("a journaled summary commit replays after restart without invoking the mode
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
             Layer.succeed(ContextRegistry, registry),
@@ -492,6 +499,7 @@ test("IM startup wakes today's persisted inbox without search hits and journals 
         const calls: string[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
             Layer.succeed(ContextRegistry, registry),
@@ -549,6 +557,7 @@ test("automatic retry runs without another incoming message and unchanged summar
         let calls = 0;
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            ContextQueries.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
             Layer.succeed(ContextRegistry, registry),

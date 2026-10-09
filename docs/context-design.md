@@ -34,7 +34,7 @@ Context messages can contain source evidence, such as a Lark chat's message wind
 | `services/actors.ts`         | Shared query replies and cancellation used by Contexts, Memory, Signals and Tools      |
 | `json.ts`                    | Shared JSON boundary normalization                                                     |
 
-`ContextActor` wraps an owner Actor definition; it is not a separate Actor or a business-state service. `ContextsActor` is the Runtime-owned `/user/contexts` query endpoint and owns no Context snapshots. Tools ask this endpoint; integrations register query routes that dispatch to their own Actors. Runtime uses native `awaitStarted` for query startup, without a Ready command.
+`ContextActor` wraps an owner Actor definition; it is not a separate Actor or a business-state service. `ContextsActor` is the Runtime-owned `/user/contexts` query endpoint and owns no Context snapshots. Tools ask this endpoint. Each owner declares `ContextCommand.Class` values in its `commands` list; `ContextActor.define` derives the catalogue and owns scoped registration and dispatch. Query callbacks receive the inferred command union. Local Command classes and internal mailbox messages are excluded from discovery. Runtime uses native `awaitStarted` for query startup, without a Ready command.
 
 Storage adapters and backend selection remain in infra. Reactions and Memory own independent supervised consumers and policies. Memory evidence reads run outside its mailbox. Runtime installs core views before source startup; integrations install their policies before source activation. Dormant owners remain discoverable through persisted snapshots and registered view policies.
 

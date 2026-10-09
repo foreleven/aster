@@ -1,14 +1,14 @@
-import { testConversations } from "./conversation-fixtures.js";
-import { readSignalHistory } from "../src/signals/state/store.js";
-import { taskFixture } from "./task-fixtures.js";
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { readSignalHistory } from "../src/signals/state/store.js";
+import { testConversations } from "./conversation-fixtures.js";
+import { taskFixture } from "./task-fixtures.js";
 
 import { Clock, Effect, Fiber, Stream } from "effect";
 import { SignalRootActor, type StoredContext } from "../src/index.js";
 
-import { type SignalCommandReply, type SignalChangeInput } from "../src/signals/protocol.js";
+import { type SignalChangeInput, type SignalCommandReply } from "../src/signals/protocol.js";
 
 const input: SignalChangeInput = {
   requestId: "create",

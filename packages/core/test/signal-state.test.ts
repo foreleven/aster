@@ -1,9 +1,9 @@
-import assert from "node:assert/strict";
-import { test } from "node:test";
 import { AgentConversations } from "@aster/agent/harness";
-import { ApplicationError } from "../src/operations.js";
 import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import { TestClock } from "effect/testing";
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { type SignalDefinition } from "../src/config/schema.js";
 import {
   ContextRegistry,
   SignalActor,
@@ -11,10 +11,10 @@ import {
   SignalTime,
   type ContextInput,
 } from "../src/index.js";
+import { ApplicationError } from "../src/operations.js";
+import { type SignalChangeInput } from "../src/signals/protocol.js";
 import { SignalState, nextSignalTime } from "../src/signals/state/model.js";
 import { readSignalHistory, signalMessage } from "../src/signals/state/store.js";
-import { type SignalChangeInput } from "../src/signals/protocol.js";
-import { type SignalDefinition } from "../src/config/schema.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 
@@ -57,7 +57,7 @@ const setup = Effect.fnUntraced(function* () {
     ],
     save: () => {},
   });
-  yield* registry.register(path, SignalActor.context);
+  yield* registry.register(path, SignalActor.contextDefinition);
   const state = yield* open(registry, messages);
   yield* state.change(create);
   const react = (id: string) =>
@@ -198,7 +198,7 @@ test("one-shot firing and exhaustion recover atomically without triggering again
       const clock = yield* TestClock.make();
       const messages = testConversations();
       const registry = yield* makeContextRegistry();
-      yield* registry.register(path, SignalActor.context);
+      yield* registry.register(path, SignalActor.contextDefinition);
       const configured: SignalDefinition = {
         ...definition,
         slug: "personal--watch",
