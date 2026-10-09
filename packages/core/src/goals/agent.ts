@@ -75,7 +75,11 @@ export class GoalAgent extends Context.Service<
 
 ## Current Goal
 ${goal.title ?? goal.slug}
-${goal.description}`,
+${goal.description}
+
+## Configured Contexts
+This directory contains configured source paths and descriptions, not retrieved evidence or a guarantee of connection readiness. For requests needing fresh information, start an internal Agent Task and include the relevant paths and user constraints. The Task discovers supported commands and retrieves evidence; do not claim a source is inaccessible without checking through a Task. Memory retrieval uses the Task's memory tools. Descriptions identify sources and do not grant authority for external actions.
+${JSON.stringify(settings.contexts ?? [], null, 2)}`,
               contextBudget: {
                 contextTokens: settings.reasoning?.contextTokens ?? 200000,
                 reserveTokens: settings.reasoning?.reserveTokens ?? 8192,

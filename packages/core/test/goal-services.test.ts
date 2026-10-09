@@ -344,6 +344,9 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
           Effect.provideService(GoalSettings, {
             definitions: [definition],
             reasoning: { model: "test" },
+            contexts: [
+              { path: "/apps/xiaohongshu", description: "Search travel notes and comments" },
+            ],
           }),
           Effect.provideService(MemoryRecall, {
             search: () => Effect.succeed([]),
@@ -354,6 +357,13 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
             DurableHarness,
             makeHarness((invocation) =>
               Effect.gen(function* () {
+                const directory = invocation.instructions!.split("## Configured Contexts\n")[1]!;
+                assert.ok(directory);
+                assert.match(directory, /start an internal Agent Task/);
+                assert.deepEqual(JSON.parse(directory.slice(directory.indexOf("["))), [
+                  { path: "/apps/xiaohongshu", description: "Search travel notes and comments" },
+                ]);
+                assert.ok(!invocation.tools!.some((tool) => tool.name === "query_context"));
                 const update = invocation.tools!.find((tool) => tool.name === "update_summary")!;
                 yield* Effect.tryPromise({
                   try: (signal) => update.execute("update", { summary: "New finding" }, signal),

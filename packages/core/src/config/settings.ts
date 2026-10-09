@@ -1,4 +1,5 @@
 import { Config, ConfigProvider, Context, Effect, Layer, Schema } from "effect";
+import { configuredContexts, type ConfiguredContext } from "./context-directory.js";
 import {
   GoalTitle,
   SignalEntry,
@@ -59,11 +60,13 @@ export class GoalSettings extends Context.Service<
   {
     readonly definitions: readonly GoalDefinition[];
     readonly reasoning?: typeof GoalOptions.Type;
+    readonly contexts?: readonly ConfiguredContext[];
   }
 >()("goals/Settings") {
   static readonly layer = Layer.effect(
     GoalSettings,
     Effect.gen(function* () {
+      const contexts = yield* configuredContexts;
       const entries = yield* Config.schema(Schema.Record(Schema.String, GoalEntry), "goals").pipe(
         Config.withDefault({}),
       );
@@ -95,6 +98,7 @@ export class GoalSettings extends Context.Service<
         return {
           definitions: [personalGoal, ...definitions.filter((goal) => goal.slug !== "personal")],
           reasoning,
+          contexts,
         };
       });
     }),

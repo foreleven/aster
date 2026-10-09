@@ -29,7 +29,7 @@ agents:
 
 contexts:
   /memory:
-    description: My long-term memory
+    description: Recall retained facts, preferences, decisions and prior findings from earlier activity. Search memory, then expand relevant matches to inspect details and source references; verify time-sensitive facts against current sources.
     config:
       dataDir: ~/.aster/memory
       port: 3111
@@ -43,12 +43,12 @@ contexts:
       # embedding:
       #   provider: local
   /lark:
-    description: My work account
+    description: Read the connected work Lark account's identity. Use /lark/im for workplace conversations and project updates, and /lark/mail for work email.
     config:
       profile: your-lark-cli-profile
     children:
       /im:
-        description: My work Lark conversations
+        description: Find known work chats and read their rolling summaries and retained messages to investigate project progress, decisions, dependencies and blockers. Message coverage is partial; this is not a complete chat archive.
         config:
           summary:
             agentStartIntervalMs: 10000
@@ -57,21 +57,21 @@ contexts:
           pollIntervalMs: 900000
           catchUpWindowMs: 3600000
       /mail:
-        description: My work mailbox
+        description: Find work emails by calendar date, sender or subject, and read selected messages for requests, decisions and follow-ups. Dates use Asia/Shanghai; read-only access does not send or reply to email.
         config:
           mailbox: me
           pollIntervalMs: 30000
   /apps:
-    description: On-demand, read-only application queries for research and travel planning.
+    description: Research travel options through connected applications. Use /apps/xiaohongshu for traveler experiences and recommendations, and /apps/ctrip for destinations, accommodation and transport options; queries are read-only and run on demand.
     # Requires OpenCLI on PATH and its browser bridge with the relevant sites logged in.
     # No polling or browser commands run at startup. Each child publishes its command catalogue.
     /xiaohongshu:
-      description: Search Xiaohongshu travel notes, read full notes and comments, and compare recent first-hand destination experiences through OpenCLI.
+      description: Search Xiaohongshu recommendations and travel experiences; read full notes, comments, public author notes and the recommendation feed. Use for destination ideas, family itineraries and practical tips; posts are user reports, not verified facts or current price and availability guarantees.
     /ctrip:
-      description: Query Ctrip destinations, hotels, flights, trains and travel packages through OpenCLI. Prices and availability are time-stamped snapshots; no booking or payment.
+      description: Find Ctrip destinations, attractions, hotels, flights, trains, buses, ferries, cruises and travel packages. Use for dated accommodation and transport comparisons and itinerary planning; prices and availability are snapshots at query time, with no booking or payment capability.
   # Optional generic IMAP/POP3 source, separate from /lark/mail.
   # /mail:
-  #   description: My connected mailboxes
+  #   description: Access connected personal mailboxes through their child Contexts. List emails by calendar day, filter by sender or subject, and read selected messages for notices, confirmations and follow-ups; read-only access does not send or reply to email.
   #   config:
   #     pollIntervalMs: 30000
   #     mailboxes:
