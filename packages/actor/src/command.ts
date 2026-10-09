@@ -1,4 +1,4 @@
-import { Predicate, Schema } from "effect";
+import { Cause, Context, Effect, Option, Predicate, Schema } from "effect";
 import { ReplyTo } from "./actor.js";
 
 export const TypeId = "~aster/actor/Command" as const;
@@ -41,6 +41,37 @@ type Fields<O extends Options> = O["payload"] &
     ? { readonly replyTo: ReturnType<typeof ReplyTo<Response<O>>> }
     : unknown);
 export type Reply<C extends Contract> = C["replySchema"]["Type"];
+
+export type Outcome<A, E> =
+  { readonly _tag: "Success"; readonly value: A } | { readonly _tag: "Failure"; readonly error: E };
+
+/** Expected failures are replies; defects and interruption retain their Effect semantics. */
+export const reply = <A, E, R>(replyTo: ReplyTo<Outcome<A, E>>, work: Effect.Effect<A, E, R>) =>
+  work.pipe(
+    Effect.matchCauseEffect({
+      onSuccess: (value) => replyTo.tell({ _tag: "Success", value }),
+      onFailure: (cause) => {
+        // A mixed cause is an execution failure, never an ordinary error reply.
+        // Preserve every reason; typed errors in a mixed cause become diagnostics.
+        if (Cause.hasDies(cause) || Cause.hasInterrupts(cause))
+          return Effect.failCause(
+            Cause.fromReasons<never>(
+              cause.reasons.map((reason) =>
+                Cause.isFailReason(reason)
+                  ? Cause.makeDieReason(reason.error).annotate(
+                      Context.makeUnsafe(reason.annotations),
+                    )
+                  : reason,
+              ),
+            ),
+          );
+        return Option.match(Cause.findErrorOption(cause), {
+          onSome: (error) => replyTo.tell({ _tag: "Failure", error }),
+          onNone: () => Effect.failCause(Cause.empty),
+        });
+      },
+    }),
+  );
 
 type Definition<Self, Tag extends string, O extends Options> = Schema.Class<
   Self,

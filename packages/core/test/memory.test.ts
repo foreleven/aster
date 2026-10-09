@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { testConversations } from "./conversation-fixtures.js";
 import { retainedTask } from "./task-fixtures.js";
 import { ContextCaptures } from "../src/memory/capture.js";
@@ -8,7 +9,6 @@ import { Clock, Deferred, Effect, Fiber, Layer, Option, Queue, Schema, Stream } 
 import { TestClock } from "effect/testing";
 import {
   ContextRegistry,
-  defineContext,
   contextView,
   MemoryActor,
   MemoryBackend,
@@ -73,7 +73,10 @@ const boot = Effect.fnUntraced(function* (
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
       ContextCaptures.layer,
-      Layer.succeed(ContextRegistry, registry),
+      Layer.merge(
+        Layer.succeed(ContextRegistry, registry),
+        Layer.succeed(DurableContext, registry.backend),
+      ),
       Layer.succeed(MemoryBackend, impl),
       ...(clock ? [Layer.succeed(Clock.Clock, clock)] : []),
     ),
@@ -286,7 +289,10 @@ test("backend defects reach Actor supervision without becoming capture success",
       const system = yield* ActorSystem.make().pipe(
         ActorSystem.provide(
           ContextCaptures.layer,
-          Layer.succeed(ContextRegistry, registry),
+          Layer.merge(
+            Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(DurableContext, registry.backend),
+          ),
           Layer.succeed(
             MemoryBackend,
             backend(() =>
@@ -338,17 +344,17 @@ test("slow capture evidence never blocks recall and captured sessions skip subse
           }),
         },
       ]);
-      yield* registry.register(
-        "/source",
-        defineContext({
-          state: Schema.Struct({ value: Schema.Int }),
-          message: Schema.Never,
-          view: contextView({ state: Schema.Struct({ value: Schema.Int }) }),
-        }),
-      );
+      yield* registry.register("/source", {
+        state: Schema.Struct({ value: Schema.Int }),
+        message: Schema.Never,
+        view: contextView({ state: Schema.Struct({ value: Schema.Int }) }),
+      });
       const system = yield* ActorSystem.make().pipe(
         ActorSystem.provide(
-          Layer.succeed(ContextRegistry, registry),
+          Layer.merge(
+            Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(DurableContext, registry.backend),
+          ),
           Layer.succeed(ContextCaptures, captures),
           Layer.succeed(
             MemoryBackend,

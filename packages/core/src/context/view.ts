@@ -8,32 +8,6 @@ export interface ContextViewPolicy {
   ) => PublicContext | undefined;
 }
 
-/** Private behavior supplied by the Actor implementation, never serialized. */
-export interface ContextDefinition {
-  readonly view?: ContextViewPolicy;
-  readonly validate: (record: ContextInput) => ContextInput;
-  readonly changes?: "none" | "durable-state";
-}
-
-export const defineContext = <State extends object, Message>(options: {
-  readonly view?: ContextViewPolicy;
-  readonly state: Schema.ConstraintDecoder<State>;
-  readonly message: Schema.ConstraintDecoder<Message>;
-  readonly changes?: "none" | "durable-state";
-}): ContextDefinition => {
-  const validate = (record: ContextInput) => ({
-    path: record.path,
-    description: record.description,
-    state: Schema.decodeUnknownSync(options.state)(record.state),
-    messages: Schema.decodeUnknownSync(Schema.Array(options.message))(record.messages),
-  });
-  return {
-    validate,
-    changes: options.changes,
-    ...(options.view ? { view: options.view } : {}),
-  };
-};
-
 /** Views are explicit read contracts. Unknown fields are never copied from canonical storage. */
 export const contextView = <State extends object, Message>(options: {
   readonly matches?: (path: string) => boolean;

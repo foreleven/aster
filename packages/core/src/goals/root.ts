@@ -1,13 +1,12 @@
-import { Command as ActorCommand, type ActorRef } from "@aster/actor";
-import { Effect, Schema } from "effect";
+import { ContextSession } from "../context/session.js";
+import { Command as ActorCommand, CommandProcessor, type ActorRef } from "@aster/actor";
+import { Effect, Match, Schema } from "effect";
 import { GoalSettings } from "../config/settings.js";
 import { ContextActor } from "../context/actor.js";
-import { defineContext } from "../context/definition.js";
-import { CollectionCommands } from "../context/queries/commands.js";
 import { ApplicationError } from "../operations.js";
 import { GoalActor } from "./actor.js";
 import { GoalCommand, type GoalMailbox } from "./protocol.js";
-import { makeGoalQueries } from "./view.js";
+import { queryGoals, GoalsQueries } from "./queries.js";
 
 export class GoalsRootCommand extends ActorCommand.Class<GoalsRootCommand>()("Route", {
   payload: {
@@ -16,14 +15,18 @@ export class GoalsRootCommand extends ActorCommand.Class<GoalsRootCommand>()("Ro
   },
 }) {}
 export const GoalsRootActor = ContextActor.define("goals/RootActor", {
-  commands: [GoalsRootCommand, ...CollectionCommands],
-  context: defineContext({ state: Schema.Struct({}), message: Schema.Never }),
+  commands: [GoalsRootCommand, ...GoalsQueries],
 })(
   Effect.gen(function* () {
-    const query = yield* makeGoalQueries();
+    const processor = yield* CommandProcessor.make({ concurrency: 2 });
     const settings = yield* GoalSettings;
+    yield* ContextSession.make({
+      path: "/goals",
+      state: Schema.Struct({}),
+      message: Schema.Never,
+      initial: { state: {}, description: "Goals" },
+    }).pipe(Effect.orDie);
     return {
-      query,
       started: (context) =>
         Effect.gen(function* () {
           for (const goal of settings.definitions) {
@@ -40,20 +43,28 @@ export const GoalsRootActor = ContextActor.define("goals/RootActor", {
           cause: signal.cause,
         }),
       receive: (command, context) =>
-        Effect.gen(function* () {
-          const child = settings.definitions.some((goal) => goal.slug === command.slug)
-            ? yield* context.child(command.slug)
-            : undefined;
-          if (child) yield* (child as ActorRef<GoalMailbox>).tell(command.command);
-          else
-            yield* command.command.replyTo.tell({
-              _tag: "Rejected",
-              error: new ApplicationError({
-                kind: "not-found",
-                message: "Goal Actor unavailable",
-              }),
-            });
-        }),
+        Match.value(command).pipe(
+          Match.tag("list", "read", (request) =>
+            processor.submit(request, context, queryGoals(request, context)),
+          ),
+          Match.tag("Route", (command) =>
+            Effect.gen(function* () {
+              const child = settings.definitions.some((goal) => goal.slug === command.slug)
+                ? yield* context.child(command.slug)
+                : undefined;
+              if (child) yield* (child as ActorRef<GoalMailbox>).tell(command.command);
+              else
+                yield* command.command.replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({
+                    kind: "not-found",
+                    message: "Goal Actor unavailable",
+                  }),
+                });
+            }),
+          ),
+          Match.exhaustive,
+        ),
     };
   }),
 );

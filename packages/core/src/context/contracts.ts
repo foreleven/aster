@@ -22,14 +22,6 @@ export const ContextQueryInput = Schema.Struct({
 });
 export type ContextQueryInput = typeof ContextQueryInput.Type;
 
-export const ContextQueryResult = Schema.Struct({
-  path: Schema.String,
-  command: Schema.String,
-  queriedAt: Schema.String,
-  data: Schema.Json,
-});
-export type ContextQueryResult = typeof ContextQueryResult.Type;
-
 export class ContextQueryError extends Schema.TaggedError<ContextQueryError>()(
   "ContextQueryError",
   {

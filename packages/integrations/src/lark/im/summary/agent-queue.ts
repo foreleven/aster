@@ -120,13 +120,6 @@ export const makeImAgentQueue = Effect.fn("ImAgentQueue.make")(function* (
   return { run } satisfies AgentAdmission;
 });
 
-const AdmissionContext = ContextSession.define({
-  state: Schema.Struct({ lastStart: Schema.optional(Schema.Number) }),
-  message: Schema.Never,
-  messageKey: (_message: never) => "",
-  compareMessages: () => 0,
-});
-
 export class ImAgentQueue extends Context.Service<ImAgentQueue, AgentAdmission>()(
   "lark/ImAgentQueue",
 ) {
@@ -137,9 +130,10 @@ export class ImAgentQueue extends Context.Service<ImAgentQueue, AgentAdmission>(
       const settings = yield* validateConfig("Lark IM Agent admission", () =>
         Schema.decodeUnknownSync(AgentAdmissionConfig)(config.im?.config?.summary ?? {}),
       );
-      const session = yield* ContextSession.open({
+      const session = yield* ContextSession.make({
         path: "/lark/im/admission",
-        definition: AdmissionContext,
+        state: Schema.Struct({ lastStart: Schema.optional(Schema.Number) }),
+        message: Schema.Never,
         initial: { state: {}, messages: [], description: "Private IM Agent admission timing" },
       }).pipe(Effect.orDie);
       return yield* makeImAgentQueue(

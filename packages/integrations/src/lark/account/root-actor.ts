@@ -1,8 +1,9 @@
+import { Command } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
 import { accountView } from "../public-views.js";
-import { LarkAccountCommands, makeLarkAccountQuery } from "../queries.js";
+import { LarkAccountCommands } from "./queries.js";
 
-import { ContextActor, ContextRegistry, defineContext } from "@aster/core";
+import { ContextActor, ContextQueryError, ContextSession } from "@aster/core";
 import { LarkConfig } from "../config.js";
 import { LarkImActor } from "../im/channel-actor.js";
 import { LarkEmailChannelActor } from "../mail/channel-actor.js";
@@ -21,33 +22,20 @@ type LarkRootCommand = typeof LarkRootCommand.Type;
 export const LarkRootActor = ContextActor.define("lark/RootActor", {
   commands: LarkAccountCommands,
   internal: LarkRootCommand,
-  context: defineContext({
-    view: accountView,
-    state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
-    message: Schema.Never,
-  }),
 })(
   Effect.gen(function* () {
-    const query = yield* makeLarkAccountQuery;
-    const registry = yield* ContextRegistry;
     const config = yield* LarkConfig;
     const cli = yield* LarkAccountCli;
+    const session = yield* ContextSession.make({
+      path: "/lark",
+      state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
+      message: Schema.Never,
+      view: accountView,
+      initial: { description: config.description, state: {} },
+    }).pipe(Effect.orDie);
     return {
-      query,
       started: (context) =>
         Effect.gen(function* () {
-          const previous = registry.get("/lark");
-          yield* registry
-            .commit(
-              {
-                path: "/lark",
-                description: config.description,
-                state: previous?.state ?? {},
-                messages: [],
-              },
-              { expectedRevision: previous?.revision ?? 0 },
-            )
-            .pipe(Effect.asVoid, Effect.orDie);
           yield* context.pipeToSelf(cli.getAccount(), (result) => ({
             _tag: "AccountLoaded",
             result,
@@ -60,19 +48,32 @@ export const LarkRootActor = ContextActor.define("lark/RootActor", {
         }),
       receive: (command) =>
         Match.value(command).pipe(
+          Match.tag("profile", (request) =>
+            Command.reply(
+              request.replyTo,
+              Effect.gen(function* () {
+                const state = yield* session.state.get.pipe(Effect.orDie);
+                if (!state.account)
+                  return yield* new ContextQueryError({
+                    kind: "unavailable",
+                    message: "Account profile is not available",
+                  });
+                return state.account;
+              }),
+            ),
+          ),
           Match.tag("AccountLoaded", ({ result }) =>
             Match.value(result).pipe(
               Match.tag("Failure", (result) => Effect.logWarning(result.error.message)),
               Match.tag("Success", (result) =>
-                registry
-                  .commit(
+                session
+                  .set(
                     {
-                      path: "/lark",
                       description: config.description,
                       state: { account: result.value },
                       messages: [],
                     },
-                    { expectedRevision: registry.get("/lark")?.revision ?? 0 },
+                    {},
                   )
                   .pipe(Effect.asVoid, Effect.orDie),
               ),

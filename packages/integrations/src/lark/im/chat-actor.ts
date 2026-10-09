@@ -1,11 +1,13 @@
+import { chatView } from "../public-views.js";
+import { ChatMessage } from "./service/model.js";
 import type { ActorContext } from "@aster/actor";
-import { ContextActor, contextPath } from "@aster/core";
-import { Context, Deferred, Effect, Layer, Match, Ref } from "effect";
+import { ContextActor, contextPath, ContextSession } from "@aster/core";
+import { Effect, Match, Ref } from "effect";
 import { randomUUID } from "node:crypto";
 import { ChatSummaryError } from "../shared/errors.js";
 import { ChatCommands, ChatInternal, type ChatCommand } from "./chat/protocol.js";
-import { ChatContext, type ChatWork, type SummaryCommit } from "./chat/snapshot.js";
-import { ChatState } from "./chat/state.js";
+import { ChatSnapshot, type ChatWork, type SummaryCommit } from "./chat/snapshot.js";
+import { makeChatState } from "./chat/state.js";
 import { ChatSummaryWork } from "./summary/work.js";
 
 type Owner = ActorContext<ChatCommand>;
@@ -13,12 +15,9 @@ type Owner = ActorContext<ChatCommand>;
 export const LarkChatActor = ContextActor.define("lark/ChatActor", {
   commands: ChatCommands,
   internal: ChatInternal,
-  context: ChatContext,
-})(
+})((owner) =>
   Effect.gen(function* () {
     const work = yield* ChatSummaryWork;
-    const scope = yield* Effect.scope;
-    const initialized = yield* Deferred.make<ChatState["Service"]>();
     const generation = randomUUID();
     const inFlight = yield* Ref.make(false);
     const changed = yield* Ref.make(false);
@@ -30,7 +29,7 @@ export const LarkChatActor = ContextActor.define("lark/ChatActor", {
           .ask<ChatWork | undefined>((replyTo) =>
             value
               ? { _tag: "ApplySummary", generation, value, replyTo }
-              : { _tag: "ReadInput", generation, replyTo },
+              : { _tag: "GetSummaryMessages", generation, replyTo },
           )
           .pipe(
             Effect.mapError((cause) => new ChatSummaryError({ cause, message: cause.message })),
@@ -41,30 +40,54 @@ export const LarkChatActor = ContextActor.define("lark/ChatActor", {
         (result) => ({ _tag: "Summarized", generation, result }),
       );
     });
+
+    const path = contextPath(owner);
+    const id = path.slice(path.lastIndexOf("/") + 1);
+    const session = yield* ContextSession.make({
+      path,
+      state: ChatSnapshot,
+      message: ChatMessage,
+      view: chatView,
+      changes: "durable-state",
+      messageKey: (message) => message.id,
+      compareMessages: (a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id),
+      initial: {
+        description: `Work Lark conversation: ${id}`,
+        state: { chat: { id, name: "", mode: "", description: "" }, seen: {} },
+      },
+    }).pipe(Effect.orDie);
+    const state = makeChatState(session);
+    yield* state.restore;
+
     return {
-      started: (context) =>
-        Effect.gen(function* () {
-          const services = yield* Layer.buildWithScope(
-            ChatState.layer(contextPath(context)),
-            scope,
-          );
-          const state = Context.get(services, ChatState);
-          yield* state.restore;
-          yield* Deferred.succeed(initialized, state);
-          yield* summarize(context);
-        }),
+      started: (context) => summarize(context),
+
       receive: (command, context) =>
         Effect.gen(function* () {
-          const state = yield* Deferred.await(initialized);
           yield* Match.value(command).pipe(
-            Match.tag("ReadInput", "ApplySummary", (command) =>
+            Match.tag("GetChatInfo", ({ replyTo }) =>
+              state.work.pipe(Effect.flatMap((snapshot) => replyTo.tell(snapshot.chat))),
+            ),
+            Match.tag("GetChatSummary", ({ replyTo }) =>
+              state.work.pipe(
+                Effect.flatMap((snapshot) =>
+                  replyTo.tell({ chat: snapshot.chat, summary: snapshot.summary ?? null }),
+                ),
+              ),
+            ),
+            Match.tag("GetSummaryMessages", (command) =>
               Effect.gen(function* () {
                 if (command.generation !== generation)
                   return yield* command.replyTo.tell(undefined);
-                const snapshot =
-                  command._tag === "ApplySummary"
-                    ? yield* state.commit(command.value)
-                    : yield* state.work;
+                const snapshot = yield* state.work;
+                yield* command.replyTo.tell(snapshot);
+              }),
+            ),
+            Match.tag("ApplySummary", (command) =>
+              Effect.gen(function* () {
+                if (command.generation !== generation)
+                  return yield* command.replyTo.tell(undefined);
+                const snapshot = yield* state.commit(command.value);
                 yield* command.replyTo.tell(snapshot);
               }),
             ),

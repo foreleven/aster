@@ -58,10 +58,10 @@ export interface DurableCommitOptions extends ContextCommitOptions {
 export class DurableContext extends Context.Service<
   DurableContext,
   {
-    readonly configureSession: (
+    readonly acquireSession: (
       path: string,
       session: ContextSessionStorage,
-    ) => Effect.Effect<void, ContextRecoveryError>;
+    ) => Effect.Effect<void, ContextRecoveryError, Scope.Scope>;
     readonly commit: (
       record: ContextInput,
       options: DurableCommitOptions,
@@ -104,6 +104,7 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
   const changes = yield* PubSub.unbounded<ContextChange>();
   // Gates live as long as their registered paths. Only writes to the same Context serialize.
   const writers = new Map<string, Semaphore.Semaphore>();
+  const owners = new Set<string>();
   const sessions = new Map<string, ContextSessionStorage>();
   const writerFor = (path: string) => {
     let writer = writers.get(path);
@@ -233,10 +234,15 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
       }).pipe(Effect.uninterruptible),
     );
   });
-  return DurableContext.of({
-    configureSession: (path, session) =>
+  const acquireSession = (path: string, session: ContextSessionStorage) =>
+    Effect.acquireRelease(
       writerFor(path).withPermit(
         Effect.gen(function* () {
+          if (owners.has(path))
+            return yield* new ContextRecoveryError({
+              path,
+              cause: new Error("Context Session already has an owner"),
+            });
           const previous = sessions.get(path);
           if (previous && !isDeepStrictEqual(previous.partition, session.partition))
             return yield* new ContextRecoveryError({
@@ -245,8 +251,16 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
             });
           yield* persistence.configureSession?.(path, session) ?? Effect.void;
           sessions.set(path, session);
+          owners.add(path);
         }),
       ),
+      () =>
+        Effect.sync(() => {
+          owners.delete(path);
+        }),
+    );
+  return DurableContext.of({
+    acquireSession,
     commit,
     recover,
     get: (path) => {

@@ -40,3 +40,15 @@ export interface ChatBatch {
   readonly chat: ChatInfo;
   readonly messages: readonly ChatMessage[];
 }
+
+/** Query pagination follows the CLI cursor rather than a local retained-message offset. */
+export const ChatHistoryArgs = Schema.Struct({
+  chatId: Schema.optional(Schema.NonEmptyString),
+  userId: Schema.optional(Schema.NonEmptyString),
+  start: Schema.optional(Schema.NonEmptyString),
+  end: Schema.optional(Schema.NonEmptyString),
+  order: Schema.optional(Schema.Literals(["asc", "desc"])),
+  pageSize: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 }))),
+  pageToken: Schema.optional(Schema.NonEmptyString),
+});
+export type ChatHistoryArgs = typeof ChatHistoryArgs.Type;

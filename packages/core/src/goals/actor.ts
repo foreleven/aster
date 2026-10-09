@@ -1,9 +1,9 @@
-import type { ActorContext, ActorRef } from "@aster/actor";
+import { goalQueryData } from "./view.js";
+import { Command, type ActorContext, type ActorRef } from "@aster/actor";
 import { Context, Deferred, Effect, Layer, Match, Ref, Result, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 import { GoalSettings } from "../config/settings.js";
 import { ContextActor, contextPath } from "../context/actor.js";
-import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
 import { CurrentActors } from "../services/actors.js";
 import type { SignalRootCommand } from "../signals/protocol.js";
@@ -17,7 +17,7 @@ import {
   GoalRequestData,
 } from "./protocol.js";
 import { GoalState } from "./state/model.js";
-import { GoalSnapshot, type StoredGoalInput } from "./state/snapshot.js";
+import { type StoredGoalInput } from "./state/snapshot.js";
 
 type Owner = ActorContext<GoalMailbox>;
 type Attempt = { generation: string; cancellation: Deferred.Deferred<void> };
@@ -25,12 +25,10 @@ type Attempt = { generation: string; cancellation: Deferred.Deferred<void> };
 export const GoalActor = ContextActor.define("goals/Actor", {
   commands: GoalCommands,
   internal: GoalInternal,
-  context: defineContext({ state: GoalSnapshot, message: Schema.Unknown }),
-})(
+})((owner) =>
   Effect.gen(function* () {
     const agent = yield* GoalAgent;
     const scope = yield* Effect.scope;
-    const initialized = yield* Deferred.make<GoalState["Service"]>();
     const registry = yield* ContextRegistry;
     const settings = yield* GoalSettings;
     const incarnation = randomUUID();
@@ -208,23 +206,30 @@ export const GoalActor = ContextActor.define("goals/Actor", {
       );
       yield* wake(context);
     });
+
+    const slug = owner.path.split("/").at(-1)!;
+    const definition = settings.definitions.find((goal) => goal.slug === slug);
+    if (!definition) return yield* Effect.die(new Error(`Unknown Goal ${slug}`));
+    const services = yield* Layer.buildWithScope(
+      GoalState.layer(contextPath(owner), definition),
+      scope,
+    );
+    const model = Context.get(services, GoalState);
+
     return {
-      started: (context) =>
-        Effect.gen(function* () {
-          const slug = context.path.split("/").at(-1)!;
-          const definition = settings.definitions.find((goal) => goal.slug === slug);
-          if (!definition) return yield* Effect.die(new Error(`Unknown Goal ${slug}`));
-          const services = yield* Layer.buildWithScope(
-            GoalState.layer(contextPath(context), definition),
-            scope,
-          );
-          yield* Deferred.succeed(initialized, Context.get(services, GoalState));
-          yield* wake(context);
-        }),
+      started: (context) => wake(context),
+
       receive: (command, context) =>
         Effect.gen(function* () {
-          const model = yield* Deferred.await(initialized);
           yield* Match.value(command).pipe(
+            Match.tag("GetGoalDetails", ({ detail, replyTo }) =>
+              Command.reply(
+                replyTo,
+                model.read.pipe(
+                  Effect.map((state) => goalQueryData(contextPath(context), state, detail)),
+                ),
+              ),
+            ),
             Match.tag("AttachTask", (command) =>
               model.attachTask(command.taskPath).pipe(
                 Effect.matchEffect({

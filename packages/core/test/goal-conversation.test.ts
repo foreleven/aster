@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { AgentError, type AgentResult, type AssistantMessage } from "@aster/agent";
 import type { AgentInvocation } from "@aster/agent/agent";
@@ -58,7 +59,10 @@ const setup = Effect.fnUntraced(function* (
   const conversations = options.history ?? testConversations();
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
-      Layer.succeed(ContextRegistry, registry),
+      Layer.merge(
+        Layer.succeed(ContextRegistry, registry),
+        Layer.succeed(DurableContext, registry.backend),
+      ),
       Layer.succeed(ContextQueries, queries),
 
       emptyRecall,

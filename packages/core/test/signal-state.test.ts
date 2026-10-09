@@ -1,16 +1,12 @@
+import type { TestContextRegistry } from "@aster/core/testing";
+import { DurableContext } from "@aster/core";
 import { AgentConversations } from "@aster/agent/harness";
-import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
+import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type SignalDefinition } from "../src/config/schema.js";
-import {
-  ContextRegistry,
-  SignalActor,
-  SignalSnapshot,
-  SignalTime,
-  type ContextInput,
-} from "../src/index.js";
+import { ContextRegistry, SignalSnapshot, SignalTime, type ContextInput } from "../src/index.js";
 import { ApplicationError } from "../src/operations.js";
 import { type SignalChangeInput } from "../src/signals/protocol.js";
 import { SignalState, nextSignalTime } from "../src/signals/state/model.js";
@@ -31,15 +27,22 @@ const create: SignalChangeInput = {
   change: { operation: "create", definition },
 };
 const open = (
-  registry: ContextRegistry["Service"],
+  registry: TestContextRegistry,
   messages: AgentConversations["Service"],
   configured?: SignalDefinition,
 ) =>
-  Layer.build(SignalState.layer(path, configured)).pipe(
-    Effect.map((services) => Context.get(services, SignalState)),
-    Effect.provideService(ContextRegistry, registry),
-    Effect.provideService(AgentConversations, messages),
-  );
+  Effect.gen(function* () {
+    const lifetime = yield* Scope.fork(yield* Scope.Scope);
+    const services = yield* Layer.buildWithScope(
+      SignalState.layer(path, configured),
+      lifetime,
+    ).pipe(
+      Effect.provideService(ContextRegistry, registry),
+      Effect.provideService(DurableContext, registry.backend),
+      Effect.provideService(AgentConversations, messages),
+    );
+    return { ...Context.get(services, SignalState), close: Scope.close(lifetime, Exit.void) };
+  });
 const setup = Effect.fnUntraced(function* () {
   const messages = testConversations();
   const registry = yield* makeContextRegistry({
@@ -57,7 +60,7 @@ const setup = Effect.fnUntraced(function* () {
     ],
     save: () => {},
   });
-  yield* registry.register(path, SignalActor.contextDefinition);
+  yield* registry.register(path, { state: SignalSnapshot, message: Schema.Never });
   const state = yield* open(registry, messages);
   yield* state.change(create);
   const react = (id: string) =>
@@ -100,6 +103,7 @@ test("Signal pause and recovery preserve an exhausted Agent-turn budget", async 
       yield* env.react("zero-budget");
       assert.equal((yield* env.state.deliveries)[0]!.message.remainingAgentTurns, 0);
       yield* env.state.pause;
+      yield* env.state.close;
       const reopened = yield* open(env.registry, env.messages);
       assert.equal((yield* reopened.snapshot)!.status, "paused");
       assert.equal((yield* readSignalHistory(env.messages, path)).remainingAgentTurns, 0);
@@ -147,6 +151,7 @@ test("Signal pause preserves frozen work; edits and resume do not rewrite it; de
       );
       assert.equal((yield* env.state.deliveries)[0]!.status, "sending");
       yield* env.state.settleDelivery(one!.message.requestId);
+      yield* env.state.close;
       const restored = yield* open(env.registry, env.messages);
       assert.deepEqual(
         (yield* restored.deliveries).map((item) => item.status),
@@ -198,7 +203,7 @@ test("one-shot firing and exhaustion recover atomically without triggering again
       const clock = yield* TestClock.make();
       const messages = testConversations();
       const registry = yield* makeContextRegistry();
-      yield* registry.register(path, SignalActor.contextDefinition);
+      yield* registry.register(path, { state: SignalSnapshot, message: Schema.Never });
       const configured: SignalDefinition = {
         ...definition,
         slug: "personal--watch",
@@ -212,6 +217,7 @@ test("one-shot firing and exhaustion recover atomically without triggering again
       yield* state
         .tick(1, "1970-01-01T00:00:01.000Z")
         .pipe(Effect.provideService(Clock.Clock, clock));
+      yield* state.close;
       const restored = yield* open(registry, messages, configured).pipe(
         Effect.provideService(Clock.Clock, clock),
       );
@@ -228,8 +234,15 @@ test("Signal Pi commit survives failed Context projection; recovery restores sta
   await run(
     Effect.gen(function* () {
       const env = yield* setup();
+      yield* env.state.close;
       const state = yield* open(
-        { ...env.registry, commit: () => Effect.die(new Error("Injected projection failure")) },
+        {
+          ...env.registry,
+          backend: {
+            ...env.registry.backend,
+            commit: () => Effect.die(new Error("Injected projection failure")),
+          },
+        },
         env.messages,
       );
       const input: SignalChangeInput = {
@@ -240,6 +253,7 @@ test("Signal Pi commit survives failed Context projection; recovery restores sta
       assert.ok(Exit.hasDies(yield* state.change(input).pipe(Effect.exit)));
       assert.equal((yield* state.snapshot)?.status, "active");
       assert.equal((yield* readSignalHistory(env.messages, path)).snapshot?.status, "paused");
+      yield* state.close;
       const restored = yield* open(env.registry, env.messages);
       assert.equal((yield* restored.snapshot)?.status, "paused");
       assert.equal(
@@ -258,17 +272,23 @@ test("Signal commit drains to the Ref after durable projection despite interrupt
       const env = yield* setup();
       const stored = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
+      yield* env.state.close;
       const state = yield* open(
         {
           ...env.registry,
-          commit: (record: ContextInput, options) =>
-            env.registry
-              .commit(record, options)
-              .pipe(
-                Effect.tap(() =>
-                  Deferred.succeed(stored, undefined).pipe(Effect.andThen(Deferred.await(release))),
+          backend: {
+            ...env.registry.backend,
+            commit: (record: ContextInput, options) =>
+              env.registry.backend
+                .commit(record, options)
+                .pipe(
+                  Effect.tap(() =>
+                    Deferred.succeed(stored, undefined).pipe(
+                      Effect.andThen(Deferred.await(release)),
+                    ),
+                  ),
                 ),
-              ),
+          },
         },
         env.messages,
       );

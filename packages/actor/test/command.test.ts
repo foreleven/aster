@@ -1,7 +1,14 @@
 import { Cause, Context, Effect, Exit, Layer, Match, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Actor, ActorSystem, Command, type ActorRef, type ServicesOf } from "../src/index.js";
+import {
+  Actor,
+  ActorSystem,
+  ActorTestKit,
+  Command,
+  type ActorRef,
+  type ServicesOf,
+} from "../src/index.js";
 
 class LookupError extends Schema.TaggedError<LookupError>()("LookupError", { id: Schema.String }) {}
 class Lookup extends Command.Class<Lookup>()("Lookup", {
@@ -111,4 +118,40 @@ test("duplicate public tags and public/internal collisions fail Actor startup", 
       ),
     );
   }
+});
+
+test("Command replies preserve mixed defects and interruption instead of reporting ordinary failures", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const probe = yield* ActorTestKit.probe<Command.Reply<typeof Lookup>>();
+        let replies = 0;
+        const replyTo: typeof probe.ref = {
+          path: probe.ref.path,
+          incarnation: probe.ref.incarnation,
+          awaitStarted: probe.ref.awaitStarted,
+          ask: (command, options) => probe.ref.ask(command, options),
+          tell: () =>
+            Effect.sync(() => {
+              replies++;
+            }),
+        };
+        for (const cause of [
+          Cause.combine(
+            Cause.fail(new LookupError({ id: "failed" })),
+            Cause.die(new Error("defect")),
+          ),
+          Cause.combine(Cause.fail(new LookupError({ id: "failed" })), Cause.interrupt(123)),
+        ]) {
+          const exit = yield* Effect.exit(Command.reply(replyTo, Effect.failCause(cause)));
+          assert.ok(Exit.isFailure(exit));
+          if (exit._tag === "Failure") {
+            assert.equal(Cause.hasDies(exit.cause), true);
+            assert.equal(Cause.hasInterrupts(exit.cause), Cause.hasInterrupts(cause));
+          }
+        }
+        assert.equal(replies, 0);
+      }),
+    ),
+  );
 });

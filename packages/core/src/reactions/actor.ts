@@ -1,24 +1,17 @@
 import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand, type ActorContext } from "@aster/actor";
-import { Config, Effect, Match, Option, Schema, Stream } from "effect";
+import { Config, Effect, Match, Schema, Stream } from "effect";
 import { randomUUID } from "node:crypto";
 import { ContextActor } from "../context/actor.js";
-import { defineContext } from "../context/definition.js";
 import { ContextEvent } from "../context/model.js";
 import { ContextRegistry } from "../context/registry.js";
 import { DurableContext } from "../context/store.js";
 import { CurrentActors } from "../services/actors.js";
 import { RecoveryInput, RecoveryReply } from "./contracts.js";
-import { reactionWorkView } from "./inspection.js";
+
 import { ReactionState } from "./model.js";
 import { ReactionFailure, ReactionPolicy } from "./policy.js";
-import {
-  ReactionPlan,
-  ReactionReply,
-  ReactionSnapshot,
-  deliveriesOf,
-  workStatus,
-} from "./state.js";
+import { ReactionPlan, ReactionReply, deliveriesOf, workStatus } from "./state.js";
 
 export class Ingest extends ActorCommand.Class<Ingest>()("Ingest", {
   payload: { events: Schema.Array(ContextEvent) },
@@ -53,23 +46,6 @@ export type ReactionCommand = MailboxOf<typeof ReactionCommands, typeof Reaction
 export const SystemOneActor = ContextActor.define("context/SystemOneActor", {
   commands: ReactionCommands,
   internal: ReactionInternal,
-  context: defineContext({
-    state: ReactionSnapshot,
-    message: Schema.Never,
-    view: {
-      project: (record) => {
-        const state = Schema.decodeUnknownOption(ReactionSnapshot)(record.state);
-        if (Option.isNone(state)) return undefined;
-        return {
-          ...record,
-          revision: record.revision ?? 0,
-          state: { work: state.value.work.map(reactionWorkView) },
-          messages: [],
-          projection: { visibility: "public" as const },
-        };
-      },
-    },
-  }),
 })(
   Effect.gen(function* () {
     const registry = yield* ContextRegistry;

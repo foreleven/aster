@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { gateStub, summaryStub } from "./summary-fixtures.js";
 
 import { Models } from "@aster/agent";
@@ -38,13 +39,17 @@ test("a code-registered Lark root starts without YAML entries and creates its ow
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
             ContextQueries.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ChatSummaryGate, { needed: gateStub(async () => true) }),
             Layer.succeed(LarkChatService, {
               searchMessages: () => Effect.succeed([]),
               getChatSettings: () => Effect.succeed([]),
+              listMessages: () => Effect.die("Unexpected IM history query"),
             }),
             Layer.succeed(ChatSummarizer, {
               summarize: summaryStub(async () => {
@@ -70,6 +75,7 @@ test("a code-registered Lark root starts without YAML entries and creates its ow
                 }),
             }),
             Layer.succeed(LarkMailCli, {
+              listMessages: () => Effect.die("Unexpected mail query"),
               getMailboxProfile: () =>
                 Effect.succeed({ address: "test@example.com", name: "Mail" }),
               listIds: () => Effect.succeed([]),
@@ -105,13 +111,17 @@ test("Lark channel publishes today’s startup mail as an email Context", async 
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
             ContextQueries.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ChatSummaryGate, { needed: gateStub(async () => true) }),
             Layer.succeed(LarkChatService, {
               searchMessages: () => Effect.succeed([]),
               getChatSettings: () => Effect.succeed([]),
+              listMessages: () => Effect.die("Unexpected IM history query"),
             }),
             Layer.succeed(ChatSummarizer, {
               summarize: summaryStub(async () => {
@@ -134,6 +144,7 @@ test("Lark channel publishes today’s startup mail as an email Context", async 
                 }),
             }),
             Layer.succeed(LarkMailCli, {
+              listMessages: () => Effect.die("Unexpected mail query"),
               getMailboxProfile: () =>
                 Effect.succeed({ address: "test@example.com", name: "Work mailbox" }),
               listIds: () => Effect.succeed(["new-id"]),
@@ -179,13 +190,17 @@ for (const mailbox of ["me", "other"])
           const entered = yield* Deferred.make<void>();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
-              Layer.succeed(ContextRegistry, registry),
+              Layer.merge(
+                Layer.succeed(ContextRegistry, registry),
+                Layer.succeed(DurableContext, registry.backend),
+              ),
               ContextQueries.layer,
               Layer.succeed(LarkConfig, {
                 description: "Account",
                 mail: { mailbox, description: "Mailbox", pollIntervalMs: 60_000 },
               }),
               Layer.succeed(LarkMailCli, {
+                listMessages: () => Effect.die("Unexpected mail query"),
                 getMailboxProfile: () =>
                   Deferred.succeed(entered, undefined).pipe(Effect.andThen(Effect.never)),
                 listIds: () => Effect.succeed([]),

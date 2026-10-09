@@ -1,7 +1,6 @@
 import { type ActorContext } from "@aster/actor";
-import { Clock, Context, Deferred, Effect, Fiber, Layer, Match, Ref, Schema, Scope } from "effect";
+import { Clock, Context, Deferred, Effect, Fiber, Layer, Match, Ref, Scope } from "effect";
 import { ContextActor, contextPath } from "../context/actor.js";
-import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
 import { deliverTask, taskDeliveryReceipt } from "../tasks/delivery.js";
 import {
@@ -11,7 +10,7 @@ import {
   SignalInternal,
 } from "./protocol.js";
 import { SignalState } from "./state/model.js";
-import { SignalSnapshot } from "./state/snapshot.js";
+import { signalView } from "./state/snapshot.js";
 
 type Owner = ActorContext<SignalCommand>;
 const handlers = Effect.gen(function* () {
@@ -71,6 +70,15 @@ const handlers = Effect.gen(function* () {
     }),
     receive: (command: SignalCommand, owner: Owner) =>
       Match.value(command).pipe(
+        Match.tag("GetSignal", ({ replyTo }) =>
+          Effect.gen(function* () {
+            const snapshot = yield* state.snapshot;
+            const record = yield* state.record;
+            yield* replyTo.tell(
+              snapshot && record ? signalView.project({ ...record, state: snapshot }) : undefined,
+            );
+          }),
+        ),
         Match.tag("Dispatch", () =>
           Effect.gen(function* () {
             yield* Ref.set(active, true);
@@ -135,35 +143,32 @@ const handlers = Effect.gen(function* () {
 export const SignalActor = ContextActor.define("signals/Actor", {
   commands: SignalCommands,
   internal: SignalInternal,
-  context: defineContext({ state: SignalSnapshot, message: Schema.Never }),
-})(
+})((owner) =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
     const definitions = yield* SignalDefinitions;
-    const ready = yield* Deferred.make<Effect.Success<typeof handlers>>();
+
+    const path = contextPath(owner);
+    const services = yield* Layer.buildWithScope(
+      SignalState.layer(
+        path,
+        definitions.find((item) => `/signals/${item.slug}` === path),
+      ),
+      scope,
+    );
+    const behavior = yield* handlers.pipe(
+      Effect.provideService(SignalState, Context.get(services, SignalState)),
+      Effect.provideService(Scope.Scope, scope),
+    );
+
     return {
       started: (owner) =>
-        Effect.gen(function* () {
-          const path = contextPath(owner);
-          const services = yield* Layer.buildWithScope(
-            SignalState.layer(
-              path,
-              definitions.find((item) => `/signals/${item.slug}` === path),
-            ),
-            scope,
-          );
-          const behavior = yield* handlers.pipe(
-            Effect.provideService(SignalState, Context.get(services, SignalState)),
-            Effect.provideService(Scope.Scope, scope),
-          );
-          yield* Deferred.succeed(ready, behavior);
-          yield* behavior.start(
-            owner,
-            owner.metadata.signalActivation as Deferred.Deferred<void> | undefined,
-          );
-        }),
-      receive: (command, owner) =>
-        Deferred.await(ready).pipe(Effect.flatMap((behavior) => behavior.receive(command, owner))),
+        behavior.start(
+          owner,
+          owner.metadata.signalActivation as Deferred.Deferred<void> | undefined,
+        ),
+
+      receive: (command, owner) => behavior.receive(command, owner),
     };
   }),
 );

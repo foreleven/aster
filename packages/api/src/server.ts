@@ -132,7 +132,7 @@ const handlers = ApplicationRpcs.toLayer(
                 }),
               );
         }),
-      QueryContext: (input) => queries.query(input),
+      QueryContext: (input) => queries.json(input),
       ListGoals: () =>
         contexts.pipe(
           Effect.map((records) => records.filter((r) => /^\/goals\/[^/]+$/.test(r.path))),

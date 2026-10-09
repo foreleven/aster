@@ -1,6 +1,6 @@
 import { Command as ActorCommand, ReplyTo, type MailboxOf } from "@aster/actor";
 import { Schema } from "effect";
-import { ChatInfo, ChatMessage } from "../service/model.js";
+import { ChatInfo, ChatMessage, ChatSummary } from "../service/model.js";
 import { ChatSummaryError } from "../../shared/errors.js";
 import type { ChatWork } from "./snapshot.js";
 import { SummaryCommit } from "./snapshot.js";
@@ -15,10 +15,18 @@ export class Update extends ActorCommand.Class<Update>()("Update", {
 export class Flush extends ActorCommand.Class<Flush>()("Flush", {
   payload: { date: Schema.String },
 }) {}
-export const ChatCommands = [Update, Flush] as const;
+export class GetChatInfo extends ActorCommand.Class<GetChatInfo>()("GetChatInfo", {
+  payload: {},
+  reply: ChatInfo,
+}) {}
+export class GetChatSummary extends ActorCommand.Class<GetChatSummary>()("GetChatSummary", {
+  payload: {},
+  reply: Schema.Struct({ chat: ChatInfo, summary: Schema.NullOr(ChatSummary) }),
+}) {}
+export const ChatCommands = [Update, Flush, GetChatInfo, GetChatSummary] as const;
 export const ChatInternal = Schema.TaggedUnion({
   RetainReceipts: { from: Schema.String },
-  ReadInput: {
+  GetSummaryMessages: {
     generation: Schema.String,
     replyTo: ReplyTo<ChatWork | undefined>(),
   },

@@ -2,6 +2,7 @@ import { askQuery } from "../actors.js";
 import { Type } from "@aster/agent";
 import type { ContextsCommand } from "../../context/queries/actor.js";
 import { queryTool } from "../define.js";
+import { queryPageOutput } from "./result.js";
 
 export const readQueryResult = (owner: string) =>
   queryTool(
@@ -25,4 +26,5 @@ export const readQueryResult = (owner: string) =>
         replyTo,
         cancelled,
       })),
+    queryPageOutput,
   );

@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { ConversationError } from "@aster/agent/harness";
 import { Deferred, Effect, Layer, Schema } from "effect";
@@ -73,7 +74,10 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
                 ContextQueries.layer,
-                Layer.succeed(ContextRegistry, registry),
+                Layer.merge(
+                  Layer.succeed(ContextRegistry, registry),
+                  Layer.succeed(DurableContext, registry.backend),
+                ),
                 Layer.succeed(ExternalAgents, {}),
                 goalWorkflowLayer({
                   definitions: [{ slug: "project", description: "Monitor release" }],
@@ -191,7 +195,10 @@ test("a Context intent remains admissible after user input advances the Goal rev
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.succeed(ContextRegistry, registry),
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
             Layer.succeed(ExternalAgents, {}),
             goalWorkflowLayer({
               definitions: [{ slug: "project", description: "Monitor release" }],

@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { Actor, ActorSystem } from "@aster/actor";
 import { Effect, Layer, Match } from "effect";
 import assert from "node:assert/strict";
@@ -145,7 +146,12 @@ test("approval validation rejects invalid answers without saving and accepts com
             },
           });
           const system = yield* ActorSystem.make().pipe(
-            ActorSystem.provide(Layer.succeed(ContextRegistry, registry)),
+            ActorSystem.provide(
+              Layer.merge(
+                Layer.succeed(ContextRegistry, registry),
+                Layer.succeed(DurableContext, registry.backend),
+              ),
+            ),
           );
           const queue = yield* system.spawn("approvals", ApprovalQueueActor);
           const reply = yield* queue.ask<ApprovalReply>((replyTo) => ({
@@ -213,7 +219,12 @@ test("persisted approval answers reach a recreated Actor only after it exists, w
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry(store);
         const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(Layer.succeed(ContextRegistry, registry)),
+          ActorSystem.provide(
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
+          ),
         );
         const queue = yield* system.spawn("approvals", ApprovalQueueActor);
         yield* queue.tell({
@@ -243,7 +254,12 @@ test("persisted approval answers reach a recreated Actor only after it exists, w
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry(store);
         const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(Layer.succeed(ContextRegistry, registry)),
+          ActorSystem.provide(
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
+          ),
         );
         yield* system.spawn("approvals", ApprovalQueueActor);
         yield* Effect.sleep(30);

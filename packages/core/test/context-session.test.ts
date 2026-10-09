@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Option, Schema } from "effect";
@@ -11,17 +12,18 @@ import { makeContextRegistry } from "../src/testing/context.js";
 
 const State = Schema.Struct({ count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) });
 const Message = Schema.Struct({ id: Schema.String, text: Schema.String, at: Schema.Number });
-const definition = ContextSession.define({
+const definition = {
   state: State,
   message: Message,
-  messageKey: (m) => m.id,
-  compareMessages: (a, b) => a.at - b.at || a.id.localeCompare(b.id),
-  changes: "durable-state",
+  messageKey: (m: { id: string }) => m.id,
+  compareMessages: (a: { id: string; at: number }, b: { id: string; at: number }) =>
+    a.at - b.at || a.id.localeCompare(b.id),
+  changes: "durable-state" as const,
   view: contextView({ state: State, message: Message }),
-});
+};
 const options = {
   path: "/test/session",
-  definition,
+  ...definition,
   initial: { description: "Test", state: { count: 0 }, messages: [] },
 };
 const message = { id: "__proto__", text: "original", at: 1 };
@@ -32,7 +34,7 @@ test("Session commits state and conditional message removals atomically and reta
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
         yield* Effect.gen(function* () {
-          const session = yield* ContextSession.open(options);
+          const session = yield* ContextSession.make(options);
           yield* session.messages.upsert([message], { mode: "bootstrap" });
           const before = yield* session.snapshot;
           yield* session.messages.upsert([message]);
@@ -66,7 +68,10 @@ test("Session commits state and conditional message removals atomically and reta
           assert.equal(conflict._tag, "ContextConflict");
           const duplicate = yield* session.messages.upsert([message, message]).pipe(Effect.flip);
           assert.equal(duplicate._tag, "ContextValidationError");
-        }).pipe(Effect.provideService(ContextRegistry, registry));
+        }).pipe(
+          Effect.provideService(ContextRegistry, registry),
+          Effect.provideService(DurableContext, registry.backend),
+        );
       }),
     ),
   );
@@ -80,8 +85,8 @@ test("Session ownership is scoped; closed handles cannot write to a replacement 
         yield* Effect.gen(function* () {
           const retired = yield* Effect.scoped(
             Effect.gen(function* () {
-              const session = yield* ContextSession.open(options);
-              const duplicate = yield* Effect.scoped(ContextSession.open(options)).pipe(
+              const session = yield* ContextSession.make(options);
+              const duplicate = yield* Effect.scoped(ContextSession.make(options)).pipe(
                 Effect.flip,
               );
               assert.equal(duplicate._tag, "ContextRecoveryError");
@@ -93,14 +98,17 @@ test("Session ownership is scoped; closed handles cannot write to a replacement 
               return session;
             }),
           );
-          const next = yield* ContextSession.open(options);
+          const next = yield* ContextSession.make(options);
           assert.equal((yield* next.state.get).count, 10);
           assert.ok(
             (yield* retired.state.update(() => ({ count: 99 })).pipe(Effect.flip)) instanceof
               ContextSessionClosed,
           );
           assert.equal((yield* next.state.get).count, 10);
-        }).pipe(Effect.provideService(ContextRegistry, registry));
+        }).pipe(
+          Effect.provideService(ContextRegistry, registry),
+          Effect.provideService(DurableContext, registry.backend),
+        );
       }),
     ),
   );
@@ -117,8 +125,12 @@ test("daily Sessions validate their calendar date, timezone and public identity"
           { layout: "daily" as const, date: "2026-10-09", timeZone: "Asia/Shanghai" },
         ]) {
           const result = yield* Effect.scoped(
-            ContextSession.open({ ...options, persistence }),
-          ).pipe(Effect.provideService(ContextRegistry, registry), Effect.flip);
+            ContextSession.make({ ...options, persistence }),
+          ).pipe(
+            Effect.provideService(ContextRegistry, registry),
+            Effect.provideService(DurableContext, registry.backend),
+            Effect.flip,
+          );
           assert.equal(result._tag, "ContextValidationError");
         }
       }),

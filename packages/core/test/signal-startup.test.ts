@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
 import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema, Stream } from "effect";
@@ -42,7 +43,10 @@ for (const fails of [false, true])
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
-              Layer.succeed(ContextRegistry, registry),
+              Layer.merge(
+                Layer.succeed(ContextRegistry, registry),
+                Layer.succeed(DurableContext, registry.backend),
+              ),
               Layer.succeed(Clock.Clock, clock),
               Layer.succeed(SignalDefinitions, [definition, { ...definition, slug: "other" }]),
               Layer.succeed(AgentConversations, {

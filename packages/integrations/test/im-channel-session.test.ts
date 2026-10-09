@@ -1,3 +1,7 @@
+import { ChatMessage } from "../src/lark/im/service/model.js";
+import type { TestContextRegistry } from "@aster/core/testing";
+import { DurableContext } from "@aster/core";
+import { makeTestContextRegistryWithBackend } from "@aster/core/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -6,7 +10,6 @@ import {
   ContextRegistry,
   ContextSession,
   contextSpawnOptions,
-  makeContextRegistryWithBackend,
   makeDurableContext,
   type StoredContext,
 } from "@aster/core";
@@ -15,8 +18,8 @@ import { TestClock } from "effect/testing";
 import { makeContextRegistry } from "@aster/core/testing";
 import { LarkConfig, parseLarkConfig } from "../src/lark/config.js";
 import { LarkImActor } from "../src/lark/im/channel-actor.js";
-import { ImContext, ImSnapshot } from "../src/lark/im/channel/snapshot.js";
-import { ChatContext, ChatSnapshot, messageFingerprint } from "../src/lark/im/chat/snapshot.js";
+import { ImSnapshot } from "../src/lark/im/channel/snapshot.js";
+import { ChatSnapshot, messageFingerprint } from "../src/lark/im/chat/snapshot.js";
 import { LarkChatService, LarkChatQueryError } from "../src/lark/im/service/chat-service.js";
 import { ChatSummarizer } from "../src/lark/im/summary/summarizer.js";
 import { ChatSummaryGate } from "../src/lark/im/summary/gate.js";
@@ -34,7 +37,7 @@ const message = {
 const summary = { text: "Summary", references: [] };
 const admission: AgentAdmission = { run: (_id, work) => work };
 const start = (
-  registry: ContextRegistry["Service"],
+  registry: TestContextRegistry,
   client: Pick<LarkChatService["Service"], "searchMessages">,
   model: ChatSummarizer["Service"] = { summarize: () => Effect.succeed(summary) },
 ) =>
@@ -42,10 +45,14 @@ const start = (
     const system = yield* ActorSystem.make().pipe(
       ActorSystem.provide(
         ContextQueries.layer,
-        Layer.succeed(ContextRegistry, registry),
+        Layer.merge(
+          Layer.succeed(ContextRegistry, registry),
+          Layer.succeed(DurableContext, registry.backend),
+        ),
         Layer.succeed(LarkConfig, parseLarkConfig({})),
         Layer.succeed(LarkChatService, {
           ...client,
+          listMessages: () => Effect.die("Unexpected history query"),
           getChatSettings: () => Effect.die("Unexpected settings query"),
         }),
         Layer.succeed(ChatSummaryGate, { needed: () => Effect.succeed(false) }),
@@ -56,7 +63,7 @@ const start = (
     yield* (yield* system.spawn("im", LarkImActor, contextSpawnOptions("/lark/im"))).awaitStarted;
     return system;
   });
-const channelState = (registry: ContextRegistry["Service"]) =>
+const channelState = (registry: TestContextRegistry) =>
   Schema.decodeUnknownSync(ImSnapshot)(registry.get("/lark/im")?.state);
 
 test("Channel never advances coverage before every Chat acknowledges durable ingress", async () => {
@@ -80,7 +87,7 @@ test("Channel never advances coverage before every Chat acknowledges durable ing
                 records.set(record.snapshot.path, structuredClone(record));
               }),
           });
-          const registry = makeContextRegistryWithBackend(backend);
+          const registry = makeTestContextRegistryWithBackend(backend);
           const changes = yield* registry.subscribe;
           yield* start(registry, {
             searchMessages: () =>
@@ -117,18 +124,21 @@ test("failed cross-midnight retrieval does not flush; successful coverage flushe
           const registry = yield* makeContextRegistry();
           yield* Effect.scoped(
             Effect.gen(function* () {
-              yield* ContextSession.open({
+              yield* ContextSession.make({
                 path: "/lark/im",
-                definition: ImContext,
+                state: ImSnapshot,
+                message: Schema.Never,
                 initial: {
                   state: { ready: false, chats: 1, through: "2026-10-09T15:50:00Z" },
                   description: "IM",
                   messages: [],
                 },
               });
-              yield* ContextSession.open({
+              yield* ContextSession.make({
                 path,
-                definition: ChatContext,
+                state: ChatSnapshot,
+                message: ChatMessage,
+                messageKey: (message) => message.id,
                 initial: {
                   state: {
                     chat,
@@ -140,7 +150,10 @@ test("failed cross-midnight retrieval does not flush; successful coverage flushe
                   messages: [message],
                 },
               });
-            }).pipe(Effect.provideService(ContextRegistry, registry)),
+            }).pipe(
+              Effect.provideService(ContextRegistry, registry),
+              Effect.provideService(DurableContext, registry.backend),
+            ),
           );
           let polls = 0;
           let runs = 0;

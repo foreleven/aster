@@ -301,3 +301,104 @@ test("transport failures stay typed and cancellation interrupts the active CLI e
     ),
   );
 });
+
+test("IM history forwards CLI time/order/cursor arguments and decodes one provider page", async () => {
+  const calls: (readonly string[])[] = [];
+  const service = makeClient((args) => {
+    calls.push(args);
+    return JSON.stringify({
+      ok: true,
+      data: {
+        messages: [
+          {
+            message_id: "history",
+            create_time: "2026-01-01T00:00:00Z",
+            content: "Old message",
+            sender: { name: "Alice", secret: "PRIVATE" },
+            deleted: false,
+          },
+        ],
+        has_more: true,
+        page_token: "next",
+      },
+    });
+  });
+  const result = await Effect.runPromise(
+    service.listMessages({
+      chatId: "oc_old",
+      start: "2026-01-01",
+      end: "2026-01-02",
+      order: "asc",
+      pageSize: 10,
+      pageToken: "first",
+    }),
+  );
+  assert.deepEqual(calls, [
+    [
+      "im",
+      "+chat-messages-list",
+      "--as",
+      "user",
+      "--chat-id",
+      "oc_old",
+      "--order",
+      "asc",
+      "--page-size",
+      "10",
+      "--format",
+      "json",
+      "--no-reactions",
+      "--start",
+      "2026-01-01",
+      "--end",
+      "2026-01-02",
+      "--page-token",
+      "first",
+    ],
+  ]);
+  assert.equal(result.hasMore, true);
+  assert.equal(result.nextPageToken, "next");
+  assert.equal(result.items[0]!.content, "Old message");
+  assert.doesNotMatch(JSON.stringify(result), /PRIVATE/);
+});
+
+test("IM history rejects invalid selectors and pagination while preserving defects and cancellation", async () => {
+  const service = LarkChatService.make(() => Effect.die("Invalid arguments reached CLI"));
+  for (const args of [
+    {},
+    { chatId: "chat", userId: "user" },
+    { chatId: "chat", pageSize: 51 },
+    { chatId: "chat", start: "bad" },
+    { chatId: "chat", start: "2026-02-02", end: "2026-02-01" },
+  ]) {
+    const error = await Effect.runPromise(service.listMessages(args).pipe(Effect.flip));
+    assert.equal(error._tag, "LarkChatQueryError");
+    assert.equal(error.kind, "invalid-input");
+  }
+  for (const page of [{ has_more: true }, { has_more: true, page_token: "first" }]) {
+    const broken = makeClient(() => JSON.stringify({ data: { messages: [], ...page } }));
+    await assert.rejects(
+      Effect.runPromise(broken.listMessages({ chatId: "chat", pageToken: "first" })),
+      /pagination/,
+    );
+  }
+  await assert.rejects(Effect.runPromise(service.listMessages({ chatId: "chat" })), /reached CLI/);
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const started = yield* Deferred.make<void>(),
+          released = yield* Deferred.make<void>();
+        const slow = LarkChatService.make(() =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Effect.never),
+            Effect.ensuring(Deferred.succeed(released, undefined)),
+          ),
+        );
+        const fiber = yield* slow.listMessages({ chatId: "chat" }).pipe(Effect.forkScoped);
+        yield* Deferred.await(started);
+        yield* Fiber.interrupt(fiber);
+        yield* Deferred.await(released);
+      }),
+    ),
+  );
+});

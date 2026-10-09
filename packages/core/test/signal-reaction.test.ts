@@ -1,6 +1,8 @@
+import { SignalSnapshot } from "../src/signals/state/snapshot.js";
+import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
-import { Effect, Layer } from "effect";
+import { Effect, Layer, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ContextQueries } from "../src/context/queries/routes.js";
@@ -39,7 +41,10 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
-              Layer.succeed(ContextRegistry, registry),
+              Layer.merge(
+                Layer.succeed(ContextRegistry, registry),
+                Layer.succeed(DurableContext, registry.backend),
+              ),
               Layer.succeed(AgentConversations, messages),
               Layer.succeed(SignalDefinitions, [definition]),
             ),
@@ -66,6 +71,10 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
           // Metadata revisions do not change the screened rule version.
           if (!restart) {
             const current = registry.get(input.target)!;
+            yield* registry.register(current.path, {
+              state: SignalSnapshot,
+              message: Schema.Never,
+            });
             yield* registry.commit(
               { ...current, description: "Updated metadata" },
               { expectedRevision: current.revision },
@@ -106,7 +115,10 @@ test("scheduled Signals reject Context reactions", async () => {
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.succeed(ContextRegistry, registry),
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
             Layer.succeed(AgentConversations, messages),
             Layer.succeed(SignalDefinitions, [
               {

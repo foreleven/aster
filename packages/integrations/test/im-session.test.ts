@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
@@ -41,7 +42,10 @@ const setup = (
     const changes = yield* registry.subscribe;
     const system = yield* ActorSystem.make().pipe(
       ActorSystem.provide(
-        Layer.succeed(ContextRegistry, registry),
+        Layer.merge(
+          Layer.succeed(ContextRegistry, registry),
+          Layer.succeed(DurableContext, registry.backend),
+        ),
         ContextQueries.layer,
         Layer.succeed(ChatSummarizer, model),
         Layer.succeed(ChatSummaryGate, gate),
@@ -493,7 +497,7 @@ test("stopping a Chat cancels model work; stale reads and commits cannot mutate 
       yield* Deferred.await(entered);
       const before = registry.get(path);
       const stale = yield* ref.ask((replyTo) => ({
-        _tag: "ReadInput",
+        _tag: "GetSummaryMessages",
         generation: "retired",
         replyTo,
       }));

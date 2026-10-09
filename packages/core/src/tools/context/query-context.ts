@@ -2,6 +2,7 @@ import { askQuery } from "../actors.js";
 import { Type } from "@aster/agent";
 import type { ContextsCommand } from "../../context/queries/actor.js";
 import { queryTool } from "../define.js";
+import { queryPageOutput } from "./result.js";
 
 export const queryContext = (owner: string, requestId: (callId: string) => string) =>
   queryTool(
@@ -29,4 +30,5 @@ export const queryContext = (owner: string, requestId: (callId: string) => strin
         replyTo,
         cancelled,
       })),
+    queryPageOutput,
   );

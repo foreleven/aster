@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
 import { Clock, Deferred, Effect, Fiber, Layer, Stream } from "effect";
@@ -47,7 +48,10 @@ test("Goal command waits for durable input and history; stopped roots fail inste
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.succeed(ContextRegistry, registry),
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
 
             Layer.succeed(ExternalAgents, {}),
             goalWorkflowLayer({
@@ -113,7 +117,13 @@ test("invalid option stays pending and can be corrected without losing the origi
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
         const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(ContextQueries.layer, Layer.succeed(ContextRegistry, registry)),
+          ActorSystem.provide(
+            ContextQueries.layer,
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
+          ),
         );
         const queue = yield* system.spawn("approvals", ApprovalQueueActor);
         yield* queue.tell({
@@ -181,7 +191,10 @@ test("malformed Signal delivery state stops before recovery writes or execution"
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.succeed(ContextRegistry, registry),
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
 
             Layer.succeed(ExternalAgents, {}),
             Layer.succeed(SignalDefinitions, [definition]),

@@ -3,6 +3,7 @@ import {
   ContextCaptures,
   ContextQueries,
   ContextRegistry,
+  DurableContext,
   defineIntegration,
   RuntimeConfigurationError,
   RuntimeIntegrations,
@@ -61,6 +62,7 @@ export const LarkIntegration = {
       const dependencies = Context.pick(
         ContextQueries,
         ContextRegistry,
+        DurableContext,
         LarkConfig,
         LarkAccountCli,
         LarkMailCli,
@@ -72,6 +74,7 @@ export const LarkIntegration = {
         yield* Effect.context<
           | ContextQueries
           | ContextRegistry
+          | DurableContext
           | LarkConfig
           | LarkAccountCli
           | LarkMailCli

@@ -1,3 +1,4 @@
+import { GetTaskDetails } from "./queries.js";
 import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand, ReplyTo } from "@aster/actor";
 import { Schema } from "effect";
@@ -39,6 +40,7 @@ export const TaskCommands = [
   RetryTask,
   ApprovalResolved,
   Cancel,
+  GetTaskDetails,
 ] as const;
 export const TaskInternal = Schema.TaggedUnion({
   ExecutionSettled: { generation: Schema.String, outcome: TaskOutcome },

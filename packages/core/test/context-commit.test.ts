@@ -6,16 +6,15 @@ import {
   ContextCommitError,
   ContextConflict,
   ContextValidationError,
-  defineContext,
   contextView,
   type StoredContext,
 } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
-const definition = defineContext({
+const definition = {
   state: Schema.Struct({ value: Schema.Number }),
   message: Schema.String,
-});
+};
 const initial = { path: "/versioned", description: "Stable", state: { value: 1 }, messages: [] };
 
 test("competing Context commits have one winner and stale identical writes conflict", async () => {
@@ -256,12 +255,12 @@ test("uncertain source recovery republishes only newly durable events for live c
             if (loseAcknowledgement) throw new Error("Commit acknowledgement lost");
           },
         });
-        const source = defineContext({
-          changes: "durable-state",
+        const source = {
+          changes: "durable-state" as const,
           state: Schema.Struct({ value: Schema.Number }),
           message: Schema.String,
           view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
-        });
+        };
         yield* registry.register(initial.path, source);
         yield* registry.commit(initial, { expectedRevision: 0 });
         const changes = yield* registry.subscribe;

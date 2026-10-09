@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import { Effect, Schema } from "effect";
-import { contextView, defineContext, type ContextSnapshot } from "../src/index.js";
+import { contextView, type ContextSnapshot } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
 const secret = "PRIVATE_PROVIDER_SENTINEL";
@@ -183,12 +183,12 @@ test("owner policies fail closed and project the original change for reactions a
         state: Schema.Struct({ summary: Schema.String }),
         message: Schema.Struct({ text: Schema.String }),
       });
-      const definition = defineContext({
+      const definition = {
         state: Schema.ObjectKeyword,
         message: Schema.Unknown,
         view,
-        changes: "durable-state",
-      });
+        changes: "durable-state" as const,
+      };
       yield* registry.register("/source", definition);
       const source = yield* registry.commit(
         record("/source", { summary: "first", metadata: secret }, [

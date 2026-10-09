@@ -1,6 +1,6 @@
 import { Schema } from "effect";
-import { contextView } from "../context/definition.js";
-import { ApprovalEvent } from "./state.js";
+import { contextView } from "../context/view.js";
+import { ApprovalEvent } from "./snapshot.js";
 import { PublicApprovalEntry } from "./contracts.js";
 export { PublicApprovalEntry } from "./contracts.js";
 export const approvalView = contextView({

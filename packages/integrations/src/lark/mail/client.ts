@@ -2,7 +2,7 @@ import { LarkCliError } from "../shared/errors.js";
 import { Context, Data, DateTime, Effect, Option, Schema, Stream } from "effect";
 import { runLarkCli } from "../shared/cli.js";
 import { parseCliOutput } from "../shared/response.js";
-import type { EmailData, MailboxProfile } from "./model.js";
+import { MailListArgs, type MailListPage, type EmailData, type MailboxProfile } from "./model.js";
 import { parseMessages, parseMailboxProfile } from "./parser.js";
 export class LarkMailCli extends Context.Service<
   LarkMailCli,
@@ -10,6 +10,10 @@ export class LarkMailCli extends Context.Service<
     readonly getMailboxProfile: (
       mailbox: string,
     ) => Effect.Effect<MailboxProfile, LarkCliError | LarkResponseError>;
+    readonly listMessages: (
+      mailbox: string,
+      args: MailListArgs,
+    ) => Effect.Effect<MailListPage, LarkCliError | LarkResponseError>;
     readonly listIds: (
       mailbox: string,
       start: number,
@@ -24,6 +28,7 @@ export class LarkMailCli extends Context.Service<
 
 export class LarkResponseError extends Data.TaggedError("LarkResponseError")<{
   readonly cause: unknown;
+  readonly kind?: "invalid-input" | "unavailable";
 }> {
   override get message() {
     return `Invalid Lark mail response: ${String(this.cause)}`;
@@ -59,6 +64,90 @@ export const makeMailClient = (run: MailRun): LarkMailCli["Service"] => {
         "--params",
         JSON.stringify({ user_mailbox_id: mailbox }),
       ]).pipe(Effect.flatMap(decode(parseMailboxProfile))),
+    listMessages: Effect.fn("LarkMail.listMessages")(function* (mailbox, input) {
+      const args = yield* Schema.decodeUnknownEffect(MailListArgs)(input).pipe(
+        Effect.mapError((cause) => new LarkResponseError({ kind: "invalid-input", cause })),
+      );
+      for (const time of [args.start, args.end]) {
+        if (
+          time !== undefined &&
+          (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:Z|[+-]\d{2}:\d{2})$/.test(time) ||
+            Option.isNone(DateTime.make(time)))
+        )
+          return yield* new LarkResponseError({
+            kind: "invalid-input",
+            cause: "Mail times must be whole-second ISO timestamps with timezone",
+          });
+      }
+      if (args.start && args.end && Date.parse(args.start) >= Date.parse(args.end))
+        return yield* new LarkResponseError({
+          kind: "invalid-input",
+          cause: "start must precede end",
+        });
+      const addresses = (value: string | undefined) =>
+        value
+          ?.split(",")
+          .map((address) => address.trim())
+          .filter(Boolean);
+      const filter = {
+        folder: args.folder ?? (args.folderId || args.label || args.labelId ? undefined : "inbox"),
+        folder_id: args.folderId,
+        label: args.label,
+        label_id: args.labelId,
+        from: addresses(args.from),
+        to: addresses(args.to),
+        cc: addresses(args.cc),
+        bcc: addresses(args.bcc),
+        subject: args.subject,
+        is_unread: args.isUnread,
+        has_attachment: args.hasAttachment,
+        time_range:
+          args.start || args.end ? { start_time: args.start, end_time: args.end } : undefined,
+      };
+      const stdout = yield* run([
+        "mail",
+        "+triage",
+        "--as",
+        "user",
+        "--mailbox",
+        mailbox,
+        "--filter",
+        JSON.stringify(filter),
+        "--max",
+        String(args.limit ?? 20),
+        "--format",
+        "json",
+        ...(args.query ? ["--query", args.query] : []),
+        ...(args.pageToken ? ["--page-token", args.pageToken] : []),
+      ]);
+      const page = yield* decode((stdout) =>
+        Schema.decodeUnknownSync(
+          Schema.Struct({
+            messages: Schema.Array(
+              Schema.Struct({
+                message_id: Schema.NonEmptyString,
+                date: Schema.optional(Schema.String),
+                from: Schema.String,
+                subject: Schema.String,
+                labels: Schema.optional(Schema.String),
+              }),
+            ),
+            has_more: Schema.Boolean,
+            page_token: Schema.optional(Schema.String),
+          }),
+        )(parseCliOutput(stdout)),
+      )(stdout);
+      if (page.has_more && (!page.page_token || page.page_token === args.pageToken))
+        return yield* new LarkResponseError({ cause: "Missing or repeated mail pagination token" });
+      return {
+        items: page.messages.map(({ message_id, ...message }) => ({
+          messageId: message_id,
+          ...message,
+        })),
+        hasMore: page.has_more,
+        nextPageToken: page.has_more ? page.page_token! : null,
+      };
+    }),
     listIds: Effect.fn("LarkMail.listIds")(function* (mailbox, start, through) {
       if (!Number.isFinite(start) || !Number.isFinite(through) || start >= through)
         return yield* new LarkResponseError({ cause: "Invalid mail query window" });

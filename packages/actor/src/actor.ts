@@ -1,4 +1,15 @@
-import { Context, Data, Effect, Layer, Schema, SchemaAST, Scope, type Duration } from "effect";
+import {
+  Context,
+  Data,
+  Effect,
+  Layer,
+  Option,
+  Schema,
+  SchemaAST,
+  Scope,
+  type Duration,
+  type Fiber,
+} from "effect";
 import type { ActorPersistence } from "./persistence.js";
 
 export type ActorPath = string;
@@ -63,13 +74,21 @@ export interface ActorRef<in Command> {
    * Not a processing barrier or health check. Cancelling a waiter does not stop the Actor.
    */
   readonly awaitStarted: Effect.Effect<void, ActorStartupError>;
+  /** Optional request lifetime on temporary reply refs; never persisted. */
+  readonly scope?: Scope.Scope;
   /** Enqueue only; stopped targets emit a redacted DeadLetter instead of failing the sender. */
   tell(command: Command): Effect.Effect<void>;
-  /** First reply wins. Timeout/cancellation closes the reply ref, not the receiver's work. */
+  /** First reply wins. Scoped requests cancel work that adopts the reply ref's scope. */
   ask<Response>(
     makeCommand: (replyTo: ActorRef<Response>) => Command,
-    timeout?: Duration.Input,
+    options?: Duration.Input | AskOptions,
   ): Effect.Effect<Response, AskTimeoutError>;
+}
+
+export interface AskOptions {
+  readonly timeout?: Duration.Input;
+  /** Borrowed parent scope. Omission uses the current scope when available. */
+  readonly scope?: Scope.Scope;
 }
 
 export class ActorNotFound extends Error {
@@ -137,6 +156,8 @@ export interface ActorContext<Command> {
   child(name: string): Effect.Effect<ActorRef<unknown> | undefined>;
   children(): Effect.Effect<ReadonlyArray<ActorRef<unknown>>>;
   receiveTimeout(duration: Duration.Input): Effect.Effect<void>;
+  /** Supervised background work owned by this Behavior and an optional request scope. */
+  fork(effect: Effect.Effect<void>, scope?: Scope.Scope): Effect.Effect<Fiber.Fiber<void>>;
   /** Behavior-scoped work: expected errors become commands; defects enter supervision. */
   pipeToSelf<A, E>(
     effect: Effect.Effect<A, E, never>,
@@ -147,6 +168,11 @@ export interface ActorContext<Command> {
     ) => Command,
   ): Effect.Effect<void>;
 }
+
+/** Runtime-supplied identity during scoped Behavior acquisition. */
+export class ActorSetup extends Context.Service<ActorSetup, ActorContext<unknown>>()(
+  "actor/Setup",
+) {}
 
 export interface ActorBehavior<Command, Services = never> {
   readonly receive: (
@@ -251,7 +277,11 @@ const actorDefine =
     protocol: Protocol<C, I>,
   ) =>
   <E, R, H = never>(
-    acquire: Effect.Effect<ActorBehavior<MailboxOf<C, I>, H>, E, R>,
+    acquire:
+      | Effect.Effect<ActorBehavior<MailboxOf<C, I>, H>, E, R>
+      | ((
+          actor: ActorContext<MailboxOf<C, I>>,
+        ) => Effect.Effect<ActorBehavior<MailboxOf<C, I>, H>, E, R>),
   ): Definition<
     C[number]["Type"],
     ActorBehavior<MailboxOf<C, I>, H>,
@@ -264,7 +294,14 @@ const actorDefine =
       Effect.gen(function* () {
         yield* validateProtocol(protocol);
         const environment = yield* Effect.context<H>();
-        const behavior = yield* acquire;
+        // The runtime supplies the context for this definition's validated protocol.
+        const behavior = yield* typeof acquire === "function"
+          ? acquire(
+              Option.getOrThrow(yield* Effect.serviceOption(ActorSetup)) as ActorContext<
+                MailboxOf<C, I>
+              >,
+            )
+          : acquire;
         return {
           ...behavior,
           receive: (command: MailboxOf<C, I>, actor: ActorContext<MailboxOf<C, I>>) =>

@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { makeHarness } from "./harness-fixtures.js";
 import { DurableHarness, AgentConversations } from "@aster/agent/harness";
 import { ActorSystem } from "@aster/actor";
@@ -17,7 +18,7 @@ import { makeContextRegistry } from "../src/testing/context.js";
 /** Real domain query owners, with fake backend work and model execution held pending. */
 export const toolSystem = Effect.fnUntraced(function* (
   options: {
-    registry?: ContextRegistry["Service"];
+    registry?: import("../src/testing/context.js").TestContextRegistry;
     messages?: AgentConversations["Service"];
     queries?: ContextQueries["Service"];
     memory?: MemoryRecall["Service"];
@@ -30,7 +31,10 @@ export const toolSystem = Effect.fnUntraced(function* (
     options.queries ?? (yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer)));
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
-      Layer.succeed(ContextRegistry, registry),
+      Layer.merge(
+        Layer.succeed(ContextRegistry, registry),
+        Layer.succeed(DurableContext, registry.backend),
+      ),
       Layer.succeed(AgentConversations, messages),
       Layer.succeed(ContextQueries, queries),
       ContextCaptures.layer,

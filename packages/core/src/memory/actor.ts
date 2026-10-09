@@ -1,9 +1,10 @@
+import { ContextSession } from "../context/session.js";
 import type { MailboxOf } from "@aster/actor";
 import { type ActorContext, Command as ActorCommand } from "@aster/actor";
 import { Deferred, Effect, HashSet, Match, Schedule, Schema, Stream } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { PublicContext as ContextRecord } from "../context/contracts.js";
-import { contextView, defineContext } from "../context/definition.js";
+import { contextView } from "../context/view.js";
 import { ContextRegistry } from "../context/registry.js";
 import { ApplicationError } from "../operations.js";
 import { cancellableQuery, queryCancelled, QueryReply } from "../services/actors.js";
@@ -62,11 +63,6 @@ export const memoryView = contextView({
 export const MemoryActor = ContextActor.define("memory/Actor", {
   commands: MemoryCommands,
   internal: MemoryInternal,
-  context: defineContext({
-    view: memoryView,
-    state: MemoryState,
-    message: Schema.Never,
-  }),
 })(
   Effect.gen(function* () {
     const backend = yield* MemoryBackend;
@@ -76,18 +72,25 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
     const changes = yield* registry.subscribe;
     // Only the mailbox changes this set. Each Behavior gets a fresh set on recovery.
     let inFlight = HashSet.empty<string>();
-    const state = Effect.suspend(() =>
-      Schema.decodeUnknownEffect(MemoryState)(registry.get("/memory")!.state),
-    ).pipe(Effect.orDie);
-    const save = Effect.fn("Memory.save")(function* (patch: Partial<typeof MemoryState.Type>) {
-      const current = registry.get("/memory")!;
-      yield* registry
-        .commit(
-          { ...current, state: { ...current.state, ...patch } },
-          { expectedRevision: current.revision ?? 0 },
-        )
-        .pipe(Effect.orDie);
-    });
+    const session = yield* ContextSession.make({
+      path: "/memory",
+      state: MemoryState,
+      message: Schema.Never,
+      view: memoryView,
+      initial: {
+        description: backend.description,
+        state: {
+          status: "ready",
+          retrieval: backend.retrieval,
+          ...(backend.llm ? { llm: backend.llm } : {}),
+        },
+      },
+    }).pipe(Effect.orDie);
+    const state = session.state.get.pipe(Effect.orDie);
+    const save = (patch: Partial<typeof MemoryState.Type>) =>
+      session.state
+        .update((current) => ({ ...current, ...patch }))
+        .pipe(Effect.orDie, Effect.asVoid);
     const admit = Effect.fn("Memory.admit")(function* (input: ContextCapture) {
       const current = yield* state;
       if (
@@ -118,21 +121,15 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
     return {
       started: (context) =>
         Effect.gen(function* () {
-          const previous = registry.get("/memory");
-          yield* registry
-            .commit(
-              {
-                path: "/memory",
-                description: backend.description,
-                state: {
-                  ...previous?.state,
-                  status: "ready",
-                  retrieval: backend.retrieval,
-                  ...(backend.llm ? { llm: backend.llm } : {}),
-                },
-                messages: [],
-              },
-              { expectedRevision: previous?.revision ?? 0 },
+          yield* session.state
+            .update(
+              (current) => ({
+                ...current,
+                status: "ready",
+                retrieval: backend.retrieval,
+                ...(backend.llm ? { llm: backend.llm } : {}),
+              }),
+              { description: backend.description },
             )
             .pipe(Effect.orDie);
           // Recovery and live evidence reads run outside the mailbox. A failed worker

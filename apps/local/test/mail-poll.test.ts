@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { ContextQueries } from "@aster/core";
 // Tests inject internal completion and timer messages through untyped selections.
 import { ActorSystem } from "@aster/actor";
@@ -37,28 +38,36 @@ test("mail retries failed windows, waits for durable publication, and deduplicat
           const release = yield* Deferred.make<void>();
           const saved = yield* Deferred.make<void>();
           const registry = yield* makeContextRegistry();
-          const originalCommit = registry.commit;
+          const originalCommit = registry.backend.commit;
           const controlledRegistry: typeof registry = {
             ...registry,
-            commit: (update, options) =>
-              Effect.gen(function* () {
-                if (update.path === "/lark/mail/me/one") yield* Deferred.await(release);
-                const result = yield* originalCommit(update, options);
-                if (update.path === "/lark/mail/me/one") yield* Deferred.succeed(saved, undefined);
-                return result;
-              }),
+            backend: {
+              ...registry.backend,
+              commit: (update, options) =>
+                Effect.gen(function* () {
+                  if (update.path === "/lark/mail/me/one") yield* Deferred.await(release);
+                  const result = yield* originalCommit(update, options);
+                  if (update.path === "/lark/mail/me/one")
+                    yield* Deferred.succeed(saved, undefined);
+                  return result;
+                }),
+            },
           };
           let attempts = 0;
           let fetches = 0;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
-              Layer.succeed(ContextRegistry, controlledRegistry),
+              Layer.merge(
+                Layer.succeed(ContextRegistry, controlledRegistry),
+                Layer.succeed(DurableContext, controlledRegistry.backend),
+              ),
               Layer.succeed(LarkConfig, {
                 description: "Mail",
                 mail: { mailbox: "me", description: "Mail", pollIntervalMs: 30_000 },
               }),
               Layer.succeed(LarkMailCli, {
+                listMessages: () => Effect.die("Unexpected mail query"),
                 getMailboxProfile: () => Effect.never,
                 listIds: (_mailbox, start, through) =>
                   Effect.gen(function* () {
@@ -131,12 +140,16 @@ for (const failure of ["transport", "incomplete"] as const)
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
                 ContextQueries.layer,
-                Layer.succeed(ContextRegistry, registry),
+                Layer.merge(
+                  Layer.succeed(ContextRegistry, registry),
+                  Layer.succeed(DurableContext, registry.backend),
+                ),
                 Layer.succeed(LarkConfig, {
                   description: "Mail",
                   mail: { mailbox: "me", description: "Mail", pollIntervalMs: 30_000 },
                 }),
                 Layer.succeed(LarkMailCli, {
+                  listMessages: () => Effect.die("Unexpected mail query"),
                   getMailboxProfile: () => Effect.never,
                   listIds: (_mailbox, start) =>
                     Queue.offer(windows, start).pipe(Effect.as(["one"])),
@@ -171,12 +184,16 @@ test("empty mail windows catch up immediately, then wait for the polling interva
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
-              Layer.succeed(ContextRegistry, registry),
+              Layer.merge(
+                Layer.succeed(ContextRegistry, registry),
+                Layer.succeed(DurableContext, registry.backend),
+              ),
               Layer.succeed(LarkConfig, {
                 description: "Mail",
                 mail: { mailbox: "me", description: "Mail", pollIntervalMs: 30_000 },
               }),
               Layer.succeed(LarkMailCli, {
+                listMessages: () => Effect.die("Unexpected mail query"),
                 getMailboxProfile: () => Effect.never,
                 listIds: (_mailbox, start, through) =>
                   Queue.offer(windows, [start, through]).pipe(Effect.as([])),
@@ -223,12 +240,16 @@ test("stopping a mailbox interrupts its active retrieval", async () => {
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.succeed(ContextRegistry, registry),
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
             Layer.succeed(LarkConfig, {
               description: "Mail",
               mail: { mailbox: "me", description: "Mail", pollIntervalMs: 30_000 },
             }),
             Layer.succeed(LarkMailCli, {
+              listMessages: () => Effect.die("Unexpected mail query"),
               getMailboxProfile: () => Effect.never,
               listIds: () =>
                 Deferred.succeed(entered, undefined).pipe(

@@ -1,7 +1,6 @@
-import { Effect, Schema } from "effect";
+import { ContextSession } from "../context/session.js";
+import { Effect, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
-import { defineContext } from "../context/definition.js";
-import { CollectionCommands } from "../context/queries/commands.js";
 import { ContextRegistry } from "../context/registry.js";
 import { ApplicationError } from "../operations.js";
 import { TaskActor } from "./actor.js";
@@ -9,34 +8,28 @@ import { FollowupTaskInput, TaskDeliveryInput, TaskPath, TaskRecoveryInput } fro
 import { taskActorPath } from "./delivery.js";
 import { taskPathFor } from "./state/admission.js";
 import { TaskSnapshot } from "./state/snapshot.js";
-import { makeTaskQueries } from "./view.js";
+import { queryTasks, TasksQueries } from "./queries.js";
 
-import type { ActorRef } from "@aster/actor";
+import { CommandProcessor, type ActorRef } from "@aster/actor";
 import { CheckTask, Input, RetryTask, StartTask, type TaskCommand } from "./protocol.js";
 
 export type TasksRootCommand = StartTask | CheckTask | RetryTask | Input;
 /** Owns asynchronous Tasks sent to delegate Actors; conversations do not own execution. */
 export const TasksRootActor = ContextActor.define("tasks/Root", {
-  commands: [StartTask, CheckTask, RetryTask, Input, ...CollectionCommands],
-  context: defineContext({
-    state: Schema.Struct({}),
-    message: Schema.Never,
-  }),
+  commands: [StartTask, CheckTask, RetryTask, Input, ...TasksQueries],
 })(
   Effect.gen(function* () {
-    const query = yield* makeTaskQueries();
+    const processor = yield* CommandProcessor.make({ concurrency: 2 });
     const registry = yield* ContextRegistry;
+    yield* ContextSession.make({
+      path: "/tasks",
+      state: Schema.Struct({}),
+      message: Schema.Never,
+      initial: { state: {}, description: "Persistent Tasks" },
+    }).pipe(Effect.orDie);
     return {
-      query,
       started: (actor) =>
         Effect.gen(function* () {
-          if (!registry.get("/tasks"))
-            yield* registry
-              .commit(
-                { path: "/tasks", description: "Persistent Tasks", state: {}, messages: [] },
-                { expectedRevision: 0 },
-              )
-              .pipe(Effect.orDie);
           for (const record of Object.values(registry.snapshot())) {
             if (!Schema.is(TaskPath)(record.path)) continue;
             const state = Schema.decodeUnknownSync(TaskSnapshot)(record.state);
@@ -54,59 +47,69 @@ export const TasksRootActor = ContextActor.define("tasks/Root", {
           cause: signal.cause,
         }),
       receive: (command, actor) =>
-        Effect.gen(function* () {
-          if (command._tag !== "StartTask") {
-            const input = yield* Schema.decodeUnknownEffect(
-              command._tag === "Input" ? FollowupTaskInput : TaskRecoveryInput,
-            )(command.input).pipe(Effect.result);
-            if (input._tag === "Failure")
-              return yield* command.replyTo.tell({
-                _tag: "Rejected",
-                error: new ApplicationError({
-                  kind: "invalid-input",
-                  message: "Invalid Task input",
-                }),
-              });
-            const path = input.success.target;
-            if (!registry.get(path))
-              return yield* command.replyTo.tell({
-                _tag: "Rejected",
-                error: new ApplicationError({ kind: "not-found", message: "Task not found" }),
-              });
-            const runtimePath = taskActorPath(path);
-            const target = yield* actor.select(runtimePath).resolve().pipe(Effect.option);
-            if (target._tag === "None")
-              return yield* command.replyTo.tell({
-                _tag: "Rejected",
-                error: new ApplicationError({
-                  kind: "unavailable",
-                  message: "Task owner is unavailable; no replacement owner was created",
-                }),
-              });
-            return yield* target.value.tell(command);
-          }
-          const decoded = yield* Schema.decodeUnknownEffect(TaskDeliveryInput)(command.input).pipe(
-            Effect.result,
-          );
-          if (
-            decoded._tag === "Failure" ||
-            decoded.success.target !==
-              taskPathFor(decoded.success.source, decoded.success.requestId)
-          )
-            return yield* command.replyTo.tell({
-              _tag: "Rejected",
-              error: new ApplicationError({
-                kind: "invalid-input",
-                message: "Invalid Task command identity",
-              }),
-            });
-          const name = decoded.success.target.slice("/tasks/".length);
-          const child =
-            ((yield* actor.child(name)) as ActorRef<TaskCommand> | undefined) ??
-            (yield* actor.spawn(name, TaskActor).pipe(Effect.orDie));
-          yield* actor.watch(child);
-          yield* child.tell({ ...command, input: decoded.success });
-        }),
+        Match.value(command).pipe(
+          Match.tag("list", "read", (request) =>
+            processor.submit(request, actor, queryTasks(request, actor)),
+          ),
+          Match.tag("Input", "CheckTask", "RetryTask", (command) =>
+            Effect.gen(function* () {
+              const input = yield* Schema.decodeUnknownEffect(
+                command._tag === "Input" ? FollowupTaskInput : TaskRecoveryInput,
+              )(command.input).pipe(Effect.result);
+              if (input._tag === "Failure")
+                return yield* command.replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({
+                    kind: "invalid-input",
+                    message: "Invalid Task input",
+                  }),
+                });
+              const path = input.success.target;
+              if (!registry.get(path))
+                return yield* command.replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({ kind: "not-found", message: "Task not found" }),
+                });
+              const runtimePath = taskActorPath(path);
+              const target = yield* actor.select(runtimePath).resolve().pipe(Effect.option);
+              if (target._tag === "None")
+                return yield* command.replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({
+                    kind: "unavailable",
+                    message: "Task owner is unavailable; no replacement owner was created",
+                  }),
+                });
+              return yield* target.value.tell(command);
+            }),
+          ),
+          Match.tag("StartTask", (command) =>
+            Effect.gen(function* () {
+              const decoded = yield* Schema.decodeUnknownEffect(TaskDeliveryInput)(
+                command.input,
+              ).pipe(Effect.result);
+              if (
+                decoded._tag === "Failure" ||
+                decoded.success.target !==
+                  taskPathFor(decoded.success.source, decoded.success.requestId)
+              )
+                return yield* command.replyTo.tell({
+                  _tag: "Rejected",
+                  error: new ApplicationError({
+                    kind: "invalid-input",
+                    message: "Invalid Task command identity",
+                  }),
+                });
+              const name = decoded.success.target.slice("/tasks/".length);
+              const child =
+                ((yield* actor.child(name)) as ActorRef<TaskCommand> | undefined) ??
+                (yield* actor.spawn(name, TaskActor).pipe(Effect.orDie));
+              yield* actor.watch(child);
+              yield* child.tell({ ...command, input: decoded.success });
+            }),
+          ),
+          Match.exhaustive,
+        ),
     };
   }),
 );

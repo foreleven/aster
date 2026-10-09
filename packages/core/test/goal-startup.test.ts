@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema } from "effect";
 import { TestClock } from "effect/testing";
@@ -44,7 +45,10 @@ for (const fails of [false, true]) {
                       Deferred.doneUnsafe(noticed, Effect.succeed(entry));
                 }),
               ]),
-              Layer.succeed(ContextRegistry, registry),
+              Layer.merge(
+                Layer.succeed(ContextRegistry, registry),
+                Layer.succeed(DurableContext, registry.backend),
+              ),
               Layer.succeed(ExternalAgents, {}),
               goalWorkflowLayer({
                 definitions: ["slow", "fast"].map((slug) => ({ slug, description: slug })),

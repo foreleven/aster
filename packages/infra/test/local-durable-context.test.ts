@@ -1,3 +1,4 @@
+import { makeTestContextRegistryWithBackend } from "@aster/core/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Cause, Deferred, Effect, Exit, Fiber, Schema, Stream } from "effect";
@@ -5,8 +6,6 @@ import {
   ContextCommitError,
   ContextConflict,
   ContextRecoveryError,
-  makeContextRegistryWithBackend,
-  defineContext,
   type ContextSnapshot,
   type StoredContext,
 } from "@aster/core";
@@ -168,14 +167,11 @@ test("the registry validates domain state while a supplied DurableContext owns c
             writes.push(record);
           }),
       });
-      const registry = makeContextRegistryWithBackend(backend);
-      yield* registry.register(
-        initial.path,
-        defineContext({
-          state: Schema.Struct({ value: Schema.Number }),
-          message: Schema.String,
-        }),
-      );
+      const registry = makeTestContextRegistryWithBackend(backend);
+      yield* registry.register(initial.path, {
+        state: Schema.Struct({ value: Schema.Number }),
+        message: Schema.String,
+      });
       yield* registry.commit(
         { ...initial, state: { value: 2, privateField: "not public" } },
         { expectedRevision: 0 },

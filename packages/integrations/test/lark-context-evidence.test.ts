@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
-import { defineContext, GoalScreeningSnapshot, makeGoalIntent, matchGoal } from "@aster/core";
+import { GoalScreeningSnapshot, makeGoalIntent, matchGoal } from "@aster/core";
 import { makeContextRegistry } from "@aster/core/testing";
 import { chatView } from "../src/lark/public-views.js";
 
@@ -10,15 +10,12 @@ test("chat views carry current identity and public evidence into Goal screening"
     Effect.gen(function* () {
       const registry = yield* makeContextRegistry();
       const path = "/lark/im/chats/project";
-      yield* registry.register(
-        path,
-        defineContext({
-          state: Schema.ObjectKeyword,
-          message: Schema.Unknown,
-          view: chatView,
-          changes: "durable-state",
-        }),
-      );
+      yield* registry.register(path, {
+        state: Schema.ObjectKeyword,
+        message: Schema.Unknown,
+        view: chatView,
+        changes: "durable-state" as const,
+      });
       const initial = yield* registry.commit(
         {
           path,

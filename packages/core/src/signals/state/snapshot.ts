@@ -3,7 +3,7 @@ import { SignalTrigger, SignalTime } from "../contracts.js";
 import { Task } from "../../tasks/contracts.js";
 import { type PublicContext } from "../../context/contracts.js";
 import { Schema } from "effect";
-import { contextView } from "../../context/definition.js";
+import { contextView } from "../../context/view.js";
 
 export { SignalTime } from "../contracts.js";
 export const SignalSnapshot = Schema.Struct({

@@ -1,22 +1,23 @@
-import type { ActorContext } from "@aster/actor";
+import { taskQueryData } from "./view.js";
+import { CommandProcessor, type ActorContext } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
-import { Context, Deferred, Effect, Fiber, Layer, Match, Option, Ref, Schema, Scope } from "effect";
+import { Context, Effect, Fiber, Layer, Match, Option, Ref, Schema, Scope } from "effect";
 import { randomUUID } from "node:crypto";
 import { approvalEntries, sendApproval } from "../approvals/actor.js";
 import { ContextActor, contextPath } from "../context/actor.js";
-import { defineContext } from "../context/definition.js";
 import { ContextRegistry } from "../context/registry.js";
 import { CurrentActors } from "../services/actors.js";
 import { deliverTaskFeedback } from "./delivery.js";
 import { TaskExecution } from "./execution/service.js";
 import { TaskCommands, TaskInternal, type TaskCommand } from "./protocol.js";
 import { TaskState } from "./state/model.js";
-import { TaskOutcome, TaskSnapshot, type TaskInput } from "./state/snapshot.js";
+import { TaskOutcome, type TaskInput } from "./state/snapshot.js";
 
 type Owner = ActorContext<TaskCommand>;
 const makeHandlers = Effect.gen(function* () {
   const scope = yield* Effect.scope;
   const state = yield* TaskState;
+  const queries = yield* CommandProcessor.make({ concurrency: 2 });
   const execution = yield* TaskExecution;
   const messages = yield* AgentConversations;
   const registry = yield* ContextRegistry;
@@ -108,6 +109,17 @@ const makeHandlers = Effect.gen(function* () {
     }),
     receive: (command: TaskCommand, owner: Owner) =>
       Match.value(command).pipe(
+        Match.tag("GetTaskDetails", (command) =>
+          Effect.gen(function* () {
+            // Capture mailbox-owned state before reading its selected Pi evidence in a request scope.
+            const snapshot = yield* state.snapshot;
+            yield* queries.submit(
+              command,
+              owner,
+              taskQueryData(state.path, snapshot, command.detail),
+            );
+          }),
+        ),
         Match.tag("StartTask", ({ input, replyTo }) =>
           receiveInput(owner, { _tag: "Initial", input }, replyTo),
         ),
@@ -187,29 +199,25 @@ const makeHandlers = Effect.gen(function* () {
 export const TaskActor = ContextActor.define("tasks/Actor", {
   commands: TaskCommands,
   internal: TaskInternal,
-  context: defineContext({ state: TaskSnapshot, message: Schema.Never }),
-})(
+})((owner) =>
   Effect.gen(function* () {
     const scope = yield* Effect.scope;
-    const initialized = yield* Deferred.make<Effect.Success<typeof makeHandlers>>();
+
+    const path = contextPath(owner);
+    const services = yield* Layer.buildWithScope(
+      Layer.merge(TaskState.layer(path), TaskExecution.layer(path)),
+      scope,
+    ).pipe(Effect.provideService(CurrentActors, owner));
+    const handlers = yield* makeHandlers.pipe(
+      Effect.provideService(TaskState, Context.get(services, TaskState)),
+      Effect.provideService(TaskExecution, Context.get(services, TaskExecution)),
+      Effect.provideService(Scope.Scope, scope),
+    );
+
     return {
-      started: (owner) =>
-        Effect.gen(function* () {
-          const path = contextPath(owner);
-          const services = yield* Layer.buildWithScope(
-            Layer.merge(TaskState.layer(path), TaskExecution.layer(path)),
-            scope,
-          ).pipe(Effect.provideService(CurrentActors, owner));
-          const handlers = yield* makeHandlers.pipe(
-            Effect.provideService(TaskState, Context.get(services, TaskState)),
-            Effect.provideService(TaskExecution, Context.get(services, TaskExecution)),
-            Effect.provideService(Scope.Scope, scope),
-          );
-          yield* Deferred.succeed(initialized, handlers);
-          yield* handlers.restore(owner);
-        }),
-      receive: (command, owner) =>
-        Effect.flatMap(Deferred.await(initialized), (handlers) => handlers.receive(command, owner)),
+      started: (owner) => handlers.restore(owner),
+
+      receive: (command, owner) => handlers.receive(command, owner),
     };
   }),
 );

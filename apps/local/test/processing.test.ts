@@ -1,3 +1,10 @@
+import { DurableContext } from "@aster/core";
+import { Schema } from "effect";
+import { TaskSnapshot } from "@aster/core";
+import { AccountProfile } from "@aster/integrations";
+import { MailboxProfile } from "@aster/integrations";
+import { EmailData } from "@aster/integrations";
+import { emailView } from "@aster/integrations";
 import {
   ApprovalQueueActor,
   ContextCaptures,
@@ -5,18 +12,11 @@ import {
   ExternalAgents,
   MemoryActor,
   MemoryBackend,
-  TaskActor,
   type ContextInput,
   type ContextCapture as MemoryCapture,
 } from "@aster/core";
 import { makeContextRegistry, taskCapture } from "@aster/core/testing";
-import {
-  larkCaptures,
-  larkContextViews,
-  LarkEmailChannelActor,
-  LarkMailMessageActor,
-  LarkRootActor,
-} from "@aster/integrations";
+import { larkCaptures, larkContextViews } from "@aster/integrations";
 import { testConversations } from "./conversation-fixtures.js";
 
 import { ActorSystem } from "@aster/actor";
@@ -58,13 +58,30 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         const conversations = testConversations();
         yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
 
-        yield* registry.register("/lark", LarkRootActor.contextDefinition);
-        yield* registry.register("/lark/mail", LarkEmailChannelActor.contextDefinition);
-        yield* registry.register("/lark/mail/me/test", LarkMailMessageActor.contextDefinition);
+        yield* registry.register("/lark", {
+          state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
+          message: Schema.Never,
+        });
+        yield* registry.register("/lark/mail", {
+          state: Schema.Struct({
+            mailbox: Schema.String,
+            profile: Schema.optional(MailboxProfile),
+          }),
+          message: Schema.Never,
+        });
+        yield* registry.register("/lark/mail/me/test", {
+          state: EmailData,
+          message: Schema.Never,
+          changes: "durable-state",
+          view: emailView,
+        });
         const captures: MemoryCapture[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
             Layer.succeed(ContextCaptures, capturesPolicy),
             Layer.succeed(ExternalAgents, {}),
             Layer.succeed(MemoryBackend, {
@@ -112,7 +129,7 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
           remainingAgentTurns: 3,
         };
         const entry = yield* conversations.append(taskPath, "task", "task.admission", input);
-        yield* registry.register(taskPath, TaskActor.contextDefinition);
+        yield* registry.register(taskPath, { state: TaskSnapshot, message: Schema.Never });
         yield* registry.commit(
           {
             path: taskPath,
@@ -168,13 +185,30 @@ test("discovered account and mailbox identities use separate sessions; no captur
         const conversations = testConversations();
         yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
 
-        yield* registry.register("/lark", LarkRootActor.contextDefinition);
-        yield* registry.register("/lark/mail", LarkEmailChannelActor.contextDefinition);
-        yield* registry.register("/lark/mail/me/test", LarkMailMessageActor.contextDefinition);
+        yield* registry.register("/lark", {
+          state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
+          message: Schema.Never,
+        });
+        yield* registry.register("/lark/mail", {
+          state: Schema.Struct({
+            mailbox: Schema.String,
+            profile: Schema.optional(MailboxProfile),
+          }),
+          message: Schema.Never,
+        });
+        yield* registry.register("/lark/mail/me/test", {
+          state: EmailData,
+          message: Schema.Never,
+          changes: "durable-state",
+          view: emailView,
+        });
         const captures: MemoryCapture[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
             Layer.succeed(ContextCaptures, capturesPolicy),
             Layer.succeed(MemoryBackend, {
               description: "Memory",

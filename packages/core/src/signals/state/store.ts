@@ -4,9 +4,9 @@ import { RemainingAgentTurns, TaskMessage } from "../../tasks/contracts.js";
 import { CommandReceipt } from "../../operations.js";
 
 import { Effect, Match, Ref, Schema } from "effect";
-import { ContextRegistry } from "../../context/registry.js";
+import { ContextSession } from "../../context/session.js";
 import { SignalChangeInput, SignalReactionInput } from "../protocol.js";
-import { SignalSnapshot, SignalTime } from "./snapshot.js";
+import { SignalSnapshot, SignalTime, signalView } from "./snapshot.js";
 
 const { sourceContext: _evidence, ...reactionIdentity } = SignalReactionInput.fields;
 const SignalReceipt = Schema.TaggedUnion({
@@ -121,19 +121,23 @@ export const readSignalHistory: (
 
 /** The mailbox writes Pi first, then its Context projection, then the committed Ref. */
 export const makeSignalStore = Effect.fn("SignalStore.make")(function* (path: string) {
-  const registry = yield* ContextRegistry;
+  const session = yield* ContextSession.make({
+    path,
+    state: SignalSnapshot,
+    message: Schema.Never,
+    view: signalView,
+  }).pipe(Effect.orDie);
   const messages = yield* AgentConversations;
-  const record = registry.get(path);
+  const record = yield* session.current.pipe(Effect.orDie);
   if (record) Schema.decodeUnknownSync(SignalSnapshot)(record.state);
   const restored = yield* readSignalHistory(messages, path);
   if (record && !restored.snapshot)
     return yield* Effect.die(new Error("Signal journal is missing"));
   const project = Effect.fnUntraced(function* (snapshot: SignalSnapshot) {
-    const current = registry.get(path);
-    yield* registry
-      .commit(
+    const current = yield* session.current.pipe(Effect.orDie);
+    yield* session
+      .set(
         {
-          path,
           description: current?.description ?? `Signal: ${path.split("/").at(-1)}`,
           state: snapshot,
           messages: [],
@@ -157,7 +161,7 @@ export const makeSignalStore = Effect.fn("SignalStore.make")(function* (path: st
     if (event._tag !== "DeliveryChanged") yield* project(next.snapshot!);
     yield* Ref.set(ref, next);
   }, Effect.uninterruptible);
-  return { read, append };
+  return { read, append, current: session.current.pipe(Effect.orDie) };
 });
 
 /** Only a durably started delivery may authorize Task admission, including after deletion. */

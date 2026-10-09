@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import { Data, Effect, Option, Ref, Schema, Semaphore } from "effect";
-import { defineContext, type ContextDefinition } from "./definition.js";
+import type { ContextViewPolicy } from "./view.js";
+import { DurableContext } from "./store.js";
+import { ContextPath, type ContextInput } from "./model.js";
 import { ContextRegistry } from "./registry.js";
 import { ContextConflict, ContextValidationError } from "./errors.js";
 import { ContextSessionLayout } from "./session-storage.js";
@@ -10,11 +12,20 @@ export class ContextSessionClosed extends Data.TaggedError("ContextSessionClosed
   readonly path: string;
 }> {}
 
-export interface ContextSessionDefinition<S extends object, M> extends ContextDefinition {
-  readonly stateSchema: Schema.ConstraintDecoder<S>;
-  readonly messageSchema: Schema.ConstraintDecoder<M>;
-  readonly messageKey: (message: M) => string;
-  readonly compareMessages: (left: M, right: M) => number;
+export interface ContextSessionOptions<S extends object, M> {
+  readonly path: string;
+  readonly state: Schema.ConstraintDecoder<S>;
+  readonly message: Schema.ConstraintDecoder<M>;
+  readonly messageKey?: (message: M) => string;
+  readonly compareMessages?: (left: M, right: M) => number;
+  readonly view?: ContextViewPolicy;
+  readonly changes?: "none" | "durable-state";
+  readonly initial?: {
+    readonly state: S;
+    readonly messages?: readonly M[];
+    readonly description: string;
+  };
+  readonly persistence?: ContextSessionLayout;
 }
 
 export interface ContextSessionSnapshot<S, M> {
@@ -34,31 +45,33 @@ export interface ContextSessionChange<S, M> {
 
 type CommitOptions = Partial<ContextCommitOptions> & { readonly description?: string };
 
-const define = <S extends object, M>(
-  options: Parameters<typeof defineContext<S, M>>[0] & {
-    readonly messageKey: (message: M) => string;
-    readonly compareMessages: (left: M, right: M) => number;
-  },
-): ContextSessionDefinition<S, M> => ({
-  ...defineContext(options),
-  stateSchema: options.state,
-  messageSchema: options.message,
-  messageKey: options.messageKey,
-  compareMessages: options.compareMessages,
-});
-
-const open = Effect.fn("ContextSession.open")(function* <S extends object, M>(options: {
-  readonly path: string;
-  readonly definition: ContextSessionDefinition<S, M>;
-  readonly initial: {
-    readonly state: S;
-    readonly messages: readonly M[];
-    readonly description: string;
-  };
-  readonly persistence?: ContextSessionLayout;
-}) {
-  const { path, definition } = options;
+/** Acquire the Actor's durable documents, validate recovery, and bootstrap only new owners. */
+const make = Effect.fn("ContextSession.make")(function* <S extends object, M>(
+  options: ContextSessionOptions<S, M>,
+) {
+  const { path } = options;
+  yield* Schema.decodeUnknownEffect(ContextPath)(path).pipe(
+    Effect.mapError((cause) => new ContextValidationError({ path, cause })),
+  );
+  const backend = yield* DurableContext;
   const registry = yield* ContextRegistry;
+  const messageKey = options.messageKey ?? ((message: M) => JSON.stringify(message));
+  const compareMessages = options.compareMessages ?? (() => 0);
+  const index = (messages: readonly M[]) => {
+    const entries = messages.map((message) => [messageKey(message), message] as const);
+    if (
+      entries.some(([key]) => !key) ||
+      new Set(entries.map(([key]) => key)).size !== entries.length
+    )
+      throw new Error("Messages require unique nonempty identities");
+    return Object.fromEntries(entries);
+  };
+  const validate = (record: ContextInput): ContextInput => {
+    const state = Schema.decodeUnknownSync(options.state)(record.state);
+    const messages = Schema.decodeUnknownSync(Schema.Array(options.message))(record.messages);
+    index(messages);
+    return { path: record.path, description: record.description, state, messages };
+  };
   const partition = yield* Schema.decodeUnknownEffect(ContextSessionLayout)(
     options.persistence ?? { layout: "single" },
   ).pipe(Effect.mapError((cause) => new ContextValidationError({ path, cause })));
@@ -76,30 +89,22 @@ const open = Effect.fn("ContextSession.open")(function* <S extends object, M>(op
         cause: new Error("Daily Session requires a valid date and a date-qualified Context path"),
       });
   }
-  yield* registry.acquireSession(path, {
+  yield* backend.acquireSession(path, {
     partition,
-    messageKey: (message) =>
-      definition.messageKey(Schema.decodeUnknownSync(definition.messageSchema)(message)),
+    messageKey: (message) => messageKey(Schema.decodeUnknownSync(options.message)(message)),
   });
-  yield* registry.register(path, definition);
+  yield* backend.recover(path, validate);
+  yield* registry.views.set(path, options.view);
+
   const gate = yield* Semaphore.make(1);
   const closed = yield* Ref.make(false);
   yield* Effect.addFinalizer(() => gate.withPermit(Ref.set(closed, true)));
   const available = Effect.gen(function* () {
     if (yield* Ref.get(closed)) return yield* new ContextSessionClosed({ path });
   });
-  const index = (messages: readonly M[]) => {
-    const entries = messages.map((message) => [definition.messageKey(message), message] as const);
-    if (
-      entries.some(([key]) => !key) ||
-      new Set(entries.map(([key]) => key)).size !== entries.length
-    )
-      throw new Error("Messages require unique nonempty identities");
-    return Object.fromEntries(entries);
-  };
   const read = Effect.fnUntraced(function* () {
     yield* available;
-    const stored = registry.get(path);
+    const stored = backend.get(path);
     if (!stored)
       return yield* new ContextValidationError({
         path,
@@ -107,27 +112,52 @@ const open = Effect.fn("ContextSession.open")(function* <S extends object, M>(op
       });
     return yield* Effect.try({
       try: (): ContextSessionSnapshot<S, M> => ({
-        state: Schema.decodeUnknownSync(definition.stateSchema)(stored.state),
-        messages: index(
-          Schema.decodeUnknownSync(Schema.Array(definition.messageSchema))(stored.messages),
-        ),
+        state: Schema.decodeUnknownSync(options.state)(stored.state),
+        messages: index(Schema.decodeUnknownSync(Schema.Array(options.message))(stored.messages)),
         revision: stored.revision,
         description: stored.description,
       }),
       catch: (cause) => new ContextValidationError({ path, cause }),
     });
   });
-  if (!registry.get(path)) {
-    yield* Effect.try({
-      try: () => index(options.initial.messages),
+  const set = Effect.fn("ContextSession.set")(function* (
+    value: { readonly state: S; readonly messages?: readonly M[]; readonly description?: string },
+    commitOptions: Partial<ContextCommitOptions> = {},
+  ) {
+    yield* available;
+    const previous = backend.get(path);
+    const validated = yield* Effect.try({
+      try: () => {
+        const state = Schema.decodeUnknownSync(options.state)(value.state);
+        const messages = [
+          ...Schema.decodeUnknownSync(Schema.Array(options.message))(
+            value.messages ?? previous?.messages ?? [],
+          ),
+        ].sort(compareMessages);
+        index(messages);
+        return {
+          path,
+          state,
+          messages,
+          description: value.description ?? previous?.description ?? path,
+        };
+      },
       catch: (cause) => new ContextValidationError({ path, cause }),
     });
-    yield* registry.commit(
-      {
-        path,
-        ...options.initial,
-        messages: [...options.initial.messages].sort(definition.compareMessages),
-      },
+    const expectedRevision = commitOptions.expectedRevision ?? previous?.revision ?? 0;
+    const event =
+      options.changes === "durable-state" && commitOptions.mode !== "bootstrap"
+        ? registry.views.project({ ...validated, revision: expectedRevision + 1 })
+        : undefined;
+    return yield* backend.commit(validated, {
+      ...commitOptions,
+      expectedRevision,
+      ...(event ? { event } : {}),
+    });
+  });
+  if (!backend.get(path) && options.initial) {
+    yield* set(
+      { ...options.initial, messages: [...(options.initial.messages ?? [])].sort(compareMessages) },
       { expectedRevision: 0, mode: "bootstrap" },
     );
   }
@@ -151,26 +181,25 @@ const open = Effect.fn("ContextSession.open")(function* <S extends object, M>(op
         const next = change(structuredClone(current));
         const messages = yield* Effect.try({
           try: () => {
-            const upsert = Schema.decodeUnknownSync(Schema.Array(definition.messageSchema))(
+            const upsert = Schema.decodeUnknownSync(Schema.Array(options.message))(
               next.messages?.upsert ?? [],
             );
-            const remove = Schema.decodeUnknownSync(Schema.Array(definition.messageSchema))(
+            const remove = Schema.decodeUnknownSync(Schema.Array(options.message))(
               next.messages?.removeUnchanged ?? [],
             );
             index([...upsert, ...remove]);
             const values = new Map(Object.entries(current.messages));
-            for (const message of upsert) values.set(definition.messageKey(message), message);
+            for (const message of upsert) values.set(messageKey(message), message);
             for (const message of remove) {
-              const id = definition.messageKey(message);
+              const id = messageKey(message);
               if (isDeepStrictEqual(values.get(id), message)) values.delete(id);
             }
-            return [...values.values()].sort(definition.compareMessages);
+            return [...values.values()].sort(compareMessages);
           },
           catch: (cause) => new ContextValidationError({ path, cause }),
         });
-        yield* registry.commit(
+        yield* set(
           {
-            path,
             description: commitOptions.description ?? current.description,
             state: next.state ?? current.state,
             messages,
@@ -183,7 +212,11 @@ const open = Effect.fn("ContextSession.open")(function* <S extends object, M>(op
   });
   const snapshot = gate.withPermit(read());
   return {
+    path,
     snapshot,
+    current: gate.withPermit(available.pipe(Effect.map(() => backend.get(path)))),
+    set: (value: Parameters<typeof set>[0], commitOptions?: Partial<ContextCommitOptions>) =>
+      gate.withPermit(set(value, commitOptions).pipe(Effect.uninterruptible)),
     commit,
     state: {
       get: snapshot.pipe(Effect.map((value) => value.state)),
@@ -200,7 +233,7 @@ const open = Effect.fn("ContextSession.open")(function* <S extends object, M>(op
           ),
         ),
       list: snapshot.pipe(
-        Effect.map((value) => Object.values(value.messages).sort(definition.compareMessages)),
+        Effect.map((value) => Object.values(value.messages).sort(compareMessages)),
       ),
       upsert: (messages: readonly M[], options?: CommitOptions) =>
         commit(() => ({ messages: { upsert: messages } }), options),
@@ -210,4 +243,6 @@ const open = Effect.fn("ContextSession.open")(function* <S extends object, M>(op
   };
 });
 
-export const ContextSession = { define, open };
+export const ContextSession = { make };
+
+export type ContextSession<S extends object, M> = Effect.Success<ReturnType<typeof make<S, M>>>;

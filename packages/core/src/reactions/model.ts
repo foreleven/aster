@@ -1,8 +1,10 @@
-import { Context, Effect, Layer, Option, Ref, Schema, Match } from "effect";
+import { Context, Effect, Layer, Option, Schema, Match } from "effect";
 import { ApplicationError } from "../operations.js";
 import { type RecoveryInput, type RecoveryReceipt } from "./contracts.js";
 import { isDeepStrictEqual } from "node:util";
 import { ContextRegistry } from "../context/registry.js";
+import { ContextSession } from "../context/session.js";
+import { reactionView } from "./inspection.js";
 import type { ContextEvent } from "../context/model.js";
 import { reactionTargets, type ReactionFailure } from "./policy.js";
 import { GoalSettings } from "../config/settings.js";
@@ -64,14 +66,18 @@ const path = "/system-one";
 const makeReactionState = Effect.gen(function* () {
   const registry = yield* ContextRegistry;
   const settings = yield* GoalSettings;
-  const snapshot = yield* Ref.make<ReactionSnapshot | undefined>(undefined);
-  const read = Ref.get(snapshot).pipe(
-    Effect.flatMap((state) =>
-      state ? Effect.succeed(state) : Effect.die(new Error("Reaction state not restored")),
-    ),
-  );
+  const session = yield* ContextSession.make({
+    path,
+    state: ReactionSnapshot,
+    message: Schema.Never,
+    view: reactionView,
+    initial: {
+      description: "Context reaction processing",
+      state: { work: [], sourceRevisions: {}, recoveryReceipts: [] },
+    },
+  }).pipe(Effect.orDie);
+  const read = session.state.get.pipe(Effect.orDie);
   const save = Effect.fn("Reactions.commit")(function* (next: ReactionSnapshot) {
-    const current = registry.get(path)!;
     // Keep unfinished work and bounded diagnostics; watermarks prevent replay of pruned events.
     const completed = next.work.filter((work) => workStatus(work) === "completed").slice(-100);
     const work = next.work.filter(
@@ -83,10 +89,7 @@ const makeReactionState = Effect.gen(function* () {
       work,
       recoveryReceipts: next.recoveryReceipts.filter((entry) => ids.has(entry.input.workId)),
     };
-    yield* registry
-      .commit({ ...current, state }, { expectedRevision: current.revision })
-      .pipe(Effect.orDie);
-    yield* Ref.set(snapshot, state);
+    yield* session.set({ state }).pipe(Effect.orDie);
   }, Effect.uninterruptible);
   const update = Effect.fnUntraced(function* (id: string, f: (work: ReactionWork) => ReactionWork) {
     const current = yield* read;
@@ -120,22 +123,6 @@ const makeReactionState = Effect.gen(function* () {
     read,
     ingest,
     restore: Effect.gen(function* () {
-      if (!registry.get(path))
-        yield* registry
-          .commit(
-            {
-              path,
-              description: "Context reaction processing",
-              state: { work: [], sourceRevisions: {}, recoveryReceipts: [] },
-              messages: [],
-            },
-            { expectedRevision: 0 },
-          )
-          .pipe(Effect.orDie);
-      yield* Ref.set(
-        snapshot,
-        Schema.decodeUnknownSync(ReactionSnapshot)(registry.get(path)!.state),
-      );
       const current = yield* read;
       if (current.work.some((work) => deliveriesOf(work).some((d) => d.status === "sending")))
         yield* save({
@@ -250,7 +237,7 @@ const makeReactionState = Effect.gen(function* () {
       const current = yield* read;
       const replay = yield* recoveryReplay(
         input,
-        registry.get(path)!.revision,
+        (yield* session.snapshot.pipe(Effect.orDie)).revision,
         current.recoveryReceipts,
       );
       if (Option.isSome(replay)) return replay.value;

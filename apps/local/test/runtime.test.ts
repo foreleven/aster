@@ -4,12 +4,12 @@ import {
   AsterRuntime,
   ConfigLocation,
   ContextActor,
+  ContextSession,
   ContextCaptures,
   contextPath,
   ContextQueries,
   ContextRegistry,
   contextView,
-  defineContext,
   defineIntegration,
   DurableContext,
   ExternalAgents,
@@ -26,27 +26,16 @@ import { test } from "node:test";
 
 const Source = ContextActor.define("test/Source", {
   commands: [Schema.TaggedStruct("Ping", {})],
-  context: defineContext({
-    view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
-    state: Schema.Struct({ value: Schema.Number }),
-    message: Schema.Never,
-  }),
-})(
+})((actor) =>
   Effect.gen(function* () {
-    const registry = yield* ContextRegistry;
-    return {
-      started: (actor) =>
-        registry.commit(
-          {
-            path: contextPath(actor),
-            description: "Source",
-            state: { value: 1 },
-            messages: [],
-          },
-          { expectedRevision: registry.get(contextPath(actor))?.revision ?? 0 },
-        ),
-      receive: () => Effect.void,
-    };
+    yield* ContextSession.make({
+      path: contextPath(actor),
+      state: Schema.Struct({ value: Schema.Number }),
+      message: Schema.Never,
+      view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
+      initial: { description: "Source", state: { value: 1 } },
+    }).pipe(Effect.orDie);
+    return { receive: () => Effect.void };
   }),
 );
 
@@ -71,7 +60,9 @@ const sourceLayer = (
         defineIntegration({
           name,
           phase: "source",
-          services: Context.make(ContextRegistry, registry),
+          services: Context.make(ContextRegistry, registry).pipe(
+            Context.add(DurableContext, yield* DurableContext),
+          ),
           activate: (system) =>
             Effect.gen(function* () {
               events.push(`start:${name}`);
@@ -410,7 +401,7 @@ test("runtime owns Apps activation and exposes query commands after readiness", 
           command: "search",
           args: { query: "Sanya" },
         });
-        assert.deepEqual(result.data, [{ city: "Sanya" }]);
+        assert.deepEqual(result, [{ city: "Sanya" }]);
         assert.equal(calls, 1);
       }),
     ).pipe(

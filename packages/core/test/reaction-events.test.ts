@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
-import { contextView, defineContext, type StoredContext } from "../src/index.js";
+import { contextView, type StoredContext } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
-const definition = defineContext({
+const definition = {
   state: Schema.Struct({ summary: Schema.String, token: Schema.String }),
   message: Schema.String,
-  changes: "durable-state",
+  changes: "durable-state" as const,
   view: contextView({ state: Schema.Struct({ summary: Schema.String }), message: Schema.String }),
-});
+};
 const initial = {
   path: "/source",
   description: "Source",

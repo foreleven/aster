@@ -1,3 +1,5 @@
+import type { TestContextRegistry } from "@aster/core/testing";
+import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema, Stream } from "effect";
@@ -24,14 +26,17 @@ const TerminationLog = Schema.Struct({
 });
 
 const taskSystem = (
-  registry: ContextRegistry["Service"],
+  registry: TestContextRegistry,
   history: AgentConversations["Service"],
   clock: Clock.Clock,
 ) =>
   ActorSystem.make().pipe(
     ActorSystem.provide(
       ContextQueries.layer,
-      Layer.succeed(ContextRegistry, registry),
+      Layer.merge(
+        Layer.succeed(ContextRegistry, registry),
+        Layer.succeed(DurableContext, registry.backend),
+      ),
       Layer.succeed(AgentConversations, history),
       Layer.succeed(ExternalAgents, {}),
       Layer.succeed(GoalSettings, { definitions: [], reasoning: { model: "test" } }),

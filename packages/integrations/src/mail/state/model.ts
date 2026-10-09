@@ -1,51 +1,38 @@
-import { ContextRegistry } from "@aster/core";
-import { Context, DateTime, Effect, Layer, Schema } from "effect";
+import { mailboxView } from "../contexts.js";
+import { ContextSession } from "@aster/core";
+import { DateTime, Effect, Schema } from "effect";
 import { MailboxSnapshot } from "./snapshot.js";
 import { mailDay } from "../dates.js";
 import type { Mailbox, MailBatch, MailboxWindow } from "../model.js";
 import type { MailFailureDetails } from "../errors.js";
 
-const makeState = Effect.fn("MailboxState.make")(function* (path: string, mailbox: Mailbox) {
-  const registry = yield* ContextRegistry;
+export const makeMailboxState = Effect.fn("MailboxState.make")(function* (
+  path: string,
+  mailbox: Mailbox,
+) {
   const timeZone = mailbox.timeZone ?? "Asia/Shanghai";
-  const snapshot = Effect.suspend(() =>
-    Schema.decodeUnknownEffect(MailboxSnapshot)(registry.get(path)!.state).pipe(Effect.orDie),
-  );
-  // All callers are mailbox handlers. Preserve the revision used to calculate each transition.
-  const update = Effect.fnUntraced(function* (change: (state: MailboxSnapshot) => MailboxSnapshot) {
-    const record = registry.get(path)!;
-    const state = yield* Schema.decodeUnknownEffect(MailboxSnapshot)(record.state).pipe(
-      Effect.orDie,
-    );
-    yield* registry
-      .commit(
-        { ...record, state: change(state) },
-        { expectedRevision: record.revision, mode: "bootstrap" },
-      )
-      .pipe(Effect.orDie);
-  });
   const now = yield* DateTime.now;
-  const record = registry.get(path);
-  if (!record)
-    yield* registry
-      .commit(
-        {
-          path,
-          description: `Mailbox ${mailbox.id}. List messages by day or read a selected email.`,
-          messages: [],
-          state: {
-            timeZone,
-            dateBasis: mailbox.protocol === "pop3" ? "sent" : "received",
-            startedAt: DateTime.formatIsoOffset(DateTime.setZoneNamedUnsafe(now, timeZone)),
-            today: { date: DateTime.formatIsoDate(mailDay(now, timeZone)), emails: [] },
-            status: "syncing",
-            undatedObserved: 0,
-          },
-        },
-        { expectedRevision: 0, mode: "bootstrap" },
-      )
-      .pipe(Effect.orDie);
-  else yield* update((state) => ({ ...state, status: "syncing" }));
+  const session = yield* ContextSession.make({
+    path,
+    state: MailboxSnapshot,
+    message: Schema.Never,
+    view: mailboxView,
+    initial: {
+      description: `Mailbox ${mailbox.id}. List messages by day or read a selected email.`,
+      state: {
+        timeZone,
+        dateBasis: mailbox.protocol === "pop3" ? "sent" : "received",
+        startedAt: DateTime.formatIsoOffset(DateTime.setZoneNamedUnsafe(now, timeZone)),
+        today: { date: DateTime.formatIsoDate(mailDay(now, timeZone)), emails: [] },
+        status: "syncing",
+        undatedObserved: 0,
+      },
+    },
+  }).pipe(Effect.orDie);
+  const snapshot = session.state.get.pipe(Effect.orDie);
+  const update = (change: (state: MailboxSnapshot) => MailboxSnapshot) =>
+    session.state.update(change, { mode: "bootstrap" }).pipe(Effect.orDie, Effect.asVoid);
+  yield* update((state) => ({ ...state, status: "syncing" }));
   return {
     snapshot,
     baseline: (known: readonly string[]) =>
@@ -120,11 +107,3 @@ const makeState = Effect.fn("MailboxState.make")(function* (path: string, mailbo
       update((state) => ({ ...state, status: "error", lastFailure })),
   };
 });
-
-export class MailboxState extends Context.Service<
-  MailboxState,
-  Effect.Success<ReturnType<typeof makeState>>
->()("mail/State") {
-  static readonly layer = (path: string, mailbox: Mailbox) =>
-    Layer.effect(MailboxState, makeState(path, mailbox));
-}

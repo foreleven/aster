@@ -1,3 +1,5 @@
+import { DurableContext } from "@aster/core";
+import { GoalSnapshot } from "@aster/core";
 import { Actor, ActorSystem } from "@aster/actor";
 import { AgentRunner } from "@aster/agent/agent";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
@@ -9,9 +11,7 @@ import {
   ContextQueries,
   ContextRegistry,
   contextView,
-  defineContext,
   ExternalAgents,
-  GoalActor,
   GoalSettings,
   GoalsRootActor,
   GoalsRootCommand,
@@ -30,11 +30,11 @@ import { test } from "node:test";
 import { apiServices, rpcRequest, startTestHttp } from "./api-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 
-const definition = defineContext({
+const definition = {
   view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
   state: Schema.Struct({ value: Schema.Number }),
   message: Schema.Unknown,
-});
+};
 const record = {
   path: "/goals/test",
   description: "API test Goal",
@@ -51,7 +51,10 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.succeed(ContextRegistry, registry),
+            Layer.merge(
+              Layer.succeed(ContextRegistry, registry),
+              Layer.succeed(DurableContext, registry.backend),
+            ),
             Layer.succeed(GoalSettings, {
               definitions: [{ slug: "personal", description: "Assistant" }],
               reasoning: { model: "test" },
@@ -114,25 +117,22 @@ test("ListContexts encodes cleared optional fields in public state and nested me
   const registry = await Effect.runPromise(makeContextRegistry());
   const path = "/goals/cleared";
   await Effect.runPromise(
-    registry.register(
-      path,
-      defineContext({
-        view: contextView({
-          state: Schema.Struct({
-            lastError: Schema.optional(Schema.String),
-            nested: Schema.Struct({ active: Schema.Boolean }),
-          }),
-          message: Schema.Struct({
-            role: Schema.String,
-            content: Schema.Array(
-              Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
-            ),
-          }),
+    registry.register(path, {
+      view: contextView({
+        state: Schema.Struct({
+          lastError: Schema.optional(Schema.String),
+          nested: Schema.Struct({ active: Schema.Boolean }),
         }),
-        state: Schema.Struct({ lastError: Schema.optional(Schema.String), nested: Schema.Unknown }),
-        message: Schema.Unknown,
+        message: Schema.Struct({
+          role: Schema.String,
+          content: Schema.Array(
+            Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
+          ),
+        }),
       }),
-    ),
+      state: Schema.Struct({ lastError: Schema.optional(Schema.String), nested: Schema.Unknown }),
+      message: Schema.Unknown,
+    }),
   );
   await Effect.runPromise(
     registry.commit(
@@ -374,7 +374,9 @@ test("RPC host rejects cross-origin and oversized input; removed endpoints retur
 test("Goal RPC paginates persisted public conversation entries", async () => {
   const registry = await Effect.runPromise(makeContextRegistry());
   const conversations = testConversations();
-  await Effect.runPromise(registry.register("/goals/feed", GoalActor.contextDefinition));
+  await Effect.runPromise(
+    registry.register("/goals/feed", { state: GoalSnapshot, message: Schema.Never }),
+  );
   await Effect.runPromise(
     registry.commit(
       {

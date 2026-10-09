@@ -1,10 +1,9 @@
 import { Command as ActorCommand, type ActorContext } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
-import { defineContext } from "../context/definition.js";
 import { ApplicationError } from "../operations.js";
 import { ApprovalEntry, ApprovalResponse } from "./contracts.js";
-import { ApprovalEvent, ApprovalSnapshot, ApprovalState } from "./state.js";
+import { ApprovalState } from "./state.js";
 export { ApprovalEntry } from "./contracts.js";
 export { approvalEntries } from "./state.js";
 
@@ -55,7 +54,6 @@ export const sendApproval = (
 export const ApprovalQueueActor = ContextActor.define("approvals/Queue", {
   commands: [Revoke, Enqueue, Resolve, Acknowledge],
   internal: Deliver,
-  context: defineContext({ changes: "none", state: ApprovalSnapshot, message: ApprovalEvent }),
 })(
   Effect.gen(function* () {
     const state = yield* ApprovalState;

@@ -1,15 +1,9 @@
 import { isDeepStrictEqual } from "node:util";
-import { ContextSession } from "@aster/core";
-import { Clock, Context, Effect, Layer, Struct } from "effect";
-import { publicChatMessage, type ChatBatch } from "../service/model.js";
+import type { ContextSession } from "@aster/core";
+import { Clock, Effect, Struct } from "effect";
+import { publicChatMessage, ChatMessage, type ChatBatch } from "../service/model.js";
 import { formatDate, dayStart } from "../service/dates.js";
-import {
-  ChatContext,
-  messageFingerprint,
-  type ChatWork,
-  type ChatSnapshot,
-  type SummaryCommit,
-} from "./snapshot.js";
+import { messageFingerprint, type ChatWork, ChatSnapshot, type SummaryCommit } from "./snapshot.js";
 
 const retainReceipts = (state: ChatSnapshot, pending: ReadonlySet<string>): ChatSnapshot => ({
   ...state,
@@ -24,21 +18,14 @@ const retainReceipts = (state: ChatSnapshot, pending: ReadonlySet<string>): Chat
 });
 
 /** The mailbox owns every mutation; model workers receive detached evidence. */
-const makeChatState = Effect.fn("ChatState.make")(function* (path: string) {
-  const id = path.slice(path.lastIndexOf("/") + 1);
-  const session = yield* ContextSession.open({
-    path,
-    definition: ChatContext,
-    initial: {
-      description: `Work Lark conversation: ${id}`,
-      state: { chat: { id, name: "", mode: "", description: "" }, seen: {} },
-      messages: [],
-    },
-  }).pipe(Effect.orDie);
+export const makeChatState = (session: ContextSession<ChatSnapshot, ChatMessage>) => {
+  const { path } = session;
   const work = session.snapshot.pipe(
     Effect.map(({ state, messages }): ChatWork => ({
       ...state,
-      pending: Object.values(messages).sort(ChatContext.compareMessages),
+      pending: Object.values(messages).sort(
+        (a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id),
+      ),
     })),
     Effect.orDie,
   );
@@ -159,10 +146,4 @@ const makeChatState = Effect.fn("ChatState.make")(function* (path: string) {
       return yield* work;
     }),
   };
-});
-export class ChatState extends Context.Service<
-  ChatState,
-  Effect.Success<ReturnType<typeof makeChatState>>
->()("lark/im/ChatState") {
-  static readonly layer = (path: string) => Layer.effect(ChatState, makeChatState(path));
-}
+};

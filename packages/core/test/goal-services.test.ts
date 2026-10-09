@@ -1,3 +1,5 @@
+import type { TestContextRegistry } from "@aster/core/testing";
+import { DurableContext } from "@aster/core";
 import { AgentError, type AssistantMessage } from "@aster/agent";
 import { AgentRunner } from "@aster/agent/agent";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
@@ -8,9 +10,7 @@ import { GoalState } from "../src/goals/state/model.js";
 import { GoalSnapshot } from "../src/goals/state/snapshot.js";
 import {
   ContextRegistry,
-  defineContext,
   ExternalAgents,
-  GoalActor,
   GoalAgent,
   GoalSettings,
   MemoryRecall,
@@ -25,10 +25,11 @@ import { makeHarness } from "./harness-fixtures.js";
 const definition = { slug: "personal", description: "Assist the user" };
 const path = "/goals/personal";
 
-const openGoal = (registry: ContextRegistry["Service"], messages: AgentConversations["Service"]) =>
+const openGoal = (registry: TestContextRegistry, messages: AgentConversations["Service"]) =>
   Layer.build(GoalState.layer(path, definition)).pipe(
     Effect.map((services) => Context.get(services, GoalState)),
     Effect.provideService(ContextRegistry, registry),
+    Effect.provideService(DurableContext, registry.backend),
     Effect.provideService(AgentConversations, messages),
   );
 
@@ -37,7 +38,7 @@ test("GoalState serializes local summary updates with concurrent durable admissi
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        yield* registry.register(path, GoalActor.contextDefinition);
+        yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
         const messages = testConversations();
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -102,7 +103,7 @@ test("GoalState drains an admitted commit into its Ref despite interruption and 
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        yield* registry.register(path, GoalActor.contextDefinition);
+        yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
         const stored = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         const messages = testConversations();
@@ -110,19 +111,22 @@ test("GoalState drains an admitted commit into its Ref despite interruption and 
         const goal = yield* openGoal(
           {
             ...registry,
-            commit: (record, options) =>
-              registry
-                .commit(record, options)
-                .pipe(
-                  Effect.tap(() =>
-                    Schema.decodeUnknownSync(GoalSnapshot)(record.state).summary ===
-                    "Committed finding"
-                      ? Deferred.succeed(stored, undefined).pipe(
-                          Effect.andThen(Deferred.await(release)),
-                        )
-                      : Effect.void,
+            backend: {
+              ...registry.backend,
+              commit: (record, options) =>
+                registry.backend
+                  .commit(record, options)
+                  .pipe(
+                    Effect.tap(() =>
+                      Schema.decodeUnknownSync(GoalSnapshot)(record.state).summary ===
+                      "Committed finding"
+                        ? Deferred.succeed(stored, undefined).pipe(
+                            Effect.andThen(Deferred.await(release)),
+                          )
+                        : Effect.void,
+                    ),
                   ),
-                ),
+            },
           },
           messages,
         ).pipe(Effect.provideService(Scope.Scope, lifetime));
@@ -163,7 +167,7 @@ test("failed Goal persistence leaves the committed Ref unchanged and remains a d
               throw new Error("Injected storage failure");
           },
         });
-        yield* registry.register(path, GoalActor.contextDefinition);
+        yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
         const goal = yield* openGoal(registry, testConversations());
         const result = yield* goal.updateSummary("Uncommitted finding").pipe(Effect.exit);
         assert.ok(Exit.hasDies(result));
@@ -182,7 +186,7 @@ test("Goal task references recover interrupted attachment and reject unrelated T
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        yield* registry.register(path, GoalActor.contextDefinition);
+        yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
         const messages = testConversations();
         const lifetime = yield* Scope.make();
         const goal = yield* openGoal(registry, messages).pipe(
@@ -190,10 +194,7 @@ test("Goal task references recover interrupted attachment and reject unrelated T
         );
         const create = Effect.fnUntraced(function* (id: string, source: string, replyTo: string) {
           const taskPath = taskPathFor(source, id);
-          yield* registry.register(
-            taskPath,
-            defineContext({ state: TaskSnapshot, message: Schema.Never }),
-          );
+          yield* registry.register(taskPath, { state: TaskSnapshot, message: Schema.Never });
           yield* registry.commit(
             {
               path: taskPath,
@@ -250,7 +251,7 @@ test("GoalState persists replies before state settlement and resumes the handoff
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        yield* registry.register(path, GoalActor.contextDefinition);
+        yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
         const messages = testConversations();
         const appended = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
@@ -315,7 +316,7 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        yield* registry.register(path, GoalActor.contextDefinition);
+        yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
         const goal = yield* openGoal(registry, testConversations());
         const message: AssistantMessage = {
           role: "assistant",
@@ -341,6 +342,7 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
             AgentRunner.make(() => Effect.die("Unexpected screening")),
           ),
           Effect.provideService(ContextRegistry, registry),
+          Effect.provideService(DurableContext, registry.backend),
           Effect.provideService(GoalSettings, {
             definitions: [definition],
             reasoning: { model: "test" },

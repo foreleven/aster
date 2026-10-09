@@ -6,12 +6,7 @@ export {
   ApplicationError,
 } from "./operations.js";
 export { ApprovalResponse, InputRequest, PublicApprovalEntry } from "./approvals/contracts.js";
-export {
-  PublicContext,
-  ContextQueryInput,
-  ContextQueryResult,
-  ContextQueryError,
-} from "./context/contracts.js";
+export { PublicContext, ContextQueryInput, ContextQueryError } from "./context/contracts.js";
 export {
   PreparedTask,
   Task,

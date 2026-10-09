@@ -1,19 +1,29 @@
 import { AgentConversations } from "@aster/agent/harness";
 import { ApplicationError } from "../../operations.js";
 import { ContextQueryInput } from "../contracts.js";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Match, Option, Schema } from "effect";
 import { isDeepStrictEqual } from "node:util";
 import type { ContextQueries } from "./routes.js";
 
 const SavedResult = Schema.Struct({ input: ContextQueryInput, text: Schema.String });
-const queryError = (error: { message: string; kind?: string }) =>
-  new ApplicationError({
-    kind:
-      error.kind === "not-found" || error.kind === "conflict" || error.kind === "invalid-input"
-        ? error.kind
-        : "unavailable",
-    message: error.message,
-  });
+const ErrorFields = Schema.Struct({ message: Schema.String, kind: Schema.optional(Schema.String) });
+const queryError = (error: unknown) =>
+  Match.value(error).pipe(
+    Match.when(
+      Schema.is(ErrorFields),
+      ({ message, kind }) =>
+        new ApplicationError({
+          kind:
+            kind === "not-found" || kind === "conflict" || kind === "invalid-input"
+              ? kind
+              : "unavailable",
+          message,
+        }),
+    ),
+    Match.orElse(
+      () => new ApplicationError({ kind: "unavailable", message: "Context query failed" }),
+    ),
+  );
 
 export const textPage = (text: string, offset: number, size: number) => ({
   content: text.slice(offset, offset + size),
@@ -69,8 +79,7 @@ export const queryResults = (
         });
       return { resultId: previous.id, path: saved.input.path, ...textPage(saved.text, 0, 2000) };
     }
-    const result = yield* queries.query(input).pipe(Effect.mapError(queryError));
-    const text = JSON.stringify(result);
+    const text = yield* queries.text(input).pipe(Effect.mapError(queryError));
     if (text.length > 1_000_000)
       return yield* new ApplicationError({
         kind: "invalid-input",

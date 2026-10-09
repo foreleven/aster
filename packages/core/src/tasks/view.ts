@@ -1,6 +1,5 @@
 import { Effect, Match, Option, Schema } from "effect";
-import { contextView } from "../context/definition.js";
-import { makeCollectionQueries } from "../context/queries/commands.js";
+import { contextView } from "../context/view.js";
 import { ContextQueryError } from "../context/queries/routes.js";
 import { publicJson } from "../json.js";
 import { ApplicationError } from "../operations.js";
@@ -19,7 +18,7 @@ const PublicTask = Schema.Struct({
   agent: Schema.String,
   inputs: Schema.Int,
 });
-export const taskView: import("../context/definition.js").ContextViewPolicy = {
+export const taskView: import("../context/view.js").ContextViewPolicy = {
   matches: (path) => /^\/tasks\/[^/]+$/.test(path),
   project: (record) => {
     const canonical = Schema.decodeUnknownOption(TaskSnapshot)(record.state);
@@ -179,52 +178,47 @@ const renderInput = (data: unknown) =>
     Match.exhaustive,
   );
 
-export const makeTaskQueries = Effect.fn("Task.makeQueries")(function* () {
+export const taskQueryData = Effect.fn("Task.queryData")(function* (
+  path: string,
+  state: TaskSnapshot,
+  detail: boolean,
+) {
   const conversations = yield* AgentConversations;
-  return yield* makeCollectionQueries(
-    "/tasks",
-    Effect.fnUntraced(function* (record, detail) {
-      const state = yield* Schema.decodeUnknownEffect(TaskSnapshot)(record.state).pipe(
-        Effect.orDie,
-      );
-      const summary = {
-        path: record.path,
-        status: state.status,
-        goal: state.admission.replyTo,
-        agent: state.admission.agent,
-      };
-      if (!detail) return publicJson(summary);
-      const admission = yield* conversations
-        .get(record.path, state.inputs[0]!.entryId)
-        .pipe(
+  const summary = {
+    path: path,
+    status: state.status,
+    goal: state.admission.replyTo,
+    agent: state.admission.agent,
+  };
+  if (!detail) return publicJson(summary);
+  const admission = yield* conversations
+    .get(path, state.inputs[0]!.entryId)
+    .pipe(
+      Effect.mapError(
+        () => new ContextQueryError({ kind: "unavailable", message: "Task evidence unavailable" }),
+      ),
+    );
+  const input = yield* Schema.decodeUnknownEffect(TaskDeliveryInput)(admission.data).pipe(
+    Effect.orDie,
+  );
+  const outcome =
+    state.outcomeEntryId === undefined
+      ? undefined
+      : yield* conversations.get(path, state.outcomeEntryId).pipe(
           Effect.mapError(
             () =>
-              new ContextQueryError({ kind: "unavailable", message: "Task evidence unavailable" }),
+              new ContextQueryError({
+                kind: "unavailable",
+                message: "Task result unavailable",
+              }),
           ),
         );
-      const input = yield* Schema.decodeUnknownEffect(TaskDeliveryInput)(admission.data).pipe(
-        Effect.orDie,
-      );
-      const outcome =
-        state.outcomeEntryId === undefined
-          ? undefined
-          : yield* conversations.get(record.path, state.outcomeEntryId).pipe(
-              Effect.mapError(
-                () =>
-                  new ContextQueryError({
-                    kind: "unavailable",
-                    message: "Task result unavailable",
-                  }),
-              ),
-            );
-      const result = outcome
-        ? yield* Schema.decodeUnknownEffect(TaskOutcome)(outcome.data).pipe(Effect.orDie)
-        : undefined;
-      return publicJson({
-        ...summary,
-        instructions: input.task.instructions,
-        result: result?.text,
-      });
-    }),
-  );
+  const result = outcome
+    ? yield* Schema.decodeUnknownEffect(TaskOutcome)(outcome.data).pipe(Effect.orDie)
+    : undefined;
+  return publicJson({
+    ...summary,
+    instructions: input.task.instructions,
+    result: result?.text,
+  });
 });

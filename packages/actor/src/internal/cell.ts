@@ -17,6 +17,7 @@ import { randomUUID } from "node:crypto";
 import {
   actorSelectionPath,
   ActorStartupError,
+  ActorSetup,
   type ActorBehavior,
   type ActorContext,
   type ActorRef,
@@ -167,6 +168,31 @@ export class ActorCell {
   private context(): ActorContext<any> {
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- Preserve the actor instance inside generators and getters.
     const cell = this;
+    const scope = cell.instanceScope;
+    const fork = (effect: Effect.Effect<void>, requestScope?: Scope.Scope) =>
+      Effect.uninterruptible(
+        Effect.gen(function* () {
+          if (!scope) return yield* Effect.die(new Error("Actor instance is unavailable"));
+          if (scope.state._tag === "Closed" || requestScope?.state._tag === "Closed")
+            return yield* Effect.forkIn(Effect.void, scope);
+          cell.pendingEffects++;
+          const fiber = yield* Effect.forkIn(
+            Effect.interruptible(effect).pipe(
+              Effect.catchCause((cause) =>
+                Cause.hasInterruptsOnly(cause) ? Effect.void : cell.fail(cause),
+              ),
+              Effect.ensuring(
+                Effect.sync(() => {
+                  cell.pendingEffects--;
+                }),
+              ),
+            ),
+            scope,
+          );
+          if (requestScope) Fiber.runIn(fiber, requestScope);
+          return fiber;
+        }),
+      );
     return {
       select: (path) => cell.system.select(actorSelectionPath(path, cell.path)),
       self: cell.ref,
@@ -202,38 +228,23 @@ export class ActorCell {
           if (milliseconds <= 0) throw new Error("ReceiveTimeout must be positive");
           cell.receiveTimeoutMs = milliseconds;
         }),
+      fork,
       pipeToSelf: (effect, toCommand) =>
-        Effect.gen(function* () {
-          if (cell.instanceScope === undefined)
-            return yield* Effect.die(new Error("Actor instance is unavailable"));
-          // Fork into the Behavior Scope: restart/stop cancels this work before replacement.
-          cell.pendingEffects++;
-          yield* Effect.forkIn(
-            Effect.matchCauseEffect(effect, {
-              onSuccess: (value) => cell.ref.tell(toCommand({ _tag: "Success", value })),
-              onFailure: (cause) => {
-                const expected = Cause.findErrorOption(cause);
-                return !Result.isSuccess(Cause.findDefect(cause)) &&
-                  !Cause.hasInterrupts(cause) &&
-                  Option.isSome(expected)
-                  ? cell.ref.tell(toCommand({ _tag: "Failure", error: expected.value }))
-                  : Cause.hasInterruptsOnly(cause)
-                    ? Effect.void
-                    : cell.fail(cause);
-              },
-            }).pipe(
-              Effect.catchCause((cause) =>
-                Cause.hasInterruptsOnly(cause) ? Effect.void : cell.fail(cause),
-              ),
-              Effect.ensuring(
-                Effect.sync(() => {
-                  cell.pendingEffects--;
-                }),
-              ),
-            ),
-            cell.instanceScope,
-          );
-        }),
+        fork(
+          Effect.matchCauseEffect(effect, {
+            onSuccess: (value) => cell.ref.tell(toCommand({ _tag: "Success", value })),
+            onFailure: (cause) => {
+              const expected = Cause.findErrorOption(cause);
+              return !Result.isSuccess(Cause.findDefect(cause)) &&
+                !Cause.hasInterrupts(cause) &&
+                Option.isSome(expected)
+                ? cell.ref.tell(toCommand({ _tag: "Failure", error: expected.value }))
+                : Cause.hasInterruptsOnly(cause)
+                  ? Effect.void
+                  : cell.fail(cause);
+            },
+          }),
+        ).pipe(Effect.asVoid),
     };
   }
 
@@ -244,7 +255,7 @@ export class ActorCell {
       // Each behavior build forks the system's Layer memo map: shared providers
       // survive, while behavior-local acquisitions close and rebuild on restart.
       const built = yield* Layer.buildWithScope(this.definition.layer, instanceScope).pipe(
-        Effect.provideContext(this.system.services),
+        Effect.provideContext(Context.add(this.system.services, ActorSetup, this.context())),
       );
       const behavior = Context.get(built, this.definition as any) as AnyBehavior;
       this.behavior = behavior;

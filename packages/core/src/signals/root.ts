@@ -1,8 +1,7 @@
-import { type ActorContext, type ActorRef } from "@aster/actor";
+import { ContextSession } from "../context/session.js";
+import { CommandProcessor, type ActorContext, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
-import { defineContext } from "../context/definition.js";
-import { CollectionCommands } from "../context/queries/commands.js";
 import { ContextRegistry } from "../context/registry.js";
 import { ApplicationError } from "../operations.js";
 import { SignalActor } from "./actor.js";
@@ -15,7 +14,7 @@ import {
   SignalRootCommands,
   SignalRootInternal,
 } from "./protocol.js";
-import { makeSignalQueries } from "./queries.js";
+import { listSignals, querySignals, SignalsQueries } from "./queries.js";
 import { SignalSnapshot } from "./state/snapshot.js";
 
 const register = Effect.fnUntraced(function* (
@@ -31,29 +30,22 @@ const register = Effect.fnUntraced(function* (
   return child as ActorRef<SignalCommand>;
 });
 export const SignalRootActor = ContextActor.define("signals/RootActor", {
-  commands: [...SignalRootCommands, ...CollectionCommands],
+  commands: [...SignalRootCommands, ...SignalsQueries],
   internal: SignalRootInternal,
-  context: defineContext({ state: Schema.Struct({}), message: Schema.Never }),
 })(
   Effect.gen(function* () {
-    const query = yield* makeSignalQueries();
+    const processor = yield* CommandProcessor.make({ concurrency: 2 });
     const registry = yield* ContextRegistry;
     const definitions = yield* SignalDefinitions;
+    yield* ContextSession.make({
+      path: "/signals",
+      state: Schema.Struct({}),
+      message: Schema.Never,
+      initial: { state: {}, description: "Context and scheduled Tasks" },
+    }).pipe(Effect.orDie);
     return {
-      query,
       started: (actor) =>
         Effect.gen(function* () {
-          yield* registry
-            .commit(
-              {
-                path: "/signals",
-                description: "Context and scheduled Tasks",
-                state: {},
-                messages: [],
-              },
-              { expectedRevision: registry.get("/signals")?.revision ?? 0 },
-            )
-            .pipe(Effect.orDie);
           const slugs = new Set([
             ...definitions.map((definition) => definition.slug),
             ...Object.keys(registry.snapshot())
@@ -70,24 +62,30 @@ export const SignalRootActor = ContextActor.define("signals/RootActor", {
         }),
       receive: (command, actor) =>
         Match.value(command).pipe(
-          Match.tag("ListByOwner", ({ owner, replyTo }) =>
-            replyTo.tell({
-              _tag: "Success",
-              value: Object.values(registry.reader.snapshot()).filter(
-                (record) =>
-                  /^\/signals\/[^/]+$/.test(record.path) &&
-                  Schema.decodeUnknownSync(SignalSnapshot)(record.state).owner === owner,
+          Match.tag("list", "read", (request) =>
+            processor.submit(request, actor, querySignals(request, actor)),
+          ),
+          Match.tag("ListByOwner", (request) =>
+            processor.submit(
+              request,
+              actor,
+              listSignals(actor).pipe(
+                Effect.map((records) =>
+                  records.filter(
+                    (record) =>
+                      Schema.decodeUnknownSync(SignalSnapshot)(record.state).owner ===
+                      request.owner,
+                  ),
+                ),
+                Effect.mapError(
+                  (error) => new ApplicationError({ kind: "unavailable", message: error.message }),
+                ),
               ),
-            }),
+            ),
           ),
           Match.tag("PauseByOwner", ({ owner, replyTo }) =>
             Effect.gen(function* () {
-              const children = (yield* actor.children()).filter((child) => {
-                const record = registry.get(`/signals/${child.path.split("/").at(-1)}`);
-                return (
-                  record && Schema.decodeUnknownSync(SignalSnapshot)(record.state).owner === owner
-                );
-              });
+              const children = yield* actor.children();
               yield* actor.pipeToSelf(
                 Effect.forEach(
                   children,

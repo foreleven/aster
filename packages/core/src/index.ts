@@ -46,9 +46,8 @@ export * from "./memory/actor.js";
 export * from "./context/queries/routes.js";
 export * from "./goals/agent.js";
 
-export * from "./context/definition.js";
+export * from "./context/view.js";
 
 export * from "./memory/capture.js";
 
-export { ContextListArgs, contextPage } from "./context/queries/commands.js";
 export { ContextCommand, type QueryCommand } from "./context/queries/protocol.js";

@@ -2,6 +2,7 @@ import { Context, Effect, Layer } from "effect";
 import {
   ContextQueries,
   ContextRegistry,
+  DurableContext,
   RuntimeIntegrations,
   defineIntegration,
 } from "@aster/core";
@@ -22,7 +23,12 @@ const installation = Layer.effectDiscard(
       OpenCli,
       ContextQueries,
       ContextRegistry,
-    )(yield* Effect.context<AppsSettings | OpenCli | ContextQueries | ContextRegistry>());
+      DurableContext,
+    )(
+      yield* Effect.context<
+        AppsSettings | OpenCli | ContextQueries | ContextRegistry | DurableContext
+      >(),
+    );
     yield* modules.register(
       defineIntegration({
         name: "apps",

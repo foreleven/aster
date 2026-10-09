@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { ConfigProvider, Effect, Layer, Schema } from "effect";
 import assert from "node:assert/strict";
@@ -109,7 +110,10 @@ test("Goal startup refreshes the entire definition without losing work", async (
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
-              Layer.succeed(ContextRegistry, registry),
+              Layer.merge(
+                Layer.succeed(ContextRegistry, registry),
+                Layer.succeed(DurableContext, registry.backend),
+              ),
 
               Layer.succeed(ExternalAgents, {}),
               goalWorkflowLayer({
@@ -148,6 +152,10 @@ test("Goal startup refreshes the entire definition without losing work", async (
             // Retain completed business progress while refreshing display metadata.
             const message = { role: "user" as const, content: "Keep existing work", timestamp: 1 };
             yield* history.append("/goals/project", "kept", "test.record", message);
+            yield* registry.register(canonical.path, {
+              state: GoalSnapshot,
+              message: Schema.Never,
+            });
             yield* registry.commit(
               {
                 ...canonical,

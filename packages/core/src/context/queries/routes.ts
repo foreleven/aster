@@ -1,20 +1,20 @@
 import { Cause, Context, Effect, Layer, Schema, Scope, Fiber } from "effect";
-import { ContextQueryError, ContextQueryInput, type ContextQueryResult } from "../contracts.js";
-export { ContextQueryError, ContextQueryInput, ContextQueryResult } from "../contracts.js";
+import { ContextQueryError, ContextQueryInput } from "../contracts.js";
+export { ContextQueryError, ContextQueryInput } from "../contracts.js";
 
-type Query = (input: ContextQueryInput) => Effect.Effect<ContextQueryResult, ContextQueryError>;
+type Query = (input: ContextQueryInput) => Effect.Effect<unknown, unknown>;
+interface QueryDefinition {
+  readonly description: string;
+  readonly schema: Schema.Codec<unknown, unknown>;
+  readonly success: Schema.Codec<unknown, unknown>;
+  readonly error: Schema.Codec<unknown, unknown>;
+  readonly text?: (value: unknown) => string;
+}
 export interface ContextQueryDefinition {
   readonly description: string;
-  readonly commands: Readonly<
-    Record<
-      string,
-      {
-        readonly description: string;
-        readonly schema: Schema.ConstraintDecoder<unknown>;
-      }
-    >
-  >;
+  readonly commands: Readonly<Record<string, QueryDefinition>>;
 }
+
 const invalid = (message: string) => new ContextQueryError({ kind: "invalid-input", message });
 const unavailable = () =>
   new ContextQueryError({
@@ -26,6 +26,50 @@ const makeQueries = Effect.sync(() => {
     string,
     { definition: ContextQueryDefinition; query: Query; scope: Scope.Scope }
   >();
+  const run = Effect.fn("ContextQueries.run")(function* <A>(
+    raw: ContextQueryInput,
+    adapt: (
+      work: Effect.Effect<unknown, unknown>,
+      spec: QueryDefinition,
+    ) => Effect.Effect<A, unknown>,
+  ) {
+    const input = yield* Schema.decodeUnknownEffect(ContextQueryInput)(raw).pipe(
+      Effect.mapError(() => invalid("Invalid Context query")),
+    );
+    const route = routes.get(input.path);
+    if (!route) return yield* unavailable();
+    const commands = route.definition.commands;
+    const spec = Object.hasOwn(commands, input.command) ? commands[input.command] : undefined;
+    if (!spec)
+      return yield* invalid(
+        "Unsupported command; use describe_context to inspect supported commands",
+      );
+    yield* Schema.decodeUnknownEffect(spec.schema, { onExcessProperty: "error" })(input.args).pipe(
+      Effect.mapError(() => invalid("Invalid command arguments")),
+    );
+    const work = route.query(input).pipe(
+      Effect.flatMap((value) =>
+        Schema.decodeUnknownEffect(Schema.toType(spec.success))(value).pipe(Effect.orDie),
+      ),
+      Effect.tapError((error) =>
+        Schema.is(ContextQueryError)(error)
+          ? Effect.void
+          : Schema.decodeUnknownEffect(Schema.toType(spec.error))(error).pipe(Effect.orDie),
+      ),
+    );
+    return yield* Effect.acquireUseRelease(
+      adapt(work, spec).pipe(Effect.forkIn(route.scope)),
+      Effect.fnUntraced(function* (fiber) {
+        const exit = yield* Fiber.await(fiber);
+        if (exit._tag === "Success") return exit.value;
+        // Retirement is a route failure, independent of the domain command's error schema.
+        if (route.scope.state._tag === "Closed" && Cause.hasInterruptsOnly(exit.cause))
+          return yield* unavailable();
+        return yield* Effect.failCause(exit.cause);
+      }),
+      Fiber.interrupt,
+    );
+  });
   return {
     register: (path: string, definition: ContextQueryDefinition, query: Query) => {
       return Effect.gen(function* () {
@@ -73,34 +117,34 @@ const makeQueries = Effect.sync(() => {
         })),
       };
     }),
-    query: Effect.fn("ContextQueries.query")(function* (raw: ContextQueryInput) {
-      const input = yield* Schema.decodeUnknownEffect(ContextQueryInput)(raw).pipe(
-        Effect.mapError(() => invalid("Invalid Context query")),
-      );
-      const route = routes.get(input.path);
-      if (!route) return yield* unavailable();
-      const commands = route.definition.commands;
-      const spec = Object.hasOwn(commands, input.command) ? commands[input.command] : undefined;
-      if (!spec)
-        return yield* invalid(
-          "Unsupported command; use describe_context to inspect supported commands",
-        );
-      yield* Schema.decodeUnknownEffect(spec.schema, { onExcessProperty: "error" })(
-        input.args,
-      ).pipe(Effect.mapError(() => invalid("Invalid command arguments")));
-      return yield* Effect.acquireUseRelease(
-        route.query(input).pipe(Effect.forkIn(route.scope)),
-        Effect.fnUntraced(function* (fiber) {
-          const exit = yield* Fiber.await(fiber);
-          if (exit._tag === "Success") return exit.value;
-          // Owner shutdown is a failed remote query; caller cancellation and defects stay intact.
-          if (route.scope.state._tag === "Closed" && Cause.hasInterruptsOnly(exit.cause))
-            return yield* unavailable();
-          return yield* Effect.failCause(exit.cause);
-        }),
-        Fiber.interrupt,
-      );
-    }),
+    /** Dynamic discovery erases types; direct Actor asks retain their declared response. */
+    query: (input: ContextQueryInput) => run(input, (work) => work),
+    text: (input: ContextQueryInput) =>
+      run(input, (work, spec) =>
+        work.pipe(
+          Effect.map((value) =>
+            spec.text
+              ? spec.text(value)
+              : (JSON.stringify(Schema.encodeUnknownSync(spec.success)(value)) ?? ""),
+          ),
+        ),
+      ),
+    /** Only the transport boundary encodes each command's chosen success/error schema. */
+    json: (input: ContextQueryInput) =>
+      run(input, (work, spec) =>
+        work.pipe(
+          Effect.map((value) => Schema.encodeUnknownSync(spec.success)(value) ?? null),
+          Effect.mapError((error) =>
+            Schema.is(ContextQueryError)(error)
+              ? Schema.encodeSync(ContextQueryError)(error)
+              : (Schema.encodeUnknownSync(spec.error)(error) ?? null),
+          ),
+        ),
+      ).pipe(
+        Effect.mapError((error) =>
+          Schema.is(ContextQueryError)(error) ? Schema.encodeSync(ContextQueryError)(error) : error,
+        ),
+      ),
   };
 });
 

@@ -1,48 +1,41 @@
-import { Effect, Ref, Schema } from "effect";
-import { ContextRegistry } from "../../context/registry.js";
+import { Effect, Schema, Ref } from "effect";
+import { ContextSession } from "../../context/session.js";
+import { taskView } from "../view.js";
 import { TaskSnapshot } from "./snapshot.js";
 
-/** Private to TaskState. Only the owning Actor mailbox calls its business operations. */
+/** An unadmitted Task has no durable state. Its first accepted command creates it. */
 export const makeTaskStore = Effect.fn("TaskStore.make")(function* (path: string) {
-  const registry = yield* ContextRegistry;
-  const restored = registry.get(path);
-  const snapshot = yield* Ref.make(
-    restored
-      ? yield* Schema.decodeUnknownEffect(TaskSnapshot)(restored.state).pipe(Effect.orDie)
-      : undefined,
+  const session = yield* ContextSession.make({
+    path,
+    state: TaskSnapshot,
+    message: Schema.Never,
+    view: taskView,
+  }).pipe(Effect.orDie);
+  const current = session.current.pipe(Effect.orDie);
+  const restored = yield* current;
+  const committed = yield* Ref.make(
+    restored ? Schema.decodeUnknownSync(TaskSnapshot)(restored.state) : undefined,
   );
-  const read = Ref.get(snapshot).pipe(
+  const read = Ref.get(committed).pipe(
     Effect.flatMap((state) =>
       state ? Effect.succeed(state) : Effect.die(new Error(`Task has not been admitted: ${path}`)),
     ),
   );
-  const current = Effect.sync(() => registry.get(path));
   const commit = Effect.fn("TaskStore.commit")(function* (
     state: TaskSnapshot,
     expectedRevision?: number,
   ) {
-    const record = yield* current;
-    yield* registry
-      .commit(
-        {
-          path,
-          description: record?.description ?? "Task",
-          state,
-          messages: [],
-        },
-        { expectedRevision: expectedRevision ?? record?.revision ?? 0 },
-      )
-      .pipe(Effect.orDie);
-    yield* Ref.set(snapshot, state);
+    yield* session.set({ state, description: "Task" }, { expectedRevision }).pipe(Effect.orDie);
+    yield* Ref.set(committed, state);
   }, Effect.uninterruptible);
-  const save = Effect.fn("TaskStore.save")(function* (patch: Partial<TaskSnapshot>) {
+  const save = Effect.fnUntraced(function* (patch: Partial<TaskSnapshot>) {
     yield* commit({ ...(yield* read), ...patch });
   });
   return {
     path,
     read,
     current,
-    exists: Ref.get(snapshot).pipe(Effect.map((value) => value !== undefined)),
+    exists: Ref.get(committed).pipe(Effect.map((value) => value !== undefined)),
     commit,
     save,
   };

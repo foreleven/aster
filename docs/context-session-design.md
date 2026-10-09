@@ -1,6 +1,6 @@
 # ContextSession design
 
-Status: implemented, 2026-10-09. ContextSession uses the existing ContextRegistry/DurableContext commit chain with a Pi Document persistence adapter. IM Chat, Channel, daily retrieval coverage and Agent admission use Sessions. Other owners retain their current storage. IM uses the new format only; no legacy-data compatibility or import is provided.
+Status: implemented, 2026-10-10. Every Context owner creates a scoped ContextSession in Behavior setup. Sessions validate and restore through DurableContext, backed by transactional Pi Documents in the configured host. ContextRegistry is a read index, public projection and notification boundary. No legacy-data import is provided.
 
 ## Purpose and boundaries
 
@@ -32,7 +32,7 @@ Each physical Session holds these session-scoped Documents:
 
 Pi document roots must be JSON objects. The framework Documents have independently versioned schemas. Owner state is validated against its current schema; unsupported formats fail validation. Encode and decode through Effect Schema; Pi's TypeScript generics do not validate application data. Reject non-JSON values, encode optional fields deliberately, and do not serialize live Actor refs, Effects or timers.
 
-The definition supplies `messageKey(message)` and a deterministic `compareMessages(left, right)` with identity as a final tie-breaker. IM uses the source message ID and orders by source timestamp then ID. Public Context messages remain an ordered array. Metadata retains a lightweight ID order index so dormant Contexts are readable before their owner definition is loaded; message bodies are stored only in the keyed Document. The index is rebuilt from the definition's comparator on commit. Domains requiring another order must encode that order in their message schema. Storage maps external IDs to safe, injective object keys, including IDs such as `__proto__`, and verifies key/payload agreement during recovery. A change of message identity is a removal plus insertion.
+Session acquisition supplies `messageKey(message)` and a deterministic `compareMessages(left, right)` with identity as a final tie-breaker. IM uses the source message ID and orders by source timestamp then ID. Public Context messages remain an ordered array. Metadata retains a lightweight ID order index so dormant Contexts are readable before their owner definition is loaded; message bodies are stored only in the keyed Document. The index is rebuilt from the Session's comparator on commit. Domains requiring another order must encode that order in their message schema. Storage maps external IDs to safe, injective object keys, including IDs such as `__proto__`, and verifies key/payload agreement during recovery. A change of message identity is a removal plus insertion.
 
 The storage adapter mutates individual native draft keys, such as `doc.messages[id] = message` and `delete doc.messages[id]`. It never assigns a reconstructed `messages` object for a routine write. Upsert stores only a changed message; removal emits a key deletion. Identical upserts and removal of missing messages are no-ops. Pi may coalesce large batches, and checkpoints intentionally store the complete current document, so this is not a promise that every commit contains only one small operation.
 
@@ -116,24 +116,43 @@ The state API deliberately accepts a complete next state for a small structured 
 
 Callbacks are short, pure transformations of detached, readonly values. All asynchronous domain work happens outside them. Expected business rejection is represented before committing or through a separately typed domain transition; throwing is not a business error protocol. The adapter validates the returned content and handles schema failures in the Effect error channel. No-op updates retain the revision and do not publish.
 
-`snapshot` reads state, messages and metadata coherently; its record uses logical message IDs and is detached from native storage keys. Separate `state.get`, `messages.get` and `messages.list` calls each read committed data, but may observe different revisions. The facade serializes coherent reads with writes using an Effect Semaphore and reads the committed registry snapshot. It does not rely on Pi's internal `readOnLine` method. Native recovery and storage operations are serialized by the adapter to prevent reopening a Session while another write is admitted.
+`snapshot` reads state, messages and metadata coherently; its record uses logical message IDs and is detached from native storage keys. Separate `state.get`, `messages.get` and `messages.list` calls each read committed data, but may observe different revisions. The facade serializes coherent reads with writes using an Effect Semaphore and reads the committed DurableContext snapshot. It does not rely on Pi's internal `readOnLine` method. Native recovery and storage operations are serialized by the adapter to prevent reopening a Session while another write is admitted.
 
-Acquisition is conceptually:
+Acquisition happens in Actor setup, before startup and mailbox consumption:
 
 ```ts
-const session =
-  yield *
-  ContextSession.open({
-    path,
-    definition: ChatContext,
-    initial: { description, state: initialChatState, messages: [] },
-    persistence: { layout: "single" },
-  });
+const ChatActor = ContextActor.define("chat/Actor", { commands: [Update] })((actor) =>
+  Effect.gen(function* () {
+    const session = yield* ContextSession.make({
+      path: contextPath(actor),
+      state: ChatState,
+      message: ChatMessage,
+      messageKey: (message) => message.id,
+      compareMessages,
+      view: chatView,
+      changes: "durable-state",
+      initial: { description, state: initialChatState },
+    });
+    return {
+      receive: (command) =>
+        Match.value(command).pipe(
+          Match.tag("Update", ({ messages, replyTo }) =>
+            session.messages
+              .upsert(messages)
+              .pipe(Effect.orDie, Effect.andThen(replyTo.tell(undefined))),
+          ),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
 ```
 
-Types are inferred from the definition's state and message schemas; the definition also declares message identity and ordering once. Initial messages are accepted as a list, validated for unique IDs and encoded into keyed storage. Initial content is used only for a missing Session; opening existing storage validates and restores it. Empty existing storage, corrupt storage and a new identity must be distinguishable. Acquiring the capability requires the configured persistence service and a Scope.
+Types are inferred directly from the state and message schemas. There is no `defineContext`, `ContextSession.define`, separate `open`, or `ContextActor.define.context` declaration. Initial messages default to an empty list. Initial values only initialize missing storage; existing records restore and validate automatically. Owners that accept their first business state through a command can omit `initial`: `current` is then absent until `set` accepts that state. No placeholder business record is persisted.
 
-`ContextActor` binds the session to its existing definition and registry lifecycle, avoiding duplicate schema/view declarations. Registry reads become detached projections of committed Session data. Do not implement Session writes followed by a second `registry.commit`: that would recreate the current dual-write recovery problem. Each owner uses exactly one authoritative persistence path.
+`set` accepts a complete state with optional messages and description, using the same scoped writer and revision checks as `commit`. Omitted messages and description preserve stored values. Message IDs default to their serialized value for small value messages; mutable entities such as IM messages supply an explicit stable key. All writes use DurableContext directly. ContextRegistry has no registration or commit API for owners, and no second write follows a Session transaction.
+
+Goals and Tasks retain their private committed Ref for domain transition publication. Their Store uses the same Session and updates that derived mirror only after persistence completes. GoalState's writer still serializes local tools with mailbox commands. Signal's Pi delivery journal remains authoritative for frozen delivery phases; its Context Session holds the public business snapshot. Agent conversation durability remains independent of these state Documents.
 
 ## Commit and lifetime guarantees
 
@@ -143,7 +162,7 @@ Types are inferred from the definition's state and message schemas; the definiti
 4. Only after confirmed persistence, expose the new canonical snapshot and publish the live notification.
 5. Return success; only then may a handler acknowledge durable acceptance.
 
-Preserve the current event contract: a definition with `changes: "durable-state"` emits source evidence for canonical state changes outside bootstrap mode. Message-only and description-only changes notify live readers without producing source events. IM uses bootstrap mode for ingestion, receipt retention and flush intent. Gate decisions and retry budgets remain transient. A changed rolling summary uses update mode. An unchanged summary may still retire covered messages, but uses bootstrap mode when private bookkeeping also changes; it must not trigger System One merely because a generation or receipt changed.
+Preserve the current event contract: a Session with `changes: "durable-state"` emits source evidence for canonical state changes outside bootstrap mode. Message-only and description-only changes notify live readers without producing source events. IM uses bootstrap mode for ingestion, receipt retention and flush intent. Gate decisions and retry budgets remain transient. A changed rolling summary uses update mode. An unchanged summary may still retire covered messages, but uses bootstrap mode when private bookkeeping also changes; it must not trigger System One merely because a generation or receipt changed.
 
 The native Session owns document transactions and its committed cache. The Effect adapter serializes access and publishes coherent snapshots; an additional cache, if required for registry reads, is a derived read model rather than another durable authority. No native Session or mutable document handle escapes to the owner. Infra caches native Sessions for its host Scope; Behavior-scoped facades are revoked independently, and the shared cache closes at infrastructure shutdown.
 

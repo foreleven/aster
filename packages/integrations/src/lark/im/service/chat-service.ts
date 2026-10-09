@@ -1,13 +1,25 @@
-import { Array, Context, Data, Effect, Layer, Option, Schema, Stream } from "effect";
+import {
+  Array,
+  Context,
+  Data,
+  DateTime,
+  Effect,
+  Layer,
+  Match,
+  Option,
+  Schema,
+  Stream,
+} from "effect";
 import { LarkConfig } from "../../config.js";
 import { runLarkCli } from "../../shared/cli.js";
 import { LarkCliError } from "../../shared/errors.js";
 import { object, parseCliOutput, string } from "../../shared/response.js";
-import { ChatPublicMessage, type ChatBatch, type ChatMessage } from "./model.js";
+import { ChatPublicMessage, ChatHistoryArgs, type ChatBatch, type ChatMessage } from "./model.js";
 
 export class LarkChatQueryError extends Data.TaggedError("LarkChatQueryError")<{
   readonly message: string;
   readonly cause?: unknown;
+  readonly kind?: "invalid-input" | "unavailable";
 }> {}
 
 export interface ChatMessageQuery {
@@ -22,21 +34,20 @@ export interface ChatUserSetting {
 }
 
 type CliRun = (args: readonly string[]) => Effect.Effect<string, LarkCliError>;
+const CliMessage = Schema.Struct({
+  message_id: Schema.NonEmptyString,
+  chat_id: Schema.optional(Schema.NonEmptyString),
+  create_time: Schema.Union([Schema.String, Schema.Number]),
+  chat_name: Schema.optional(Schema.String),
+  chat_type: Schema.optional(Schema.String),
+  chat_mode: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.Unknown),
+  sender: Schema.optional(Schema.Unknown),
+  message_app_link: Schema.optional(Schema.String),
+  deleted: Schema.optional(Schema.Boolean),
+});
 const MessagePage = Schema.Struct({
-  messages: Schema.Array(
-    Schema.Struct({
-      message_id: Schema.NonEmptyString,
-      chat_id: Schema.NonEmptyString,
-      create_time: Schema.Union([Schema.String, Schema.Number]),
-      chat_name: Schema.optional(Schema.String),
-      chat_type: Schema.optional(Schema.String),
-      chat_mode: Schema.optional(Schema.String),
-      content: Schema.optional(Schema.Unknown),
-      sender: Schema.optional(Schema.Unknown),
-      message_app_link: Schema.optional(Schema.String),
-      deleted: Schema.optional(Schema.Boolean),
-    }),
-  ),
+  messages: Schema.Array(CliMessage),
   has_more: Schema.Boolean,
   page_token: Schema.optional(Schema.String),
 });
@@ -61,6 +72,27 @@ const messageTime = (value: string | number) => {
     typeof value === "number" || /^\d+$/.test(value) ? Number(value) : Date.parse(value);
   return Math.abs(parsed) < 100_000_000_000 ? parsed * 1000 : parsed;
 };
+
+const messageEvidence = Effect.fnUntraced(function* (raw: typeof CliMessage.Type) {
+  const at = messageTime(raw.create_time);
+  if (!Number.isFinite(at) || !Number.isFinite(new Date(at).getTime()))
+    return yield* new LarkChatQueryError({ message: "Lark message has no valid timestamp" });
+  return yield* Schema.decodeUnknownEffect(ChatPublicMessage)({
+    id: raw.message_id,
+    at: DateTime.formatIso(DateTime.makeUnsafe(at)),
+    content:
+      typeof raw.content === "string"
+        ? raw.content
+        : string(object(raw.content).text) || JSON.stringify(raw.content ?? {}),
+    sender: object(raw.sender),
+    url: raw.message_app_link ?? "",
+    deleted: raw.deleted === true,
+  }).pipe(
+    Effect.mapError(
+      (cause) => new LarkChatQueryError({ message: "Invalid Lark message evidence", cause }),
+    ),
+  );
+});
 
 const make = (run: CliRun) => {
   const getChatSettings = Effect.fn("LarkChatService.getChatSettings")(function* (
@@ -141,6 +173,8 @@ const make = (run: CliRun) => {
       if (!Number.isFinite(at) || !Number.isFinite(new Date(at).getTime()))
         return yield* new LarkChatQueryError({ message: "Lark message has no valid timestamp" });
       if (at < from || at >= through) continue;
+      if (!raw.chat_id)
+        return yield* new LarkChatQueryError({ message: "Search message has no chat id" });
       const group = grouped.get(raw.chat_id) ?? {
         chat: {
           id: raw.chat_id,
@@ -150,21 +184,7 @@ const make = (run: CliRun) => {
         },
         messages: new Map<string, ChatMessage>(),
       };
-      const message = yield* Schema.decodeUnknownEffect(ChatPublicMessage)({
-        id: raw.message_id,
-        at: new Date(at).toISOString(),
-        content:
-          typeof raw.content === "string"
-            ? raw.content
-            : string(object(raw.content).text) || JSON.stringify(raw.content ?? {}),
-        sender: object(raw.sender),
-        url: raw.message_app_link ?? "",
-        deleted: raw.deleted === true,
-      }).pipe(
-        Effect.mapError(
-          (cause) => new LarkChatQueryError({ message: "Invalid Lark message evidence", cause }),
-        ),
-      );
+      const message = yield* messageEvidence(raw);
       group.messages.set(raw.message_id, message);
       grouped.set(raw.chat_id, group);
     }
@@ -179,7 +199,82 @@ const make = (run: CliRun) => {
         ),
       }));
   });
-  return { searchMessages, getChatSettings };
+  const listMessages = Effect.fn("LarkChatService.listMessages")(function* (
+    input: ChatHistoryArgs,
+  ) {
+    const args = yield* Schema.decodeUnknownEffect(ChatHistoryArgs)(input).pipe(
+      Effect.mapError(
+        (cause) =>
+          new LarkChatQueryError({
+            kind: "invalid-input",
+            message: "Invalid message query arguments",
+            cause,
+          }),
+      ),
+    );
+    const target = yield* Match.value({ chatId: args.chatId, userId: args.userId }).pipe(
+      Match.when({ chatId: Schema.is(Schema.NonEmptyString), userId: undefined }, ({ chatId }) =>
+        Effect.succeed(["--chat-id", chatId]),
+      ),
+      Match.when({ chatId: undefined, userId: Schema.is(Schema.NonEmptyString) }, ({ userId }) =>
+        Effect.succeed(["--user-id", userId]),
+      ),
+      Match.orElse(() =>
+        Effect.fail(
+          new LarkChatQueryError({
+            kind: "invalid-input",
+            message: "Provide exactly one of chatId or userId",
+          }),
+        ),
+      ),
+    );
+    for (const time of [args.start, args.end]) {
+      if (
+        time !== undefined &&
+        (!/^\d{4}-\d{2}-\d{2}(?:T.*(?:Z|[+-]\d{2}:\d{2}))?$/.test(time) ||
+          Option.isNone(DateTime.make(time)))
+      )
+        return yield* new LarkChatQueryError({
+          kind: "invalid-input",
+          message: "Invalid message query time; use a date or ISO timestamp with timezone",
+        });
+    }
+    if (args.start && args.end && Date.parse(args.start) >= Date.parse(args.end))
+      return yield* new LarkChatQueryError({
+        kind: "invalid-input",
+        message: "start must precede end",
+      });
+    const stdout = yield* run([
+      "im",
+      "+chat-messages-list",
+      "--as",
+      "user",
+      ...target,
+      "--order",
+      args.order ?? "desc",
+      "--page-size",
+      String(args.pageSize ?? 50),
+      "--format",
+      "json",
+      "--no-reactions",
+      ...(args.start ? ["--start", args.start] : []),
+      ...(args.end ? ["--end", args.end] : []),
+      ...(args.pageToken ? ["--page-token", args.pageToken] : []),
+    ]);
+    const page = yield* decodeResponse(MessagePage, stdout);
+    if (page.has_more && (!page.page_token || page.page_token === args.pageToken))
+      return yield* new LarkChatQueryError({
+        message: "Missing or repeated history pagination token",
+      });
+    const items = yield* Effect.forEach(page.messages, messageEvidence);
+    return {
+      items,
+      hasMore: page.has_more,
+      nextPageToken: page.has_more ? page.page_token! : null,
+      coverage: { source: "provider" as const, complete: !page.has_more },
+    };
+  });
+  return { searchMessages, getChatSettings, listMessages };
 };
 
 export class LarkChatService extends Context.Service<LarkChatService, ReturnType<typeof make>>()(

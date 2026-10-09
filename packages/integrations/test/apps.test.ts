@@ -1,3 +1,5 @@
+import type { TestContextRegistry } from "@aster/core/testing";
+import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { test } from "node:test";
@@ -20,6 +22,7 @@ import {
   Layer,
   Logger,
   Schema,
+  Queue,
   Sink,
   Stream,
 } from "effect";
@@ -40,7 +43,7 @@ const settings: AppsConfiguration = {
 };
 const launch = Effect.fnUntraced(function* (
   cli: OpenCli["Service"],
-  registry: ContextRegistry["Service"],
+  registry: TestContextRegistry,
   config = settings,
 ) {
   return yield* Effect.gen(function* () {
@@ -61,29 +64,18 @@ const launch = Effect.fnUntraced(function* (
   }).pipe(
     Effect.provide(Layer.merge(RuntimeIntegrations.layer, ContextQueries.layer)),
     Effect.provideService(ContextRegistry, registry),
+    Effect.provideService(DurableContext, registry.backend),
     Effect.provideService(AppsSettings, config),
     Effect.provideService(OpenCli, cli),
   );
 });
 const input = { path: "/apps/ctrip", command: "search", args: { query: "春节 三亚" } };
 
-test("apps register discoverable query-only Contexts without running OpenCLI; queries persist before reply", async () => {
+test("apps register discoverable query-only Contexts without running OpenCLI; queries reply without mutating Context state", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        const saving = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        const controlled: typeof registry = {
-          ...registry,
-          commit: (record, options) =>
-            record.path === input.path && "lastResult" in record.state
-              ? Deferred.succeed(saving, undefined).pipe(
-                  Effect.andThen(Deferred.await(release)),
-                  Effect.andThen(registry.commit(record, options)),
-                )
-              : registry.commit(record, options),
-        };
         const mutableCalls: string[][] = [];
         const runtime = yield* launch(
           {
@@ -93,7 +85,7 @@ test("apps register discoverable query-only Contexts without running OpenCLI; qu
                 return [{ name: "Sanya", cityId: "43" }];
               }),
           },
-          controlled,
+          registry,
         );
         assert.equal(mutableCalls.length, 0);
         const contexts = Object.values(runtime.reader.snapshot());
@@ -108,32 +100,24 @@ test("apps register discoverable query-only Contexts without running OpenCLI; qu
         assert.ok(
           JSON.stringify(yield* runtime.queries.describe(input.path)).includes("hotel-search"),
         );
-        const query = yield* runtime.queries.query(input).pipe(Effect.forkScoped);
-        yield* Deferred.await(saving);
-        assert.equal(
-          Schema.decodeUnknownSync(AppState)(registry.get(input.path)!.state).lastResult,
-          undefined,
-        );
-        yield* Deferred.succeed(release, undefined);
-        const result = yield* Fiber.join(query);
-        assert.deepEqual(result.data, [{ name: "Sanya", cityId: "43" }]);
-        assert.deepEqual(
-          Schema.decodeUnknownSync(AppState)(registry.get(input.path)!.state).lastResult,
-          result,
-        );
+        const before = registry.get(input.path);
+        const result = yield* runtime.queries.query(input);
+        assert.deepEqual(result, [{ name: "Sanya", cityId: "43" }]);
+        assert.deepEqual(registry.get(input.path), before);
         assert.deepEqual(mutableCalls, [
           ["ctrip", "search", "春节 三亚", "--limit", "10", "-f", "json"],
         ]);
         assert.equal(registry.backend.journal().length, 0);
         yield* runtime.handle.stop;
         const gone = yield* Effect.flip(runtime.queries.query(input));
+        assert.ok(Schema.is(ContextQueryError)(gone));
         assert.equal(gone.kind, "unavailable");
       }),
     ),
   );
 });
 
-test("apps reject writes and invalid arguments before transport; failure leaves last successful evidence intact", async () => {
+test("apps reject writes and invalid arguments before transport; failure leaves Context state unchanged", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -158,46 +142,64 @@ test("apps reject writes and invalid arguments before transport; failure leaves 
           { ...input, args: { query: "sanya", execute: true } },
           { path: "/apps/xiaohongshu", command: "publish", args: { query: "hello" } },
         ])
-          assert.equal((yield* Effect.flip(runtime.queries.query(request))).kind, "invalid-input");
+          assert.equal(
+            Schema.decodeUnknownSync(ContextQueryError)(
+              yield* Effect.flip(runtime.queries.query(request)),
+            ).kind,
+            "invalid-input",
+          );
         assert.equal(calls, 0);
-        const result = yield* runtime.queries.query(input);
-        assert.equal((yield* Effect.flip(runtime.queries.query(input))).message, "Login required");
-        assert.deepEqual(
-          Schema.decodeUnknownSync(AppState)(registry.get(input.path)!.state).lastResult,
-          result,
+        const before = registry.get(input.path);
+        yield* runtime.queries.query(input);
+        assert.equal(
+          Schema.decodeUnknownSync(ContextQueryError)(
+            yield* Effect.flip(runtime.queries.query(input)),
+          ).message,
+          "Login required",
         );
+        assert.deepEqual(registry.get(input.path), before);
       }),
     ),
   );
 });
 
-test("caller cancellation and runtime stop release query work; busy queries do not start another process", async () => {
+test("Apps queue requests and cancellation releases the worker for the next request", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const registry = yield* makeContextRegistry();
-        const started = yield* Deferred.make<void>();
-        const released = yield* Deferred.make<void>();
+        const entered = yield* Queue.unbounded<number>();
+        const released = yield* Queue.unbounded<number>();
+        let calls = 0;
         const runtime = yield* launch(
           {
             run: () =>
-              Deferred.succeed(started, undefined).pipe(
-                Effect.andThen(Effect.never),
-                Effect.ensuring(Deferred.succeed(released, undefined)),
-              ),
+              Effect.suspend(() => {
+                const id = ++calls;
+                return Queue.offer(entered, id).pipe(
+                  Effect.andThen(Effect.never),
+                  Effect.ensuring(Queue.offer(released, id)),
+                );
+              }),
           },
           registry,
         );
-        const caller = yield* runtime.queries.query(input).pipe(Effect.forkScoped);
-        yield* Deferred.await(started);
-        assert.equal((yield* Effect.flip(runtime.queries.query(input))).kind, "busy");
-        yield* Fiber.interrupt(caller);
-        yield* Deferred.await(released);
-        assert.equal(
-          Schema.decodeUnknownSync(AppState)(registry.get(input.path)!.state).lastResult,
-          undefined,
-        );
+        const first = yield* runtime.queries.query(input).pipe(Effect.forkScoped);
+        assert.equal(yield* Queue.take(entered), 1);
+        const second = yield* runtime.queries.query(input).pipe(Effect.flip, Effect.forkScoped);
+        yield* Fiber.interrupt(first);
+        assert.equal(yield* Queue.take(released), 1);
+        assert.equal(yield* Queue.take(entered), 2);
         yield* runtime.handle.stop;
+        assert.equal(
+          Schema.decodeUnknownSync(ContextQueryError)(yield* Fiber.join(second)).kind,
+          "unavailable",
+        );
+        assert.equal(yield* Queue.take(released), 2);
+        assert.deepEqual(Schema.decodeUnknownSync(AppState)(registry.get(input.path)!.state), {
+          app: "ctrip",
+          mode: "query-only",
+        });
       }),
     ),
   );
@@ -414,7 +416,10 @@ test("stopping an Apps Actor releases active query work and rejects its waiting 
         const waiting = yield* runtime.queries.query(input).pipe(Effect.flip, Effect.forkScoped);
         yield* Deferred.await(entered);
         yield* runtime.handle.stop;
-        assert.equal((yield* Fiber.join(waiting)).kind, "unavailable");
+        assert.equal(
+          Schema.decodeUnknownSync(ContextQueryError)(yield* Fiber.join(waiting)).kind,
+          "unavailable",
+        );
         assert.ok(released);
       }),
     ),

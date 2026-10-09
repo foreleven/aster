@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect";
+import { Effect, Schema, Option } from "effect";
 import { ApplicationError } from "../operations.js";
 import type { ContextRegistry } from "../context/registry.js";
 import {
@@ -78,3 +78,18 @@ export const inspectReactions = Effect.fn("Reactions.inspect")(function* (
     ]),
   };
 });
+
+export const reactionView: import("../context/view.js").ContextViewPolicy = {
+  matches: (path) => path === "/system-one",
+  project: (record) => {
+    const state = Schema.decodeUnknownOption(ReactionSnapshot)(record.state);
+    if (Option.isNone(state)) return undefined;
+    return {
+      ...record,
+      revision: record.revision ?? 0,
+      state: { work: state.value.work.map(reactionWorkView) },
+      messages: [],
+      projection: { visibility: "public" },
+    };
+  },
+};

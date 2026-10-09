@@ -1,3 +1,6 @@
+import { ContextQueryError } from "@aster/core";
+import type { TestContextRegistry } from "@aster/core/testing";
+import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ConfigProvider, Effect, Fiber, Layer } from "effect";
@@ -34,6 +37,7 @@ test("configured mail installs a runtime source without opening connections", as
         }).pipe(
           Effect.provide(Layer.merge(RuntimeIntegrations.layer, ContextQueries.layer)),
           Effect.provideService(ContextRegistry, registry),
+          Effect.provideService(DurableContext, registry.backend),
           Effect.provide(ConfigProvider.layer(configuration)),
         );
       }),
@@ -70,7 +74,7 @@ const email: MailMessage = {
 };
 
 const install = Effect.fnUntraced(function* (
-  registry: ContextRegistry["Service"],
+  registry: TestContextRegistry,
   fetcher: MailFetcher["Service"],
   config = settings,
 ) {
@@ -101,6 +105,7 @@ const install = Effect.fnUntraced(function* (
   }).pipe(
     Effect.provide(Layer.merge(RuntimeIntegrations.layer, ContextQueries.layer)),
     Effect.provideService(ContextRegistry, registry),
+    Effect.provideService(DurableContext, registry.backend),
     Effect.provideService(MailSettings, config),
     Effect.provideService(MailFetcher, fetcher),
   );
@@ -137,13 +142,16 @@ test("mail publishes its tree before retrieval and acknowledges persistence befo
           const releaseSave = yield* Deferred.make<void>();
           const controlled: typeof registry = {
             ...registry,
-            commit: (record, options) =>
-              record.path === mailMessagePath(email)
-                ? Deferred.succeed(saving, undefined).pipe(
-                    Effect.andThen(Deferred.await(releaseSave)),
-                    Effect.andThen(registry.commit(record, options)),
-                  )
-                : registry.commit(record, options),
+            backend: {
+              ...registry.backend,
+              commit: (record, options) =>
+                record.path === mailMessagePath(email)
+                  ? Deferred.succeed(saving, undefined).pipe(
+                      Effect.andThen(Deferred.await(releaseSave)),
+                      Effect.andThen(registry.backend.commit(record, options)),
+                    )
+                  : registry.backend.commit(record, options),
+            },
           };
           const { handle, completed } = yield* install(
             controlled,
@@ -335,6 +343,7 @@ test("missing generic mail config installs no source and requires no credentials
         }).pipe(
           Effect.provide(Layer.merge(RuntimeIntegrations.layer, ContextQueries.layer)),
           Effect.provideService(ContextRegistry, registry),
+          Effect.provideService(DurableContext, registry.backend),
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
         );
       }),
@@ -475,8 +484,8 @@ test("mail historical queries leave discovery, cursor, Contexts and source event
           command: "list",
           args: { date: "2026-10-06" },
         });
-        assert.doesNotMatch(JSON.stringify(result.data), /Please review/);
-        assert.match(JSON.stringify(result.data), /undatedObserved/);
+        assert.doesNotMatch(JSON.stringify(result), /Please review/);
+        assert.match(JSON.stringify(result), /undatedObserved/);
         yield* queries.query({
           path: mailboxPath("work"),
           command: "read",
@@ -490,13 +499,15 @@ test("mail historical queries leave discovery, cursor, Contexts and source event
         assert.equal(remoteReads, 1);
         assert.deepEqual(registry.snapshot(), before);
         assert.equal(
-          (yield* Effect.flip(
-            queries.query({
-              path: mailboxPath("work"),
-              command: "list",
-              args: { date: "2026-02-30" },
-            }),
-          )).kind,
+          Schema.decodeUnknownSync(ContextQueryError)(
+            yield* Effect.flip(
+              queries.query({
+                path: mailboxPath("work"),
+                command: "list",
+                args: { date: "2026-02-30" },
+              }),
+            ),
+          ).kind,
           "invalid-input",
         );
         yield* handle.stop;
@@ -637,7 +648,10 @@ test("mail queries share the polling connection permit and owner shutdown releas
           .query({ path: mailboxPath("work"), command: "read", args: { id: email.id } })
           .pipe(Effect.flip, Effect.forkScoped({ startImmediately: true }));
         yield* handle.stop;
-        assert.equal((yield* Fiber.join(waiting)).kind, "unavailable");
+        assert.equal(
+          Schema.decodeUnknownSync(ContextQueryError)(yield* Fiber.join(waiting)).kind,
+          "unavailable",
+        );
         assert.equal(reads, 0);
       }),
     ).pipe(Effect.timeout("10 seconds")),

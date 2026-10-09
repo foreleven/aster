@@ -43,7 +43,7 @@ The public snapshot exposes `timeZone`, `dateBasis`, `through`, `today`, `status
 
 Mailbox capability discovery follows the shared [Agent Context access contract](context-agent-access-design.md).
 
-- `list({ date?, query?, offset?, limit? })`: date is `YYYY-MM-DD`, default today. Query matches sender and subject without case sensitivity. Results contain metadata without bodies, newest first, calendar zone/date basis, preceding date, pagination and coverage. Default page size is 20, maximum 100. `coverage.complete` covers dated matches in the successfully retrieved interval; `undatedObserved` separately reports unassignable observations.
+- `list({ date?, query? })`: date is `YYYY-MM-DD`, default today. Query matches sender and subject without case sensitivity. Results contain metadata without bodies, newest first, calendar zone/date basis, preceding date and coverage. The command returns all matching metadata from that provider day. `coverage.complete` covers dated matches in the successfully retrieved interval; `undatedObserved` separately reports unassignable observations.
 - `read({ id })`: reads retained individual evidence when present, otherwise fetches the mailbox-scoped provider identity. Returns metadata and text with the date basis.
 
 Neither command advances the cursor or discovery checkpoint, changes the default index, creates an Email Context, or triggers matching. Task Agent query evidence is retained in its Pi conversation by the existing query-result mechanism; no extra historical mailbox cache is added. Direct application RPC calls do not imply conversation persistence. No in-memory table dependency is needed.

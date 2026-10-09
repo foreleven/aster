@@ -2,7 +2,7 @@
 
 The Actor API and runtime semantics are specified in [docs/actor-design.md](../../docs/actor-design.md). This package implements them with `effect@4.0.0` on Node 24 or later.
 
-The package exports `Command`, `Actor`, `PersistentActor`, `ActorSystem`, persistence Layers and `ActorTestKit`. Define public messages with `Command.Class`, then declare `Actor.define(key, { commands: [Search], internal })(acquire)`. The public reference accepts the declared classes; handlers and `self` additionally accept the internal schema. Tags, payloads and replies come from the command class. Dependencies are inferred from acquisition, handler Effects and child spawning.
+The package exports `Command`, `Actor`, `PersistentActor`, `ActorSystem`, persistence Layers and `ActorTestKit`. Define public messages with `Command.Class`, then declare `Actor.define(key, { commands: [Search], internal })(acquire)`. The public reference accepts the declared classes; handlers and `self` additionally accept the internal schema. Acquisition may also be a setup callback `(actor) => Effect.gen(...)`, receiving identity and child operations before startup. Tags, payloads and replies come from the command class. Dependencies are inferred from acquisition, handler Effects and child spawning.
 
 `Command.Class` supports payload-only notifications, explicit `reply` schemas, and `success`/`error` replies. Generated `replyTo` references are local and explicit; `Command.Reply<typeof Search>` derives their response type. `PersistentActor.define` adds `event` and `state` schemas and automatically requires persistence. `Actor.provide(layer)` and `PersistentActor.provide(layer)` supply Behavior-local dependencies.
 
@@ -25,7 +25,8 @@ Internal modules are not package exports. Callers use actor definitions and the 
 ## Lifecycle contracts
 
 - `spawn` returns after registration; Layer acquisition, recovery and `started` run asynchronously under supervision. `tell` only enqueues work. `ActorRef.awaitStarted` waits for the first initialization outcome; it is not a health check or a processing barrier. Use a domain reply when processing completion matters.
-- `ask` accepts one reply. Timeout or caller cancellation closes the temporary reply reference without cancelling the receiver's work.
+- `ask` accepts one reply and an optional parent Scope (explicit or ambient). Each request closes its own Scope on reply, timeout or cancellation. Concurrent work adopting `replyTo.scope` is cancelled with the request; inline handlers remain mailbox-owned.
+- CommandProcessor owns a FIFO and fixed workers in the Behavior Scope; it replies directly with typed outcomes and keeps the mailbox available. Use Command.reply for inline work and pipeToSelf for mailbox-owned state transitions.
 - Restart retains the ref, mailbox, children and watches, while replacing the Behavior Scope and recovering persistent state. `pipeToSelf` belongs to that Scope; old work cannot deliver results or failures into a replacement Behavior.
 - `context.stop(child)` requests a direct child's stop. `system.stop(root)` awaits one root's subtree. Descendants finish before the parent's Behavior resources close.
 - `system.terminate()` waits for active handlers and all cleanup. Closing the enclosing Scope, or interrupting the owner of graceful termination, forces actor cancellation before closing shared resources.

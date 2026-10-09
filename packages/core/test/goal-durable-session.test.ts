@@ -1,3 +1,6 @@
+import { DurableContext } from "@aster/core";
+import { Schema } from "effect";
+import { GoalSnapshot } from "@aster/core";
 import { Models, type ResolvedModel } from "@aster/agent";
 import { AgentRunner } from "@aster/agent/agent";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
@@ -16,7 +19,6 @@ import { Effect, Layer } from "effect";
 import {
   ContextRegistry,
   ExternalAgents,
-  GoalActor,
   GoalAgent,
   GoalSettings,
   MemoryRecall,
@@ -130,7 +132,7 @@ test("reopened Goal sessions keep their policy and history while tools read the 
           ],
           save: () => {},
         });
-        yield* registry.register("/goals/test", GoalActor.contextDefinition);
+        yield* registry.register("/goals/test", { state: GoalSnapshot, message: Schema.Never });
         const { system } = yield* toolSystem({
           registry,
           messages: conversations,
@@ -156,6 +158,7 @@ test("reopened Goal sessions keep their policy and history while tools read the 
           Effect.provideService(AgentConversations, conversations),
           Effect.provideService(CurrentActors, system),
           Effect.provideService(ContextRegistry, registry),
+          Effect.provideService(DurableContext, registry.backend),
           Effect.provideService(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
           Effect.provideService(MemoryRecall, {
             search: () => Effect.succeed([]),

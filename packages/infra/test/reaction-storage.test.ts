@@ -1,3 +1,4 @@
+import { makeTestContextRegistryWithBackend } from "@aster/core/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
@@ -12,21 +13,16 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
-import {
-  contextView,
-  defineContext,
-  makeContextRegistryWithBackend,
-  type StoredContext,
-} from "@aster/core";
+import { contextView, type StoredContext } from "@aster/core";
 import { LocalDurableContext } from "../src/storage/local-durable.js";
 import { makeFileContextStore } from "../src/storage/file-context-store.js";
 
-const definition = defineContext({
+const definition = {
   state: Schema.Struct({ summary: Schema.String, credential: Schema.String }),
   message: Schema.String,
-  changes: "durable-state",
+  changes: "durable-state" as const,
   view: contextView({ state: Schema.Struct({ summary: Schema.String }), message: Schema.String }),
-});
+};
 const source = {
   path: "/source",
   description: "Source",
@@ -49,7 +45,7 @@ test("file pending recovery restores the source and reaction handoff after a nat
   await Effect.runPromise(
     Effect.gen(function* () {
       const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
-      const registry = makeContextRegistryWithBackend(backend);
+      const registry = makeTestContextRegistryWithBackend(backend);
       yield* registry.register(source.path, definition);
       yield* registry.commit(
         { ...source, state: { ...source.state, summary: "Before" } },
@@ -64,7 +60,7 @@ test("file pending recovery restores the source and reaction handoff after a nat
       assert.ok(existsSync(join(root, "source/.pending.json")));
       rmSync(statePath, { recursive: true });
       const recoveredBackend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
-      const restored = makeContextRegistryWithBackend(recoveredBackend);
+      const restored = makeTestContextRegistryWithBackend(recoveredBackend);
       yield* restored.register(source.path, definition);
       const accepted = restored.get(source.path)!;
       assertHandoff(recoveredBackend.exportRecords()[0]!);
@@ -84,7 +80,7 @@ test("Local storage reopens atomic source handoffs and preserves them through la
       Effect.scoped(
         Effect.gen(function* () {
           const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
-          const registry = makeContextRegistryWithBackend(backend);
+          const registry = makeTestContextRegistryWithBackend(backend);
           yield* registry.register(source.path, definition);
           if (!restart) {
             yield* registry.commit(source, { expectedRevision: 0 });
@@ -110,7 +106,7 @@ test("corrupt pending reaction envelopes fail before recovery rewrites committed
   await Effect.runPromise(
     Effect.gen(function* () {
       const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
-      const registry = makeContextRegistryWithBackend(backend);
+      const registry = makeTestContextRegistryWithBackend(backend);
       yield* registry.register(source.path, definition);
       const committed = yield* registry.commit(source, { expectedRevision: 0 });
       const event = backend.exportRecords()[0]!.events![0]!;

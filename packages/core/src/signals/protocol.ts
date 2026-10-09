@@ -1,3 +1,4 @@
+import { GetSignal } from "./queries.js";
 import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand, ReplyTo } from "@aster/actor";
 import { Context, Schema } from "effect";
@@ -71,7 +72,7 @@ export class PauseByOwner extends ActorCommand.Class<PauseByOwner>()("PauseByOwn
   payload: { owner: GoalPath },
   reply: Schema.Void,
 }) {}
-export const SignalCommands = [React, Change, PauseByOwner] as const;
+export const SignalCommands = [React, Change, PauseByOwner, GetSignal] as const;
 export const SignalInternal = Schema.TaggedUnion({
   Tick: { version: Schema.Int, due: SignalTime },
   Dispatch: {},

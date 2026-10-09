@@ -55,14 +55,20 @@ test("Context query cancellation reaches the backend and parallel callers retain
             register: () => Effect.void,
             list: () => Effect.succeed({ items: [], total: 0, nextOffset: null }),
             describe: () => Effect.succeed({ path: "/test", description: "Test", commands: [] }),
-            query: (input) =>
+            query: () => Effect.die("Unexpected raw query"),
+            json: () => Effect.die("Unexpected transport query"),
+            text: (input) =>
               input.args.query === "blocked"
                 ? Deferred.succeed(entered, undefined).pipe(
                     Effect.andThen(Deferred.await(unblock)),
-                    Effect.as({ ...input, queriedAt: "now", data: "blocked result" }),
+                    Effect.as(
+                      JSON.stringify({ ...input, queriedAt: "now", data: "blocked result" }),
+                    ),
                     Effect.ensuring(Deferred.succeed(released, undefined)),
                   )
-                : Effect.succeed({ ...input, queriedAt: "now", data: input.args.query }),
+                : Effect.succeed(
+                    JSON.stringify({ ...input, queriedAt: "now", data: input.args.query }),
+                  ),
           },
         });
         const first = contextQueryTools("/goals/one", (id) => id);

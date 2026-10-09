@@ -7,20 +7,15 @@ import {
   type AnyActorDefinition,
   type CommandOf,
   type Protocol,
+  type MailboxOf,
   type ServicesOf,
   type SpawnError,
   type SpawnOptions,
 } from "@aster/actor";
-import { Deferred, Effect, Predicate, Schema, Scope } from "effect";
+import { Effect, Match, Predicate, Ref, Schema, Scope } from "effect";
 import { randomUUID } from "node:crypto";
-import { ContextQueryError, type ContextQueryResult } from "./contracts.js";
-import type { ContextDefinition } from "./definition.js";
-import {
-  QueryInvocation,
-  QueryReply,
-  isQueryCommand,
-  type QueryCommand,
-} from "./queries/protocol.js";
+import { ContextQueryError } from "./contracts.js";
+import { QueryReply, isQueryCommand, type QueryCommand } from "./queries/protocol.js";
 import { ContextQueries } from "./queries/routes.js";
 import { ContextRegistry } from "./registry.js";
 
@@ -65,17 +60,11 @@ export const contextSpawnOptions = (path: string, options: SpawnOptions = {}): S
   metadata: { ...options.metadata, contextPath: path },
 });
 
-type LocalMailbox<C extends readonly Schema.Top[], I extends Schema.Top> =
-  Exclude<C[number], QueryCommand>["Type"] | I["Type"];
 interface ContextBehavior<
   C extends readonly Schema.Top[],
   I extends Schema.Top,
   H,
-> extends ActorBehavior<LocalMailbox<C, I>, H> {
-  readonly query?: (
-    command: Extract<C[number], QueryCommand>["Type"],
-    actor: ActorContext<LocalMailbox<C, I>>,
-  ) => Effect.Effect<ContextQueryResult, ContextQueryError, H>;
+> extends ActorBehavior<MailboxOf<C, I>, H> {
   readonly description?: string;
 }
 
@@ -84,237 +73,218 @@ export const ContextActor = {
   define:
     <const C extends readonly Schema.Top[], I extends Schema.Top = typeof Schema.Never>(
       key: string,
-      options: Protocol<C, I> & { readonly context: ContextDefinition },
+      options: Protocol<C, I>,
     ) =>
-    <E, R, H = never>(acquire: Effect.Effect<ContextBehavior<C, I, H>, E, R>) => {
+    <E, R, H = never>(
+      acquire:
+        | Effect.Effect<ContextBehavior<C, I, H>, E, R>
+        | ((actor: ActorContext<MailboxOf<C, I>>) => Effect.Effect<ContextBehavior<C, I, H>, E, R>),
+    ) => {
       const contracts = options.commands.filter(isQueryCommand);
-      const internal = Schema.Union([options.internal ?? Schema.Never, QueryInvocation]);
-      return Object.assign(
-        Actor.define(key, { commands: options.commands, internal })(
-          Effect.gen(function* () {
-            const registry = yield* ContextRegistry;
-            const scope = yield* Effect.scope;
-            const environment = yield* Effect.context<H>();
-            // The runtime filter and conditional requirement use the same descriptor marker.
-            // Widened schema arrays conservatively retain the query-registry requirement.
-            const routes = yield* (
-              contracts.length ? ContextQueries : Effect.void
-            ) as Effect.Effect<
-              ContextQueries["Service"] | undefined,
-              never,
-              QueryCommand extends C[number]
-                ? ContextQueries
-                : Extract<C[number], QueryCommand> extends never
-                  ? never
-                  : ContextQueries
-            >;
-            const behavior = yield* acquire;
-            type Owner = ActorContext<LocalMailbox<C, I>>;
-            const withContextPath = <M>(actor: ActorContext<M>): typeof actor => ({
-              ...actor,
-              spawn: (name, child, spawnOptions) =>
-                actor.spawn(
-                  name,
-                  child,
-                  contextSpawnOptions(
-                    typeof spawnOptions?.metadata?.contextPath === "string"
-                      ? spawnOptions.metadata.contextPath
-                      : childContextPath(
-                          contextPath(actor),
-                          name.startsWith("~")
-                            ? Buffer.from(name.slice(1), "base64url").toString("utf8")
-                            : name,
-                        ),
-                    spawnOptions,
-                  ),
+      return Actor.define(
+        key,
+        options,
+      )((owner) =>
+        Effect.gen(function* () {
+          const registry = yield* ContextRegistry;
+          const scope = yield* Effect.scope;
+          // The runtime filter and conditional requirement use the same descriptor marker.
+          // Widened schema arrays conservatively retain the query-registry requirement.
+          const routes = yield* (contracts.length ? ContextQueries : Effect.void) as Effect.Effect<
+            ContextQueries["Service"] | undefined,
+            never,
+            QueryCommand extends C[number]
+              ? ContextQueries
+              : Extract<C[number], QueryCommand> extends never
+                ? never
+                : ContextQueries
+          >;
+          type Owner = ActorContext<MailboxOf<C, I>>;
+          const withContextPath = <M>(actor: ActorContext<M>): typeof actor => ({
+            ...actor,
+            spawn: (name, child, spawnOptions) =>
+              actor.spawn(
+                name,
+                child,
+                contextSpawnOptions(
+                  typeof spawnOptions?.metadata?.contextPath === "string"
+                    ? spawnOptions.metadata.contextPath
+                    : childContextPath(
+                        contextPath(actor),
+                        name.startsWith("~")
+                          ? Buffer.from(name.slice(1), "base64url").toString("utf8")
+                          : name,
+                      ),
+                  spawnOptions,
                 ),
+              ),
+          });
+          const behavior = yield* typeof acquire === "function"
+            ? acquire(withContextPath(owner))
+            : acquire;
+          const pending = yield* Ref.make(
+            new Map<
+              string,
+              {
+                replyTo: ReplyTo<typeof QueryReply.Type>;
+                contract: QueryCommand;
+              }
+            >(),
+          );
+          const retire = (id: string) =>
+            Ref.update(pending, (current) => {
+              const next = new Map(current);
+              next.delete(id);
+              return next;
             });
-            const pending = new Map<string, ReplyTo<typeof QueryReply.Type>>();
-            const run = (tag: string, raw: unknown, actor: Owner) =>
-              Effect.gen(function* () {
-                const contract = contracts.find((candidate) => candidate._tag === tag);
-                if (!contract || !behavior.query)
-                  return yield* new ContextQueryError({
-                    kind: "invalid-input",
-                    message: "Unsupported Context command",
-                  });
-                const request = yield* Schema.decodeUnknownEffect(contract)(raw).pipe(
-                  Effect.mapError(
-                    () =>
-                      new ContextQueryError({
-                        kind: "invalid-input",
-                        message: "Invalid command arguments",
-                      }),
-                  ),
-                );
-                // The registry erases individual schema types. Decoding with a member of C
-                // reestablishes the union before handing it to the domain query behavior.
-                return yield* behavior
-                  .query(request as Extract<C[number], QueryCommand>["Type"], actor)
-                  .pipe(Effect.provideContext(environment));
-              });
-            yield* Effect.addFinalizer(() =>
-              Effect.forEach(
-                pending.values(),
-                (replyTo) =>
-                  replyTo.tell({
-                    _tag: "Failure",
-                    error: new ContextQueryError({
+          yield* Effect.addFinalizer(() =>
+            Ref.get(pending).pipe(
+              Effect.flatMap((requests) =>
+                Effect.forEach(
+                  requests.values(),
+                  ({ replyTo, contract }) => {
+                    const error = new ContextQueryError({
                       kind: "unavailable",
                       message: "Context query owner stopped",
-                    }),
-                  }),
-                { discard: true },
+                    });
+                    // Local replies must stay within the command's declared error protocol.
+                    // Remote queries also observe retirement through their route Scope.
+                    return Schema.is(contract.errorSchema)(error)
+                      ? replyTo.tell({
+                          _tag: "Failure",
+                          error,
+                        })
+                      : Effect.void;
+                  },
+                  { discard: true },
+                ),
               ),
-            );
-            return {
-              receive: (command, actor) =>
-                Effect.gen(function* () {
-                  if (Schema.is(QueryInvocation)(command)) {
-                    if (command._tag === "ContextQueryCompleted") {
-                      const replyTo = pending.get(command.id);
-                      pending.delete(command.id);
-                      if (replyTo) yield* replyTo.tell(command.result);
-                      return;
-                    }
-                    if (yield* Deferred.isDone(command.cancelled)) return;
-                    // Fresh ids isolate shared reply refs and queued completions from older Behaviors.
-                    const id = randomUUID();
-                    pending.set(id, command.replyTo);
-                    yield* actor.pipeToSelf(
-                      Effect.raceFirst(
-                        run(
-                          command.input.command,
-                          {
-                            ...command.input.args,
-                            _tag: command.input.command,
-                            replyTo: command.replyTo,
-                          },
-                          withContextPath(actor),
+            ),
+          );
+          return {
+            receive: (command, actor) =>
+              Effect.gen(function* () {
+                const contract = contracts.find(
+                  (candidate) =>
+                    Predicate.hasProperty(command, "_tag") && command._tag === candidate._tag,
+                );
+                if (!contract) return yield* behavior.receive(command, withContextPath(actor));
+                const original = yield* Schema.decodeUnknownEffect(
+                  Schema.Struct({ replyTo: ReplyTo<typeof QueryReply.Type>() }),
+                )(command).pipe(Effect.orDie);
+                if (original.replyTo.scope?.state._tag === "Closed") return;
+                // Correlation belongs to an invocation, not a possibly shared reply Actor.
+                const id = randomUUID();
+                yield* Ref.update(pending, (current) =>
+                  new Map(current).set(id, {
+                    replyTo: original.replyTo,
+                    contract,
+                  }),
+                );
+                if (original.replyTo.scope)
+                  yield* Scope.addFinalizer(original.replyTo.scope, retire(id));
+                const replyTo: ReplyTo<typeof QueryReply.Type> = {
+                  path: original.replyTo.path,
+                  incarnation: original.replyTo.incarnation,
+                  awaitStarted: original.replyTo.awaitStarted,
+                  scope: original.replyTo.scope,
+                  ask: (makeCommand, options) => original.replyTo.ask(makeCommand, options),
+                  tell: (result) =>
+                    Ref.modify(pending, (current) => {
+                      const next = new Map(current);
+                      const active = next.delete(id);
+                      return [active, next] as const;
+                    }).pipe(
+                      Effect.flatMap((active) =>
+                        active ? original.replyTo.tell(result) : Effect.void,
+                      ),
+                    ),
+                };
+                yield* Schema.decodeUnknownEffect(contract)(
+                  Object.assign({}, command, { replyTo }),
+                ).pipe(
+                  Effect.matchEffect({
+                    onFailure: () => {
+                      const error = new ContextQueryError({
+                        kind: "invalid-input",
+                        message: "Invalid command arguments",
+                      });
+                      return Schema.is(contract.errorSchema)(error)
+                        ? replyTo.tell({
+                            _tag: "Failure",
+                            error,
+                          })
+                        : Effect.die(error);
+                    },
+                    // The decoded member of the declared protocol restores the erased catalogue type.
+                    onSuccess: (decoded) =>
+                      behavior.receive(decoded as MailboxOf<C, I>, withContextPath(actor)),
+                  }),
+                );
+              }),
+            ...(behavior.receiveSignal
+              ? {
+                  receiveSignal: (signal: import("@aster/actor").ActorSignal, actor: Owner) =>
+                    behavior.receiveSignal!(signal, withContextPath(actor)),
+                }
+              : {}),
+            started: (actor) =>
+              Effect.gen(function* () {
+                const path = contextPath(actor);
+                if (behavior.started) yield* behavior.started(withContextPath(actor));
+                if (routes) {
+                  yield* routes
+                    .register(
+                      path,
+                      {
+                        description:
+                          behavior.description ?? registry.get(path)?.description ?? path,
+                        commands: Object.fromEntries(
+                          contracts.map((contract) => [
+                            contract._tag,
+                            {
+                              description: contract.description,
+                              schema: contract.payloadSchema,
+                              success: contract.successSchema,
+                              error: contract.errorSchema,
+                              text: (value: unknown) => contract.text(value),
+                            },
+                          ]),
                         ),
-                        Deferred.await(command.cancelled).pipe(
-                          Effect.andThen(
-                            Effect.fail(
-                              new ContextQueryError({
-                                kind: "unavailable",
-                                message: "Context query cancelled",
-                              }),
+                      },
+                      (input) =>
+                        actor.self
+                          .ask<typeof QueryReply.Type>(
+                            (replyTo) =>
+                              ({ ...input.args, _tag: input.command, replyTo }) as MailboxOf<C, I>,
+                            { timeout: "100 seconds", scope },
+                          )
+                          .pipe(
+                            Effect.catchTag("AskTimeoutError", () =>
+                              Effect.fail(
+                                new ContextQueryError({
+                                  kind: "timeout",
+                                  message: "Context query acknowledgement timed out",
+                                }),
+                              ),
+                            ),
+                            Effect.flatMap((reply) =>
+                              Match.value(reply).pipe(
+                                Match.tag("Success", ({ value }) => Effect.succeed(value)),
+                                Match.tag("Failure", ({ error }) => Effect.fail(error)),
+                                Match.exhaustive,
+                              ),
                             ),
                           ),
-                        ),
-                      ),
-                      (result) => ({
-                        _tag: "ContextQueryCompleted",
-                        id,
-                        result,
-                      }),
-                    );
-                    return;
-                  }
-                  for (const contract of contracts) {
-                    if (Predicate.hasProperty(command, "_tag") && command._tag === contract._tag) {
-                      const request = yield* Schema.decodeUnknownEffect(
-                        Schema.Struct({ replyTo: ReplyTo<typeof QueryReply.Type>() }),
-                      )(command).pipe(Effect.orDie);
-                      // Fresh ids isolate shared reply refs and queued completions from older Behaviors.
-                      const id = randomUUID();
-                      pending.set(id, request.replyTo);
-                      yield* actor.pipeToSelf(
-                        run(contract._tag, command, withContextPath(actor)),
-                        (result) => ({
-                          _tag: "ContextQueryCompleted",
-                          id,
-                          result,
-                        }),
-                      );
-                      return;
-                    }
-                  }
-                  // The generic registry erases individual contracts. Only the framework's
-                  // query messages are intercepted; the remaining original mailbox is unchanged.
-                  yield* behavior.receive(command as LocalMailbox<C, I>, withContextPath(actor));
-                }),
-              ...(behavior.receiveSignal
-                ? {
-                    receiveSignal: (signal: import("@aster/actor").ActorSignal, actor: Owner) =>
-                      behavior.receiveSignal!(signal, withContextPath(actor)),
-                  }
-                : {}),
-              started: (actor) =>
-                Effect.gen(function* () {
-                  const path = contextPath(actor);
-                  yield* registry.register(path, options.context);
-                  if (behavior.started) yield* behavior.started(withContextPath(actor));
-                  if (routes) {
-                    if (!behavior.query)
-                      return yield* Effect.die(new Error(`Missing query behavior for ${key}`));
-                    yield* routes
-                      .register(
-                        path,
-                        {
-                          description:
-                            behavior.description ?? registry.get(path)?.description ?? path,
-                          commands: Object.fromEntries(
-                            contracts.map((contract) => [
-                              contract._tag,
-                              {
-                                description: contract.description,
-                                schema: contract.payloadSchema,
-                              },
-                            ]),
-                          ),
-                        },
-                        (input) =>
-                          Effect.acquireUseRelease(
-                            Deferred.make<void>(),
-                            (cancelled) =>
-                              actor.self
-                                .ask<typeof QueryReply.Type>(
-                                  (replyTo) => ({
-                                    _tag: "ContextQueryRequested",
-                                    input,
-                                    replyTo,
-                                    cancelled,
-                                  }),
-                                  "100 seconds",
-                                )
-                                .pipe(
-                                  Effect.flatMap((reply) =>
-                                    reply._tag === "Success"
-                                      ? Effect.succeed(reply.value)
-                                      : Effect.fail(reply.error),
-                                  ),
-                                  Effect.catchTag("AskTimeoutError", () =>
-                                    Effect.fail(
-                                      new ContextQueryError({
-                                        kind: "timeout",
-                                        message: "Context query acknowledgement timed out",
-                                      }),
-                                    ),
-                                  ),
-                                ),
-                            (cancelled) => Deferred.succeed(cancelled, undefined),
-                          ),
-                      )
-                      .pipe(Effect.provideService(Scope.Scope, scope), Effect.orDie);
-                  }
-                }),
-            };
-          }),
-        ),
-        { contextDefinition: options.context },
+                    )
+                    .pipe(Effect.provideService(Scope.Scope, scope), Effect.orDie);
+                }
+              }),
+          };
+        }),
       );
     },
-  provide:
-    <Out, E2, R2>(dependency: import("effect").Layer.Layer<Out, E2, R2>) =>
-    <P, B, E, R>(
-      definition: import("@aster/actor").Definition<P, B, E, R> & {
-        readonly contextDefinition: ContextDefinition;
-      },
-    ) =>
-      Object.assign(Actor.provide(dependency)(definition), {
-        contextDefinition: definition.contextDefinition,
-      }),
+  provide: Actor.provide,
 } as const;
 
 export const spawnContextChild = <Command, Definition extends AnyActorDefinition>(

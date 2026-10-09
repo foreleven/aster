@@ -17,7 +17,6 @@ import {
   ContextRegistry,
   GoalSettings,
   SystemOneClient,
-  defineContext,
   contextView,
   type SignalRootCommand,
   type GoalsRootCommand,
@@ -79,10 +78,10 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
     goals: GoalsRootCommand[] = [];
   const screened: string[] = [];
   const registry = await Effect.runPromise(makeContextRegistry());
-  const generic = defineContext({
+  const generic = {
     state: Schema.Record(Schema.String, Schema.Unknown),
     message: Schema.Unknown,
-  });
+  };
   for (const item of [
     record("/signals/one", { ...definition, slug: "one", owner: "/goals/owned" }),
     record("/signals/two", { ...definition, slug: "two", owner: "/goals/owned" }),
@@ -98,7 +97,7 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
   await Effect.runPromise(
     registry.register("/source", {
       ...generic,
-      changes: "durable-state",
+      changes: "durable-state" as const,
       view: contextView({ state: Schema.Struct({ summary: Schema.String }) }),
     }),
   );

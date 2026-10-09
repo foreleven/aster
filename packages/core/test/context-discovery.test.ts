@@ -1,3 +1,4 @@
+import { ContextQueryError } from "../src/context/contracts.js";
 import { CurrentActors } from "../src/services/actors.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -19,6 +20,8 @@ test("Context discovery lists capabilities without state and descriptions match 
                 read: {
                   description: "Read one email",
                   schema: Schema.Struct({ id: Schema.String }),
+                  success: Schema.Json,
+                  error: Schema.Never,
                 },
               },
             },
@@ -46,9 +49,15 @@ test("Context discovery lists capabilities without state and descriptions match 
           { path: "/mail/0", command: "read", args: { id: "1", extra: true } },
         ];
         for (const input of invalidInputs)
-          assert.equal((yield* Effect.flip(queries.query(input))).kind, "invalid-input");
+          assert.equal(
+            Schema.decodeUnknownSync(ContextQueryError)(yield* Effect.flip(queries.query(input)))
+              .kind,
+            "invalid-input",
+          );
         assert.equal(
-          (yield* queries.query({ path: "/mail/0", command: "read", args: { id: "1" } })).data,
+          Schema.decodeUnknownSync(Schema.Struct({ data: Schema.String }))(
+            yield* queries.query({ path: "/mail/0", command: "read", args: { id: "1" } }),
+          ).data,
           "PRIVATE BODY",
         );
         assert.equal((yield* queries.list("/mai")).total, 0);
@@ -70,7 +79,14 @@ test("Context query registration owns active handlers and cancels them on shutdo
             "/source",
             {
               description: "Source",
-              commands: { read: { description: "Read", schema: Schema.Struct({}) } },
+              commands: {
+                read: {
+                  description: "Read",
+                  schema: Schema.Struct({}),
+                  success: Schema.Json,
+                  error: Schema.Never,
+                },
+              },
             },
             () =>
               Deferred.succeed(entered, undefined).pipe(
@@ -85,9 +101,17 @@ test("Context query registration owns active handlers and cancels them on shutdo
         yield* Deferred.await(entered);
         yield* Scope.close(owner, Exit.void);
         yield* Deferred.await(cancelled);
-        assert.equal((yield* Fiber.join(caller)).kind, "unavailable");
+        assert.equal(
+          Schema.decodeUnknownSync(ContextQueryError)(yield* Fiber.join(caller)).kind,
+          "unavailable",
+        );
         assert.equal((yield* queries.list()).total, 0);
-        assert.equal((yield* Effect.flip(queries.describe("/source"))).kind, "unavailable");
+        assert.equal(
+          Schema.decodeUnknownSync(ContextQueryError)(
+            yield* Effect.flip(queries.describe("/source")),
+          ).kind,
+          "unavailable",
+        );
       }),
     ).pipe(Effect.timeout("10 seconds")),
   );

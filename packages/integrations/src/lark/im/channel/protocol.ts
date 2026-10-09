@@ -17,5 +17,5 @@ export const ImInternal = Schema.TaggedUnion({
     }),
   },
 });
-// Context queries are intercepted before reaching the channel mailbox.
+// Internal channel lifecycle commands.
 export type ImCommand = typeof ImInternal.Type;

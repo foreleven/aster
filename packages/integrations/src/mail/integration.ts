@@ -3,6 +3,7 @@ import { Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect"
 import {
   ContextQueries,
   ContextRegistry,
+  DurableContext,
   RuntimeIntegrations,
   defineIntegration,
 } from "@aster/core";
@@ -26,7 +27,12 @@ const installation = Layer.effectDiscard(
       MailFetcher,
       ContextQueries,
       ContextRegistry,
-    )(yield* Effect.context<MailSettings | MailFetcher | ContextRegistry | ContextQueries>());
+      DurableContext,
+    )(
+      yield* Effect.context<
+        MailSettings | MailFetcher | ContextRegistry | DurableContext | ContextQueries
+      >(),
+    );
     yield* modules.register(
       defineIntegration({
         name: "mail",

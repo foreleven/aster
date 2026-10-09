@@ -8,7 +8,6 @@ import {
   DecisionError,
   GoalSettings,
   contextView,
-  defineContext,
   type ContextSnapshot,
   type StoredContext,
 } from "../src/index.js";
@@ -29,12 +28,12 @@ import { makeContextRegistry, type TestContextRegistry } from "../src/testing/co
 import { SystemOneActor } from "../src/reactions/actor.js";
 import { ReactionFailure, ReactionPolicy, makeReactionPolicy } from "../src/reactions/policy.js";
 
-const sourceDefinition = defineContext({
-  changes: "durable-state",
+const sourceDefinition = {
+  changes: "durable-state" as const,
   state: Schema.Struct({ summary: Schema.String }),
   message: Schema.String,
   view: contextView({ state: Schema.Struct({ summary: Schema.String }), message: Schema.String }),
-});
+};
 const source = {
   path: "/source",
   description: "Source",
@@ -79,11 +78,11 @@ const storeFor = (records: Map<string, StoredContext>) => ({
     records.set(record.snapshot.path, structuredClone(record));
   },
 });
-const candidateDefinition = defineContext({
+const candidateDefinition = {
   state: Schema.ObjectKeyword,
   message: Schema.Never,
   view: contextView({ state: Schema.ObjectKeyword }),
-});
+};
 const layerFor = (
   registry: TestContextRegistry,
   policy: ReactionPolicy["Service"],
@@ -427,7 +426,7 @@ test("System One rejects corrupted recovered work before any planning or deliver
           save: () => assert.fail("Corrupted recovery must never rewrite stored state"),
         });
         const result = yield* recovered
-          .register("/system-one", SystemOneActor.contextDefinition)
+          .register("/system-one", { state: ReactionSnapshot, message: Schema.Never })
           .pipe(Effect.exit);
         assert.equal(result._tag, "Failure");
       }
@@ -611,11 +610,11 @@ for (const retryMatched of [true, false])
         Effect.scoped(
           Effect.gen(function* () {
             const registry = yield* makeContextRegistry(storeFor(records));
-            const definition = defineContext({
+            const definition = {
               state: Schema.ObjectKeyword,
               message: Schema.Never,
               view: contextView({ state: Schema.ObjectKeyword }),
-            });
+            };
             if (!restart) {
               for (const slug of ["healthy", "broken", "ignored"]) {
                 const path = `/goals/${slug}`;

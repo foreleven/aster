@@ -1,3 +1,4 @@
+import { makeTestContextRegistryWithBackend } from "@aster/core/testing";
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -12,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
-import { ContextCommitError, defineContext, makeContextRegistryWithBackend } from "@aster/core";
+import { ContextCommitError } from "@aster/core";
 import { LocalDurableContext } from "../src/storage/local-durable.js";
 import { makeContextRegistry } from "@aster/core/testing";
 import { makeFileContextStore } from "../src/index.js";
@@ -20,10 +21,10 @@ import { makeFileContextStore } from "../src/index.js";
 test("JSON state and JSONL messages survive restart, append, and history compaction", async () => {
   const dir = mkdtempSync(join(tmpdir(), "signals-store-"));
   try {
-    const definition = defineContext({
+    const definition = {
       state: Schema.Struct({ status: Schema.String }),
       message: Schema.Unknown,
-    });
+    };
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -124,14 +125,14 @@ test("LocalDurableContext recovers state, message, receipt and outbox together a
     await Effect.runPromise(
       Effect.gen(function* () {
         const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
-        const registry = makeContextRegistryWithBackend(backend);
-        const definition = defineContext({
+        const registry = makeTestContextRegistryWithBackend(backend);
+        const definition = {
           state: Schema.Struct({
             receipts: Schema.Array(Schema.Unknown),
             outbox: Schema.Array(Schema.Unknown),
           }),
           message: Schema.Unknown,
-        });
+        };
         yield* registry.register(original.path, definition);
         yield* registry.commit(original, { expectedRevision: 0 });
         const statePath = join(root, "personal/state.json");
@@ -146,7 +147,7 @@ test("LocalDurableContext recovers state, message, receipt and outbox together a
         rmSync(statePath, { recursive: true });
         // Reopen the real driver: the durable intent replaces both public files.
         const recoveredBackend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
-        const recovered = makeContextRegistryWithBackend(recoveredBackend);
+        const recovered = makeTestContextRegistryWithBackend(recoveredBackend);
         yield* recovered.register(original.path, definition);
         const accepted = recovered.get(original.path)!;
         assert.deepEqual(accepted, { ...intended, revision: 2 });

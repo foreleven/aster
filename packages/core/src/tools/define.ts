@@ -19,11 +19,12 @@ const defineTool = <T extends TSchema, R>(
   definition: Definition<T>,
   execute: Execute<T, R>,
   mode: "read" | "write",
+  format: typeof output = output,
 ): EffectTool<T, ApplicationError, R> => ({
   ...definition,
   execute: (id, args) =>
     Effect.suspend(() => execute(args, id)).pipe(
-      Effect.map(output),
+      Effect.map(format),
       Effect.catchTag("ApplicationError", (error) =>
         mode === "write" && error.kind === "unavailable"
           ? Effect.fail(error)
@@ -38,7 +39,8 @@ const defineTool = <T extends TSchema, R>(
 export const queryTool = <T extends TSchema, R>(
   definition: Definition<T>,
   execute: Execute<T, R>,
-) => defineTool(definition, execute, "read");
+  format?: typeof output,
+) => defineTool(definition, execute, "read", format);
 export const commandTool = <T extends TSchema, R>(
   definition: Definition<T>,
   execute: Execute<T, R>,

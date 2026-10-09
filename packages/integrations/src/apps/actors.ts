@@ -1,217 +1,81 @@
-import { Command as ActorCommand, type ActorRef } from "@aster/actor";
-import {
-  ContextActor,
-  contextPath,
-  ContextQueryError,
-  ContextQueryInput,
-  ContextQueryResult,
-  ContextRegistry,
-  defineContext,
-  spawnContextChild,
-} from "@aster/core";
-import { DateTime, Deferred, Effect, Match, Schema } from "effect";
+import { Command as ActorCommand, CommandProcessor, type ActorRef } from "@aster/actor";
+import { ContextActor, contextPath, ContextSession, spawnContextChild } from "@aster/core";
+import { Effect, Match, Schema } from "effect";
 import { OpenCli } from "./client.js";
 import { appCommands, queryArgv } from "./commands.js";
 import { AppsSettings } from "./config.js";
 import { AppsState, AppState, appsView, appView } from "./contexts.js";
 
-const QueryReply = Schema.TaggedUnion({
-  Success: { value: ContextQueryResult },
-  Failure: { error: ContextQueryError },
-});
-type QueryReply = typeof QueryReply.Type;
 export class Ready extends ActorCommand.Class<Ready>()("Ready", {
   payload: {},
   reply: Schema.Void,
 }) {}
-export class Query extends ActorCommand.Class<Query>()("Query", {
-  payload: {
-    input: ContextQueryInput,
-    cancelled: Schema.declare<Deferred.Deferred<void>>(Deferred.isDeferred),
-  },
-  reply: QueryReply,
-}) {}
-const Internal = Schema.TaggedUnion({
-  Query: Query.fields,
-  Finished: { requestId: Schema.String, result: QueryReply },
-});
 
 const AppActor = (appName: import("./commands.js").AppName) =>
   ContextActor.define("apps/AppActor", {
     commands: [Ready, ...appCommands[appName]],
-    internal: Internal,
-    context: defineContext({
-      view: appView,
-      state: AppState,
-      message: Schema.Never,
-    }),
-  })(
+  })((owner) =>
     Effect.gen(function* () {
-      const registry = yield* ContextRegistry;
       const settings = yield* AppsSettings;
       const cli = yield* OpenCli;
-      let pending: Query | undefined;
-      yield* Effect.addFinalizer(() =>
-        pending
-          ? pending.replyTo.tell({
-              _tag: "Failure",
-              error: new ContextQueryError({
-                kind: "unavailable",
-                message: "Context query owner stopped or restarted",
-              }),
-            })
-          : Effect.void,
-      );
+      const processor = yield* CommandProcessor.make({ concurrency: 1 });
+      const path = contextPath(owner);
+      const app = settings.apps.find((app) => path === `/apps/${app.name}`)!;
+      const session = yield* ContextSession.make({
+        path,
+        state: AppState,
+        message: Schema.Never,
+        view: appView,
+        initial: { description: app.description, state: { app: app.name, mode: "query-only" } },
+      }).pipe(Effect.orDie);
+      yield* session
+        .set(
+          { description: app.description, state: { app: app.name, mode: "query-only" } },
+          { mode: "bootstrap" },
+        )
+        .pipe(Effect.orDie);
       return {
-        query: (command, actor) =>
-          Effect.gen(function* () {
-            const contract = appCommands[appName].find(
-              (candidate) => candidate._tag === command._tag,
-            )!;
-            const args = yield* Schema.encodeUnknownEffect(contract.payloadSchema)(command).pipe(
-              Effect.orDie,
-            );
-            const input = yield* Schema.decodeUnknownEffect(ContextQueryInput)({
-              path: contextPath(actor),
-              command: command._tag,
-              args,
-            }).pipe(Effect.orDie);
-            const cancelled = yield* Deferred.make<void>();
-            const reply = yield* actor.self
-              .ask<QueryReply>(
-                (replyTo) => ({ _tag: "Query", input, cancelled, replyTo }),
-                "100 seconds",
-              )
-              .pipe(
-                Effect.ensuring(Deferred.succeed(cancelled, undefined)),
-                Effect.catchTag("AskTimeoutError", () =>
-                  Effect.fail(
-                    new ContextQueryError({
-                      kind: "timeout",
-                      message: "Context query acknowledgement timed out",
-                    }),
-                  ),
-                ),
-              );
-            if (reply._tag === "Failure") return yield* reply.error;
-            return reply.value;
-          }),
-        started: (actor) =>
-          Effect.gen(function* () {
-            const path = contextPath(actor);
-            const app = settings.apps.find((app) => path === `/apps/${app.name}`)!;
-            const previous = registry.get(path);
-            const restored = previous
-              ? yield* Schema.decodeUnknownEffect(AppState)(previous.state).pipe(Effect.orDie)
-              : undefined;
-            yield* registry
-              .commit(
-                {
-                  path,
-                  description: app.description,
-                  messages: [],
-                  state: {
-                    app: app.name,
-                    mode: "query-only",
-                    ...(restored?.lastResult ? { lastResult: restored.lastResult } : {}),
-                  },
-                },
-                { expectedRevision: previous?.revision ?? 0, mode: "bootstrap" },
-              )
-              .pipe(Effect.orDie);
-          }),
         receive: (command, actor) =>
           Match.value(command).pipe(
             Match.tag("Ready", ({ replyTo }) => replyTo.tell(undefined)),
-            Match.tag("Query", (request) =>
-              Effect.gen(function* () {
-                if (yield* Deferred.isDone(request.cancelled)) return;
-                if (pending)
-                  return yield* request.replyTo.tell({
-                    _tag: "Failure",
-                    error: new ContextQueryError({
-                      kind: "busy",
-                      message: "This Context already has a query in progress",
-                    }),
-                  });
-                pending = request;
-                const path = contextPath(actor);
-                const app = settings.apps.find((app) => path === `/apps/${app.name}`)!;
-                const query = Effect.gen(function* () {
-                  const argv = yield* queryArgv(
-                    app.name,
-                    request.input.command,
-                    request.input.args,
-                  );
+            Match.orElse((request) =>
+              processor.submit(
+                request,
+                actor,
+                Effect.gen(function* () {
+                  const path = contextPath(actor);
+                  const contract = appCommands[appName].find(
+                    (candidate) => candidate._tag === request._tag,
+                  )!;
+                  const args = yield* Schema.encodeUnknownEffect(contract.payloadSchema)(
+                    request,
+                  ).pipe(Effect.orDie);
+                  const argv = yield* queryArgv(appName, request._tag, args);
                   yield* Effect.logInfo({
                     event: "apps.query.started",
                     path,
-                    command: request.input.command,
+                    command: request._tag,
                   });
                   const data = yield* cli.run(argv);
-                  return {
-                    path,
-                    command: request.input.command,
-                    queriedAt: DateTime.formatIso(yield* DateTime.now),
-                    data,
-                  };
-                });
-                // Ask cancellation alone only closes the reply ref. Explicit cancellation releases the process too.
-                yield* actor.pipeToSelf(
-                  Effect.raceFirst(
-                    query,
-                    Deferred.await(request.cancelled).pipe(
-                      Effect.andThen(
-                        Effect.fail(
-                          new ContextQueryError({
-                            kind: "cancelled",
-                            message: "Context query cancelled",
-                          }),
-                        ),
-                      ),
-                    ),
-                  ),
-                  (result) => ({ _tag: "Finished", requestId: request.replyTo.path, result }),
-                );
-              }),
-            ),
-            Match.tag("Finished", ({ requestId, result }) =>
-              Effect.gen(function* () {
-                const request = pending;
-                // An already queued result from a retired Behavior cannot settle a new query.
-                if (!request || request.replyTo.path !== requestId) return;
-                const path = contextPath(actor);
-                if (result._tag === "Success") {
-                  const previous = registry.get(path)!;
-                  const state = yield* Schema.decodeUnknownEffect(AppState)(previous.state).pipe(
-                    Effect.orDie,
-                  );
-                  // Commit evidence before replying. Queries do not produce source events or wake unrelated Goals.
-                  yield* registry
-                    .commit(
-                      { ...previous, state: { ...state, lastResult: result.value } },
-                      { expectedRevision: previous.revision ?? 0, mode: "bootstrap" },
-                    )
-                    .pipe(Effect.orDie);
                   yield* Effect.logInfo({
                     event: "apps.query.completed",
                     path,
-                    command: result.value.command,
+                    command: request._tag,
                   });
-                } else {
-                  yield* Effect.logWarning({
-                    event: "apps.query.failed",
-                    path,
-                    command: request.input.command,
-                    kind: result.error.kind,
-                    message: result.error.message,
-                  });
-                }
-                yield* request.replyTo.tell(result);
-                pending = undefined;
-              }),
+                  return data;
+                }).pipe(
+                  Effect.tapError((error) =>
+                    Effect.logWarning({
+                      event: "apps.query.failed",
+                      path: contextPath(actor),
+                      command: request._tag,
+                      kind: error.kind,
+                      message: error.message,
+                    }),
+                  ),
+                ),
+              ),
             ),
-            Match.exhaustive,
           ),
       };
     }),
@@ -219,30 +83,32 @@ const AppActor = (appName: import("./commands.js").AppName) =>
 
 export const AppsRootActor = ContextActor.define("apps/RootActor", {
   commands: [Ready],
-  context: defineContext({
-    view: appsView,
-    state: AppsState,
-    message: Schema.Never,
-  }),
 })(
   Effect.gen(function* () {
-    const registry = yield* ContextRegistry;
     const settings = yield* AppsSettings;
+    const session = yield* ContextSession.make({
+      path: "/apps",
+      state: AppsState,
+      message: Schema.Never,
+      view: appsView,
+      initial: {
+        description: settings.description,
+        state: { apps: settings.apps.map((app) => `/apps/${app.name}`) },
+      },
+    }).pipe(Effect.orDie);
+    yield* session
+      .set(
+        {
+          description: settings.description,
+          state: { apps: settings.apps.map((app) => `/apps/${app.name}`) },
+        },
+        { mode: "bootstrap" },
+      )
+      .pipe(Effect.orDie);
     const children: ActorRef<typeof Ready.Type>[] = [];
     return {
       started: (actor) =>
         Effect.gen(function* () {
-          yield* registry
-            .commit(
-              {
-                path: "/apps",
-                description: settings.description,
-                state: { apps: settings.apps.map((app) => `/apps/${app.name}`) },
-                messages: [],
-              },
-              { expectedRevision: registry.get("/apps")?.revision ?? 0, mode: "bootstrap" },
-            )
-            .pipe(Effect.orDie);
           for (const app of settings.apps) {
             const existing = yield* actor.child(app.name);
             children.push(

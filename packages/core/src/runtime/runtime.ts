@@ -57,6 +57,7 @@ type ActorServices =
   | AgentConversations
   | GoalSettings
   | ContextRegistry
+  | DurableContext
   | SignalDefinitions
   | SystemOneClient
   | ExternalAgents;

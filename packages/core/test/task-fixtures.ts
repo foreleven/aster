@@ -1,3 +1,4 @@
+import { DurableContext } from "@aster/core";
 import { Actor, ActorSystem } from "@aster/actor";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { Clock, Effect, Layer, Schema, Stream } from "effect";
@@ -10,7 +11,6 @@ import {
   SignalDefinitions,
   TaskSnapshot,
   TasksRootActor,
-  defineContext,
   type ExternalAgent,
   type StoredContext,
 } from "../src/index.js";
@@ -67,6 +67,8 @@ export const taskFixture = Effect.fnUntraced(function* (
         Effect.gen(function* () {
           if (command._tag === "AttachTask")
             return yield* command.replyTo.tell({ _tag: "Attached" });
+          if (command._tag === "GetGoalDetails")
+            return yield* command.replyTo.tell({ _tag: "Success", value: {} });
           feedback.push(command);
           yield* command.replyTo.tell({
             _tag: "Accepted",
@@ -83,10 +85,10 @@ export const taskFixture = Effect.fnUntraced(function* (
       receive: () => Effect.void,
     }),
   );
-  yield* registry.register(
-    "/goals/personal",
-    defineContext({ state: Schema.Struct({ status: Schema.String }), message: Schema.Never }),
-  );
+  yield* registry.register("/goals/personal", {
+    state: Schema.Struct({ status: Schema.String }),
+    message: Schema.Never,
+  });
   if (!registry.get("/goals/personal"))
     yield* registry.commit(
       {
@@ -100,14 +102,24 @@ export const taskFixture = Effect.fnUntraced(function* (
   const conversations = options.conversations ?? testConversations();
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
-      Layer.succeed(ContextRegistry, registry),
+      Layer.merge(
+        Layer.succeed(ContextRegistry, registry),
+        Layer.succeed(DurableContext, registry.backend),
+      ),
       Layer.succeed(AgentConversations, conversations),
       Layer.succeed(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
       Layer.succeed(
         DurableHarness,
         options.harness ?? makeHarness(() => Effect.die("Unexpected internal execution")),
       ),
-      ContextQueries.layer.pipe(Layer.provide(Layer.succeed(ContextRegistry, registry))),
+      ContextQueries.layer.pipe(
+        Layer.provide(
+          Layer.merge(
+            Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(DurableContext, registry.backend),
+          ),
+        ),
+      ),
       emptyRecall,
       Layer.succeed(ExternalAgents, options.agents ?? { test: options.agent ?? fakeAgent() }),
       Layer.succeed(SignalDefinitions, []),

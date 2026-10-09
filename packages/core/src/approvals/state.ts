@@ -1,18 +1,12 @@
 import { isDeepStrictEqual } from "node:util";
 import { ApprovalEntry, ApprovalResponse, InputRequest } from "./contracts.js";
-import { Clock, Context, Data, Effect, Layer, Match, Ref, Schema } from "effect";
+import { Clock, Context, Data, Effect, Layer, Match, Schema } from "effect";
 import { ContextRegistry } from "../context/registry.js";
+import { ContextSession } from "../context/session.js";
+import { approvalView } from "./view.js";
 
-export const ApprovalSnapshot = Schema.Struct({
-  entries: Schema.Array(ApprovalEntry),
-  revokedIds: Schema.Array(Schema.String),
-});
-export const ApprovalEvent = Schema.Struct({
-  type: Schema.Literals(["Requested", "Revoked", "Resolved", "Acknowledged"]),
-  requestId: Schema.String,
-  at: Schema.String,
-  response: Schema.optional(ApprovalResponse),
-});
+import { ApprovalSnapshot, ApprovalEvent } from "./snapshot.js";
+export { ApprovalSnapshot, ApprovalEvent } from "./snapshot.js";
 export const approvalEntries = (registry: ContextRegistry["Service"]): readonly ApprovalEntry[] => {
   const record = registry.get("/approvals");
   return record ? Schema.decodeUnknownSync(ApprovalSnapshot)(record.state).entries : [];
@@ -97,41 +91,29 @@ const validateApprovalResponse = (
   );
 
 const makeApprovalState = Effect.gen(function* () {
-  const registry = yield* ContextRegistry;
-  const snapshot = yield* Ref.make<typeof ApprovalSnapshot.Type | undefined>(undefined);
-  const read = Ref.get(snapshot).pipe(
-    Effect.flatMap((state) =>
-      state ? Effect.succeed(state) : Effect.die(new Error("Approval state not restored")),
-    ),
-  );
+  const session = yield* ContextSession.make({
+    path: "/approvals",
+    state: ApprovalSnapshot,
+    message: ApprovalEvent,
+    view: approvalView,
+    messageKey: (event) => `${event.requestId}:${event.type}:${event.at}`,
+    initial: {
+      state: { entries: [], revokedIds: [] },
+      description: "Task requests awaiting confirmation or additional information",
+    },
+  }).pipe(Effect.orDie);
+  const read = session.state.get.pipe(Effect.orDie);
   const commit = Effect.fn("Approvals.commit")(function* (
     state: typeof ApprovalSnapshot.Type,
     event?: Omit<typeof ApprovalEvent.Type, "at">,
   ) {
-    const previous = registry.get("/approvals");
-    const messages = [...(previous?.messages ?? [])];
-    if (event)
-      messages.push({ ...event, at: new Date(yield* Clock.currentTimeMillis).toISOString() });
-    yield* registry
-      .commit(
-        {
-          path: "/approvals",
-          description: "Task requests awaiting confirmation or additional information",
-          state,
-          messages,
-        },
-        { expectedRevision: previous?.revision ?? 0 },
-      )
+    const at = new Date(yield* Clock.currentTimeMillis).toISOString();
+    yield* session
+      .commit(() => ({ state, ...(event ? { messages: { upsert: [{ ...event, at }] } } : {}) }))
       .pipe(Effect.orDie);
-    yield* Ref.set(snapshot, state);
-  }, Effect.uninterruptible);
+  });
   return {
-    restore: Effect.gen(function* () {
-      const initial = registry.get("/approvals");
-      if (initial)
-        yield* Ref.set(snapshot, Schema.decodeUnknownSync(ApprovalSnapshot)(initial.state));
-      else yield* commit({ entries: [], revokedIds: [] });
-    }),
+    restore: Effect.void,
     pending: read.pipe(
       Effect.map((state) => state.entries.filter((entry) => entry.status === "resolved")),
     ),

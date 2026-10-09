@@ -1,3 +1,4 @@
+import { ContextQueryError } from "../src/context/contracts.js";
 import { AgentConversations } from "@aster/agent/harness";
 import { CurrentActors } from "../src/services/actors.js";
 import type { CoreTool } from "../src/tools/define.js";
@@ -10,6 +11,75 @@ import { ContextQueries } from "../src/context/queries/routes.js";
 import { contextQueryTools } from "../src/tools/catalogues.js";
 
 const input = { path: "/apps/ctrip", command: "search", args: { query: "Sanya" } };
+
+test("Agent tools retain formatted text and replay it after the command owner retires", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
+        const owner = yield* Scope.make();
+        const rendered = "## Mail profile\nInbox <alice@example.com>\n".repeat(100);
+        let calls = 0;
+        yield* queries
+          .register(
+            "/mail/profile",
+            {
+              description: "Mail profile",
+              commands: {
+                profile: {
+                  description: "Read profile",
+                  schema: Schema.Struct({}),
+                  success: Schema.Number,
+                  error: Schema.Never,
+                  text: () => rendered,
+                },
+              },
+            },
+            () => Effect.sync(() => ++calls),
+          )
+          .pipe(Effect.provideService(Scope.Scope, owner));
+        const env = yield* toolSystem({ queries });
+        const tools = contextQueryTools("/goals/one", (id) => id);
+        const execute = (tool: CoreTool, id: string, args: object) =>
+          tool.execute(id, args).pipe(Effect.provideService(CurrentActors, env.system));
+        const decodePage = Schema.decodeUnknownSync(
+          Schema.Struct({
+            resultId: Schema.Int,
+            content: Schema.String,
+            nextOffset: Schema.NullOr(Schema.Int),
+          }),
+        );
+        const request = { path: "/mail/profile", command: "profile", args: {} };
+        const output = yield* execute(tools[0]!, "profile", request);
+        const first = decodePage(output.details);
+        assert.match(
+          output.content[0]!.type === "text" ? output.content[0]!.text : "",
+          /\n\n## Mail profile\nInbox/,
+        );
+        yield* Scope.close(owner, Exit.void);
+        assert.deepEqual(
+          decodePage((yield* execute(tools[0]!, "profile", request)).details),
+          first,
+        );
+        let text = first.content;
+        let offset = first.nextOffset;
+        while (offset !== null) {
+          const page = decodePage(
+            (yield* execute(tools[1]!, "page", {
+              resultId: first.resultId,
+              offset,
+            })).details,
+          );
+          text += page.content;
+          offset = page.nextOffset;
+        }
+        assert.equal(text, rendered);
+        assert.equal(calls, 1);
+      }),
+    ),
+  );
+});
+
 test("Context query routes follow ownership scopes and reject unavailable/invalid requests", async () => {
   await Effect.runPromise(
     Effect.scoped(
@@ -29,37 +99,57 @@ test("Context query routes follow ownership scopes and reject unavailable/invali
             {
               description: "Test",
               commands: {
-                search: { description: "Search", schema: Schema.Struct({ query: Schema.String }) },
+                search: {
+                  description: "Search",
+                  schema: Schema.Struct({ query: Schema.String }),
+                  success: Schema.Json,
+                  error: Schema.Never,
+                },
               },
             },
             query,
           )
           .pipe(Effect.provideService(Scope.Scope, owner));
-        assert.deepEqual((yield* queries.query(input)).data, []);
+        assert.deepEqual(
+          Schema.decodeUnknownSync(Schema.Struct({ data: Schema.Array(Schema.Unknown) }))(
+            yield* queries.query(input),
+          ).data,
+          [],
+        );
         assert.equal(
-          (yield* Effect.flip(
-            queries.register(
-              input.path,
-              {
-                description: "Test",
-                commands: {
-                  search: {
-                    description: "Search",
-                    schema: Schema.Struct({ query: Schema.String }),
+          Schema.decodeUnknownSync(ContextQueryError)(
+            yield* Effect.flip(
+              queries.register(
+                input.path,
+                {
+                  description: "Test",
+                  commands: {
+                    search: {
+                      description: "Search",
+                      schema: Schema.Struct({ query: Schema.String }),
+                      success: Schema.Json,
+                      error: Schema.Never,
+                    },
                   },
                 },
-              },
-              query,
+                query,
+              ),
             ),
-          )).kind,
+          ).kind,
           "unavailable",
         );
         assert.equal(
-          (yield* Effect.flip(queries.query({ ...input, command: "" }))).kind,
+          Schema.decodeUnknownSync(ContextQueryError)(
+            yield* Effect.flip(queries.query({ ...input, command: "" })),
+          ).kind,
           "invalid-input",
         );
         yield* Scope.close(owner, Exit.void);
-        assert.equal((yield* Effect.flip(queries.query(input))).kind, "unavailable");
+        assert.equal(
+          Schema.decodeUnknownSync(ContextQueryError)(yield* Effect.flip(queries.query(input)))
+            .kind,
+          "unavailable",
+        );
       }),
     ).pipe(Effect.provide(ContextQueries.layer)),
   );
@@ -81,10 +171,12 @@ test("query tools retain isolated pages across Actor restart and reject changed 
             register: () => Effect.void,
             list: () => Effect.succeed({ items: [], total: 0, nextOffset: null }),
             describe: () => Effect.succeed({ path: "/test", description: "Test", commands: [] }),
-            query: (input) =>
+            query: () => Effect.die("Unexpected raw query"),
+            json: () => Effect.die("Unexpected transport query"),
+            text: (input) =>
               Effect.sync(() => {
                 calls++;
-                return { ...input, queriedAt: "2026-10-04T00:00:00.000Z", data };
+                return JSON.stringify({ ...input, queriedAt: "2026-10-04T00:00:00.000Z", data });
               }),
           },
         });
@@ -93,14 +185,12 @@ test("query tools retain isolated pages across Actor restart and reject changed 
           tool.execute(id, args).pipe(Effect.provideService(CurrentActors, env.system));
         const page = (result: Effect.Success<ReturnType<CoreTool["execute"]>>) =>
           Schema.decodeUnknownSync(
-            Schema.fromJsonString(
-              Schema.Struct({
-                resultId: Schema.Int,
-                content: Schema.String,
-                nextOffset: Schema.NullOr(Schema.Int),
-              }),
-            ),
-          )(result.content.map((entry) => (entry.type === "text" ? entry.text : "")).join(""));
+            Schema.Struct({
+              resultId: Schema.Int,
+              content: Schema.String,
+              nextOffset: Schema.NullOr(Schema.Int),
+            }),
+          )(result.details);
         const tools = makeTools();
         const first = page(yield* execute(tools[0]!, "one", input));
         assert.equal(first.nextOffset, 2000);

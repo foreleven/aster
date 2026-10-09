@@ -1,17 +1,18 @@
-import { type ActorRef } from "@aster/actor";
+import { Command, CommandProcessor, type ActorRef } from "@aster/actor";
 import {
   ContextActor,
+  ContextQueryError,
   ContextRegistry,
+  ContextSession,
   childActorName,
-  defineContext,
   spawnContextChild,
 } from "@aster/core";
 import { Clock, Effect, Match, Schema } from "effect";
 import { LarkConfig } from "../config.js";
 import { mailChannelView } from "../public-views.js";
-import { LarkMailCommands, makeLarkMailQuery } from "../queries.js";
+import { LarkMailCommands } from "./queries.js";
 import { LarkMailCli, LarkResponseError } from "./client.js";
-import { LarkMailMessageActor, type MailMessageCommand } from "./message-actor.js";
+import { GetEmail, LarkMailMessageActor, type MailMessageCommand } from "./message-actor.js";
 import { EmailData, MailboxProfile } from "./model.js";
 import { MailWindow, mailDayStart, mailWindow } from "./window.js";
 const EmailChannelCommand = Schema.TaggedUnion({
@@ -49,17 +50,24 @@ const MailboxState = Schema.Struct({
 export const LarkEmailChannelActor = ContextActor.define("lark/EmailChannelActor", {
   commands: LarkMailCommands,
   internal: EmailChannelCommand,
-  context: defineContext({
-    view: mailChannelView,
-    state: MailboxState,
-    message: Schema.Never,
-  }),
 })(
   Effect.gen(function* () {
-    const query = yield* makeLarkMailQuery;
+    const processor = yield* CommandProcessor.make({ concurrency: 2 });
     const registry = yield* ContextRegistry;
     const cli = yield* LarkMailCli;
     const config = yield* LarkConfig;
+    const session = yield* ContextSession.make({
+      path: "/lark/mail",
+      state: MailboxState,
+      message: Schema.Never,
+      view: mailChannelView,
+      initial: { description: config.mail.description, state: { mailbox: config.mail.mailbox } },
+    }).pipe(Effect.orDie);
+    yield* session.state
+      .update((state) =>
+        state.mailbox === config.mail.mailbox ? state : { mailbox: config.mail.mailbox },
+      )
+      .pipe(Effect.orDie);
     const sessionStart = mailDayStart(yield* Clock.currentTimeMillis);
     let cursor: number | undefined;
     let busy = false;
@@ -82,25 +90,8 @@ export const LarkEmailChannelActor = ContextActor.define("lark/EmailChannelActor
     });
     const schedule = Effect.sleep(config.mail.pollIntervalMs);
     return {
-      query,
       started: (context) =>
         Effect.gen(function* () {
-          const previous = registry.get("/lark/mail");
-          const restored = previous && Schema.decodeUnknownSync(MailboxState)(previous.state);
-          yield* registry
-            .commit(
-              {
-                path: "/lark/mail",
-                description: config.mail.description,
-                state: {
-                  ...(restored?.mailbox === config.mail.mailbox ? restored : {}),
-                  mailbox: config.mail.mailbox,
-                },
-                messages: [],
-              },
-              { expectedRevision: previous?.revision ?? 0 },
-            )
-            .pipe(Effect.asVoid, Effect.orDie);
           yield* context.pipeToSelf(cli.getMailboxProfile(config.mail.mailbox), (result) => ({
             _tag: "ProfileLoaded",
             result,
@@ -109,14 +100,89 @@ export const LarkEmailChannelActor = ContextActor.define("lark/EmailChannelActor
         }),
       receive: (command, context) =>
         Match.value(command).pipe(
+          Match.tag("profile", (request) =>
+            Command.reply(
+              request.replyTo,
+              Effect.gen(function* () {
+                const state = yield* session.state.get.pipe(Effect.orDie);
+                if (!state.profile)
+                  return yield* new ContextQueryError({
+                    kind: "unavailable",
+                    message: "Mailbox profile is not available",
+                  });
+                return state.profile;
+              }),
+            ),
+          ),
+          Match.tag("list", (request) =>
+            processor.submit(
+              request,
+              context,
+              cli.listMessages(config.mail.mailbox, request).pipe(
+                Effect.map((page) => ({
+                  ...page,
+                  coverage: { source: "provider" as const, complete: !page.hasMore },
+                })),
+              ),
+            ),
+          ),
+          Match.tag("read", (request) =>
+            Effect.gen(function* () {
+              const relative = `${config.mail.mailbox}/${request.messageId}`;
+              let child = (yield* context.child(childActorName(relative))) as
+                ActorRef<MailMessageCommand> | undefined;
+              // Retained evidence can outlive a passivated Message Actor. Restore its owner, not the provider data.
+              if (!child && registry.get(`/lark/mail/${relative}`))
+                child = yield* spawnContextChild(context, relative, LarkMailMessageActor).pipe(
+                  Effect.orDie,
+                );
+              const read = child
+                ? child
+                    .ask<Command.Reply<typeof GetEmail>>((replyTo) => new GetEmail({ replyTo }))
+                    .pipe(
+                      Effect.flatMap((reply) =>
+                        Match.value(reply).pipe(
+                          Match.tag("Success", (reply) => Effect.succeed(reply.value)),
+                          Match.tag("Failure", (reply) => Effect.fail(reply.error)),
+                          Match.exhaustive,
+                        ),
+                      ),
+                      Effect.catchTag("AskTimeoutError", () =>
+                        Effect.fail(
+                          new ContextQueryError({
+                            kind: "unavailable",
+                            message: "Email Actor unavailable",
+                          }),
+                        ),
+                      ),
+                    )
+                : cli.getMessages(config.mail.mailbox, [request.messageId]).pipe(
+                    Effect.flatMap((emails) => {
+                      const email = emails.find(
+                        (email) =>
+                          email.messageId === request.messageId &&
+                          email.mailbox === config.mail.mailbox,
+                      );
+                      return email
+                        ? Effect.succeed(email)
+                        : Effect.fail(
+                            new ContextQueryError({
+                              kind: "unavailable",
+                              message: "Email evidence unavailable",
+                            }),
+                          );
+                    }),
+                  );
+              yield* processor.submit(request, context, read);
+            }),
+          ),
           Match.tag("ProfileLoaded", (command) =>
             Match.value(command.result).pipe(
               Match.tag("Failure", (result) => Effect.logWarning(result.error.message)),
               Match.tag("Success", (result) =>
-                registry
-                  .commit(
+                session
+                  .set(
                     {
-                      path: "/lark/mail",
                       description: config.mail.description,
                       state: {
                         mailbox: config.mail.mailbox,
@@ -124,7 +190,7 @@ export const LarkEmailChannelActor = ContextActor.define("lark/EmailChannelActor
                       },
                       messages: [],
                     },
-                    { expectedRevision: registry.get("/lark/mail")?.revision ?? 0 },
+                    {},
                   )
                   .pipe(Effect.asVoid, Effect.orDie),
               ),

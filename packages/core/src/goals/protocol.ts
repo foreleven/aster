@@ -1,3 +1,4 @@
+import { GetGoalDetails } from "./queries.js";
 import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand } from "@aster/actor";
 import { AgentError } from "@aster/agent";
@@ -83,7 +84,7 @@ export class AttachTask extends ActorCommand.Class<AttachTask>()("AttachTask", {
   payload: { taskPath: TaskPath },
   reply: GoalTaskReply,
 }) {}
-export const GoalCommands = [SubmitInput, End, RetryTurn, AttachTask] as const;
+export const GoalCommands = [SubmitInput, End, RetryTurn, AttachTask, GetGoalDetails] as const;
 export const GoalInternal = Schema.TaggedUnion({
   RunNext: {},
   GateSettled: {

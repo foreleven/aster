@@ -1,3 +1,5 @@
+import type { TestContextRegistry } from "@aster/core/testing";
+import { DurableContext } from "@aster/core";
 import { ActorNotFound, type ActorSystem } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
 import { AsterRuntime, ContextRegistry, ContextQueries } from "@aster/core";
@@ -7,7 +9,7 @@ import { makeHttpApi } from "../src/http-api.js";
 import { testConversations } from "./conversation-fixtures.js";
 
 export interface ApiFixture {
-  readonly registry: ContextRegistry["Service"];
+  readonly registry: TestContextRegistry;
   readonly actors?: Pick<ActorSystem, "select">;
   readonly conversations?: AgentConversations["Service"];
   readonly inspect?: AsterRuntime["Service"]["inspect"];
@@ -22,7 +24,10 @@ export const apiServices = (options: ApiFixture) =>
       ready: Effect.void,
       inspect: options.inspect ?? Effect.succeed({ phase: "ready", actors: [], events: [] }),
     }),
-    Layer.succeed(ContextRegistry, options.registry),
+    Layer.merge(
+      Layer.succeed(ContextRegistry, options.registry),
+      Layer.succeed(DurableContext, options.registry.backend),
+    ),
     Layer.succeed(AgentConversations, options.conversations ?? testConversations()),
     options.queries ? Layer.succeed(ContextQueries, options.queries) : ContextQueries.layer,
   );

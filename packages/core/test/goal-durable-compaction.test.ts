@@ -1,3 +1,6 @@
+import { DurableContext } from "@aster/core";
+import { Schema } from "effect";
+import { GoalSnapshot } from "@aster/core";
 import { Models, type ResolvedModel } from "@aster/agent";
 import { AgentRunner } from "@aster/agent/agent";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
@@ -14,13 +17,7 @@ import { testConversations } from "./conversation-fixtures.js";
 import { toolSystem } from "./tool-fixtures.js";
 
 import { Effect, Layer } from "effect";
-import {
-  ContextRegistry,
-  ExternalAgents,
-  GoalActor,
-  GoalAgent,
-  GoalSettings,
-} from "../src/index.js";
+import { ContextRegistry, ExternalAgents, GoalAgent, GoalSettings } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
 test("durable Goal compacts its native transcript and finishes the same request", async (t) => {
@@ -102,7 +99,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
   });
   const run = Effect.gen(function* () {
     const registry = yield* makeContextRegistry();
-    yield* registry.register("/goals/test", GoalActor.contextDefinition);
+    yield* registry.register("/goals/test", { state: GoalSnapshot, message: Schema.Never });
     const { system } = yield* toolSystem({ registry, messages: conversations });
     return yield* GoalAgent.use((agent) =>
       agent.converse({
@@ -128,6 +125,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
       Effect.provideService(AgentConversations, conversations),
       Effect.provideService(CurrentActors, system),
       Effect.provideService(ContextRegistry, registry),
+      Effect.provideService(DurableContext, registry.backend),
       Effect.provideService(GoalSettings, {
         definitions: [],
         reasoning: { model: "test", contextTokens: 48000 },

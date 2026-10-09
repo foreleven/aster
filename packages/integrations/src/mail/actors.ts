@@ -1,13 +1,13 @@
-import { Command as ActorCommand, type ActorRef } from "@aster/actor";
+import { Command as ActorCommand, CommandProcessor, type ActorRef } from "@aster/actor";
 import {
   ContextActor,
   ContextRegistry,
+  ContextSession,
   childActorName,
   contextPath,
-  defineContext,
   spawnContextChild,
 } from "@aster/core";
-import { Context, DateTime, Effect, Layer, Match, Schema, Scope, Semaphore } from "effect";
+import { DateTime, Effect, Match, Schema, Semaphore } from "effect";
 import { randomUUID } from "node:crypto";
 import { MailFetcher } from "./client.js";
 import { MailSettings } from "./config.js";
@@ -18,14 +18,12 @@ import {
   mailRootView,
   mailSegment,
   mailboxPath,
-  mailboxView,
 } from "./contexts.js";
 import { mailDay } from "./dates.js";
 import { MailFetchError, mailFailureDetails, type MailFailureDetails } from "./errors.js";
-import { MailBatch, MailMessage, MailboxWindow, type Mailbox } from "./model.js";
-import { MailboxQueries, makeMailboxQuery } from "./queries.js";
-import { MailboxState } from "./state/model.js";
-import { MailboxSnapshot } from "./state/snapshot.js";
+import { MailBatch, MailMessage, MailboxWindow } from "./model.js";
+import { MailboxQueries, queryMailbox } from "./queries.js";
+import { makeMailboxState } from "./state/model.js";
 
 export class SetEmail extends ActorCommand.Class<SetEmail>()("SetEmail", {
   payload: { email: MailMessage },
@@ -34,15 +32,15 @@ export class SetEmail extends ActorCommand.Class<SetEmail>()("SetEmail", {
 
 const MailMessageActor = ContextActor.define("mail/MessageActor", {
   commands: [SetEmail],
-  context: defineContext({
-    view: mailMessageView,
-    state: MailMessage,
-    message: Schema.Never,
-    changes: "durable-state",
-  }),
-})(
+})((owner) =>
   Effect.gen(function* () {
-    const registry = yield* ContextRegistry;
+    const session = yield* ContextSession.make({
+      path: contextPath(owner),
+      state: MailMessage,
+      message: Schema.Never,
+      view: mailMessageView,
+      changes: "durable-state",
+    }).pipe(Effect.orDie);
     return {
       started: (context) => context.receiveTimeout("5 minutes"),
       receive: ({ email, replyTo }, context) =>
@@ -51,11 +49,10 @@ const MailMessageActor = ContextActor.define("mail/MessageActor", {
           if (path !== mailMessagePath(email))
             return yield* Effect.die(new Error("Mail identity mismatch"));
           // The provider identity is immutable. Replay acknowledges the existing durable record.
-          if (!registry.get(path)) {
-            yield* registry
-              .commit(
+          if (!(yield* session.current.pipe(Effect.orDie))) {
+            yield* session
+              .set(
                 {
-                  path,
                   description: `Email from ${email.from}: ${email.subject}`,
                   state: email,
                   messages: [],
@@ -104,18 +101,18 @@ const MailboxCommand = Schema.TaggedUnion({
 const MailboxActor = ContextActor.define("mail/MailboxActor", {
   commands: MailboxQueries,
   internal: MailboxCommand,
-  context: defineContext({ view: mailboxView, state: MailboxSnapshot, message: Schema.Never }),
-})(
+})((owner) =>
   Effect.gen(function* () {
     const registry = yield* ContextRegistry;
     const settings = yield* MailSettings;
     const fetcher = yield* MailFetcher;
-    const scope = yield* Scope.Scope;
     // POP3 commonly allows only one authenticated session per mailbox.
     const mailboxPermit = yield* Semaphore.make(1);
+    const processor = yield* CommandProcessor.make({ concurrency: 1 });
     const generation = randomUUID();
-    let state: MailboxState["Service"];
-    let mailbox: Mailbox;
+    const path = contextPath(owner);
+    const mailbox = settings.mailboxes.find((entry) => mailboxPath(entry.id) === path)!;
+    const state = yield* makeMailboxState(path, mailbox);
     let busy = false;
     let failures = 0;
     let synced = false;
@@ -133,18 +130,8 @@ const MailboxActor = ContextActor.define("mail/MailboxActor", {
       });
     });
     return {
-      query: (input) =>
-        mailboxPermit.withPermit(
-          Effect.flatMap(makeMailboxQuery(mailbox), (query) => query(input)),
-        ),
       started: (actor) =>
         Effect.gen(function* () {
-          const path = contextPath(actor);
-          mailbox = settings.mailboxes.find((entry) => mailboxPath(entry.id) === path)!;
-          state = Context.get(
-            yield* Layer.buildWithScope(MailboxState.layer(path, mailbox), scope),
-            MailboxState,
-          );
           yield* Effect.logInfo({ event: "mail.poll.started", path, pollIntervalMs: interval });
           yield* actor.self.tell({ _tag: "Rotate" });
           yield* actor.self.tell({ _tag: "Poll" });
@@ -153,6 +140,13 @@ const MailboxActor = ContextActor.define("mail/MailboxActor", {
         Effect.gen(function* () {
           if ("generation" in command && command.generation !== generation) return;
           yield* Match.value(command).pipe(
+            Match.tag("list", "read", (request) =>
+              processor.submit(
+                request,
+                actor,
+                mailboxPermit.withPermit(queryMailbox(mailbox, request)),
+              ),
+            ),
             Match.tag("Rotate", () =>
               Effect.gen(function* () {
                 const now = yield* DateTime.now;
@@ -321,31 +315,25 @@ const MailboxActor = ContextActor.define("mail/MailboxActor", {
 
 export const MailRootActor = ContextActor.define("mail/RootActor", {
   commands: [],
-  context: defineContext({
-    view: mailRootView,
-    state: MailRootState,
-    message: Schema.Never,
-  }),
 })(
   Effect.gen(function* () {
-    const registry = yield* ContextRegistry;
     const settings = yield* MailSettings;
+    const session = yield* ContextSession.make({
+      path: "/mail",
+      state: MailRootState,
+      message: Schema.Never,
+      view: mailRootView,
+      initial: {
+        description: settings.description ?? "Connected mailboxes",
+        state: { mailboxes: settings.mailboxes.map((mailbox) => mailboxPath(mailbox.id)) },
+      },
+    }).pipe(Effect.orDie);
+    yield* session.state
+      .update(() => ({ mailboxes: settings.mailboxes.map((mailbox) => mailboxPath(mailbox.id)) }))
+      .pipe(Effect.orDie);
     return {
       started: (context) =>
         Effect.gen(function* () {
-          yield* registry
-            .commit(
-              {
-                path: "/mail",
-                description: settings.description ?? "Connected mailboxes",
-                state: {
-                  mailboxes: settings.mailboxes.map((mailbox) => mailboxPath(mailbox.id)),
-                },
-                messages: [],
-              },
-              { expectedRevision: registry.get("/mail")?.revision ?? 0 },
-            )
-            .pipe(Effect.orDie);
           for (const mailbox of settings.mailboxes) {
             const name = mailSegment(mailbox.id);
             if (!(yield* context.child(childActorName(name))))

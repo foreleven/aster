@@ -1,18 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Fiber, Schema, Stream } from "effect";
-import {
-  type StoredContext,
-  childActorName,
-  childContextPath,
-  defineContext,
-} from "../src/index.js";
+import { type StoredContext, childActorName, childContextPath } from "../src/index.js";
 import { makeContextRegistry } from "../src/testing/context.js";
 
-const definition = defineContext({
+const definition = {
   state: Schema.Struct({ value: Schema.Number }),
   message: Schema.String,
-});
+};
 
 test("virtual Context path segments map to a direct Actor name", () => {
   assert.equal(childContextPath("/lark/mail", "me/message-1"), "/lark/mail/me/message-1");
