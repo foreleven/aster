@@ -6,8 +6,6 @@ import {
   ImAgentQueue,
   ImSummaryGate,
   makeImSummaryGate,
-  ImStorage,
-  makeImStorage,
   ChatSummarizer,
   LarkChatActor,
 } from "@aster/integrations";
@@ -82,12 +80,11 @@ const report = await Effect.runPromise(
           ChatSummarizer.layer,
           ImAgentQueue.layer,
           Layer.succeed(ImSummaryGate, makeImSummaryGate(client)),
-          Layer.succeed(ImStorage, makeImStorage(dir)),
         ),
       );
       yield* Stream.runForEach(yield* registry.subscribe, (change) =>
         Effect.gen(function* () {
-          if (change.path !== path || !change.stateChanged || change.evaluate === false) return;
+          if (change.record.path !== path || !change.events?.length) return;
           console.log(
             JSON.stringify({ event: "verification.summary", summary: change.record.state.summary }),
           );

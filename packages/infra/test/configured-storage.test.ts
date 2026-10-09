@@ -61,7 +61,13 @@ test("configured Local storage reopens Contexts and keeps journals under the sam
       goalSlug: "test",
       summaryFingerprint: "f1",
       input: {
-        contextSummary: "Evidence",
+        context: {
+          path: "/chat",
+          revision: 1,
+          description: "Chat",
+          state: { summary: "Evidence" },
+          messages: [],
+        },
         goalTitle: "Test",
         goalDescription: "Test",
         goalSummary: "",

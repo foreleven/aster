@@ -2,6 +2,8 @@
 
 Context is versioned shared state between an Actor owner and its readers. It validates owner data, commits it durably, projects public views and announces successful commits. It does not select Goals or Signals, execute Tasks, capture Memory or generate descriptions.
 
+[ContextSession](context-session-design.md) provides typed owner-scoped state and keyed-message operations through the existing registry/commit chain. IM owners use separate transactional Pi Documents with continuous or explicitly dated storage. Other owners continue using Local files.
+
 ## Models
 
 | Model             | Purpose                                                                           |
@@ -12,7 +14,7 @@ Context is versioned shared state between an Actor owner and its readers. It val
 | `ContextChange`   | `{ record: ContextSnapshot }`; live notification after a successful commit        |
 | `PublicContext`   | Allowlisted state/messages and projection metadata for application/model reads    |
 | `ContextEvent`    | `id`, versioned public `record`, `createdAt`; durable source evidence             |
-| `StoredContext`   | `{ snapshot, events }`; the same validated model in memory, Local and Pi          |
+| `StoredContext`   | `{ snapshot, events }`; the logical model in memory and adapters                  |
 
 Context messages can contain source evidence, such as a Lark chat's message window. Goal and Task conversations remain in Pi; Context is not a second Agent transcript store.
 
@@ -44,7 +46,7 @@ Owners use `registry.get/snapshot`. Application queries and model tools use `reg
 
 A commit validates the owner schema and expected revision, then persists the next snapshot and source event together. Only successful persistence updates canonical memory and publishes a notification. An unchanged record retains its revision. State changes produce source events only when requested by the definition; message-only and description-only changes still notify readers.
 
-Owners supply `description` directly when creating or updating a Context. It identifies the Context and its purpose; changing activity belongs in state or summary. There is no model-generated description, metadata consumer or separate description-write API.
+Owners supply `description` directly when creating or updating a Context. Public views may derive their description from decoded public state, so identity metadata such as a chat name and purpose stays current without rewriting owner snapshots. Directory entries still use the owner description. Changing activity belongs in state or summary. There is no model-generated description, metadata consumer or separate description-write API.
 
 The store serializes commit and recovery per path. Unrelated Contexts may progress independently. Waiting writers are interruptible; admitted persistence, canonical-state updates and publication drain together. Pi adapters additionally serialize access to their shared Session, including poisoning and reopen, so recovery cannot close a Session while another Context is writing.
 
@@ -52,10 +54,10 @@ Failed or uncertain writes fence their path until registration reconciles author
 
 ## Durable evidence and storage
 
-Source event IDs derive from the `context-event` namespace, path and committed revision. The storage schema validates event ownership, increasing revisions, snapshot bounds, stable identity and creation time. Event records retain public evidence only. `journal()` supplies durable consumers; `exportRecords()` supplies full records for routed-storage divergence checks and offline backend migration.
+Source event IDs derive from the `context-event` namespace, path and committed revision. The storage schema validates event ownership, increasing revisions, snapshot bounds, stable identity and creation time. Event records retain public evidence only. `journal()` supplies durable consumers; `exportRecords()` supplies full records for routed-storage divergence checks.
 
-Local keeps its fsync-backed pending transaction across state and message files. Pi atomically commits the storage record, entry and index mapping. Both use `{ snapshot, events }`; old flat records, missing revisions and reaction-envelope conversions are unsupported. No runtime data is rewritten by this change.
+Local keeps its fsync-backed pending transaction across state and message files. Session-backed owners atomically commit separate State, Messages, Metadata and Events Documents in Pi, without conversation entries. The adapter updates message keys individually and retains a lightweight order index. Both reconstruct the logical `{ snapshot, events }` record. IM uses the new Session format without legacy-data compatibility.
 
 Live notifications carry newly committed durable events, including events discovered during uncertain-write recovery. System One admits these events directly and scans the journal only at startup. Its persisted per-source revision watermarks prevent replay; queued changes from the same Context coalesce to the latest revision, while in-flight matching retains its frozen evidence. Reactions own target matching, deliveries and receipts. Memory owns capture selection and deduplication. Neither relies on a live source Actor to preserve accepted evidence.
 
-Source journals still grow with retained history and are saved with snapshots. Append-only storage and journal compaction require a separate retention design that accounts for every durable consumer.
+Source journals still grow with retained history. The Pi adapter appends newly retained event bodies to its Events Document without rewriting earlier bodies during ordinary commits. Journal pruning requires a separate retention design that accounts for every durable consumer.

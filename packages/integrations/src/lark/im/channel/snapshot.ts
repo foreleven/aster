@@ -1,0 +1,26 @@
+import { Schema } from "effect";
+import { ContextSession } from "@aster/core";
+import { imChannelView } from "../../public-views.js";
+import { ChatInfo, ChatMessage } from "../service/model.js";
+export const ImSnapshot = Schema.Struct({
+  ready: Schema.Boolean,
+  through: Schema.optional(Schema.String),
+  chats: Schema.Number,
+  lastError: Schema.optional(Schema.String),
+});
+export type ImSnapshot = typeof ImSnapshot.Type;
+export const ImPollResult = Schema.Struct({
+  start: Schema.String,
+  through: Schema.String,
+  caughtUp: Schema.Boolean,
+  batches: Schema.Array(Schema.Struct({ chat: ChatInfo, messages: Schema.Array(ChatMessage) })),
+});
+export type ImPollResult = typeof ImPollResult.Type;
+
+export const ImContext = ContextSession.define({
+  view: imChannelView,
+  state: ImSnapshot,
+  message: Schema.Never,
+  messageKey: (_message: never) => "",
+  compareMessages: () => 0,
+});

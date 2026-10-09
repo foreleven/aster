@@ -36,6 +36,8 @@ export { SignalRootActor } from "./signals/root.js";
 export * from "./signals/state/snapshot.js";
 
 export * from "./context/store.js";
+export * from "./context/session.js";
+export * from "./context/session-storage.js";
 
 export * from "./tasks/root.js";
 

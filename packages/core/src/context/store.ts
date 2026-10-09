@@ -12,6 +12,7 @@ import {
   type Scope,
 } from "effect";
 import { publicJson } from "../json.js";
+import type { ContextSessionStorage } from "./session-storage.js";
 import {
   ContextInput,
   ContextEvent,
@@ -31,7 +32,14 @@ import {
 /** Drivers own serialization and atomic recovery; the kernel owns revision/publication semantics. */
 export interface ContextPersistence {
   readonly load: Effect.Effect<readonly StoredContext[], ContextRecoveryError>;
-  readonly save: (record: StoredContext) => Effect.Effect<void, ContextCommitError>;
+  readonly save: (
+    record: StoredContext,
+    session?: ContextSessionStorage,
+  ) => Effect.Effect<void, ContextCommitError>;
+  readonly configureSession?: (
+    path: string,
+    session: ContextSessionStorage,
+  ) => Effect.Effect<void, ContextRecoveryError>;
 }
 
 export interface ContextCommitOptions {
@@ -50,6 +58,10 @@ export interface DurableCommitOptions extends ContextCommitOptions {
 export class DurableContext extends Context.Service<
   DurableContext,
   {
+    readonly configureSession: (
+      path: string,
+      session: ContextSessionStorage,
+    ) => Effect.Effect<void, ContextRecoveryError>;
     readonly commit: (
       record: ContextInput,
       options: DurableCommitOptions,
@@ -92,6 +104,7 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
   const changes = yield* PubSub.unbounded<ContextChange>();
   // Gates live as long as their registered paths. Only writes to the same Context serialize.
   const writers = new Map<string, Semaphore.Semaphore>();
+  const sessions = new Map<string, ContextSessionStorage>();
   const writerFor = (path: string) => {
     let writer = writers.get(path);
     if (!writer) {
@@ -151,7 +164,9 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
           snapshot: { ...content, revision },
           events,
         });
-        yield* Effect.suspend(() => persistence.save(structuredClone(stored))).pipe(
+        yield* Effect.suspend(() =>
+          persistence.save(structuredClone(stored), sessions.get(input.path)),
+        ).pipe(
           Effect.tapCause((cause) =>
             Effect.sync(() => {
               const failure = Cause.findError(cause);
@@ -219,6 +234,19 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
     );
   });
   return DurableContext.of({
+    configureSession: (path, session) =>
+      writerFor(path).withPermit(
+        Effect.gen(function* () {
+          const previous = sessions.get(path);
+          if (previous && !isDeepStrictEqual(previous.partition, session.partition))
+            return yield* new ContextRecoveryError({
+              path,
+              cause: new Error("Context Session partition cannot change"),
+            });
+          yield* persistence.configureSession?.(path, session) ?? Effect.void;
+          sessions.set(path, session);
+        }),
+      ),
     commit,
     recover,
     get: (path) => {

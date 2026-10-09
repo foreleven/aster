@@ -1,8 +1,8 @@
 import { Config, ConfigProvider, Context, Effect, Layer, Schema } from "effect";
 import { validateConfig } from "@aster/core";
-import { parseImPolicy } from "./im/policy.js";
+import { ChatConfigEntry } from "./im/config.js";
 export interface LarkIntegrationConfig {
-  readonly im?: typeof LarkImEntry.Type;
+  readonly im?: typeof ChatConfigEntry.Type;
   readonly profile?: string;
   readonly description: string;
   readonly mail: {
@@ -28,29 +28,13 @@ const LarkEmailEntry = Schema.Struct({
   ),
 });
 
-const LarkImEntry = Schema.Struct({
-  description: Schema.optional(Schema.String),
-  config: Schema.optionalKey(
-    Schema.Struct({
-      pollIntervalMs: Schema.optional(Schema.Int),
-      catchUpWindowMs: Schema.optional(Schema.Int),
-      summary: Schema.optionalKey(
-        Schema.Struct({
-          model: Schema.optional(Schema.NonEmptyString),
-          agentStartIntervalMs: Schema.optional(Schema.Int),
-          agentConcurrency: Schema.optional(Schema.Int),
-        }),
-      ),
-    }),
-  ),
-});
 const LarkEntry = Schema.Struct({
   description: Schema.optional(Schema.String),
   config: Schema.optionalKey(Schema.Struct({ profile: Schema.optional(Schema.String) })),
   children: Schema.optionalKey(
     Schema.Struct({
       "/mail": Schema.optionalKey(LarkEmailEntry),
-      "/im": Schema.optionalKey(LarkImEntry),
+      "/im": Schema.optionalKey(ChatConfigEntry),
     }),
   ),
 });
@@ -78,8 +62,7 @@ export const parseLarkConfig = (entry: unknown): LarkIntegrationConfig => {
   const im =
     children["/im"] === undefined
       ? undefined
-      : Schema.decodeUnknownSync(LarkImEntry)(children["/im"]);
-  if (im) parseImPolicy(im);
+      : Schema.decodeUnknownSync(ChatConfigEntry)(children["/im"]);
   return {
     ...(im === undefined ? {} : { im }),
     profile: root.config?.profile,

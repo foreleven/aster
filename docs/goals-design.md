@@ -44,6 +44,8 @@ Gate work belongs to the Actor Behavior scope and has its own generation and can
 
 Execution feedback carries Task path, status at emission and text; Goal resolves the original remaining Agent-turn budget from the Task. Automatic feedback retains its original remaining Agent-turn budget. A new conversation turn does not replenish it. Exhausted feedback can produce a visible notice without invoking another model.
 
+System One receives the same frozen public Context projection for Goal and Signal matching, including path, description, state and messages. Goal requests add the target title, description and summary. Source views own identity metadata such as chat names; screening does not extract integration-specific fields. The v4 screening audit stores this public Context, and its `summaryFingerprint` covers path, description, state and messages while excluding revision metadata. Goal delivery still carries the summary and public source description into the second gate.
+
 ## Implementation organization
 
 ```text

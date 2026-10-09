@@ -9,9 +9,8 @@ import { makeContextRegistry } from "@aster/core/testing";
 import {
   ChatSummarizer,
   ImAgentQueue,
-  ImSummaryGate,
-  ImStorage,
-  ImSearch,
+  ChatSummaryGate,
+  LarkChatService,
   LarkConfig,
   LarkIntegration,
   LarkAccountCli,
@@ -41,10 +40,12 @@ test("a code-registered Lark root starts without YAML entries and creates its ow
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
             ContextQueries.layer,
-            ImStorage.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
-            Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
-            Layer.succeed(ImSearch, { recent: async () => [] }),
+            Layer.succeed(ChatSummaryGate, { needed: gateStub(async () => true) }),
+            Layer.succeed(LarkChatService, {
+              searchMessages: () => Effect.succeed([]),
+              getChatSettings: () => Effect.succeed([]),
+            }),
             Layer.succeed(ChatSummarizer, {
               summarize: summaryStub(async () => {
                 throw new Error("No chats in mail test");
@@ -106,10 +107,12 @@ test("Lark channel publishes today’s startup mail as an email Context", async 
           ActorSystem.provide(
             Layer.succeed(ContextRegistry, registry),
             ContextQueries.layer,
-            ImStorage.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
-            Layer.succeed(ImSummaryGate, { needed: gateStub(async () => true) }),
-            Layer.succeed(ImSearch, { recent: async () => [] }),
+            Layer.succeed(ChatSummaryGate, { needed: gateStub(async () => true) }),
+            Layer.succeed(LarkChatService, {
+              searchMessages: () => Effect.succeed([]),
+              getChatSettings: () => Effect.succeed([]),
+            }),
             Layer.succeed(ChatSummarizer, {
               summarize: summaryStub(async () => {
                 throw new Error("No chats in mail test");

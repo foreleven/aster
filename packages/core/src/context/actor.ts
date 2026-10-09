@@ -98,7 +98,7 @@ export const ContextActor = {
             // The runtime filter and conditional requirement use the same descriptor marker.
             // Widened schema arrays conservatively retain the query-registry requirement.
             const routes = yield* (
-              contracts.length ? ContextQueries : Effect.succeed(undefined)
+              contracts.length ? ContextQueries : Effect.void
             ) as Effect.Effect<
               ContextQueries["Service"] | undefined,
               never,

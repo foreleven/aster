@@ -1,6 +1,12 @@
 import { Context, Effect, Layer } from "effect";
-import { ContextRecoveryError, DurableContext, ExternalAgents } from "@aster/core";
-import { LocalDurableContext } from "./local-durable.js";
+import {
+  ContextRecoveryError,
+  DurableContext,
+  ExternalAgents,
+  makeDurableContext,
+} from "@aster/core";
+import { makeContextSessionPersistence } from "./context-sessions.js";
+import { join } from "node:path";
 import { makeExternalAgents } from "../agents.js";
 import { makeFileContextStore } from "./file-context-store.js";
 import { storageSettings } from "./settings.js";
@@ -13,7 +19,12 @@ export const ConfiguredDurableInfrastructure = {
       const contexts = yield* Effect.try({
         try: () => makeFileContextStore(settings.contextDirectory),
         catch: (cause) => new ContextRecoveryError({ path: "/", cause }),
-      }).pipe(Effect.flatMap(LocalDurableContext.fromStore));
+      }).pipe(
+        Effect.flatMap((store) =>
+          makeContextSessionPersistence(store, join(settings.root, "context-sessions")),
+        ),
+        Effect.flatMap(makeDurableContext),
+      );
       const agents = yield* makeExternalAgents();
       return Context.make(DurableContext, contexts).pipe(Context.add(ExternalAgents, agents));
     }),

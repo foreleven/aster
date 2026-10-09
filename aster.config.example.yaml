@@ -51,6 +51,7 @@ contexts:
         description: Find known work chats and read their rolling summaries and retained messages to investigate project progress, decisions, dependencies and blockers. Message coverage is partial; this is not a complete chat archive.
         config:
           summary:
+            maxMessages: 200
             agentStartIntervalMs: 10000
             agentConcurrency: 2
             model: goal-reasoning

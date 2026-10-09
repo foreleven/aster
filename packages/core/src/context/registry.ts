@@ -13,6 +13,8 @@ import { Context, Effect, Layer, Schema, Stream, type Scope } from "effect";
 import { ContextCommitError, ContextConflict, ContextValidationError } from "./errors.js";
 
 import { DurableContext, type ContextCommitOptions } from "./store.js";
+import type { ContextSessionStorage } from "./session-storage.js";
+import { ContextRecoveryError } from "./errors.js";
 export type { ContextCommitOptions } from "./store.js";
 
 export interface ContextReader {
@@ -31,6 +33,10 @@ export interface ContextReader {
 export class ContextRegistry extends Context.Service<
   ContextRegistry,
   {
+    readonly acquireSession: (
+      path: string,
+      storage: ContextSessionStorage,
+    ) => Effect.Effect<void, ContextRecoveryError, Scope.Scope>;
     readonly reader: ContextReader;
     readonly views: {
       readonly project: (record: PublicContext) => PublicContext;
@@ -63,6 +69,7 @@ export const makeContextRegistryWithBackend = (
 ): ContextRegistry["Service"] => {
   const definitions = new Map<string, ContextDefinition>();
   const views = new Set<ContextViewPolicy>();
+  const sessionOwners = new Set<string>();
   const project = (record: PublicContext): PublicContext => {
     if (record.projection?.visibility === "restricted")
       return restrictedContext(record, record.projection.reason ?? "missing-policy");
@@ -108,6 +115,30 @@ export const makeContextRegistryWithBackend = (
       Object.entries(backend.snapshot()).map(([path, record]) => [path, project(record)]),
     );
   return {
+    acquireSession: (path, storage) =>
+      Effect.acquireRelease(
+        Effect.gen(function* () {
+          if (sessionOwners.has(path))
+            return yield* new ContextRecoveryError({
+              path,
+              cause: new Error("Context Session already has an owner"),
+            });
+          sessionOwners.add(path);
+          yield* backend.configureSession(path, storage).pipe(
+            Effect.onExit((exit) =>
+              exit._tag === "Failure"
+                ? Effect.sync(() => {
+                    sessionOwners.delete(path);
+                  })
+                : Effect.void,
+            ),
+          );
+        }),
+        () =>
+          Effect.sync(() => {
+            sessionOwners.delete(path);
+          }),
+      ),
     reader: {
       get: (path) => {
         const record = backend.get(path);

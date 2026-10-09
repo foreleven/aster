@@ -16,12 +16,14 @@
     "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js"
   },
   "dependencies": {
+    "@agentmemory/agentmemory": "0.9.29",
     "@aster/agent": "workspace:*",
     "@aster/core": "workspace:*",
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
     "@typesafe-ai/sdk": "^0.6.0",
     "effect": "4.0.0",
-    "yaml": "2.8.3",
-    "@agentmemory/agentmemory": "0.9.29"
+    "yaml": "2.8.3"
   },
   "devDependencies": {
     "@aster/actor": "workspace:*"

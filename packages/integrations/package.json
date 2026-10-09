@@ -16,13 +16,14 @@
     "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js"
   },
   "dependencies": {
+    "@aster/actor": "workspace:*",
     "@aster/agent": "workspace:*",
     "@aster/core": "workspace:*",
+    "@effect/platform-node": "4.0.0",
     "effect": "4.0.0",
     "imapflow": "^2.1.2",
     "mailparser": "^3.9.31",
-    "node-pop3": "^0.15.3",
-    "@aster/actor": "workspace:*"
+    "node-pop3": "^0.15.3"
   },
   "devDependencies": {
     "@types/mailparser": "^3.9.0"

@@ -1,3 +1,4 @@
+import { AgentRunner } from "@aster/agent/agent";
 import {
   ContextCaptures,
   ContextQueries,
@@ -12,12 +13,10 @@ import { LarkAccountCli, makeAccountClient } from "./account/client.js";
 import { LarkRootActor } from "./account/root-actor.js";
 import { LarkConfig } from "./config.js";
 import { larkCaptures } from "./context-policies.js";
-import { ImAgentQueue } from "./im/agent-queue.js";
-import { ImSearch } from "./im/client.js";
-import { parseImPolicy } from "./im/policy.js";
-import { ImStorage } from "./im/storage.js";
-import { ChatSummarizer } from "./im/summarizer.js";
-import { ImSummaryGate } from "./im/summary-gate.js";
+import { ImAgentQueue } from "./im/summary/agent-queue.js";
+import { LarkChatService } from "./im/service/chat-service.js";
+import { ChatSummarizer } from "./im/summary/summarizer.js";
+import { ChatSummaryGate } from "./im/summary/gate.js";
 import { LarkMailCli, liveCli } from "./mail/client.js";
 import { larkContextViews } from "./public-views.js";
 const services = Layer.effect(
@@ -36,10 +35,10 @@ const services = Layer.effect(
       }),
     ),
   ),
-  Layer.merge(ChatSummarizer.layer),
-  Layer.merge(ImSummaryGate.layer),
-  Layer.merge(ImAgentQueue.layer.pipe(Layer.provideMerge(ImStorage.layer))),
-  Layer.merge(ImSearch.layer),
+  Layer.merge(ChatSummarizer.layer.pipe(Layer.provide(AgentRunner.layer))),
+  Layer.merge(ChatSummaryGate.layer),
+  Layer.merge(ImAgentQueue.layer),
+  Layer.merge(LarkChatService.layer),
   Layer.provideMerge(LarkConfig.layer),
 );
 
@@ -53,7 +52,6 @@ export const LarkIntegration = {
       yield* (yield* ContextCaptures).register(larkCaptures);
       const im = (yield* LarkConfig).im;
       if (im !== undefined) {
-        yield* Effect.try(() => parseImPolicy(im));
         const client = yield* SystemOneClient;
         if (client.configured === false)
           return yield* Effect.fail(
@@ -67,10 +65,9 @@ export const LarkIntegration = {
         LarkAccountCli,
         LarkMailCli,
         ChatSummarizer,
-        ImSearch,
-        ImStorage,
+        LarkChatService,
         ImAgentQueue,
-        ImSummaryGate,
+        ChatSummaryGate,
       )(
         yield* Effect.context<
           | ContextQueries
@@ -79,10 +76,9 @@ export const LarkIntegration = {
           | LarkAccountCli
           | LarkMailCli
           | ChatSummarizer
-          | ImSearch
-          | ImStorage
+          | LarkChatService
           | ImAgentQueue
-          | ImSummaryGate
+          | ChatSummaryGate
         >(),
       );
       yield* modules.register(

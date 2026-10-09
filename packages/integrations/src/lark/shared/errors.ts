@@ -10,12 +10,13 @@ export class LarkAccountError extends Data.TaggedError("LarkAccountError")<{
   readonly cause: unknown;
 }> {}
 
-export class ImPollError extends Data.TaggedError("ImPollError")<{
+export class ChatPollError extends Data.TaggedError("ChatPollError")<{
   readonly message: string;
   readonly cause: unknown;
 }> {}
 
-export class ImSummaryError extends Data.TaggedError("ImSummaryError")<{
+export class ChatSummaryError extends Data.TaggedError("ChatSummaryError")<{
   readonly message: string;
   readonly cause?: unknown;
+  readonly kind?: "capacity" | "transient" | "permanent";
 }> {}

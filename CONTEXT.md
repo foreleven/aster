@@ -16,6 +16,12 @@ The outward-visible structured information about a Context, such as account info
 **Chat Summary**:
 The current condensed understanding of a chat, carried forward from its previous summary and newly observed messages and exposed as part of its Context State. It retains relevant progress, decisions, blockers, pending work, and source references for deciding which Goals concern the conversation.
 
+**Pending Chat Messages**:
+Observed chat messages whose current content has not yet been incorporated into a durably saved Chat Summary. A newer edit remains pending even if an earlier version of that message has already been summarized.
+
+**Chat Summary Request**:
+A request to refresh one chat's summary from its accumulated Pending Chat Messages. Its message coverage is determined when an IM Agent Permit is granted, so messages observed while awaiting admission can join the same summary.
+
 **Daily IM Retrieval Progress**:
 The record of message retrieval coverage for a particular day, including unfinished coverage that may be retrieved on demand. Retrieval progress is distinct from completion of chat summarization.
 
@@ -41,7 +47,7 @@ The Actor code that owns one Context and defines its public State and Message Sc
 A shared integration implementation that can supply one or more Context implementations with external capabilities and resources. For example, a Lark Provider can supply separate IM and Mail Channel implementations.
 
 **Message**:
-An ordered, persisted event in a Context's history, such as observed activity, a user decision, or a delegation result. Messages are produced by handling Commands and are replayed during recovery.
+An ordered, retained item of Context information, such as observed activity, a user decision, or a delegation result. Retention depends on the Context; a Message may be removed after its information has been incorporated into a durable summary.
 
 **Summary Checkpoint**:
 A durable, compressed representation that replaces a prefix of a Context's Message history. Messages covered by the checkpoint no longer need to be retained; the checkpoint never replaces exact structured state.

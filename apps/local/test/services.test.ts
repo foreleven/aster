@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Layer } from "effect";
 import { SystemOneClient } from "@aster/core";
-import { ImSummaryGate } from "@aster/integrations";
+import { ChatSummaryGate } from "@aster/integrations";
 test("Lark IM builds its summary gate from the injected global System One client", async () => {
   const input = {
     path: "/lark/im/chats/test",
@@ -22,7 +22,7 @@ test("Lark IM builds its summary gate from the injected global System One client
   });
   await Effect.runPromise(
     Effect.gen(function* () {
-      const gate = yield* ImSummaryGate;
+      const gate = yield* ChatSummaryGate;
       assert.equal(yield* gate.needed(input), false);
       answer = "yes";
       assert.equal(yield* gate.needed(input), true);
@@ -31,7 +31,7 @@ test("Lark IM builds its summary gate from the injected global System One client
       assert.equal(result._tag, "Failure");
       if (result._tag === "Failure")
         assert.match(result.failure.message, /no valid summary decision/);
-    }).pipe(Effect.provide(ImSummaryGate.layer.pipe(Layer.provide(client)))),
+    }).pipe(Effect.provide(ChatSummaryGate.layer.pipe(Layer.provide(client)))),
   );
   assert.equal(calls, 3);
 });

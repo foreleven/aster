@@ -110,28 +110,26 @@ export const LarkEmailChannelActor = ContextActor.define("lark/EmailChannelActor
       receive: (command, context) =>
         Match.value(command).pipe(
           Match.tag("ProfileLoaded", (command) =>
-            Effect.gen(function* () {
-              yield* Match.value(command.result).pipe(
-                Match.tag("Failure", (result) => Effect.logWarning(result.error.message)),
-                Match.tag("Success", (result) =>
-                  registry
-                    .commit(
-                      {
-                        path: "/lark/mail",
-                        description: config.mail.description,
-                        state: {
-                          mailbox: config.mail.mailbox,
-                          profile: result.value,
-                        },
-                        messages: [],
+            Match.value(command.result).pipe(
+              Match.tag("Failure", (result) => Effect.logWarning(result.error.message)),
+              Match.tag("Success", (result) =>
+                registry
+                  .commit(
+                    {
+                      path: "/lark/mail",
+                      description: config.mail.description,
+                      state: {
+                        mailbox: config.mail.mailbox,
+                        profile: result.value,
                       },
-                      { expectedRevision: registry.get("/lark/mail")?.revision ?? 0 },
-                    )
-                    .pipe(Effect.asVoid, Effect.orDie),
-                ),
-                Match.exhaustive,
-              );
-            }),
+                      messages: [],
+                    },
+                    { expectedRevision: registry.get("/lark/mail")?.revision ?? 0 },
+                  )
+                  .pipe(Effect.asVoid, Effect.orDie),
+              ),
+              Match.exhaustive,
+            ),
           ),
           Match.tag("Poll", () =>
             Effect.gen(function* () {

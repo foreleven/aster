@@ -38,6 +38,7 @@ export const defineContext = <State extends object, Message>(options: {
 export const contextView = <State extends object, Message>(options: {
   readonly matches?: (path: string) => boolean;
   readonly state: Schema.ConstraintDecoder<State>;
+  readonly description?: (state: State) => string;
   readonly message?: Schema.ConstraintDecoder<Message>;
   readonly projectMessage?: (message: unknown) => unknown | undefined;
 }): ContextViewPolicy => ({
@@ -57,7 +58,7 @@ export const contextView = <State extends object, Message>(options: {
     return {
       path: record.path,
       revision: record.revision ?? 0,
-      description: record.description,
+      description: options.description ? options.description(state.value) : record.description,
       state: state.value,
       messages,
       projection: { visibility: "public" },

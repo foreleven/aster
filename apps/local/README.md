@@ -60,21 +60,17 @@ Codex uses app-server; busy follow-ups steer the current turn and completed work
 
 Workspace packages use `@aster/*`; the CLI is `pnpm aster` (or the `aster` binary), and the default configuration is `aster.config.yaml`. Signal/Signals remain domain terms, including the `signals` configuration key and `/signals` Context paths.
 
-Default storage and the ownership lock now live under `~/.aster`: `actors/`, `tasks/`, `im/`, and `memory/`. Memory `dataDir` supports `~/` paths; explicitly configured relative paths still resolve beside the config file. No automatic migration from the old storage directory is performed. Existing execution resume metadata retains its filename.
+Default storage and the ownership lock now live under `~/.aster`: `actors/`, `tasks/`, `context-sessions/`, and `memory/`. Memory `dataDir` supports `~/` paths; explicitly configured relative paths still resolve beside the config file. No automatic migration from the old storage directory is performed. Existing execution resume metadata retains its filename.
 
-### IM daily files
+### IM Sessions
 
-The single-account IM integration stores its private progress and daily summaries under `~/.aster/im/`:
+The single-account IM integration uses ContextSession with Pi Documents under the host's durable root. Each chat keeps a continuous Session containing its rolling summary, deduplication receipts and a separate keyed Document for pending messages. Retrieval coverage has explicit daily partitions; the Channel cursor and shared Agent admission timing have their own continuous Sessions.
 
-- `<YYYY-MM-DD>/progress.json`: successful retrieval intervals and `through`; uncovered intervals remain gaps, including on days with no messages.
-- `<YYYY-MM-DD>/<chat-id>.md`: the daily summary, updated in place. YAML frontmatter includes the Beijing date, timezone, chat identity/mode, update time, first/last summarized message timestamps, and summarized message count.
-- `<YYYY-MM-DD>/chats/<chat-id>.json`: pending messages, completed message fingerprints, daily summary checkpoint, failure/retry information, and any interrupted summary commit.
-
-The rolling summary remains in the chat’s public `state.summary` (`text` and `references`). Daily summaries are separate from it. Historical backfill and historical pending-message processing are deferred; no automatic backlog migration occurs. On first upgrade, without a new daily progress file, retrieval starts at today’s midnight instead of trusting the legacy public cursor.
+The rolling summary is exposed in the chat's public `state.summary` (`text` and `references`). Daily summaries and Markdown archives are not generated. Startup restores accepted pending evidence, including prior-day messages, but does not backfill missing historical retrieval intervals or migrate the old storage format. Receipt cleanup follows the durable retrieval cursor and preserves pending evidence and replay overlap.
 
 ### IM summary admission
 
-IM uses `config.system-one` to judge whether pending chat messages warrant a summary update. An explicit “no” retains the messages until new evidence arrives; that decision survives restarts. Errors retry after 30 seconds. System One has no added rate/concurrency limiter and does not consume summary Agent permits. This judgment is separate from Goal relevance screening after a summary changes.
+IM uses `config.system-one` to judge accumulated pending evidence. An explicit “no” is cached only in the current Behavior and retains messages until new evidence arrives; restart performs a fresh assessment. More than `summary.maxMessages` messages bypass the gate and enter chronological batching. System One has no added IM rate/concurrency limiter and does not consume summary Agent permits. This judgment is separate from Goal relevance screening after a summary changes.
 
 Configure the following under `contexts./lark.children./im.config` (timing and concurrency values shown are defaults; select an existing model alias):
 
@@ -83,13 +79,14 @@ pollIntervalMs: 900000
 catchUpWindowMs: 3600000
 summary:
   model: goal-reasoning
+  maxMessages: 200
   agentStartIntervalMs: 10000
   agentConcurrency: 2
 ```
 
-All chats share a FIFO Agent queue, with at least ten seconds between starts and at most two concurrent runs. Daily and rolling summaries each queue separately; retries go to the tail. Pending messages merge while waiting; the batch freezes when the daily run is admitted. Successful daily output survives a later rolling failure or restart, so only the unfinished stage retries. `~/.aster/im/agent-admission.json` preserves the latest start time. Restart reconstructs today's pending work and respects this interval.
+All chats share one FIFO Agent queue, with ten seconds between starts and at most two concurrent runs by default. Pending messages accumulate while waiting; admission reads the latest evidence. Each bounded batch commits its rolling summary before its successor requests admission. Capacity errors halve the selected batch; transient failures retain it and retry up to three times, thirty seconds apart, releasing the permit before waiting. Invalid, authentication, configuration and unknown failures stop the cycle with messages retained. Retry budgets and deadlines are transient; the latest global start time remains durable across restarts.
 
-While continuously running, successful retrieval of yesterday's final interval triggers its pending day-end summaries, including batches deferred by System One. They still use the shared Agent queue. Failed retrieval delays the flush. Restart does not revive missed prior-day work.
+Successful retrieval of yesterday's final interval flushes its pending evidence through the shared queue. Failed retrieval delays that flush. `Flush(date)` forces only evidence at or before its date; newer pending messages return to ordinary assessment once it is covered. See [IM summary design](../../docs/im-summary-design.md) for the detailed lifecycle.
 
 See [Reactive application API](../../docs/reactive-api-design.md) for the scoped HTTP/RPC implementation and browser query ownership.
 

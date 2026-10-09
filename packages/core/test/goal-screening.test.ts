@@ -153,7 +153,9 @@ test("Goal screening scores each Goal independently and records admitted evidenc
     records.map((record) => record.admitted),
     [true, false],
   );
-  assert.ok(records.every((record) => record.input.contextSummary.includes("launch")));
+  assert.ok(
+    records.every((record) => JSON.stringify(record.input.context.state).includes("launch")),
+  );
 });
 
 test("invalid Goal screening scores fail closed", async () => {
@@ -191,7 +193,7 @@ test("ten-level relevance preserves continuous scores and the normalized admissi
     assert.equal(result.length, admitted ? 1 : 0);
     assert.equal(records[0]?.score, score / 9);
     assert.equal(records[0]?.threshold, 0.7);
-    assert.equal(records[0]?.policyVersion, "goal-relevance-v3");
+    assert.equal(records[0]?.policyVersion, "goal-relevance-v4");
     assert.match(records[0]?.rationale ?? "", /\/9\.$/);
   }
 });
@@ -278,4 +280,28 @@ test("empty Goal evidence is explicitly NotMatched without a model request", asy
     ),
   );
   assert.deepEqual(result, { _tag: "NotMatched", reason: "Context has no summary evidence." });
+});
+
+test("Goal evidence identity includes public metadata and messages but ignores revision", async () => {
+  const records: GoalScreeningRecord[] = [];
+  for (const evidence of [
+    source,
+    { ...source, revision: 2 },
+    { ...source, description: "A different project chat" },
+    { ...source, messages: [{ text: "An explicit project dependency" }] },
+  ]) {
+    await Effect.runPromise(
+      relevantGoals(
+        {
+          systemOne: () => Effect.succeed({ answers: { relevance: { type: "score", score: 9 } } }),
+        },
+        evidence,
+        [{ slug: "release", description: "Release risks" }],
+        { screening: { append: (record) => Effect.sync(() => records.push(record)) } },
+      ),
+    );
+  }
+  assert.equal(records[0]!.summaryFingerprint, records[1]!.summaryFingerprint);
+  assert.notEqual(records[0]!.summaryFingerprint, records[2]!.summaryFingerprint);
+  assert.notEqual(records[0]!.summaryFingerprint, records[3]!.summaryFingerprint);
 });

@@ -9,8 +9,8 @@ import {
 import { DateTime, Effect, Schema } from "effect";
 import { AccountProfile } from "./account/model.js";
 import { LarkConfig } from "./config.js";
-import { ImChat, PublicImMessage } from "./im/model.js";
-import { ChatSummary } from "./im/summarizer.js";
+import { ChatInfo, ChatPublicMessage } from "./im/service/model.js";
+import { ChatSummary } from "./im/service/model.js";
 import { LarkMailCli } from "./mail/client.js";
 import { EmailData, MailboxProfile } from "./mail/model.js";
 const chatArgs = Schema.Struct({ ...ContextListArgs.fields, id: Schema.NonEmptyString });
@@ -19,7 +19,7 @@ const mailArgs = Schema.Struct({
   date: Schema.optional(Schema.String.check(Schema.isPattern(/^\d{4}-\d{2}-\d{2}$/))),
 });
 const idArgs = Schema.Struct({ id: Schema.NonEmptyString });
-const chatState = Schema.Struct({ chat: ImChat, summary: Schema.optional(ChatSummary) });
+const chatState = Schema.Struct({ chat: ChatInfo, summary: Schema.optional(ChatSummary) });
 const unavailable = () =>
   new ContextQueryError({ kind: "unavailable", message: "Requested evidence is not available" });
 
@@ -105,7 +105,7 @@ export const makeLarkImQuery = Effect.gen(function* () {
         chat: state.chat,
         summary: state.summary ?? null,
       });
-    const messages = yield* Schema.decodeUnknownEffect(Schema.Array(PublicImMessage))(
+    const messages = yield* Schema.decodeUnknownEffect(Schema.Array(ChatPublicMessage))(
       record.messages,
     ).pipe(Effect.orDie);
     const filtered = messages.filter(

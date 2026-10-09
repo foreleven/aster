@@ -26,12 +26,11 @@ export const makeGoalIntent = (
   const intentId = createHash("sha256")
     .update(`${relevance.slug}:${record.path}:${fingerprint}`)
     .digest("hex");
-  const rawChat = record.state as { chat?: { name?: string } };
   return {
     intentId,
     source: {
       contextPath: record.path,
-      name: rawChat.chat?.name?.trim() || record.description,
+      name: record.description,
     },
     content: { summary },
     relevance: {
