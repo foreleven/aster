@@ -1,9 +1,9 @@
 import { validateConfig } from "@aster/core";
-import { Context, Effect, Layer, Ref, Schedule, Schema } from "effect";
+import { Context, Effect, Equivalence, Layer, Ref, Schedule, Schema } from "effect";
 import { LarkConfig } from "../../config.js";
 import { ChatSummaryBatchConfig } from "../config.js";
 import { formatDate } from "../service/dates.js";
-import { batchFingerprint, type ChatWork, type SummaryCommit } from "../chat/snapshot.js";
+import { type ChatWork, type SummaryCommit } from "../chat/snapshot.js";
 import { ChatSummaryGate } from "./gate.js";
 import { ImAgentQueue } from "./agent-queue.js";
 import { ChatSummarizer, type ChatSummaryInput } from "./summarizer.js";
@@ -23,7 +23,8 @@ const makeChatSummaryWork = Effect.gen(function* () {
   const settings = yield* validateConfig("Lark IM summary batches", () =>
     Schema.decodeUnknownSync(ChatSummaryBatchConfig)(config.im?.config?.summary ?? {}),
   );
-  const deferred = yield* Ref.make<string | undefined>(undefined);
+  const deferred = yield* Ref.make<readonly string[] | undefined>(undefined);
+  const sameIds = Equivalence.Array(Equivalence.strictEqual<string>());
   const run = Effect.fn("ChatSummaryWork.run")(function* (input: {
     path: string;
     read: Effect.Effect<ChatWork, ChatSummaryError>;
@@ -31,9 +32,10 @@ const makeChatSummaryWork = Effect.gen(function* () {
   }) {
     let current = yield* input.read;
     if (!current.pending.length) return false;
-    const fingerprint = batchFingerprint(current.pending);
+    const ids = current.pending.map((message) => message.id);
     if (!current.flushThrough && current.pending.length <= settings.maxMessages) {
-      if ((yield* Ref.get(deferred)) === fingerprint) return false;
+      const previous = yield* Ref.get(deferred);
+      if (previous && sameIds(previous, ids)) return false;
       const needed = yield* gate
         .needed({
           path: input.path,
@@ -49,7 +51,7 @@ const makeChatSummaryWork = Effect.gen(function* () {
           ),
         );
       if (!needed) {
-        yield* Ref.set(deferred, fingerprint);
+        yield* Ref.set(deferred, ids);
         return false;
       }
     }
@@ -62,7 +64,7 @@ const makeChatSummaryWork = Effect.gen(function* () {
         current.chat.id,
         Effect.gen(function* () {
           if (!selected) {
-            // Arrivals queued before admission join this input. Retries keep the selected versions.
+            // Arrivals queued before admission join this input. Retries keep the selected messages.
             const latest = yield* input.read;
             remaining ??= new Set(
               latest.pending
@@ -112,7 +114,7 @@ const makeChatSummaryWork = Effect.gen(function* () {
       if (!result) return false;
       current = yield* input.commit(result);
       for (const message of result.batch) remaining?.delete(message.id);
-      // Finish the admitted backlog. Edits of covered messages and later arrivals get a fresh assessment.
+      // Finish the admitted backlog. Later arrivals get a fresh assessment.
     } while (current.pending.some((message) => remaining?.has(message.id)));
     return current.pending.length > 0;
   });

@@ -50,7 +50,7 @@ yield *
   }));
 ```
 
-The domain owns generation checks and in-flight batch identity. IM derives an observation key from source identity and normalized content fingerprint, so source edits append a new immutable observation and remain pending when an older batch completes. Chronological batching is a domain transformation of a detached list. Integration ingress receipts remain domain data, separate from message storage deletion.
+The domain owns generation checks and in-flight batch identity. IM uses source message IDs, ignores IDs already retained, and appends replayed IDs again after deletion. It retains no historical message deduplication records. Chronological batching is a domain transformation of a detached list.
 
 ## Reader boundary
 

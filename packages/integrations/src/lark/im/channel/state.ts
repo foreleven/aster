@@ -86,11 +86,7 @@ export const makeImState = Effect.fn("ImState.make")(function* (
       yield* Ref.set(startup, false);
       // Every Chat checks its own pending messages. The Channel supplies completed coverage only.
       const flushThrough = formatDate(dayStart(formatDate(Date.parse(result.through))) - 1);
-      // The durable cursor has advanced. Keep its maximum overlap, even for smaller catch-up windows.
-      const from = new Date(
-        Math.max(sessionStart, Date.parse(result.through) - 60_000),
-      ).toISOString();
-      return { flushThrough, retainFrom: from };
+      return flushThrough;
     }),
     completed: Effect.fn("ImState.completed")(function* (result: ImPollResult) {
       yield* session.state

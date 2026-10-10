@@ -25,7 +25,6 @@ export class GetChatSummary extends ActorCommand.Class<GetChatSummary>()("GetCha
 }) {}
 export const ChatCommands = [Update, Flush, GetChatInfo, GetChatSummary] as const;
 export const ChatInternal = Schema.TaggedUnion({
-  RetainReceipts: { from: Schema.String },
   GetSummaryMessages: {
     generation: Schema.String,
     replyTo: ReplyTo<ChatWork | undefined>(),

@@ -5,12 +5,7 @@ import { Effect, Match, Ref } from "effect";
 import { randomUUID } from "node:crypto";
 import { ChatSummaryError } from "../shared/errors.js";
 import { ChatCommands, ChatInternal, type ChatCommand } from "./chat/protocol.js";
-import {
-  ChatSnapshot,
-  observationKey,
-  type ChatWork,
-  type SummaryCommit,
-} from "./chat/snapshot.js";
+import { ChatSnapshot, type ChatWork, type SummaryCommit } from "./chat/snapshot.js";
 import { makeChatState } from "./chat/state.js";
 import { ChatSummaryWork } from "./summary/work.js";
 
@@ -54,10 +49,10 @@ export const LarkChatActor = ContextActor.define("lark/ChatActor", {
         message: ChatMessage,
         serialize: ({ chat, summary }) => JSON.stringify({ chat, summary }),
         events: "state",
-        keyOf: observationKey,
+        keyOf: (message) => message.id,
         initial: {
           description: `Work Lark conversation: ${id}`,
-          state: { chat: { id, name: "", mode: "", description: "" }, seen: {} },
+          state: { chat: { id, name: "", mode: "", description: "" } },
         },
       })
       .pipe(Effect.orDie);
@@ -96,7 +91,6 @@ export const LarkChatActor = ContextActor.define("lark/ChatActor", {
                 yield* command.replyTo.tell(snapshot);
               }),
             ),
-            Match.tag("RetainReceipts", ({ from }) => state.retain(from)),
             Match.tag("Update", (command) =>
               Effect.gen(function* () {
                 const accepted = yield* state.accept(command);

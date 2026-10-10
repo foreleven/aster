@@ -17,7 +17,7 @@ import { makeTestContext } from "@aster/core/testing";
 import { LarkConfig, parseLarkConfig } from "../src/lark/config.js";
 import { LarkImActor } from "../src/lark/im/channel-actor.js";
 import { ImSnapshot } from "../src/lark/im/channel/snapshot.js";
-import { ChatSnapshot, messageFingerprint } from "../src/lark/im/chat/snapshot.js";
+import { ChatSnapshot } from "../src/lark/im/chat/snapshot.js";
 import { LarkChatService, LarkChatQueryError } from "../src/lark/im/service/chat-service.js";
 import { ChatSummarizer } from "../src/lark/im/summary/summarizer.js";
 import { ChatSummaryGate } from "../src/lark/im/summary/gate.js";
@@ -139,9 +139,6 @@ test("failed cross-midnight retrieval does not flush; successful coverage flushe
                 initial: {
                   state: {
                     chat,
-                    seen: {
-                      [message.id]: { fingerprint: messageFingerprint(message), at: message.at },
-                    },
                   },
                   description: "Chat",
                   messages: [message],

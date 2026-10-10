@@ -46,11 +46,11 @@ test("Lark queries use owner state and child Actors; provider history stays inde
             loadAll: () => [
               {
                 snapshot: {
-                  text: serializeFixtureState({ chat, summary, seen: {}, checkpoint: "PRIVATE" }),
+                  text: serializeFixtureState({ chat, summary, checkpoint: "PRIVATE" }),
                   path: "/lark/im/chats/team",
                   revision: 1,
                   description: "Team",
-                  state: { chat, summary, seen: {}, checkpoint: "PRIVATE" },
+                  state: { chat, summary, checkpoint: "PRIVATE" },
                   messages: [],
                 },
                 events: [],

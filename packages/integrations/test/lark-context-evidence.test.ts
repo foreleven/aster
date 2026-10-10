@@ -30,7 +30,7 @@ test("chat serialization freezes summary and identity without receipts or pendin
                 mode: "group",
                 description: "Owns Project A",
               },
-              seen: { private: { fingerprint: "PRIVATE_SENTINEL", at: "2026-10-09T00:00:00Z" } },
+              flushThrough: "2026-10-08",
             },
             messages: [
               {
@@ -51,7 +51,7 @@ test("chat serialization freezes summary and identity without receipts or pendin
         const evidence = durable.journal()[0]!.record;
         assert.equal(evidence.description, "Release team");
         assert.equal(evidence.text.includes("Launch blocked"), true);
-        assert.equal(JSON.stringify(evidence).includes("PRIVATE_SENTINEL"), false);
+        assert.equal(JSON.stringify(evidence).includes("flushThrough"), false);
         assert.equal(JSON.stringify(evidence).includes("PRIVATE_PENDING_BODY"), false);
         let requests = 0;
         const result = yield* matchGoal(

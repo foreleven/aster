@@ -118,10 +118,9 @@ export const LarkImActor = ContextActor.define("lark/ImActor", {
                 Match.tag("Failure", ({ error }) => state.failed(error).pipe(Effect.as(false))),
                 Match.tag("Success", () =>
                   Effect.gen(function* () {
-                    const { flushThrough, retainFrom } = yield* state.accept(value);
+                    const flushThrough = yield* state.accept(value);
                     for (const child of yield* context.children()) {
                       const chat = child as ActorRef<ChatCommand>;
-                      yield* chat.tell({ _tag: "RetainReceipts", from: retainFrom });
                       yield* chat.tell(new Flush({ date: flushThrough }));
                     }
                     yield* state.completed(value);

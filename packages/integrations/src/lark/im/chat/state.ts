@@ -3,25 +3,7 @@ import type { ContextHandle } from "@aster/core";
 import { Clock, Effect, Struct } from "effect";
 import { publicChatMessage, ChatMessage, type ChatBatch } from "../service/model.js";
 import { formatDate, dayStart } from "../service/dates.js";
-import {
-  messageFingerprint,
-  observationKey,
-  type ChatWork,
-  ChatSnapshot,
-  type SummaryCommit,
-} from "./snapshot.js";
-
-const retainReceipts = (state: ChatSnapshot, pending: ReadonlySet<string>): ChatSnapshot => ({
-  ...state,
-  seen: Object.fromEntries(
-    Object.entries(state.seen).filter(
-      ([id, receipt]) =>
-        pending.has(id) ||
-        state.replayFrom === undefined ||
-        Date.parse(receipt.at) >= Date.parse(state.replayFrom),
-    ),
-  ),
-});
+import { type ChatWork, ChatSnapshot, type SummaryCommit } from "./snapshot.js";
 
 /** The mailbox owns every mutation; model workers receive detached evidence. */
 export const makeChatState = (session: ContextHandle<ChatSnapshot, ChatMessage>) => {
@@ -29,7 +11,7 @@ export const makeChatState = (session: ContextHandle<ChatSnapshot, ChatMessage>)
   const work = session.snapshot.pipe(
     Effect.map(({ state, messages }): ChatWork => ({
       ...state,
-      pending: Object.values(messages).sort(
+      pending: [...messages].sort(
         (a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id),
       ),
     })),
@@ -41,9 +23,7 @@ export const makeChatState = (session: ContextHandle<ChatSnapshot, ChatMessage>)
     yield* session
       .commit(
         (current) => {
-          obligated = Object.values(current.messages).some(
-            (message) => formatDate(message.at) <= date,
-          );
+          obligated = current.messages.some((message) => formatDate(message.at) <= date);
           if (!obligated) return {};
           const flushThrough =
             current.state.flushThrough && current.state.flushThrough > date
@@ -76,25 +56,11 @@ export const makeChatState = (session: ContextHandle<ChatSnapshot, ChatMessage>)
             const incoming = new Map(
               batch.messages.map((message) => [message.id, publicChatMessage(message)]),
             );
-            const append = [...incoming.values()].filter(
-              (message) =>
-                current.state.seen[message.id]?.fingerprint !== messageFingerprint(message),
-            );
+            const retained = new Set(current.messages.map((message) => message.id));
+            const append = [...incoming.values()].filter((message) => !retained.has(message.id));
             changed = append.length > 0;
             return {
-              state: {
-                ...current.state,
-                chat: batch.chat,
-                seen: {
-                  ...current.state.seen,
-                  ...Object.fromEntries(
-                    append.map((message) => [
-                      message.id,
-                      { fingerprint: messageFingerprint(message), at: message.at },
-                    ]),
-                  ),
-                },
-              },
+              state: { ...current.state, chat: batch.chat },
               messages: { append },
             };
           },
@@ -107,41 +73,23 @@ export const makeChatState = (session: ContextHandle<ChatSnapshot, ChatMessage>)
       yield* Effect.logInfo({ event: "chat.messages", path, received: batch.messages.length });
       return changed;
     }),
-    retain: Effect.fn("ChatState.retain")(function* (from: string) {
-      yield* session
-        .commit(
-          (current) => ({
-            state: retainReceipts(
-              { ...current.state, replayFrom: from },
-              new Set(current.messages.map((message) => message.id)),
-            ),
-          }),
-          { mode: "bootstrap" },
-        )
-        .pipe(Effect.orDie);
-    }),
     commit: Effect.fn("ChatState.commit")(function* (result: SummaryCommit) {
       const previous = yield* session.state.get.pipe(Effect.orDie);
-      const covered = new Set(result.batch.map(observationKey));
+      const covered = new Set(result.batch.map((message) => message.id));
       yield* session
         .commit(
           (current) => {
-            const pending = Object.values(current.messages).filter(
-              (message) => !covered.has(observationKey(message)),
-            );
+            const pending = current.messages.filter((message) => !covered.has(message.id));
             const flushThrough = current.state.flushThrough;
             return {
-              state: retainReceipts(
-                {
-                  ...Struct.omit(current.state, ["flushThrough"]),
-                  ...(flushThrough &&
-                  pending.some((message) => formatDate(message.at) <= flushThrough)
-                    ? { flushThrough }
-                    : {}),
-                  summary: result.rolling,
-                },
-                new Set(pending.map((message) => message.id)),
-              ),
+              state: {
+                ...Struct.omit(current.state, ["flushThrough"]),
+                ...(flushThrough &&
+                pending.some((message) => formatDate(message.at) <= flushThrough)
+                  ? { flushThrough }
+                  : {}),
+                summary: result.rolling,
+              },
               messages: { remove: [...covered] },
             };
           },

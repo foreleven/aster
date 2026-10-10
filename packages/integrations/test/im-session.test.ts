@@ -102,7 +102,7 @@ const withClock = <A, E>(
     ),
   );
 
-test("one rolling summary atomically retires unchanged evidence and retains an in-flight edit", async () => {
+test("one rolling summary ignores retained-ID edits and atomically removes only its input messages", async () => {
   await run(
     Effect.gen(function* () {
       const entered = yield* Deferred.make<ChatSummaryInput>();
@@ -125,11 +125,18 @@ test("one rolling summary atomically retires unchanged evidence and retains an i
       const input = yield* Deferred.await(entered);
       assert.deepEqual(input.messages, [message]);
       const edited = { ...message, content: "edited" };
-      yield* ref.ask<void>((replyTo) => ({ _tag: "Update", chat, messages: [edited], replyTo }));
+      const arrived = { ...message, id: "second", content: "new arrival" };
+      yield* ref.ask<void>((replyTo) => ({
+        _tag: "Update",
+        chat,
+        messages: [edited, arrived],
+        replyTo,
+      }));
+      assert.deepEqual(registry.get(path)?.messages, [message, arrived]);
       yield* Deferred.succeed(release, undefined);
       yield* waitFor((state) => state.summary?.text === summary.text);
       assert.equal(calls, 1);
-      assert.deepEqual(registry.get(path)?.messages, [edited]);
+      assert.deepEqual(registry.get(path)?.messages, [arrived]);
       assert.ok(registry.backend.journal().at(-1)?.record.text.includes(summary.text));
       assert.equal(registry.backend.journal().length, 1);
     }),
@@ -138,9 +145,9 @@ test("one rolling summary atomically retires unchanged evidence and retains an i
 
 for (const pending of [
   { ...message, id: "second" },
-  { ...message, content: "edited" },
+  { ...message, id: "prior-day", at: "2026-10-08T04:00:00Z" },
 ]) {
-  test(`flush received during execution survives commit for ${pending.id === message.id ? "an edit" : "a new message"}`, async () => {
+  test(`flush received during execution survives commit for ${pending.id}`, async () => {
     await run(
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
@@ -189,7 +196,7 @@ for (const pending of [
   });
 }
 
-test("deduplication survives restart while deferred evidence gets a fresh assessment", async () => {
+test("retained messages deduplicate across restart while deferred evidence gets a fresh assessment", async () => {
   await run(
     Effect.gen(function* () {
       let assessments = 0;
@@ -230,7 +237,7 @@ test("deduplication survives restart while deferred evidence gets a fresh assess
   );
 });
 
-test("one shared admission request includes accumulated arrivals and deduplicates replay", async () => {
+test("one shared admission request includes accumulated arrivals and deduplicates retained IDs", async () => {
   await run(
     Effect.gen(function* () {
       const queued = yield* Deferred.make<void>();
@@ -267,15 +274,16 @@ test("one shared admission request includes accumulated arrivals and deduplicate
       yield* ref.ask<void>((replyTo) => ({ _tag: "Update", chat, messages: [], replyTo }));
       assert.equal(admissions, 1);
       assert.equal(assessments, 1);
-      yield* Deferred.succeed(permit, undefined);
-      assert.equal((yield* Deferred.await(called)).messages.length, 2);
-      yield* waitFor((state, messages) => state.summary !== undefined && messages.length === 0);
       yield* ref.ask<void>((replyTo) => ({
         _tag: "Update",
         chat,
         messages: [message, second],
         replyTo,
       }));
+      assert.deepEqual(registry.get(path)?.messages, [message, second]);
+      yield* Deferred.succeed(permit, undefined);
+      assert.equal((yield* Deferred.await(called)).messages.length, 2);
+      yield* waitFor((state, messages) => state.summary !== undefined && messages.length === 0);
       assert.equal(registry.get(path)?.messages.length, 0);
       assert.equal(admissions, 1);
       assert.equal(assessments, 1);
@@ -568,12 +576,7 @@ test("gate failures remain retryable and unchanged summaries do not emit another
             messages: [{ ...message, id: "second" }],
             replyTo,
           }));
-          yield* waitFor(
-            (state, messages) =>
-              state.summary !== undefined &&
-              Object.keys(state.seen).length === 2 &&
-              messages.length === 0,
-          );
+          yield* waitFor((state, messages) => state.summary !== undefined && messages.length === 0);
           assert.equal(registry.backend.journal().length, 1);
         }).pipe(Effect.provideService(Clock.Clock, clock));
       }),
@@ -828,38 +831,33 @@ test("a date-bounded flush does not force today's arrivals after yesterday is co
   );
 });
 
-test("receipt pruning preserves pending evidence and replay overlap, then cleans retired receipts", async () => {
+test("summary deletion leaves no receipts and permits the same message ID after restart", async () => {
   await run(
     Effect.gen(function* () {
-      const { ref, settled, registry, waitFor } = yield* setup(
+      const { ref, system, spawn, settled, registry } = yield* setup(
         { summarize: () => Effect.succeed(summary) },
         { needed: () => Effect.succeed(false) },
       );
-      const old = { ...message, id: "old", at: new Date(now - 60_001).toISOString() };
-      const overlap = { ...message, id: "overlap", at: new Date(now - 60_000).toISOString() };
-      yield* ref.ask<void>((replyTo) => ({
+      yield* ref.ask<void>((replyTo) => ({ _tag: "Update", chat, messages: [message], replyTo }));
+      yield* settled;
+      yield* ref.tell({ _tag: "Flush", date: "2026-10-09" });
+      yield* settled;
+      assert.deepEqual(registry.get(path)?.messages, []);
+      assert.deepEqual(registry.get(path)?.state, { chat, summary });
+      yield* system.stop(ref);
+      const restored = yield* spawn;
+      yield* restored.awaitStarted;
+      yield* settled;
+      const replayed = { ...message, content: "replayed after deletion" };
+      yield* restored.ask<void>((replyTo) => ({
         _tag: "Update",
         chat,
-        messages: [old, overlap],
+        messages: [replayed],
         replyTo,
       }));
       yield* settled;
-      yield* ref.tell({ _tag: "RetainReceipts", from: overlap.at });
-      yield* ref.ask<void>((replyTo) => ({ _tag: "Update", chat, messages: [], replyTo }));
-      assert.deepEqual(
-        Object.keys(Schema.decodeUnknownSync(ChatSnapshot)(registry.get(path)?.state).seen),
-        ["old", "overlap"],
-      );
-      yield* ref.tell({ _tag: "Flush", date: "2026-10-09" });
-      yield* settled;
-      assert.deepEqual(
-        Object.keys(Schema.decodeUnknownSync(ChatSnapshot)(registry.get(path)?.state).seen),
-        ["overlap"],
-      );
-      yield* ref.ask<void>((replyTo) => ({ _tag: "Update", chat, messages: [overlap], replyTo }));
-      assert.equal(registry.get(path)?.messages.length, 0);
-      yield* ref.tell({ _tag: "RetainReceipts", from: new Date(now).toISOString() });
-      yield* waitFor((state) => Object.keys(state.seen).length === 0);
+      assert.deepEqual(registry.get(path)?.messages, [replayed]);
+      assert.deepEqual(registry.get(path)?.state, { chat, summary });
     }),
   );
 });
@@ -947,7 +945,7 @@ test("successful batches survive a later failure and restart resumes only uncove
   );
 });
 
-test("transport-only sender changes do not resurrect summarized evidence", async () => {
+test("transport-only sender changes leave retained messages immutable without repeating assessment", async () => {
   await run(
     Effect.gen(function* () {
       let assessments = 0;
@@ -957,7 +955,7 @@ test("transport-only sender changes do not resurrect summarized evidence", async
           needed: () =>
             Effect.sync(() => {
               assessments++;
-              return true;
+              return false;
             }),
         },
       );
@@ -971,7 +969,7 @@ test("transport-only sender changes do not resurrect summarized evidence", async
         replyTo,
       }));
       assert.equal(assessments, 1);
-      assert.equal(registry.get(path)?.messages.length, 0);
+      assert.deepEqual(registry.get(path)?.messages, [{ ...received, sender: { name: "Alex" } }]);
     }),
   );
 });
