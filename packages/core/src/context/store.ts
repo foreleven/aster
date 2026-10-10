@@ -12,7 +12,7 @@ import {
   type Scope,
 } from "effect";
 import { publicJson } from "../json.js";
-import type { ContextSessionStorage } from "./session-storage.js";
+import type { ContextMessageWatch, ContextSessionStorage } from "./session-storage.js";
 import {
   ContextInput,
   ContextEvent,
@@ -40,6 +40,8 @@ export interface ContextPersistence {
     path: string,
     session: ContextSessionStorage,
   ) => Effect.Effect<void, ContextRecoveryError>;
+  /** Observe one persisted message document when the backend supports it. */
+  readonly watchMessage?: (path: string, key: string) => ContextMessageWatch;
 }
 
 export interface ContextCommitOptions {
@@ -83,6 +85,7 @@ export class DurableContext extends Context.Service<
     readonly exportRecords: () => readonly StoredContext[];
     readonly changes: Stream.Stream<ContextChange>;
     readonly subscribe: Effect.Effect<Stream.Stream<ContextChange>, never, Scope.Scope>;
+    readonly watchMessage: (path: string, key: string) => ContextMessageWatch;
   }
 >()("context/DurableContext") {}
 
@@ -286,5 +289,39 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
         ),
       ),
     ),
+    watchMessage: (path, key) => {
+      const native = persistence.watchMessage?.(path, key);
+      if (native) return native;
+      const session = sessions.get(path);
+      if (!session)
+        return Stream.fail(
+          new ContextRecoveryError({
+            path,
+            cause: new Error("Context Session is not acquired"),
+          }),
+        );
+      return Stream.unwrap(
+        PubSub.subscribe(changes).pipe(
+          Effect.map((subscription) => {
+            const value = records
+              .get(path)
+              ?.snapshot.messages.find((message) => session.messageKey(message) === key);
+            return Stream.concat(
+              Stream.succeed(value ?? null),
+              Stream.fromEffectRepeat(PubSub.take(subscription)).pipe(
+                Stream.filter((change) => change.record.path === path),
+                Stream.map(
+                  (change) =>
+                    change.record.messages.find((message) => session.messageKey(message) === key) ??
+                    null,
+                ),
+              ),
+            )
+              .pipe(Stream.changesWith(isDeepStrictEqual))
+              .pipe(Stream.takeUntil((next) => next === null));
+          }),
+        ),
+      );
+    },
   });
 });

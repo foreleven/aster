@@ -1,7 +1,7 @@
 import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Effect, Option, Schema } from "effect";
+import { Effect, Fiber, Option, Queue, Schema, Stream } from "effect";
 import {
   ContextRegistry,
   ContextSession,
@@ -68,6 +68,36 @@ test("Session commits state and conditional message removals atomically and reta
           assert.equal(conflict._tag, "ContextConflict");
           const duplicate = yield* session.messages.upsert([message, message]).pipe(Effect.flip);
           assert.equal(duplicate._tag, "ContextValidationError");
+        }).pipe(
+          Effect.provideService(ContextRegistry, registry),
+          Effect.provideService(DurableContext, registry.backend),
+        );
+      }),
+    ),
+  );
+});
+
+test("Session message watches fall back to the durable Context change stream", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeContextRegistry();
+        yield* Effect.gen(function* () {
+          const session = yield* ContextSession.make({
+            ...options,
+            initial: { ...options.initial, messages: [message] },
+          });
+          const values = yield* Queue.unbounded<Option.Option<typeof message>>();
+          const fiber = yield* session.messages.watch(message.id).pipe(
+            Stream.runForEach((value) => Queue.offer(values, value)),
+            Effect.forkScoped,
+          );
+          assert.deepEqual(yield* Queue.take(values), Option.some(message));
+          yield* session.messages.upsert([{ ...message, text: "updated" }]);
+          assert.deepEqual(yield* Queue.take(values), Option.some({ ...message, text: "updated" }));
+          yield* session.messages.removeUnchanged([{ ...message, text: "updated" }]);
+          assert.deepEqual(yield* Queue.take(values), Option.none());
+          yield* Fiber.join(fiber);
         }).pipe(
           Effect.provideService(ContextRegistry, registry),
           Effect.provideService(DurableContext, registry.backend),

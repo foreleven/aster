@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Effect, Schema } from "effect";
+import { Effect, Fiber, Option, Queue, Schema, Stream } from "effect";
 import {
   ContextRegistry,
   ContextCommitError,
@@ -87,6 +87,43 @@ test("Pi Documents write message deltas, checkpoint and recover ordered data wit
     .flatMap((f) => readFileSync(join(f.parentPath, f.name), "utf8").trim().split("\n"));
   assert.ok(lines.length > 70);
   assert.ok(lines.every((line) => !line.includes('"entry.append"')));
+});
+
+test("message family watches deliver the current value, updates and retirement", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aster-session-watch-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* setup(root);
+        yield* Effect.gen(function* () {
+          const session = yield* ContextSession.make({
+            path: "/watch",
+            ...definition,
+            initial: {
+              description: "Watch",
+              state: { count: 0 },
+              messages: [{ id: "m", text: "one" }],
+            },
+          });
+          const values = yield* Queue.unbounded<Option.Option<{ id: string; text: string }>>();
+          const fiber = yield* session.messages.watch("m").pipe(
+            Stream.runForEach((value) => Queue.offer(values, value)),
+            Effect.forkScoped,
+          );
+          assert.deepEqual(yield* Queue.take(values), Option.some({ id: "m", text: "one" }));
+          yield* session.messages.upsert([{ id: "m", text: "two" }]);
+          assert.deepEqual(yield* Queue.take(values), Option.some({ id: "m", text: "two" }));
+          yield* session.messages.removeUnchanged([{ id: "m", text: "two" }]);
+          assert.deepEqual(yield* Queue.take(values), Option.none());
+          yield* Fiber.join(fiber);
+        }).pipe(
+          Effect.provideService(ContextRegistry, registry),
+          Effect.provideService(DurableContext, registry.backend),
+        );
+      }),
+    ),
+  );
 });
 
 test("daily directories remain independent and reopening refuses a changed timezone", async (t) => {

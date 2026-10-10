@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { Data, Effect, Option, Ref, Schema, Semaphore } from "effect";
+import { Data, Effect, Option, Ref, Schema, Semaphore, Stream } from "effect";
 import type { ContextViewPolicy } from "./view.js";
 import { DurableContext } from "./store.js";
 import { ContextPath, type ContextInput } from "./model.js";
@@ -235,6 +235,30 @@ const make = Effect.fn("ContextSession.make")(function* <S extends object, M>(
       list: snapshot.pipe(
         Effect.map((value) => Object.values(value.messages).sort(compareMessages)),
       ),
+      /**
+       * Observe one keyed message. The stream starts with the value captured
+       * at acquisition and emits `Option.none` after the document is retired.
+       */
+      watch: (id: string) =>
+        Stream.unwrap(
+          available.pipe(
+            Effect.as(
+              backend.watchMessage(path, id).pipe(
+                Stream.mapEffect((value) =>
+                  Effect.try({
+                    try: () =>
+                      Option.fromNullishOr(
+                        value === null
+                          ? undefined
+                          : Schema.decodeUnknownSync(options.message)(value),
+                      ),
+                    catch: (cause) => new ContextValidationError({ path, cause }),
+                  }),
+                ),
+              ),
+            ),
+          ),
+        ),
       upsert: (messages: readonly M[], options?: CommitOptions) =>
         commit(() => ({ messages: { upsert: messages } }), options),
       removeUnchanged: (messages: readonly M[], options?: CommitOptions) =>

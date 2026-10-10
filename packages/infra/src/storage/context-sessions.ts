@@ -7,6 +7,7 @@ import { copyJson, type Context as NativeContext, type JsonValue } from "@earend
 import {
   createSession,
   defineDoc,
+  defineDocFamily,
   type Session,
   type JsonObject,
 } from "@earendil-works/pi-durable";
@@ -19,7 +20,7 @@ import {
   publicJson,
   type ContextPersistence,
 } from "@aster/core";
-import { Effect, Schema, Semaphore } from "effect";
+import { Effect, Queue, Schema, Semaphore, Stream } from "effect";
 import type { ContextStore } from "./file-context-store.js";
 
 const MetadataSchema = Schema.Struct({
@@ -42,7 +43,16 @@ const StateDoc = defineDoc<{ value: JsonValue }>({
   initial: () => ({ value: {} }),
   checkpointWhen,
 });
-const MessagesDoc = defineDoc<{ messages: Record<string, JsonValue> }>({
+const MessagesDoc = defineDocFamily<{ value: JsonValue }, JsonValue>({
+  kind: "aster.context.message",
+  version: 1,
+  family: true,
+  scope: "session",
+  initial: (value) => ({ value }),
+  checkpointWhen,
+});
+/** Read-only compatibility token for sessions written before messages became a family. */
+const LegacyMessagesDoc = defineDoc<{ messages: Record<string, JsonValue> }>({
   kind: "aster.context.messages",
   version: 1,
   scope: "session",
@@ -146,30 +156,38 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
           const session = await openSession(directory, context);
           const meta = await session.snapshot(MetadataDoc, context);
           const state = await session.snapshot(StateDoc, context);
-          const messages = await session.snapshot(MessagesDoc, context);
+          const legacyMessages = await session.snapshot(LegacyMessagesDoc, context);
           const events = await session.snapshot(EventsDoc, context);
-          if (!meta && !state && !messages && !events) continue;
-          if (!meta || !state || !messages || !events)
+          if (!meta && !state && !legacyMessages && !events) continue;
+          if (!meta || !state || !events)
             throw new Error(`Incomplete Context Session: ${directory}`);
           const metadata = Schema.decodeUnknownSync(MetadataSchema)(meta.value);
           if (contextSessionDirectory(root, metadata.path, metadata.partition) !== directory)
             throw new Error(`Context Session identity does not match directory: ${directory}`);
           if (records.has(metadata.path))
             throw new Error(`Multiple storage authorities for ${metadata.path}`);
-          const keys = Object.keys(messages.messages);
-          if (
-            new Set(metadata.order).size !== metadata.order.length ||
-            keys.length !== metadata.order.length ||
-            metadata.order.some((id) => !Object.hasOwn(messages.messages, messageKey(id)))
-          )
+          if (new Set(metadata.order).size !== metadata.order.length)
             throw new Error(`Invalid Context message index: ${metadata.path}`);
+          const messages = await Promise.all(
+            metadata.order.map(async (id) => {
+              const value = await session.snapshot(MessagesDoc, messageKey(id), context);
+              return value ? value.value : legacyMessages?.messages[messageKey(id)];
+            }),
+          );
+          if (
+            messages.some((value) => value === undefined) &&
+            !metadata.order.every((id) =>
+              Object.hasOwn(legacyMessages?.messages ?? {}, messageKey(id)),
+            )
+          )
+            throw new Error(`Missing Context message document: ${metadata.path}`);
           const record = Schema.decodeUnknownSync(StoredContext)({
             snapshot: {
               path: metadata.path,
               revision: metadata.revision,
               description: metadata.description,
               state: state.value,
-              messages: metadata.order.map((id) => messages.messages[messageKey(id)]),
+              messages,
             },
             events: Object.values(events.events)
               .map((event) => Schema.decodeUnknownSync(StoredContext.fields.events.value)(event))
@@ -240,14 +258,19 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
           );
           await session.commit(async (tx) => {
             const stateDoc = await tx.doc(StateDoc);
-            const messages = await tx.doc(MessagesDoc);
             const meta = await tx.doc(MetadataDoc);
             const events = await tx.doc(EventsDoc);
             if (!isDeepStrictEqual(stateDoc.value, state)) stateDoc.value = state;
-            for (const key of Object.keys(messages.messages))
-              if (!values.has(key)) delete messages.messages[key];
-            for (const [key, value] of values)
-              if (!isDeepStrictEqual(messages.messages[key], value)) messages.messages[key] = value;
+            const previousOrder = locations.get(path)?.metadata.order ?? [];
+            for (const id of previousOrder) {
+              const key = messageKey(id);
+              if (!values.has(key)) await tx.retireDoc(MessagesDoc, key);
+            }
+            for (const [key, value] of values) {
+              const message = await tx.doc(MessagesDoc, key, value);
+              if (!isDeepStrictEqual(message.value, value)) message.value = value;
+            }
+            await tx.retireDoc(LegacyMessagesDoc);
             meta.value = copyJson(publicJson(metadata));
             // Retain source evidence without rewriting earlier event bodies on every commit.
             for (const event of record.events)
@@ -260,5 +283,33 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
         catch: (cause) => new ContextCommitError({ path: record.snapshot.path, cause }),
       }).pipe(Effect.uninterruptible),
     );
-  return { load, save, configureSession } satisfies ContextPersistence;
+  const watchMessage: NonNullable<ContextPersistence["watchMessage"]> = (path, key) =>
+    Stream.unwrap(
+      Effect.tryPromise({
+        try: async (signal) => {
+          const location = locations.get(path);
+          if (!location) return Stream.succeed(null);
+          const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
+          const session = await openSession(location.directory, context);
+          const watch = await session.watchDoc(MessagesDoc, messageKey(key), context);
+          if (!watch) return Stream.succeed(null);
+          return Stream.callback<JsonValue | null>((queue) => {
+            Queue.offerUnsafe(queue, watch.value?.value ?? null);
+            watch.start((value) => {
+              Queue.offerUnsafe(queue, value?.value ?? null);
+              if (value === null) Queue.endUnsafe(queue);
+              return Promise.resolve();
+            });
+            return Effect.acquireRelease(Effect.void, () =>
+              Effect.tryPromise({
+                try: () => watch.stop(),
+                catch: (cause) => new Error(String(cause)),
+              }).pipe(Effect.asVoid, Effect.orDie),
+            );
+          });
+        },
+        catch: (cause) => new ContextRecoveryError({ path, cause }),
+      }),
+    );
+  return { load, save, configureSession, watchMessage } satisfies ContextPersistence;
 });
