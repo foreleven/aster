@@ -1,3 +1,4 @@
+import { FetchHttpClient } from "effect/http";
 import { secretConfig } from "../src/config/credentials.js";
 import { ConfigLocation } from "../src/index.js";
 import { testLocalConfig } from "./configuration-fixtures.js";
@@ -8,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config, ConfigProvider, Effect, Layer, Redacted, Schema } from "effect";
 import { GoalSettings, SignalDefinitions } from "@aster/core";
-import { SystemOneClientLive } from "../src/index.js";
+import { SystemOneTransport } from "../src/index.js";
 import { SystemOneClient } from "@aster/core";
 
 test("local provider precedence, exact credentials and config-relative locations do not mutate process.env", async (t) => {
@@ -135,7 +136,10 @@ test("module settings read structured provider values and disabled decisions nee
         assert.equal((yield* SystemOneClient).configured, false);
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(GoalSettings.layer, SystemOneClientLive.layer).pipe(
+          Layer.mergeAll(
+            GoalSettings.layer,
+            SystemOneTransport.layer.pipe(Layer.provide(FetchHttpClient.layer)),
+          ).pipe(
             Layer.provide(
               Layer.mergeAll(
                 config,
@@ -156,7 +160,7 @@ test("module settings read structured provider values and disabled decisions nee
 
 test("executor environments use captured private keys even after dotenv changes", async (t) => {
   const { ProcessEnvironment } = await import("@aster/core");
-  const { agentEnvironment } = await import("../src/process/environment.js");
+  const { agentEnvironment } = await import("../src/executors/environment.js");
   const dir = await mkdtemp(join(tmpdir(), "aster-captured-env-"));
   t.after(() => rm(dir, { recursive: true, force: true }));
   const configPath = join(dir, "config.yaml");
@@ -197,7 +201,13 @@ test("System One resolves credential references exactly once in its Layer", asyn
   );
   const client = await Effect.runPromise(
     Effect.scoped(
-      SystemOneClient.pipe(Effect.provide(SystemOneClientLive.layer.pipe(Layer.provide(sources)))),
+      SystemOneClient.pipe(
+        Effect.provide(
+          SystemOneTransport.layer.pipe(
+            Layer.provide(Layer.mergeAll(sources, FetchHttpClient.layer)),
+          ),
+        ),
+      ),
     ),
   );
   assert.equal(client.configured, true);

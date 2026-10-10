@@ -147,9 +147,6 @@ The durable transfer of an accepted Goal Input from its Goal to the Goal Agent S
 **Evaluation Retry**:
 A new Goal Evaluation Group that reprocesses the same durable Intent batch after a failed planning exchange. It points to the failed group and preserves both groups as separate history.
 
-**Screening Decision Record**:
-The structured audit record of one Goal relevance assessment, including its score, admission result, normalized screening input snapshot, input/version fingerprints, policy and model metadata, and outcome. It is retained in a separate local append-only JSONL dataset for evaluation and calibration, outside Goal History; raw message batches, credentials, and unrelated Contexts are excluded.
-
 **Goal Task**:
 A Task pursued on behalf of a Goal. It is the same work concept as Task, not a separate planning record paired with an external execution Task.
 

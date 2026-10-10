@@ -7,10 +7,10 @@ import { SignalRecord } from "../signals/queries.js";
 import type { ActorRef } from "@aster/actor";
 import { type ContextText } from "../context/contracts.js";
 import { Clock, Context, Effect, Match, Schema } from "effect";
-import { choice, type SystemOneClient } from "../services/system-one.js";
+import { choice, withDecisionLanguage, type SystemOneClient } from "../services/system-one.js";
 import { SignalSnapshot, signalEnabled } from "../signals/state/snapshot.js";
 import type { GoalDefinition } from "../goals/contracts.js";
-import { matchGoal, goalTitleText, type GoalScreeningStore } from "../goals/screening/decision.js";
+import { matchGoal, goalTitleText } from "../goals/screening/decision.js";
 
 import { makeGoalIntent } from "../goals/screening/intent.js";
 import type { GoalsRootCommand } from "../goals/root.js";
@@ -90,14 +90,18 @@ export const matchSignal = Effect.fn("Signal.match")(function* (
   client: SystemOneClient,
   record: ContextText,
   signal: Extract<ReactionCandidate, { _tag: "Signal" }>,
+  language?: string,
 ) {
   const response = yield* client.systemOne({
     state: JSON.stringify({ context: record }),
     questions: {
-      matches: choice(`Does this Context satisfy the Signal condition? ${signal.when}`, {
-        yes: "Evidence satisfies the condition; execute its Task.",
-        no: "The condition is not satisfied.",
-      }),
+      matches: withDecisionLanguage(
+        choice(`Does this Context satisfy the Signal condition? ${signal.when}`, {
+          yes: "Evidence satisfies the condition; execute its Task.",
+          no: "The condition is not satisfied.",
+        }),
+        language,
+      ),
     },
   });
   const answer = response.answers.matches;
@@ -133,7 +137,7 @@ export class ReactionPolicy extends Context.Service<
 /** Planning only reads frozen evidence. No domain delivery occurs until the plan commits. */
 export const makeReactionPolicy = (options: {
   client: SystemOneClient;
-  screening?: GoalScreeningStore["Service"] | undefined;
+  language?: string;
 }): Effect.Effect<ReactionPolicy["Service"]> =>
   Effect.sync(() => {
     return ReactionPolicy.of({
@@ -157,7 +161,7 @@ export const makeReactionPolicy = (options: {
               };
               const result = yield* Match.value(input).pipe(
                 Match.tag("Signal", (signal) =>
-                  matchSignal(options.client, record, signal).pipe(
+                  matchSignal(options.client, record, signal, options.language).pipe(
                     Effect.map((match): ReactionDecision =>
                       match._tag === "NotMatched"
                         ? match
@@ -188,7 +192,7 @@ export const makeReactionPolicy = (options: {
                       title: goal.title,
                       summary: goal.summary,
                     },
-                    options.screening,
+                    options.language,
                   ).pipe(
                     Effect.map((match): ReactionDecision =>
                       match._tag === "NotMatched"
@@ -216,9 +220,8 @@ export const makeReactionPolicy = (options: {
                   ),
                 ),
                 Match.exhaustive,
-                Effect.catchTag(
-                  ["DecisionError", "ReactionFailure", "GoalScreeningStoreError"],
-                  (error) => Effect.succeed({ _tag: "Failed" as const, error: error.message }),
+                Effect.catchTag(["DecisionError", "ReactionFailure"], (error) =>
+                  Effect.succeed({ _tag: "Failed" as const, error: error.message }),
                 ),
               );
               return { target, result };

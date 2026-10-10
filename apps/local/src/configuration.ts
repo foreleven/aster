@@ -1,3 +1,4 @@
+import { FetchHttpClient } from "effect/http";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { LocalConfig, StorageSettings } from "@aster/infra";
@@ -11,6 +12,6 @@ export const localConfiguration = (projectRoot: string, configPath: string) => {
     envPath: join(projectRoot, ".env"),
     homeDirectory: homedir(),
     environment: { ...process.env },
-  }).pipe(Layer.provideMerge(NodeServices.layer));
+  }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer)));
   return StorageSettings.layer.pipe(Layer.provideMerge(sources));
 };

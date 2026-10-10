@@ -1,11 +1,12 @@
 #!/usr/bin/env node
+import { NodeServices } from "@effect/platform-node";
+import { FetchHttpClient } from "effect/http";
 import { localConfiguration } from "./configuration.js";
-import { MemoryRecallError } from "@aster/core";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { Effect } from "effect";
+import { Effect, Layer } from "effect";
 import { openMemoryReader, configuredMemoryReader } from "@aster/infra";
 import { startApplication } from "./application.js";
 
@@ -47,28 +48,18 @@ const recallMemory = async (command: "search" | "expand", args: string[]) => {
     Effect.scoped(
       Effect.gen(function* () {
         const client = yield* reader;
-        return yield* Effect.tryPromise({
-          try: async (signal) =>
-            command === "search"
-              ? client.search(positionals[0]!, {
-                  limit: values.limit === undefined ? 10 : Number(values.limit),
-                  signal,
-                })
-              : client.expand(
-                  positionals.map((obsId) => ({
-                    obsId,
-                    ...(values.session === undefined ? {} : { sessionId: values.session }),
-                  })),
-                  signal,
-                ),
-          catch: (cause) =>
-            new MemoryRecallError({
-              cause,
-              message: cause instanceof Error ? cause.message : String(cause),
-            }),
-        });
+        return yield* command === "search"
+          ? client.search(positionals[0]!, {
+              limit: values.limit === undefined ? 10 : Number(values.limit),
+            })
+          : client.expand(
+              positionals.map((obsId) => ({
+                obsId,
+                ...(values.session === undefined ? {} : { sessionId: values.session }),
+              })),
+            );
       }),
-    ),
+    ).pipe(Effect.provide(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer))),
   );
   console.log(JSON.stringify(result, null, 2));
 };

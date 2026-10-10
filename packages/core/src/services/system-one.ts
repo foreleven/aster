@@ -1,3 +1,4 @@
+import { DEFAULT_OUTPUT_LANGUAGE, outputLanguageInstruction } from "../config/language.js";
 import { Context, Data, Effect } from "effect";
 
 export class DecisionError extends Data.TaggedError("DecisionError")<{
@@ -24,7 +25,7 @@ export const score = (
   instructions: string,
   criteria: readonly [string, string, ...string[]],
 ): DecisionQuestion => ({ type: "score", instructions, criteria });
-/** Adapters translate SDK failures and forward fiber interruption to the transport. */
+/** Adapters translate transport failures and forward fiber interruption. */
 export interface SystemOneClient {
   readonly configured?: boolean;
   readonly systemOne: (request: {
@@ -51,3 +52,11 @@ export interface SystemOneClient {
 
 /** Global decision transport; each domain owns its questions and policy. */
 export const SystemOneClient = Context.Service<SystemOneClient>("services/SystemOneClient");
+
+export const withDecisionLanguage = (
+  question: DecisionQuestion,
+  language = DEFAULT_OUTPUT_LANGUAGE,
+): DecisionQuestion => ({
+  ...question,
+  instructions: `${question.instructions}\n\n${outputLanguageInstruction(language)}`,
+});

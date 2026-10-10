@@ -1,4 +1,4 @@
-import { ConfiguredModels } from "../src/config/models.js";
+import { ConfiguredModels } from "../src/models.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ConfigProvider, Effect, Layer } from "effect";

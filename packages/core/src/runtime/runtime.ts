@@ -5,7 +5,6 @@ import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { ContextsActor } from "../context/queries/actor.js";
 import { ContextQueries } from "../context/queries/routes.js";
 import { DurableContext } from "../context/store.js";
-import { GoalScreeningStore } from "../goals/screening/decision.js";
 import { ContextCaptures } from "../memory/capture.js";
 import { ApplicationError } from "../operations.js";
 import { SystemOneActor } from "../reactions/actor.js";
@@ -24,7 +23,6 @@ import {
   Exit,
   Fiber,
   Layer,
-  Option,
   Ref,
   Scope,
   Stream,
@@ -81,7 +79,7 @@ const acquireRuntime = Effect.gen(function* () {
   const modules = (yield* RuntimeIntegrations).installed();
   const reactionPolicy = yield* makeReactionPolicy({
     client: decisions,
-    screening: Option.getOrUndefined(yield* Effect.serviceOption(GoalScreeningStore)),
+    language: (yield* LanguageSettings).outputLanguage,
   });
   const shared = Context.pick(
     DurableContext,

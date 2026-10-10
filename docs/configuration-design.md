@@ -59,26 +59,26 @@ Use injected ConfigProviders and FileSystem/Path Layers. Verify source snapshott
 
 ## File responsibilities
 
-| Location                           | Responsibility                                                      |
-| ---------------------------------- | ------------------------------------------------------------------- |
-| `apps/local/src/configuration.ts`  | Capture launch inputs and provide platform/source/storage Layers    |
-| `apps/local/src/settings.ts`       | Local HTTP configuration declaration                                |
-| `infra/config/provider.ts`         | Public source Layer and provider assembly                           |
-| `infra/config/sources.ts`          | File reads and YAML/dotenv decoding                                 |
-| `infra/config/overlay.ts`          | Private structural overlay semantics                                |
-| `infra/config/location.ts`         | Source-location contract                                            |
-| `core/process/environment.ts`      | Portable, redacted subprocess environment contract                  |
-| `core/config/language.ts`          | Shared language Settings and prompt instruction                     |
-| `core/config/context-directory.ts` | Explicit Context metadata Settings                                  |
-| `core/goals/settings.ts`           | Goal definitions and normalized reasoning budgets                   |
-| `core/signals/settings.ts`         | Configured Signal definitions                                       |
-| `core/reactions/settings.ts`       | Matching and delivery concurrency                                   |
-| `infra/config/models.ts`           | Model configuration loading and credential resolution               |
-| `infra/config/credentials.ts`      | Private credential reference resolution for infrastructure adapters |
-| `infra/storage/settings.ts`        | Shared resolved storage paths                                       |
-| `infra/agentmemory/settings.ts`    | Memory input validation, paths and native environment preparation   |
-| `infra/system-one/settings.ts`     | Optional client configuration and credential/URL resolution         |
-| `infra/executor-settings.ts`       | External executor prompt declaration                                |
-| `integrations/*/settings.ts`       | Module-owned enablement, transport and business settings            |
+| Location                             | Responsibility                                                      |
+| ------------------------------------ | ------------------------------------------------------------------- |
+| `apps/local/src/configuration.ts`    | Capture launch inputs and provide platform/source/storage Layers    |
+| `apps/local/src/settings.ts`         | Local HTTP configuration declaration                                |
+| `infra/config/provider.ts`           | Public source Layer and provider assembly                           |
+| `infra/config/sources.ts`            | File reads and YAML/dotenv decoding                                 |
+| `infra/config/overlay.ts`            | Private structural overlay semantics                                |
+| `infra/config/location.ts`           | Source-location contract                                            |
+| `core/process/environment.ts`        | Portable, redacted subprocess environment contract                  |
+| `core/config/language.ts`            | Shared language Settings and prompt instruction                     |
+| `core/config/context-directory.ts`   | Explicit Context metadata Settings                                  |
+| `core/goals/settings.ts`             | Goal definitions and normalized reasoning budgets                   |
+| `core/signals/settings.ts`           | Configured Signal definitions                                       |
+| `core/reactions/settings.ts`         | Matching and delivery concurrency                                   |
+| `infra/models.ts`                    | Model configuration loading and credential resolution               |
+| `infra/config/credentials.ts`        | Private credential reference resolution for infrastructure adapters |
+| `infra/storage/settings.ts`          | Shared resolved storage paths                                       |
+| `infra/memory/settings.ts`           | Memory input validation, paths and native environment preparation   |
+| `infra/system-one/settings.ts`       | Optional client configuration and credential/URL resolution         |
+| `infra/executors/doubao/settings.ts` | External executor prompt declaration                                |
+| `integrations/*/settings.ts`         | Module-owned enablement, transport and business settings            |
 
 Shared Settings Layers use the same Layer identity within a composition graph so Effect memoization reuses their acquisition. Adapters that need shared language settings can provide that Layer when constructing their capability. They must not resolve it inside business invocations or Actor initialization.

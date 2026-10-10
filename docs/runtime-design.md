@@ -38,9 +38,10 @@ const RuntimeLive = AsterRuntime.layer({
 }).pipe(
   Layer.provide(
     Layer.mergeAll(
-      ConfiguredDurableInfrastructure.layer,
+      ContextStorage.layer,
+      ExternalExecutors.layer,
       ConfiguredModels.layer,
-      SystemOneClientLive.layer,
+      SystemOneTransport.layer,
       AgentMemoryBackend.layer,
     ),
   ),
@@ -48,14 +49,14 @@ const RuntimeLive = AsterRuntime.layer({
 );
 ```
 
-| External capability                                | Local implementation                  | Internal consumer                                            |
-| -------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------ |
-| ConfigProvider, ConfigLocation, ProcessEnvironment | LocalConfig.layer                     | Module Config declarations and adapters                      |
-| DurableContext                                     | ConfiguredDurableInfrastructure.layer | Scoped domain owner handles and text readers                 |
-| Models                                             | ConfiguredModels.layer                | Internal Agent, Goal reasoner, Lark summarizer               |
-| SystemOneClient                                    | SystemOneClientLive.layer             | Signal/Goal policies and Lark summary gate                   |
-| MemoryBackend                                      | AgentMemoryBackend.layer              | Core starts the Memory Actor with backend recall and capture |
-| ExternalAgents                                     | ConfiguredDurableInfrastructure.layer | Task confirmation and execution                              |
+| External capability                                | Local implementation     | Internal consumer                                            |
+| -------------------------------------------------- | ------------------------ | ------------------------------------------------------------ |
+| ConfigProvider, ConfigLocation, ProcessEnvironment | LocalConfig.layer        | Module Config declarations and adapters                      |
+| DurableContext                                     | ContextStorage.layer     | Scoped domain owner handles and text readers                 |
+| Models                                             | ConfiguredModels.layer   | Internal Agent, Goal reasoner, Lark summarizer               |
+| SystemOneClient                                    | SystemOneTransport.layer | Signal/Goal policies and Lark summary gate                   |
+| MemoryBackend                                      | AgentMemoryBackend.layer | Core starts the Memory Actor with backend recall and capture |
+| ExternalAgents                                     | ExternalExecutors.layer  | Task confirmation and execution                              |
 
 `ConfigProvider` is an Effect reference service with a default; local explicitly overrides it for the entire Layer acquisition graph. Other unsatisfied capabilities remain in the returned Layer's input type. Every host supplies MemoryBackend; core directly starts the Memory Actor. Local never supplies the internal registry, command endpoint, business reasoning workflows separately.
 
@@ -67,7 +68,7 @@ Readiness is completed with the startup Exit, not only its typed error channel. 
 
 Internal domain operations also preserve the caller's Effect execution. Goal Signal edits/deactivation return Effects rather than starting independent Promise runtimes. Mailbox handlers use `pipeToSelf` for remote acknowledgements; per-Goal Signal operations remain serialized without preventing the Goal mailbox from accepting End or UserMessage. The shared Task workflow lives in `core/tasks`, below both Goals and Signals.
 
-Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluation performs history reads and generation-tagged mailbox acknowledgements directly. Only the Agent adapter bridges SDK Promise callbacks, preserving the calling Context and cancelling pending callbacks before Agent cleanup waits for idle. Goal End signals cancellation through a Deferred; restart and shutdown use the Behavior scope. Expected reasoning failures remain tagged, while defects enter supervision. The Memory backend recall capability also exposes an Effect port. The agentmemory adapter in infra owns the Promise-to-Effect adapter and forwards cancellation to the backend HTTP request, including expansion fallbacks. Goal conversations and Task execution use DurableHarness from @aster/agent/harness, which owns their SDK callback lifecycle; no additional host Layer is needed.
+Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluation performs history reads and generation-tagged mailbox acknowledgements directly. Only the Agent adapter bridges SDK Promise callbacks, preserving the calling Context and cancelling pending callbacks before Agent cleanup waits for idle. Goal End signals cancellation through a Deferred; restart and shutdown use the Behavior scope. Expected reasoning failures remain tagged, while defects enter supervision. The Memory backend recall capability also exposes an Effect port. The agentmemory adapter in infra uses Effect HTTP and forwards cancellation to the backend request, including expansion fallbacks. Goal conversations and Task execution use DurableHarness from @aster/agent/harness, which owns their SDK callback lifecycle; no additional host Layer is needed.
 
 ## Configuration
 
@@ -81,7 +82,7 @@ Keep current YAML keys, including `contexts./lark.children./im`, models, signals
 
 Each module owns defaults and validation. There is no whole-application CoreConfig/parseConfig/loadConfig path; the host ConfigProvider and module Settings are the only startup configuration path. A settings acquisition may consult another service for cross-module checks (for example, a selected model alias). Validate required settings before starting producers. Disabled capabilities must not demand their unused credentials. Keep configuration and credentials out of public Context snapshots.
 
-Use one credential resolver for exact `${ENV_VAR}` references and memory `apiKeyEnv`. Resolve against a captured process/.env source and retain secrets as Redacted until adapter invocation. Never interpolate arbitrary task text. System One `url` additionally supports embedded `${ENV_VAR}` references, including `https://example.test/v1/systemone?ak=${ACCESS_KEY}`, and a whole-value `${SYSTEM_ONE_URL}` reference. `config.system-one.apiKey` is optional: omission sends no Authorization header and does not consult the SDK's environment fallback; a supplied key still uses exact-reference resolution and Bearer authentication. Query substitutions are percent-encoded as values; configured query parameters are attached after the SDK constructs its endpoint. Missing or blank references fail acquisition, resolved values are expanded once, and credentials remain redacted in failure diagnostics and logs. Dotenv is parsed once without general interpolation. No process.loadEnvFile or ad-hoc process.env lookup in domain/model configuration. Child-process environments are explicit adapter inputs and retain credential filtering.
+Use one credential resolver for exact `${ENV_VAR}` references and memory `apiKeyEnv`. Resolve against a captured process/.env source and retain secrets as Redacted until adapter invocation. Never interpolate arbitrary task text. System One `url` additionally supports embedded `${ENV_VAR}` references, including `https://example.test/v1/systemone?ak=${ACCESS_KEY}`, and a whole-value `${SYSTEM_ONE_URL}` reference. `config.system-one.apiKey` is optional: omission sends no Authorization header and does not consult a live environment fallback; a supplied key still uses exact-reference resolution and Bearer authentication. Query substitutions are percent-encoded as values; configured query parameters are preserved during endpoint normalization. Missing or blank references fail acquisition, resolved values are expanded once, and credentials remain redacted in failure diagnostics and logs. Dotenv is parsed once without general interpolation. No process.loadEnvFile or ad-hoc process.env lookup in domain/model configuration. Child-process environments are explicit adapter inputs and retain credential filtering.
 
 ## Application interface
 
@@ -97,15 +98,15 @@ Runtime exposes Actor addressing, readiness and native diagnostics, and its Laye
 
 Acceptance is about change ownership: changing Signal rules touches core; changing IM readiness touches Lark; adding an executor touches its adapter and registration; adding a client reuses application use cases. No live external integrations are necessary for acceptance tests.
 
-External execution follows the same boundary: core's `ExternalAgent` port exposes Effect operations and tagged `ExternalAgentError`; the infrastructure Layer owns adapter release. Fiber cancellation reaches transport requests without treating it as proof of external cancellation or automatically retrying submission. Task persists results in Pi before notifying its Goal and replays them on restart or receiver reattachment, even when that executor is no longer configured. The host supplies `ConfiguredDurableInfrastructure.layer`; no new internal Layer needs application assembly.
+External execution follows the same boundary: core's `ExternalAgent` port exposes Effect operations and tagged `ExternalAgentError`; the infrastructure Layer owns adapter release. Fiber cancellation reaches transport requests without treating it as proof of external cancellation or automatically retrying submission. Task persists results in Pi before notifying its Goal and replays them on restart or receiver reattachment, even when that executor is no longer configured. The host selects ContextStorage and ExternalExecutors independently; core owns internal service assembly.
 
 ## Pi storage and internal execution
 
 Pi model execution belongs to `@aster/agent`. Goal conversations and internal Task workflows use DurableHarness; Goal relevance screening uses ordinary AgentRunner; the raw conversation driver remains private. ExternalAgent delegates to Codex or Doubao and does not register Pi as another executor.
 
-`ConfiguredDurableInfrastructure.layer` supplies native Context Session persistence alongside independently acquired external adapters. Context Documents live in `<config.durable.root>/context-sessions`; State, message family members, metadata and source events share native transactions. Core owns Context revisions and committed publication. Pi Agent conversations and their persistence belong to the agent package under `<config.durable.root>/conversations`. There is one Context persistence adapter and no cross-backend routing or migration layer.
+`ContextStorage.layer` supplies only native Context Session persistence; ExternalExecutors is acquired independently. Context Documents live in `<config.durable.root>/context-sessions`; State, message family members, metadata and source events share native transactions. Core owns Context revisions and committed publication. Pi Agent conversations and their persistence belong to the agent package under `<config.durable.root>/conversations`. There is one Context persistence adapter and no cross-backend routing or migration layer.
 
-The process captures LocalConfig once before resolving and locking `config.durable.root`. The root lock holds an exclusive SQLite transaction on permanent `.actors-lock.sqlite`; `actors.pid` is diagnostic only and never grants ownership. That lock outlives runtime resources and covers Context storage, Agent conversations and screening logs.
+The process captures LocalConfig once before resolving and locking `config.durable.root`. The root lock holds an exclusive SQLite transaction on permanent `.actors-lock.sqlite`; `actors.pid` is diagnostic only and never grants ownership. That lock outlives runtime resources and covers Context storage, Agent conversations and operational diagnostics.
 
 ## Local process ownership
 
@@ -115,7 +116,7 @@ Runtime and adapter finalizers finish before the root lock is released. A defect
 
 ## Package boundaries
 
-[ADR 0046](adr/0046-separate-business-integrations-from-infrastructure.md) separates business integrations (`lark/`, `mail/`) from infrastructure (`config/`, `storage/`, `system-one/`, `codex/`, `doubao/`, `agentmemory/`, `process/`). These sibling packages do not import or re-export one another. Local imports each directly; core imports neither. The existing Agent package stays independent of core.
+[ADR 0046](adr/0046-separate-business-integrations-from-infrastructure.md) separates business integrations (`lark/`, `mail/`) from infrastructure (`config/`, `storage/`, `context/`, `executors/`, `memory/`, `system-one/`). These sibling packages do not import or re-export one another. Local imports each directly; core imports neither. The existing Agent package stays independent of core.
 
 Memory is an internal consumer owned by core. Its startup acknowledgement follows Actor initialization and precedes business source activation. Source capture handoffs wait for the Memory pending queue commit. Stopping the Actor interrupts local capture observers while retaining unacknowledged queue entries; runtime then drains admitted backend operations before releasing adapter resources. The agentmemory capture protocol cannot cancel already-submitted observations, so that Promise boundary remains in infra. Capture state paths, formats, provenance, and daemon ownership remain compatible.
 

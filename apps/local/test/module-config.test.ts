@@ -8,7 +8,7 @@ import { Config, Effect } from "effect";
 import { SignalDefinitions } from "@aster/core";
 import { Models } from "@aster/agent";
 import { LarkSettings } from "@aster/integrations";
-import { ConfiguredModels, MemorySettings } from "@aster/infra";
+import { ConfiguredModels } from "@aster/infra";
 
 test("environment overrides preserve dynamic keys, nested module settings and model array entries", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "aster-structured-config-"));
@@ -58,10 +58,6 @@ config:
           ],
         );
         assert.equal((yield* LarkSettings).im?.config?.pollIntervalMs, 5000);
-        assert.equal(
-          (yield* MemorySettings.pipe(Effect.provide(MemorySettings.layer))).dataDir,
-          join(dir, "memory"),
-        );
         const models = yield* Models;
         const one = yield* models.resolve("one");
         assert.equal(one.model.id, "replacement");

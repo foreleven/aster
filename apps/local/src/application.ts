@@ -1,6 +1,6 @@
 import { localConfiguration } from "./configuration.js";
 import { Effect, Fiber, Layer } from "effect";
-import { withActorStoreLock, StorageSettings } from "@aster/infra";
+import { withStorageLease, StorageSettings } from "@aster/infra";
 import { localRuntimeLayer } from "./services.js";
 import { LocalHttpApi } from "./http-api.js";
 import { waitForShutdown } from "./shutdown.js";
@@ -27,7 +27,7 @@ export const startApplication = async (
           yield* stopped;
         }).pipe(Effect.provide(configured));
         // Cancellation covers the whole Layer graph, including interrupted acquisition.
-        yield* withActorStoreLock(root, running).pipe(Effect.raceFirst(stopped));
+        yield* withStorageLease(root, running).pipe(Effect.raceFirst(stopped));
       }),
     ).pipe(Effect.provide(sources)),
   );

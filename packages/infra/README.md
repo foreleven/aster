@@ -1,36 +1,30 @@
 # Infrastructure
 
-Concrete infrastructure adapters for Aster. The local host imports `@aster/infra` alongside `@aster/core` and `@aster/integrations`; core never imports concrete adapters. Infra and integrations are independent sibling packages.
+Concrete infrastructure capabilities for Aster. Local chooses platform implementations and independent Layers; core owns domain contracts, Actor orchestration, accepted state and business recovery. Infra and integrations are sibling packages without imports or re-exports between them. Agent receives resolved model registrations and owns model execution.
 
-This package owns:
+## Public capabilities
 
-- `LocalConfig.layer`: YAML and dotenv sources loaded through Effect FileSystem/Path, explicit host environment and home-directory inputs, Effect ConfigProvider, source locations and explicit child-process environment. Modules validate their own settings through this provider.
-- Native Pi Document Context persistence and the actor-store process lock.
-- The TypeSafe-compatible System One HTTP client, behind core's decision interface.
-- Infrastructure Layers (`ConfiguredDurableInfrastructure`, `FileGoalScreening`, `SystemOneClientLive`); Goal runtime assembly and reasoning belong to core.
-- Codex app-server execution, persistent thread/turn recovery, native approval replies and environment isolation.
-- Doubao session/run status and waiting via CLI, native pending-control replies, and executor capability descriptions.
+- `LocalConfig.layer`, `ConfigLocation`: captured YAML/dotenv/environment sources and launch locations, with Effect FileSystem/Path. No module reads live environment values.
+- `StorageSettings.layer`, `withStorageLease`: resolve and exclusively own the shared data root. The SQLite lock's permanent inode remains the ownership identity; failed writer cleanup retains ownership until process exit.
+- `ContextStorage.layer`: native Pi Context Documents under `context-sessions/`. Core owns owner validation, CAS and publication; the adapter owns atomic document persistence, validated recovery and fsync.
+- `ConfiguredModels.layer`: decode configured registrations and resolve Redacted credentials before constructing agent Models.
+- `ExternalExecutors.layer`: scoped Codex and Doubao capabilities. Task workspaces default to `<root>/tasks`. Core freezes reviewed executor instructions; adapters submit those instructions without prepending policy again.
+- `SystemOneTransport.layer`: injected Effect HTTP decision protocol, typed responses, bounded retry/timeout/cancellation and credential-safe logs. Business question builders apply output-language instructions.
+- `AgentMemoryBackend.layer`: managed agentmemory process, transport, durable provenance and admitted capture lifetime. Default data lives under `<root>/memory`; explicit dataDir overrides it.
+- `openMemoryReader`, `configuredMemoryReader`: read-only CLI access from an explicit or configuration-resolved connection file, without starting a daemon.
 
-The agentmemory adapter lives in `agentmemory/` and provides core’s `MemoryBackend`. Core owns its Memory Actor, durable capture queue, retries, and runtime assembly. Lark and generic mail belong to `@aster/integrations`; `ConfiguredModels.layer` loads model settings and resolves credentials before supplying `Models.layer` from `@aster/agent`. The shared credential resolver is private to `config/`.
+The package root exports these host capabilities explicitly. Native clients, protocol schemas, status decoders, renderer functions and resource factories remain private; tests import implementations relatively.
 
-External adapters receive explicit child environments filtered once from captured values and private key names. Dotenv/service keys and `ASTER_*` variables are removed without rereading files. Doubao CLI and native response use the same captured endpoint. Internal reasoning no longer uses Codex CLI or an app CLI path. Captures, reasoning, extraction and delegation are injected into core through typed callbacks/interfaces; no core module reaches into this package's compiled output.
+## Resource ownership
 
-The local app retains CLI commands, HTTP/SSE and web serving, adapter selection and process signals. Core `AsterRuntime` owns startup order and domain shutdown. Infra does not start an application or managed memory merely by being imported.
+The host holds the root lease around the complete runtime and adapter graph. Runtime stops domain admission/producers and Actors before releasing adapters. Cancelled observation does not prove that an external submission or memory observation was cancelled; external submissions are not automatically retried after unknown outcomes.
 
-Source is grouped by capability: `config/`, `storage/`, `system-one/`, `codex/`, `doubao/`, `agentmemory/`, and `process/`. Consumers use the package root exports rather than internal paths.
+Memory capture fibers belong to the backend's private work scope. Caller interruption stops observation, while admitted work remains available for drain. The adapter drains captures, stops worker/engine processes and closes SQLite resources before leases release. The upstream daemon's global control files retain a separate scoped lease; uncertain cleanup retains that lease too.
 
-System One logs correlate each invocation with a `requestId`, model, endpoint origin, question count, attempt number and elapsed milliseconds. Events cover request start, attempt start, response headers (`status` and `headersMs`), SDK timeout/retry messages, completion, interruption and failure. Nested transport errors expose codes such as `UND_ERR_CONNECT_TIMEOUT` without dumping error objects. The SDK still owns response buffering, cancellation and its default timeout/retry policy; SDK debug payload logs remain disabled. These logs retain the caller's Effect logger and annotations; IM summary gates annotate the chat path. Time before headers includes connection setup and server response latency, so it is not a direct measurement of model inference. Logs omit credentials and request state; Goal screening retains its normalized input separately in the screening audit store.
+Codex owns a lazy app-server connection and correlated JSON-RPC requests. Protocol decoding is separate from execution and control mapping. Doubao owns serialized CLI commands and explicit native renderer approval/clarification responses. Unsupported follow-up remains a typed rejection. Native response scripts are self-contained because the external renderer has no Aster Effect runtime.
 
-Doubao native response supports local command allow/reject, native local `interaction.ask` input, and pre-tool safety confirmation. It verifies the request against the original run before calling the observed desktop protocol; it never substitutes ordinary chat messages for approval. Unsupported action types, changed module contracts and missing bindings fail explicitly, with the saved response retained in Delegation history. No globally installed CLI is modified. Native contracts were checked against Doubao Work 2.31.6 and CLI 0.12.0.
+Pi callbacks, SQLite kernel ownership, native detached PID control and renderer code are explicit native boundaries. Ordinary HTTP, filesystem reads, CLI operations, delays and coordination use Effect services. Public model/transport errors preserve private causes as Redacted values.
 
-Execution factories return managed Effect adapters. `external-agent.ts` contains the Promise driver boundary: it maps transport failures to core's `ExternalAgentError`, forwards Fiber cancellation as an AbortSignal and performs no submission retry. Only infrastructure sees the additional `close(): Effect<void>` capability; `makeExternalAgents` acquires and releases adapters inside `ConfiguredDurableInfrastructure.layer`, after domain Actors stop. The host provides this Layer together with configuration/environment services. Codex JSON-RPC and Doubao CLI/native transports remain Promise implementations inside their adapters. Cancelling a local wait does not mean the external run was cancelled.
+Independent Goal screening audit files and their Store capability have been removed. Durable routing and Goal inputs remain authoritative, accompanied by structured operational logs; no complete calibration dataset is collected.
 
-`ConfiguredDurableInfrastructure.layer` supplies core's `DurableContext` through `makeContextSessionPersistence`. Core owns owner validation, revision CAS, recovery fencing and committed publication. The native adapter commits State, message family members, metadata and source events together, with fsync and validated recovery. Domain Actors use DurableContext and never open files. The actor-store process lock covers this authoritative backend for the entire runtime lifetime.
-
-## Local Context storage
-
-`ConfiguredDurableInfrastructure.layer` supplies native Context document persistence and the Codex/Doubao external adapters. `config.durable.root` defaults to `~/.aster`; relative paths resolve beside the configuration file. Context documents live in `context-sessions/`; screening journals remain in `evaluations/`. Pi execution and durable Agent conversations belong to `@aster/agent`; infra also supplies Pi Document persistence for ContextHandle owners under `context-sessions/`. All configured Context owners use native Pi Documents; no Local fallback or historical import path remains.
-
-The root store lock uses a SQLite exclusive transaction on permanent `.actors-lock.sqlite`. `actors.pid` is diagnostic only. Startup never unlinks a lock to recover ownership; process death releases it. Keep the root lock through adapter cleanup, including interrupted memory startup, before allowing another writer. The host uses `withActorStoreLock` to retain ownership until process exit if runtime shutdown ends with a defect. Contexts, Agent conversations and screening journals share this resolved root.
-
-See [configuration design](../../docs/configuration-design.md) for source composition and module Settings ownership.
+See [infra design](../../docs/infra-design-review.md), [configuration](../../docs/configuration-design.md) and [runtime](../../docs/runtime-design.md).

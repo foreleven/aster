@@ -22,7 +22,7 @@ export const makeGoalIntent = (
   createdAt: string,
 ): GoalIntent => {
   const summary = contextSummaryText(record);
-  const fingerprint = relevance.screening.summaryFingerprint;
+  const fingerprint = relevance.summaryFingerprint;
   const intentId = createHash("sha256")
     .update(`${relevance.slug}:${record.path}:${fingerprint}`)
     .digest("hex");
@@ -36,7 +36,7 @@ export const makeGoalIntent = (
     relevance: {
       score: relevance.score,
       rationale: relevance.rationale,
-      threshold: relevance.screening.threshold,
+      threshold: relevance.threshold,
     },
     createdAt,
   };

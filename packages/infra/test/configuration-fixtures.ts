@@ -1,12 +1,9 @@
+import { decodeMemorySettings } from "../src/memory/settings.js";
+import { FetchHttpClient } from "effect/http";
 import { homedir } from "node:os";
 import { NodeServices } from "@effect/platform-node";
 import { Effect, Layer, Path } from "effect";
-import {
-  ConfigLocation,
-  decodeMemorySettings,
-  LocalConfig,
-  StorageSettings,
-} from "../src/index.js";
+import { ConfigLocation, LocalConfig, StorageSettings } from "../src/index.js";
 
 export const testLocalConfig = (
   options: Omit<Parameters<typeof LocalConfig.layer>[0], "homeDirectory" | "environment"> & {
@@ -19,13 +16,14 @@ export const testLocalConfig = (
         ...options,
         homeDirectory: homedir(),
         environment: options.environment ?? {},
-      }).pipe(Layer.provideMerge(NodeServices.layer)),
+      }).pipe(Layer.provideMerge(Layer.mergeAll(NodeServices.layer, FetchHttpClient.layer))),
     ),
   );
 
 export const testMemorySettings = (input: unknown, baseDir = "/tmp") =>
   decodeMemorySettings(input).pipe(
     Effect.provide(Path.layer),
+    Effect.provideService(StorageSettings, { root: `${homedir()}/.aster` }),
     Effect.provideService(ConfigLocation, {
       baseDir,
       projectRoot: baseDir,

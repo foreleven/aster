@@ -1,10 +1,10 @@
 import { AsterRuntime } from "@aster/core";
 import {
   AgentMemoryBackend,
-  ConfiguredDurableInfrastructure,
+  ContextStorage,
   ConfiguredModels,
-  FileGoalScreening,
-  SystemOneClientLive,
+  ExternalExecutors,
+  SystemOneTransport,
   StorageSettings,
 } from "@aster/infra";
 import { LarkIntegration, MailIntegration, AppsIntegration } from "@aster/integrations";
@@ -25,11 +25,11 @@ export const localRuntimeLayer = AsterRuntime.layer({
 }).pipe(
   Layer.provide(
     Layer.mergeAll(
-      ConfiguredDurableInfrastructure.layer,
-      FileGoalScreening.layer,
+      ContextStorage.layer,
+      ExternalExecutors.layer,
       ConfiguredModels.layer,
       localConversationsLayer,
-      SystemOneClientLive.layer,
+      SystemOneTransport.layer,
       AgentMemoryBackend.layer,
     ),
   ),

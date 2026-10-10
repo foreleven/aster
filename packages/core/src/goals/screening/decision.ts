@@ -1,60 +1,16 @@
+import { DEFAULT_OUTPUT_LANGUAGE } from "../../config/language.js";
+import { withDecisionLanguage } from "../../services/system-one.js";
 import { score, DecisionError, type SystemOneClient } from "../../services/system-one.js";
 import type { GoalDefinition } from "../../goals/contracts.js";
-import { ContextText, type ContextText as ContextRecord } from "../../context/contracts.js";
-import { Clock, Context, Effect, Match, Schema } from "effect";
+import { type ContextText as ContextRecord } from "../../context/contracts.js";
+import { Clock, Effect } from "effect";
 import { createHash } from "node:crypto";
 
-export const GoalScreeningSnapshot = Schema.Struct({
-  context: ContextText,
-  goalTitle: Schema.String,
-  goalDescription: Schema.String,
-  goalSummary: Schema.String,
-});
-export type GoalScreeningSnapshot = typeof GoalScreeningSnapshot.Type;
-
-export const GoalScreeningRecord = Schema.Struct({
-  screeningRecordId: Schema.String,
-  sourcePath: Schema.String,
-  goalSlug: Schema.String,
-  /** Stable field name; v4 fingerprints all public evidence, excluding revision metadata. */
-  summaryFingerprint: Schema.String,
-  input: GoalScreeningSnapshot,
-  score: Schema.Number,
-  admitted: Schema.Boolean,
-  threshold: Schema.Number,
-  policyVersion: Schema.String,
-  model: Schema.String,
-  latencyMs: Schema.Number,
-  rationale: Schema.String,
-  error: Schema.optional(Schema.String),
-  createdAt: Schema.String,
-});
-export type GoalScreeningRecord = typeof GoalScreeningRecord.Type;
-
-export interface GoalScreeningStoreShape {
-  readonly append: (record: GoalScreeningRecord) => Effect.Effect<void, GoalScreeningStoreError>;
+interface GoalScreeningSnapshot {
+  readonly goalTitle: string;
+  readonly goalDescription: string;
+  readonly goalSummary: string;
 }
-
-export class GoalScreeningStoreError extends Schema.TaggedError<GoalScreeningStoreError>()(
-  "GoalScreeningStoreError",
-  { message: Schema.String, cause: Schema.optional(Schema.Unknown) },
-) {}
-
-export class GoalScreeningStore extends Context.Service<
-  GoalScreeningStore,
-  GoalScreeningStoreShape
->()("goals/ScreeningStore") {}
-
-export const makeMemoryGoalScreeningStore = (): GoalScreeningStore["Service"] => {
-  const records: GoalScreeningRecord[] = [];
-  return {
-    append: (record) =>
-      Effect.sync(() => {
-        records.push(structuredClone(record));
-      }),
-  };
-};
-
 export const contextSummaryText = (record: ContextRecord): string => record.text;
 export const goalSummaryText = (record: { summary: string } | undefined): string =>
   record?.summary ?? "";
@@ -101,103 +57,14 @@ export const normalizeScore = (value: unknown): number | undefined => {
   return value / maximumRelevanceScore;
 };
 
-const screeningDecision = Effect.fn("Goal.screeningDecision")(function* (options: {
-  readonly client: SystemOneClient;
-  readonly goal: GoalDefinition;
-  readonly source: ContextRecord;
-  readonly title: string;
-  readonly summary: string;
-  readonly screeningRecordId: string;
-  readonly summaryFingerprint: string;
-  readonly threshold: number;
-  readonly policyVersion: string;
-  readonly model: string;
-  readonly now: () => number;
-  readonly store?: GoalScreeningStore["Service"];
-}): Effect.fn.Return<GoalScreeningRecord, DecisionError | GoalScreeningStoreError> {
-  const input: GoalScreeningSnapshot = {
-    context: options.source,
-    goalTitle: options.title,
-    goalDescription: options.goal.description,
-    goalSummary: options.summary,
-  };
-  const started = options.now();
-  const result = yield* options.client
-    .systemOne({
-      state: input,
-      questions: { relevance: relevanceQuestion(input) },
-    })
-    .pipe(Effect.result);
-  const outcome = Match.value(result).pipe(
-    Match.tag("Failure", ({ failure }) => ({
-      score: 0,
-      admitted: false,
-      rationale: "System One request failed; no relevance score is available.",
-      error: failure.message,
-    })),
-    Match.tag("Success", ({ success }) => {
-      const answer = success.answers.relevance;
-      const normalized = normalizeScore(answer?.type === "score" ? answer.score : undefined);
-      if (normalized === undefined)
-        return {
-          score: 0,
-          admitted: false,
-          rationale: "System One returned no valid relevance score; admission failed closed.",
-          error: "invalid-score",
-        };
-      const legend = answer?.legend?.[String(Math.round(answer.score ?? 0))];
-      return {
-        score: normalized,
-        admitted: normalized >= options.threshold,
-        rationale:
-          typeof legend === "string"
-            ? legend
-            : `System One scored ${(normalized * maximumRelevanceScore).toFixed(1)}/${maximumRelevanceScore}.`,
-      };
-    }),
-    Match.exhaustive,
-  );
-  const record: GoalScreeningRecord = {
-    screeningRecordId: options.screeningRecordId,
-    sourcePath: options.source.path,
-    goalSlug: options.goal.slug,
-    summaryFingerprint: options.summaryFingerprint,
-    input,
-    ...outcome,
-    threshold: options.threshold,
-    policyVersion: options.policyVersion,
-    model: options.model,
-    latencyMs: Math.max(0, options.now() - started),
-    createdAt: new Date(options.now()).toISOString(),
-  };
-  if (result._tag === "Failure")
-    yield* Effect.logError(
-      JSON.stringify({
-        event: "goal.screening.failed",
-        requestId: record.screeningRecordId,
-        sourcePath: record.sourcePath,
-        goalSlug: record.goalSlug,
-        model: record.model,
-        latencyMs: record.latencyMs,
-        error: record.error,
-      }),
-    );
-  if (options.store) yield* options.store.append(record);
-  // Audit expected transport failures without turning them into a successful
-  // rejection. The owning Actor must retain failed work for explicit recovery.
-  if (result._tag === "Failure") return yield* result.failure;
-  if (record.error === "invalid-score")
-    return yield* new DecisionError({ message: "System One returned no valid relevance score" });
-  return record;
-});
-
 export type GoalRelevance = GoalDefinition & {
   readonly score: number;
   readonly rationale: string;
-  readonly screening: GoalScreeningRecord;
+  readonly summaryFingerprint: string;
+  readonly threshold: number;
 };
 
-/** One target per decision. The caller owns concurrency and partial-failure collection. */
+/** One target per decision; the caller persists the resulting routing plan. */
 export const matchGoal = Effect.fn("Goal.match")(function* (
   client: SystemOneClient,
   source: ContextRecord,
@@ -206,56 +73,83 @@ export const matchGoal = Effect.fn("Goal.match")(function* (
     readonly title: string;
     readonly summary: string;
   },
-  store?: GoalScreeningStore["Service"],
+  language = DEFAULT_OUTPUT_LANGUAGE,
 ) {
-  const summary = contextSummaryText(source);
-  if (!summary.trim())
+  if (!source.text.trim())
     return { _tag: "NotMatched" as const, reason: "Context has no summary evidence." };
-  const goal = candidate.definition;
+  const clock = yield* Clock.Clock;
+  const started = clock.currentTimeMillisUnsafe();
   const fingerprint = createHash("sha256")
     .update(
-      JSON.stringify({
-        path: source.path,
-        description: source.description,
-        text: source.text,
-      }),
+      JSON.stringify({ path: source.path, description: source.description, text: source.text }),
     )
     .digest("hex");
-  const requestId = createHash("sha256")
-    .update(`${source.path}:${goal.slug}:${fingerprint}`)
-    .digest("hex");
-  const clock = yield* Clock.Clock;
-  const screening = yield* screeningDecision({
-    client,
-    goal,
-    source,
-    title: candidate.title,
-    summary: candidate.summary,
-    screeningRecordId: requestId,
-    summaryFingerprint: fingerprint,
-    threshold: 0.7,
-    policyVersion: "goal-relevance-v4",
-    model: "system-one",
-    now: () => clock.currentTimeMillisUnsafe(),
-    store,
-  });
+  const result = yield* client
+    .systemOne({
+      state: {
+        context: {
+          path: source.path,
+          revision: source.revision,
+          description: source.description,
+          text: source.text,
+        },
+        goalTitle: candidate.title,
+        goalDescription: candidate.definition.description,
+        goalSummary: candidate.summary,
+      },
+      questions: {
+        relevance: withDecisionLanguage(
+          relevanceQuestion({
+            goalTitle: candidate.title,
+            goalDescription: candidate.definition.description,
+            goalSummary: candidate.summary,
+          }),
+          language,
+        ),
+      },
+    })
+    .pipe(
+      Effect.tapError((error) =>
+        Effect.logError({
+          event: "goal.screening.failed",
+          sourcePath: source.path,
+          goalSlug: candidate.definition.slug,
+          error: error.message,
+        }),
+      ),
+    );
+  const answer = result.answers.relevance;
+  const normalized = normalizeScore(answer?.type === "score" ? answer.score : undefined);
+  if (normalized === undefined)
+    return yield* new DecisionError({ message: "System One returned no valid relevance score" });
+  const threshold = 0.7;
+  const legend = answer?.legend?.[String(Math.round(answer.score ?? 0))];
+  const rationale =
+    typeof legend === "string"
+      ? legend
+      : `System One scored ${(normalized * maximumRelevanceScore).toFixed(1)}/${maximumRelevanceScore}.`;
   yield* Effect.logInfo({
     event: "goal.screening.completed",
-    screeningRecordId: requestId,
     sourcePath: source.path,
-    goalSlug: goal.slug,
-    score: screening.score,
-    admitted: screening.admitted,
-    latencyMs: screening.latencyMs,
+    goalSlug: candidate.definition.slug,
+    score: normalized,
+    admitted: normalized >= threshold,
+    latencyMs: clock.currentTimeMillisUnsafe() - started,
   });
-  if (!screening.admitted)
+  if (normalized < threshold)
     return {
       _tag: "NotMatched" as const,
-      reason: `${screening.rationale} Relevance ${screening.score.toFixed(3)} is below threshold ${screening.threshold}.`,
+      reason: `${rationale} Relevance ${normalized.toFixed(3)} is below threshold ${threshold}.`,
     };
   return {
     _tag: "Matched" as const,
-    reason: screening.rationale,
-    relevance: { ...goal, score: screening.score, rationale: screening.rationale, screening },
+    reason: rationale,
+    relevance: {
+      ...candidate.definition,
+      score: normalized,
+      rationale,
+      threshold,
+      summaryFingerprint: fingerprint,
+    },
   };
 });

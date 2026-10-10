@@ -8,4 +8,5 @@ export class IntegrationError extends Data.TaggedError("IntegrationError")<{
 
 export class RuntimeConfigurationError extends Data.TaggedError("RuntimeConfigurationError")<{
   readonly message: string;
+  readonly cause?: unknown;
 }> {}

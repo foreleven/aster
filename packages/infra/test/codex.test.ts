@@ -5,7 +5,8 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { makeCodexAgent, agentEnvironment } from "../src/index.js";
+import { testCodex } from "./executor-fixtures.js";
+import { agentEnvironment } from "../src/executors/environment.js";
 
 const isInterrupted = (error: unknown) =>
   error instanceof Error && /interrupt/i.test(error.message);
@@ -41,7 +42,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     { mode: 0o700 },
   );
   process.env.TEST_INTEGRATION_TOKEN = "test-only";
-  const agent = makeCodexAgent(
+  const agent = await testCodex(
     agentEnvironment({
       values: Redacted.make({ ...process.env }),
       privateKeys: ["TEST_INTEGRATION_TOKEN"],
@@ -49,7 +50,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     executable,
     join(dir, "tasks"),
   );
-  let restored: ReturnType<typeof makeCodexAgent> | undefined;
+  let restored: Awaited<ReturnType<typeof testCodex>> | undefined;
   try {
     const session = await Effect.runPromise(
       Effect.scoped(agent.submit({ instructions: "Prepared", input: [] })),
@@ -69,7 +70,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
       text: "Final result",
     });
     await Effect.runPromise(Effect.scoped(agent.close()));
-    restored = makeCodexAgent(
+    restored = await testCodex(
       agentEnvironment({
         values: Redacted.make({ ...process.env }),
         privateKeys: ["TEST_INTEGRATION_TOKEN"],
@@ -125,8 +126,8 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 `,
     { mode: 0o700 },
   );
-  const agent = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
-  const restored = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
+  const agent = await testCodex({ ...process.env }, executable, join(dir, "tasks"));
+  const restored = await testCodex({ ...process.env }, executable, join(dir, "tasks"));
   try {
     const session = await Effect.runPromise(
       Effect.scoped(agent.submit({ instructions: "Prepared", input: [] })),
@@ -179,7 +180,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 `,
     { mode: 0o700 },
   );
-  const agent = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
+  const agent = await testCodex({ ...process.env }, executable, join(dir, "tasks"));
   const methods = async (): Promise<string[]> =>
     (await readFile(log, "utf8"))
       .trim()
@@ -276,7 +277,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
 `,
     { mode: 0o700 },
   );
-  const agent = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
+  const agent = await testCodex({ ...process.env }, executable, join(dir, "tasks"));
   try {
     const first = await Effect.runPromise(
       Effect.scoped(agent.submit({ instructions: "Initial work", input: [] })),

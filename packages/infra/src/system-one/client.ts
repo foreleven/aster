@@ -1,218 +1,232 @@
-import { readSystemOneSettings } from "./settings.js";
-import { TypeSafeClient, type Questions } from "@typesafe-ai/sdk";
+import { DecisionError, type SystemOneClient } from "@aster/core";
 import {
-  DecisionError,
-  SystemOneClient,
-  LanguageSettings,
-  outputLanguageInstruction,
-  DEFAULT_OUTPUT_LANGUAGE,
-} from "@aster/core";
+  Clock,
+  Data,
+  Duration,
+  Effect,
+  Predicate,
+  Random,
+  Redacted,
+  Schedule,
+  Schema,
+} from "effect";
+import { HttpClient, HttpClientRequest } from "effect/http";
 import { randomUUID } from "node:crypto";
-import { Clock, Effect, Layer, Predicate, Redacted } from "effect";
+import type { SystemOneSettings } from "./settings.js";
 
-import type { SystemOneConfig } from "./settings.js";
-
-/** Only transport codes cross this boundary; nested error objects may contain request data. */
-const transportErrorCodes = (error: unknown, depth = 0): string[] => {
-  if (Redacted.isRedacted(error)) return transportErrorCodes(Redacted.value(error), depth);
-  if (depth > 4 || !Predicate.isObject(error)) return [];
-  const code =
-    Predicate.hasProperty(error, "code") && typeof error.code === "string" ? error.code : undefined;
+class RequestFailure extends Data.TaggedError("SystemOneRequestFailure")<{
+  readonly retryable: boolean;
+  readonly message: string;
+  readonly cause?: unknown;
+  readonly retryAfterMs?: number;
+}> {}
+const Answer = Schema.Struct({
+  type: Schema.String,
+  choice: Schema.optional(Schema.String),
+  score: Schema.optional(Schema.Finite),
+  confidence: Schema.optional(Schema.Finite),
+  legend: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
+});
+const Response = Schema.Struct({ answers: Schema.Record(Schema.String, Answer) });
+const networkCodes = new Set([
+  "ECONNREFUSED",
+  "ECONNRESET",
+  "ENOTFOUND",
+  "EAI_AGAIN",
+  "ETIMEDOUT",
+  "EPIPE",
+  "ENETUNREACH",
+  "EHOSTUNREACH",
+  "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_HEADERS_TIMEOUT",
+  "UND_ERR_BODY_TIMEOUT",
+  "UND_ERR_SOCKET",
+]);
+/** Only known network codes leave a cause; native messages can contain credentials. */
+const transportCodes = (cause: unknown, depth = 0): string[] => {
+  if (Redacted.isRedacted(cause)) return transportCodes(Redacted.value(cause), depth + 1);
+  if (depth > 4 || !Predicate.isObject(cause)) return [];
+  const code = Predicate.hasProperty(cause, "code") ? cause.code : undefined;
   return [
-    ...(code && /^[A-Z][A-Z0-9_]{0,63}$/.test(code) ? [code] : []),
-    ...(Predicate.hasProperty(error, "cause") ? transportErrorCodes(error.cause, depth + 1) : []),
-    ...(error instanceof AggregateError
-      ? error.errors.slice(0, 8).flatMap((cause: unknown) => transportErrorCodes(cause, depth + 1))
+    ...(typeof code === "string" && networkCodes.has(code) ? [code] : []),
+    ...(Predicate.hasProperty(cause, "cause") ? transportCodes(cause.cause, depth + 1) : []),
+    ...(cause instanceof AggregateError
+      ? cause.errors.slice(0, 8).flatMap((error: unknown) => transportCodes(error, depth + 1))
       : []),
   ];
 };
 
-/** Explicit configuration applies to TypeSafe and compatible System One services. */
-export const makeSystemOneClient = (
-  config: SystemOneConfig | undefined,
-  fetcher: typeof fetch = fetch,
-  language = DEFAULT_OUTPUT_LANGUAGE,
-): SystemOneClient => {
-  if (!config)
-    throw new Error("config.system-one is required when Signals, Goals or IM are configured");
-  let url: URL;
-  try {
-    url = new URL(config.url);
-  } catch {
-    throw new Error("config.system-one.url must be an HTTP or HTTPS URL");
-  }
-  if (!["http:", "https:"].includes(url.protocol) || url.hash || url.username || url.password) {
-    throw new Error(
-      "config.system-one.url must be an HTTP or HTTPS URL without embedded credentials or fragment",
-    );
-  }
-  const model = config.model.trim();
-  if (!model) throw new Error("config.system-one.model must be nonempty");
-  const apiKey = config.apiKey?.trim();
-  if (apiKey !== undefined && !apiKey) throw new Error("config.system-one.apiKey must be nonempty");
-  // The SDK appends /v1/systemone. Accept a service root, /v1, or that full endpoint.
-  const baseURL = `${url.origin}${url.pathname
-    .replace(/\/+$/, "")
-    .replace(/\/v1(?:\/systemone)?$/, "")}`;
-  const endpoint = `${baseURL}/v1/systemone${url.search}`;
-  const privateValues = [
-    ...new Set(
-      [apiKey ?? "", ...url.searchParams.values()]
-        .filter((value) => value.length > 0)
-        .flatMap((value) => [
-          value,
-          encodeURIComponent(value),
-          new URLSearchParams({ value }).toString().slice(6),
-        ]),
-    ),
-    ...(url.search ? [url.toString(), endpoint] : []),
-  ].sort((left, right) => right.length - left.length);
-  const redact = (message: string) =>
-    privateValues.reduce((text, value) => text.replaceAll(value, "<redacted>"), message);
+/** All retry decisions concern this read-only model decision protocol, never external task submission. */
+export const makeSystemOneClient = Effect.fn("SystemOne.make")(function* (
+  settings: SystemOneSettings,
+) {
+  const client = yield* HttpClient.HttpClient;
+  const endpoint = Redacted.value(settings.endpoint);
+  const origin = new URL(endpoint).origin;
   return {
     configured: true,
-    systemOne: Effect.fn("SystemOneClient.systemOne")(function* (request) {
-      const started = yield* Clock.currentTimeMillis;
+    systemOne: Effect.fn("SystemOne.request")(function* (request) {
+      for (const question of Object.values(request.questions)) {
+        const size =
+          question.type === "score"
+            ? question.criteria.length
+            : Object.keys(question.criteria).length;
+        if (
+          !question.instructions.trim() ||
+          size < (question.type === "score" ? 2 : 1) ||
+          (question.type === "score" && size > 10)
+        )
+          return yield* new DecisionError({ message: "Invalid System One question criteria" });
+      }
       const requestId = yield* Effect.sync(randomUUID);
-      const metadata = {
-        requestId,
-        model,
-        endpoint: url.origin,
-        questionCount: Object.keys(request.questions).length,
-      };
-      // SDK callbacks are synchronous. Capture the caller's Clock, logger and annotations.
-      const runSync = Effect.runSyncWith(yield* Effect.context<never>());
-      const elapsed = () => runSync(Clock.currentTimeMillis) - started;
+      const started = yield* Clock.currentTimeMillis;
       let attempt = 0;
       const log = (event: string, fields: Record<string, unknown> = {}) =>
-        runSync(
-          Effect.logInfo(
-            JSON.stringify({ event, ...metadata, attempt, elapsedMs: elapsed(), ...fields }),
-          ),
-        );
-      const sdkLog = (message: string, ...errors: unknown[]) =>
-        log("system-one.request.sdk", {
-          message: redact(message),
-          errorCodes: [...new Set(errors.flatMap((error) => transportErrorCodes(error)))].map(
-            redact,
-          ),
+        Effect.logInfo({
+          event,
+          requestId,
+          model: settings.model,
+          endpoint: origin,
+          attempt,
+          ...fields,
         });
-      // A client per invocation keeps SDK retry logs attached to one logical request.
-      const client = new TypeSafeClient({
-        baseURL,
-        defaultModel: model,
-        // SDK requires a key and falls back to process.env only for undefined.
-        // An explicit empty key disables that fallback; its synthetic header is removed below.
-        apiKey: apiKey ?? "",
-        logLevel: "info",
-        logger: { debug: () => {}, info: sdkLog, warn: sdkLog, error: sdkLog },
-        fetch: async (input, init) => {
+      yield* log("system-one.request.started", {
+        timeoutMs: 10000,
+        maxRetries: 2,
+        questionCount: Object.keys(request.questions).length,
+      });
+      const execute = Effect.scoped(
+        Effect.gen(function* () {
           attempt++;
-          const attemptStarted = elapsed();
-          log("system-one.request.attempt.started");
-          // SDK concatenates its route onto baseURL; queries belong on the final request URL.
-          const destination = new URL(input);
-          destination.search = url.search;
-          const headers = new Headers(init?.headers);
-          if (apiKey === undefined) headers.delete("Authorization");
-          const response = await fetcher(destination.toString(), { ...init, headers });
-          log("system-one.request.headers", {
-            status: response.status,
-            headersMs: elapsed() - attemptStarted,
-          });
-          // Do not consume or replace the body: the SDK owns buffering and its timeout.
-          return response;
-        },
-      });
-      log("system-one.request.started", {
-        timeoutMs: client.timeout,
-        maxRetries: client.retry.maxRetries,
-      });
-      return yield* Effect.tryPromise({
-        // SDK cancellation covers the fetch and retry delay, not just our local wait.
-        try: (signal) =>
-          client.systemOne(
-            {
+          yield* log("system-one.request.attempt.started");
+          let input = HttpClientRequest.post(endpoint).pipe(
+            HttpClientRequest.bodyJsonUnsafe({
               ...request,
-              // The core contract deliberately hides the SDK's generic question union;
-              // this is the single adapter boundary where the validated shapes meet.
-              questions: Object.fromEntries(
-                Object.entries(request.questions).map(([name, question]) => [
-                  name,
-                  {
-                    ...question,
-                    instructions: `${question.instructions}\n\n${outputLanguageInstruction(language)}`,
-                  },
-                ]),
-              ) as Questions,
+              model: settings.model,
               state:
                 typeof request.state === "string" ? request.state : JSON.stringify(request.state),
-            },
-            { signal },
-          ),
-        catch: (cause) => {
-          const codes = transportErrorCodes(cause);
-          const message = cause instanceof Error ? cause.message : String(cause);
-          return new DecisionError({
-            cause: Redacted.make(cause),
-            // Keep diagnostic codes available to typed business retry classification.
-            message: redact(codes.length ? `${message} (${codes.join(", ")})` : message),
-          });
-        },
-      }).pipe(
-        Effect.tap(() => Effect.sync(() => log("system-one.request.completed"))),
-        Effect.onInterrupt(() => Effect.sync(() => log("system-one.request.interrupted"))),
-        Effect.tapErrorTag("DecisionError", (error) =>
-          Effect.logError(
-            JSON.stringify({
-              event: "system-one.request.failed",
-              ...metadata,
-              attempt,
-              elapsedMs: elapsed(),
-              error: error.message,
-              errorCodes: [...new Set(transportErrorCodes(error.cause))].map(redact),
+            }),
+          );
+          if (settings.apiKey !== undefined)
+            input = input.pipe(
+              HttpClientRequest.setHeader(
+                "Authorization",
+                `Bearer ${Redacted.value(settings.apiKey)}`,
+              ),
+            );
+          const response = yield* client.execute(input);
+          yield* log("system-one.request.headers", { status: response.status });
+          if (response.status < 200 || response.status >= 300) {
+            const rawDelay = response.headers["retry-after-ms"];
+            const rawSeconds = response.headers["retry-after"];
+            const now = yield* Clock.currentTimeMillis;
+            const delay =
+              rawDelay !== undefined
+                ? Number(rawDelay)
+                : rawSeconds === undefined
+                  ? NaN
+                  : /^\d+(?:\.\d+)?$/.test(rawSeconds)
+                    ? Number(rawSeconds) * 1000
+                    : Date.parse(rawSeconds) - now;
+            return yield* new RequestFailure({
+              message: `System One returned HTTP ${response.status}`,
+              retryable:
+                response.status === 408 || response.status === 429 || response.status >= 500,
+              ...(Number.isFinite(delay) && delay >= 0 && delay <= 60000
+                ? { retryAfterMs: delay }
+                : {}),
+            });
+          }
+          const body = yield* response.json;
+          const value = yield* Schema.decodeUnknownEffect(Response)(body).pipe(
+            Effect.mapError(
+              (cause) =>
+                new RequestFailure({
+                  message: "System One returned an invalid response",
+                  retryable: false,
+                  cause: Redacted.make(cause),
+                }),
+            ),
+          );
+          for (const [key, question] of Object.entries(request.questions)) {
+            const answer = value.answers[key];
+            if (
+              !answer ||
+              answer.type !== question.type ||
+              (question.type === "choice" &&
+                (answer.choice === undefined ||
+                  !Object.hasOwn(question.criteria, answer.choice))) ||
+              (question.type === "score" &&
+                (answer.score === undefined ||
+                  answer.score < 0 ||
+                  answer.score > question.criteria.length - 1))
+            )
+              return yield* new RequestFailure({
+                message: "System One returned an invalid answer",
+                retryable: false,
+              });
+          }
+          return value;
+        }),
+      ).pipe(
+        Effect.timeout(10000),
+        Effect.catchTag("TimeoutError", (cause) =>
+          Effect.fail(
+            new RequestFailure({
+              message: "System One request timed out",
+              retryable: true,
+              cause: Redacted.make(cause),
             }),
           ),
         ),
-        Effect.map((result) => ({
-          answers: result.answers as {
-            readonly [key: string]: {
-              readonly type: string;
-              readonly choice?: string;
-              readonly score?: number;
-              readonly confidence?: number;
-              readonly legend?: Readonly<Record<string, unknown>>;
-            };
-          },
-        })),
+        Effect.catchTag("HttpClientError", (cause) => {
+          const codes = [...new Set(transportCodes(cause.reason.cause))];
+          return Effect.fail(
+            new RequestFailure({
+              message: codes.length
+                ? `System One transport failed (${codes.join(", ")})`
+                : "System One transport failed",
+              retryable: cause.reason._tag === "TransportError",
+              cause: Redacted.make(cause),
+            }),
+          );
+        }),
       );
-    }),
-  };
-};
-
-export const SystemOneClientLive = {
-  layer: Layer.effect(
-    SystemOneClient,
-    Effect.gen(function* () {
-      const config = yield* readSystemOneSettings;
-      if (!config)
-        return {
-          configured: false,
-          systemOne: () =>
-            Effect.fail(new DecisionError({ message: "System One is not configured" })),
-        };
-      const { outputLanguage: language } = yield* LanguageSettings;
-      return yield* Effect.try(() =>
-        makeSystemOneClient(
-          {
-            ...config,
-            url: Redacted.value(config.url),
-            apiKey: config.apiKey === undefined ? undefined : Redacted.value(config.apiKey),
-          },
-          fetch,
-          language,
+      const schedule = Schedule.exponential(500).pipe(
+        Schedule.modifyDelay(({ duration, input }) => {
+          const failure = input instanceof RequestFailure ? input : undefined;
+          return failure?.retryAfterMs !== undefined
+            ? Effect.succeed(failure.retryAfterMs)
+            : Random.next.pipe(
+                Effect.map(
+                  (random) => Math.min(Duration.toMillis(duration), 5000) * (0.75 + random * 0.5),
+                ),
+              );
+        }),
+      );
+      return yield* execute.pipe(
+        Effect.retry({ times: 2, while: (failure) => failure.retryable, schedule }),
+        Effect.mapError(
+          (cause) => new DecisionError({ message: cause.message, cause: Redacted.make(cause) }),
         ),
+        Effect.tap(() =>
+          Clock.currentTimeMillis.pipe(
+            Effect.flatMap((now) =>
+              log("system-one.request.completed", { elapsedMs: now - started }),
+            ),
+          ),
+        ),
+        Effect.tapError((error) =>
+          Effect.logError({
+            event: "system-one.request.failed",
+            requestId,
+            endpoint: origin,
+            attempt,
+            error: error.message,
+          }),
+        ),
+        Effect.onInterrupt(() => log("system-one.request.interrupted")),
       );
     }),
-  ).pipe(Layer.provide(LanguageSettings.layer)),
-};
+  } satisfies SystemOneClient;
+});

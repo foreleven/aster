@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Effect, Fiber, Option, Queue, Schema, Stream } from "effect";
 import { ContextCommitError, makeDurableContext } from "@aster/core";
 
-import { makeContextSessionPersistence } from "../src/storage/context-sessions.js";
+import { makeContextSessionPersistence } from "../src/context/session-store.js";
 const definition = {
   state: Schema.Struct({ count: Schema.Number }),
   message: Schema.Struct({ id: Schema.String, text: Schema.String }),

@@ -31,7 +31,7 @@ const services = Layer.unwrap(
         ? Layer.mergeAll(
             LarkImClient.layer,
             ChatSummarizer.layer.pipe(Layer.provide(LanguageSettings.layer)),
-            ChatSummaryGate.layer,
+            ChatSummaryGate.layer.pipe(Layer.provide(LanguageSettings.layer)),
             SummaryAdmission.layer,
           )
         : Layer.empty,

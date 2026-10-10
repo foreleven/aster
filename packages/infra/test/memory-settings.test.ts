@@ -1,7 +1,8 @@
+import { StorageSettings } from "../src/storage/settings.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ConfigProvider, Effect, Layer, Path } from "effect";
-import { MemorySettings } from "../src/agentmemory/settings.js";
+import { MemorySettings } from "../src/memory/settings.js";
 import { ConfigLocation } from "../src/config/location.js";
 
 const settings = (entry: unknown) =>
@@ -11,6 +12,7 @@ const settings = (entry: unknown) =>
         Layer.provide(
           Layer.mergeAll(
             Path.layer,
+            Layer.succeed(StorageSettings, { root: "/data" }),
             Layer.succeed(ConfigLocation, {
               baseDir: "/config",
               projectRoot: "/project",
@@ -31,7 +33,7 @@ const settings = (entry: unknown) =>
 
 test("memory defaults and relative/home paths use captured locations", async () => {
   for (const [entry, expected] of [
-    [{}, "/home/test/.aster/memory"],
+    [{}, "/data/memory"],
     [{ config: { dataDir: "./data" } }, "/config/data"],
     [{ config: { dataDir: "~/data" } }, "/home/test/data"],
   ] as const) {

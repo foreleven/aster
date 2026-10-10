@@ -5,14 +5,23 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { acquireActorStoreLock } from "@aster/infra";
+import { withStorageLease } from "@aster/infra";
+import { Deferred, Effect, Fiber } from "effect";
 
 test("startup rejects a held actor-store lock without changing its owner marker", async () => {
   const home = await mkdtemp(join(tmpdir(), "aster-startup-"));
   const lock = join(home, ".aster", "actors.pid");
-  let release: (() => void) | undefined;
+  let release: (() => Promise<unknown>) | undefined;
   try {
-    release = acquireActorStoreLock(join(home, ".aster"));
+    const ready = Deferred.makeUnsafe<void>();
+    const lease = Effect.runFork(
+      withStorageLease(
+        join(home, ".aster"),
+        Deferred.succeed(ready, undefined).pipe(Effect.andThen(Effect.never)),
+      ),
+    );
+    await Effect.runPromise(Deferred.await(ready));
+    release = () => Effect.runPromise(Fiber.interrupt(lease));
     const config = join(home, "config.yaml");
     await writeFile(config, "{}");
     const result = await new Promise<{ code: number | string | null | undefined; stderr: string }>(
@@ -36,7 +45,7 @@ test("startup rejects a held actor-store lock without changing its owner marker"
     assert.ok(result.stderr.includes("Cannot acquire actor store"), result.stderr);
     assert.equal(await readFile(lock, "utf8"), String(process.pid));
   } finally {
-    release?.();
+    await release?.();
     await rm(home, { recursive: true, force: true });
   }
 });
@@ -66,9 +75,14 @@ test("startup locks the configured root before acquiring model and integration s
   const root = join(home, "custom");
   const lock = join(root, "actors.pid");
   const config = join(home, "config.yaml");
-  let release: (() => void) | undefined;
+  let release: (() => Promise<unknown>) | undefined;
   try {
-    release = acquireActorStoreLock(root);
+    const ready = Deferred.makeUnsafe<void>();
+    const lease = Effect.runFork(
+      withStorageLease(root, Deferred.succeed(ready, undefined).pipe(Effect.andThen(Effect.never))),
+    );
+    await Effect.runPromise(Deferred.await(ready));
+    release = () => Effect.runPromise(Fiber.interrupt(lease));
     await writeFile(
       config,
       JSON.stringify({ config: { durable: { root }, personal: { model: "missing" } } }),
@@ -78,7 +92,7 @@ test("startup locks the configured root before acquiring model and integration s
     assert.match(result.stderr, /Cannot acquire actor store/);
     assert.equal(await readFile(lock, "utf8"), String(process.pid));
   } finally {
-    release?.();
+    await release?.();
     await rm(home, { recursive: true, force: true });
   }
 });

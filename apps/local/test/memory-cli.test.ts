@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { makeMemoryClient } from "@aster/infra";
+import { DatabaseSync } from "node:sqlite";
 
 test("CLI returns compact candidates, then expands only the requested memory", async () => {
   const dir = await mkdtemp(join(tmpdir(), "signals-memory-cli-"));
@@ -67,7 +67,11 @@ test("CLI returns compact candidates, then expands only the requested memory", a
       project: "test",
       cwd: dir,
     };
-    makeMemoryClient(connection).close();
+    const db = new DatabaseSync(join(dir, "signals-sources.sqlite"));
+    db.exec(
+      "CREATE TABLE sources (session_id TEXT NOT NULL, observation_id TEXT NOT NULL, paths TEXT NOT NULL, PRIMARY KEY(session_id, observation_id))",
+    );
+    db.close();
     const connectionFile = join(dir, "connection.json");
     await writeFile(connectionFile, JSON.stringify(connection));
     const run = (args: string[]) =>
@@ -103,7 +107,7 @@ test("CLI returns compact candidates, then expands only the requested memory", a
         typeof error === "object" &&
         error !== null &&
         "stderr" in error &&
-        String(error.stderr).includes("limit must be an integer"),
+        String(error.stderr).includes("limit must be an integer from 1 to 100"),
     );
     await assert.rejects(
       run(["expand", "obs-2", "--limit", "2"]),

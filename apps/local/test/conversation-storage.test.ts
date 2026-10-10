@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Effect, Layer } from "effect";
 import { AgentConversations } from "@aster/agent/harness";
-import { StorageSettings, withActorStoreLock } from "@aster/infra";
+import { StorageSettings, withStorageLease } from "@aster/infra";
 import { localConversationsLayer } from "../src/services.js";
 
 test("conversations resolve beside config under the locked root and reopen without Pi leases", async (t) => {
@@ -27,7 +27,7 @@ test("conversations resolve beside config under the locked root and reopen witho
   const conversations = localConversationsLayer.pipe(Layer.provide(sources));
   const entry = await Effect.runPromise(
     Effect.scoped(
-      withActorStoreLock(
+      withStorageLease(
         root,
         Effect.gen(function* () {
           const messages = yield* AgentConversations;
@@ -38,7 +38,7 @@ test("conversations resolve beside config under the locked root and reopen witho
   );
   const entries = await Effect.runPromise(
     Effect.scoped(
-      withActorStoreLock(
+      withStorageLease(
         root,
         Effect.gen(function* () {
           return yield* (yield* AgentConversations).read("/goals/a");

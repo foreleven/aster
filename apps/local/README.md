@@ -8,7 +8,7 @@ The local application observes Lark mail and work IM, evaluates Signals, pursues
 
 `AsterRuntime` in core owns domain service construction, root Actors, Context reactions, integration activation, readiness and shutdown. Lark owns IM readiness; memory owns its capture consumer. Local does not inspect IM state, bind ActorRefs, select Signals or initialize Goals. The host mounts `@aster/api/server` with HTTP/NDJSON; that package injects Runtime/domain services, constructs typed Actor commands and adapts replies. The API remains available while integrations catch up. During shutdown HTTP closes first, then runtime stops sources, subscriptions and Actors, drains captures and releases infrastructure. The root store lock remains held until cleanup completes; a defective shutdown retains it until process exit. Conversation storage uses the same resolved root, including paths relative to the configuration file.
 
-External Layers are `ConfiguredDurableInfrastructure.layer`, `FileGoalScreening.layer`, `ConfiguredModels.layer`, the host-configured `AgentConversations.layer(root)`, `SystemOneClientLive.layer` and `AgentMemoryBackend.layer`. Runtime builds `ContextRegistry`, internal reasoning, Tasks and Goal services. Tests replace these capability Layers with isolated implementations. See [runtime design](../../docs/runtime-design.md) for the graph and contracts.
+External Layers are `ContextStorage.layer`, `ExternalExecutors.layer`, `ConfiguredModels.layer`, the host-configured `AgentConversations.layer(root)`, `SystemOneTransport.layer` and `AgentMemoryBackend.layer`. Runtime builds `ContextRegistry`, internal reasoning, Tasks and Goal services. Tests replace these capability Layers with isolated implementations. See [runtime design](../../docs/runtime-design.md) for the graph and contracts.
 
 ## Configuration sources
 
@@ -42,7 +42,7 @@ The server binds only loopback and checks Host/Origin. Model credentials are not
 
 Chat updates are batched for one second, screened by System One, and summarized through the replaceable `ChatSummarizer` service, implemented inside Lark integration and using `contexts./lark.children./im.config.summary.model`. Each message batch is partitioned by its message date in Beijing time. Both a daily summary and a rolling summary must be stored before their covered messages are removed. Group and direct conversations follow the same rules. Source screening now requires `stateChanged`; message-only updates do not invoke System One. Ingestion writes are excluded from evaluation, and polling cursors are private. Each summary commit journals both outputs before publishing them so an interrupted commit can be replayed without another model call. Existing inactive legacy Contexts are preserved; their old `through` field is removed when their Chat Actor next starts.
 
-After `pnpm build`, run `node --use-env-proxy apps/local/scripts/verify-chat-summary.mjs` from the repository root. This uses synthetic evidence and real configured summary, System One and Goal models in isolated in-memory actors. It does not create a real Doubao task or require the managed memory process. A rejected relevance gate is reported as an automatic-chain failure; the script then separately checks Goal planning without changing production routing.
+Summary gating, Goal screening and planning are covered by integration/core tests with injected models and isolated Actors. Run the package test suites for local verification.
 
 Follow the JSON event names `chat.summary.*`, `system-one.goals.*`, `goal.planning.*` and `delegation.*` by Context path in startup logs. Live tests reached Goal planning but also exposed inconsistent relevance classification in the configured Laya service; see `docs/im-summary-design.md`.
 
@@ -60,7 +60,7 @@ Codex uses app-server; busy follow-ups steer the current turn and completed work
 
 Workspace packages use `@aster/*`; the CLI is `pnpm aster` (or the `aster` binary), and the default configuration is `aster.config.yaml`. Signal/Signals remain domain terms, including the `signals` configuration key and `/signals` Context paths.
 
-Default storage and the ownership lock now live under `~/.aster`: `context-sessions/`, `conversations/`, `evaluations/`, `tasks/`, and `memory/`. Memory `dataDir` supports `~/` paths; explicitly configured relative paths still resolve beside the config file. No automatic migration from the old storage directory is performed. Existing execution resume metadata retains its filename.
+Storage and the ownership lock live under `config.durable.root` (default `~/.aster`): `context-sessions/`, `conversations/`, `tasks/`, and `memory/`. Memory `dataDir` supports `~/` paths; explicitly configured relative paths still resolve beside the config file. No automatic migration from the old storage directory is performed. Existing execution resume metadata retains its filename.
 
 ### IM Sessions
 
@@ -94,4 +94,4 @@ The HTTP host composes `@aster/api/server`, `static-assets`, `source-assets` and
 
 ## Local storage
 
-Set `config.durable.root` to choose the directory covered by the process lock (default `~/.aster`). Context files, Agent conversations and screening logs live beneath this root. Relative paths resolve beside the configuration file. Context persistence uses the Local file backend; Pi conversations are owned by the agent package. External execution uses the Codex or Doubao adapters.
+Set `config.durable.root` to choose the directory covered by the process lock (default `~/.aster`). Context files, Agent conversations and operational diagnostics live beneath this root. Relative paths resolve beside the configuration file. Context persistence uses the Local file backend; Pi conversations are owned by the agent package. External execution uses the Codex or Doubao adapters.

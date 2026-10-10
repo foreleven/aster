@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect } from "effect";
-import { GoalScreeningSnapshot, makeDurableContext, makeGoalIntent, matchGoal } from "@aster/core";
+import { makeDurableContext, makeGoalIntent, matchGoal } from "@aster/core";
 import { Schema } from "effect";
 import { ChatState } from "../../src/lark/im/chat/state.js";
 import { ChatMessage } from "../../src/lark/im/model.js";
@@ -59,7 +59,16 @@ test("chat serialization freezes summary and identity without receipts or pendin
             systemOne: (request) =>
               Effect.sync(() => {
                 requests++;
-                const input = Schema.decodeUnknownSync(GoalScreeningSnapshot)(request.state);
+                const input = Schema.decodeUnknownSync(
+                  Schema.Struct({
+                    context: Schema.Struct({
+                      path: Schema.String,
+                      revision: Schema.Number,
+                      description: Schema.String,
+                      text: Schema.String,
+                    }),
+                  }),
+                )(request.state);
                 assert.deepEqual(input.context, evidence);
                 return { answers: { relevance: { type: "score", score: 9 } } };
               }),
