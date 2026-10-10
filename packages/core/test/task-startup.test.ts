@@ -1,4 +1,4 @@
-import type { TestContextRegistry } from "@aster/core/testing";
+import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
@@ -8,13 +8,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ContextQueries } from "../src/context/queries/routes.js";
 import {
-  ContextRegistry,
   ExternalAgents,
   GoalSettings,
   TasksRootActor,
   type TaskAdmissionReply,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { makeHarness } from "./harness-fixtures.js";
 import { retainedTask, taskInput } from "./task-fixtures.js";
@@ -26,17 +25,14 @@ const TerminationLog = Schema.Struct({
 });
 
 const taskSystem = (
-  registry: TestContextRegistry,
+  registry: TestContext,
   history: AgentConversations["Service"],
   clock: Clock.Clock,
 ) =>
   ActorSystem.make().pipe(
     ActorSystem.provide(
       ContextQueries.layer,
-      Layer.merge(
-        Layer.succeed(ContextRegistry, registry),
-        Layer.succeed(DurableContext, registry.backend),
-      ),
+      Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
       Layer.succeed(AgentConversations, history),
       Layer.succeed(ExternalAgents, {}),
       Layer.succeed(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
@@ -60,7 +56,7 @@ for (const fails of [false, true]) {
           const history = testConversations();
           const retained = yield* retainedTask(history, "completed");
           const otherTask = yield* retainedTask(history, "completed", taskInput("other"));
-          const registry = yield* makeContextRegistry({
+          const registry = yield* makeTestContext({
             loadAll: () => [retained, otherTask],
             save: () => {},
           });
@@ -136,7 +132,7 @@ test("Task root restart retains existing child ownership", async () => {
       Effect.gen(function* () {
         const history = testConversations();
         const retained = yield* retainedTask(history, "completed");
-        const registry = yield* makeContextRegistry({
+        const registry = yield* makeTestContext({
           loadAll: () => [retained],
           save: () => {},
         });
@@ -145,12 +141,15 @@ test("Task root restart retains existing child ownership", async () => {
         const system = yield* taskSystem(
           {
             ...registry,
-            get: (path) => {
-              if (failNextRead && path === retained.snapshot.path) {
-                failNextRead = false;
-                throw new Error("Injected root routing failure");
-              }
-              return registry.get(path);
+            backend: {
+              ...registry.backend,
+              get: (path) => {
+                if (failNextRead && path === retained.snapshot.path) {
+                  failNextRead = false;
+                  throw new Error("Injected root routing failure");
+                }
+                return registry.backend.get(path);
+              },
             },
           },
           history,

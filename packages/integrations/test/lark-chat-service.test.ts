@@ -65,7 +65,7 @@ test("IM searches recent messages before filtering muted chats and paginates the
       },
     });
   });
-  const batches = await Effect.runPromise(cli.searchMessages(query));
+  const batches = await Effect.runPromise(Effect.scoped(cli.searchMessages(query)));
   assert.equal(calls[0]![1], "+messages-search");
   assert.equal(calls[1]![1], "+messages-search");
   assert.equal(calls[2]![1], "chat.user_setting");
@@ -83,7 +83,9 @@ test("IM searches recent messages before filtering muted chats and paginates the
   );
   await assert.rejects(
     Effect.runPromise(
-      makeClient(() => '{"data":{"messages":[],"has_more":true}}').searchMessages(query),
+      Effect.scoped(
+        makeClient(() => '{"data":{"messages":[],"has_more":true}}').searchMessages(query),
+      ),
     ),
     /token/,
   );
@@ -99,11 +101,14 @@ test("IM fails closed on incomplete mute settings and rejects repeated page toke
           },
     }),
   );
-  await assert.rejects(Effect.runPromise(cli.searchMessages(query)), /Incomplete/);
+  await assert.rejects(Effect.runPromise(Effect.scoped(cli.searchMessages(query))), /Incomplete/);
   const repeated = makeClient(() =>
     JSON.stringify({ data: { messages: [], has_more: true, page_token: "same" } }),
   );
-  await assert.rejects(Effect.runPromise(repeated.searchMessages(query)), /repeated/);
+  await assert.rejects(
+    Effect.runPromise(Effect.scoped(repeated.searchMessages(query))),
+    /repeated/,
+  );
 });
 test("IM batches mute lookups by ten and skips settings for empty windows", async () => {
   const sizes: number[] = [];
@@ -126,15 +131,17 @@ test("IM batches mute lookups by ten and skips settings for empty windows", asyn
       },
     });
   });
-  const batches = await Effect.runPromise(cli.searchMessages(query));
+  const batches = await Effect.runPromise(Effect.scoped(cli.searchMessages(query)));
   assert.deepEqual(sizes, [10, 10, 3]);
   assert.equal(batches.length, 22);
   let calls = 0;
   await Effect.runPromise(
-    makeClient(() => {
-      calls++;
-      return '{"data":{"messages":[],"has_more":false}}';
-    }).searchMessages(query),
+    Effect.scoped(
+      makeClient(() => {
+        calls++;
+        return '{"data":{"messages":[],"has_more":false}}';
+      }).searchMessages(query),
+    ),
   );
   assert.equal(calls, 1);
 });
@@ -148,10 +155,10 @@ test("startup clamps old cursors to Beijing midnight while continuous polling cr
       }),
   };
   const now = Date.parse("2026-09-29T02:00:00Z");
-  await Effect.runPromise(pollChats(cli, undefined, now));
-  await Effect.runPromise(pollChats(cli, "2026-09-28T10:00:00Z", now));
-  await Effect.runPromise(pollChats(cli, "2026-09-29T01:00:00Z", now));
-  await Effect.runPromise(pollChats(cli, "2026-09-30T01:00:00Z", now));
+  await Effect.runPromise(Effect.scoped(pollChats(cli, undefined, now)));
+  await Effect.runPromise(Effect.scoped(pollChats(cli, "2026-09-28T10:00:00Z", now)));
+  await Effect.runPromise(Effect.scoped(pollChats(cli, "2026-09-29T01:00:00Z", now)));
+  await Effect.runPromise(Effect.scoped(pollChats(cli, "2026-09-30T01:00:00Z", now)));
   assert.deepEqual(
     windows.map((w) => w[0]),
     [
@@ -162,16 +169,18 @@ test("startup clamps old cursors to Beijing midnight while continuous polling cr
     ],
   );
   const midnight = Date.parse("2026-09-29T16:00:40Z");
-  await Effect.runPromise(pollChats(cli, "2026-09-29T15:59:40Z", midnight, false));
+  await Effect.runPromise(Effect.scoped(pollChats(cli, "2026-09-29T15:59:40Z", midnight, false)));
   assert.equal(windows.at(-1)![0], "2026-09-29T15:58:40.000Z");
-  await Effect.runPromise(pollChats(cli, "2026-09-29T15:59:40Z", midnight));
+  await Effect.runPromise(Effect.scoped(pollChats(cli, "2026-09-29T15:59:40Z", midnight)));
   assert.equal(windows.at(-1)![0], "2026-09-29T16:00:00.000Z");
   await assert.rejects(
     Effect.runPromise(
-      pollChats(
-        { searchMessages: () => Effect.fail(new LarkChatQueryError({ message: "offline" })) },
-        undefined,
-        now,
+      Effect.scoped(
+        pollChats(
+          { searchMessages: () => Effect.fail(new LarkChatQueryError({ message: "offline" })) },
+          undefined,
+          now,
+        ),
       ),
     ),
     /offline/,
@@ -205,7 +214,7 @@ test("direct search forwards keywords, keeps exact bounds and deduplicates messa
   });
   assert.equal(calls.length, 0);
   for (let i = 0; i < 2; i++) {
-    const result = await Effect.runPromise(search);
+    const result = await Effect.runPromise(Effect.scoped(search));
     assert.deepEqual(
       result[0]?.messages.map(({ id, content }) => ({ id, content })),
       [{ id: "m", content: "edited" }],
@@ -232,11 +241,14 @@ test("settings queries deduplicate requested IDs and reject malformed or unrelat
       },
     });
   });
-  assert.deepEqual(await Effect.runPromise(service.getChatSettings(["a", "b", "a"])), [
-    { chatId: "b", isMuted: false },
-    { chatId: "a", isMuted: true },
-  ]);
-  assert.deepEqual(await Effect.runPromise(service.getChatSettings([])), []);
+  assert.deepEqual(
+    await Effect.runPromise(Effect.scoped(service.getChatSettings(["a", "b", "a"]))),
+    [
+      { chatId: "b", isMuted: false },
+      { chatId: "a", isMuted: true },
+    ],
+  );
+  assert.deepEqual(await Effect.runPromise(Effect.scoped(service.getChatSettings([]))), []);
   for (const items of [
     [{ chat_id: "a", is_muted: "false" }],
     [{ chat_id: "other", is_muted: false }],
@@ -246,7 +258,9 @@ test("settings queries deduplicate requested IDs and reject malformed or unrelat
     ],
   ]) {
     const bad = makeClient(() => JSON.stringify({ data: { items } }));
-    const error = await Effect.runPromise(bad.getChatSettings(["a"]).pipe(Effect.flip));
+    const error = await Effect.runPromise(
+      Effect.scoped(bad.getChatSettings(["a"]).pipe(Effect.flip)),
+    );
     assert.equal(error._tag, "LarkChatQueryError");
   }
 });
@@ -257,7 +271,9 @@ test("invalid windows and responses fail in the typed channel", async () => {
     { start: "invalid", end: query.end },
     { start: query.end, end: query.start },
   ]) {
-    const error = await Effect.runPromise(neverRun.searchMessages(bounds).pipe(Effect.flip));
+    const error = await Effect.runPromise(
+      Effect.scoped(neverRun.searchMessages(bounds).pipe(Effect.flip)),
+    );
     assert.equal(error._tag, "LarkChatQueryError");
   }
   for (const stdout of [
@@ -267,9 +283,11 @@ test("invalid windows and responses fail in the typed channel", async () => {
     '{"data":{"messages":[{"message_id":"bad","chat_id":"chat","create_time":"2026-09-29T00:02:00Z","sender":{"name":123}}],"has_more":false}}',
   ]) {
     const error = await Effect.runPromise(
-      makeClient(() => stdout)
-        .searchMessages(query)
-        .pipe(Effect.flip),
+      Effect.scoped(
+        makeClient(() => stdout)
+          .searchMessages(query)
+          .pipe(Effect.flip),
+      ),
     );
     assert.equal(error._tag, "LarkChatQueryError");
   }
@@ -278,7 +296,10 @@ test("invalid windows and responses fail in the typed channel", async () => {
 test("transport failures stay typed and cancellation interrupts the active CLI effect", async () => {
   const failure = new LarkCliError({ message: "offline", cause: "offline" });
   const failed = LarkChatService.make(() => Effect.fail(failure));
-  assert.equal(await Effect.runPromise(failed.searchMessages(query).pipe(Effect.flip)), failure);
+  assert.equal(
+    await Effect.runPromise(Effect.scoped(failed.searchMessages(query).pipe(Effect.flip))),
+    failure,
+  );
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -324,14 +345,16 @@ test("IM history forwards CLI time/order/cursor arguments and decodes one provid
     });
   });
   const result = await Effect.runPromise(
-    service.listMessages({
-      chatId: "oc_old",
-      start: "2026-01-01",
-      end: "2026-01-02",
-      order: "asc",
-      pageSize: 10,
-      pageToken: "first",
-    }),
+    Effect.scoped(
+      service.listMessages({
+        chatId: "oc_old",
+        start: "2026-01-01",
+        end: "2026-01-02",
+        order: "asc",
+        pageSize: 10,
+        pageToken: "first",
+      }),
+    ),
   );
   assert.deepEqual(calls, [
     [
@@ -371,18 +394,23 @@ test("IM history rejects invalid selectors and pagination while preserving defec
     { chatId: "chat", start: "bad" },
     { chatId: "chat", start: "2026-02-02", end: "2026-02-01" },
   ]) {
-    const error = await Effect.runPromise(service.listMessages(args).pipe(Effect.flip));
+    const error = await Effect.runPromise(
+      Effect.scoped(service.listMessages(args).pipe(Effect.flip)),
+    );
     assert.equal(error._tag, "LarkChatQueryError");
     assert.equal(error.kind, "invalid-input");
   }
   for (const page of [{ has_more: true }, { has_more: true, page_token: "first" }]) {
     const broken = makeClient(() => JSON.stringify({ data: { messages: [], ...page } }));
     await assert.rejects(
-      Effect.runPromise(broken.listMessages({ chatId: "chat", pageToken: "first" })),
+      Effect.runPromise(Effect.scoped(broken.listMessages({ chatId: "chat", pageToken: "first" }))),
       /pagination/,
     );
   }
-  await assert.rejects(Effect.runPromise(service.listMessages({ chatId: "chat" })), /reached CLI/);
+  await assert.rejects(
+    Effect.runPromise(Effect.scoped(service.listMessages({ chatId: "chat" }))),
+    /reached CLI/,
+  );
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

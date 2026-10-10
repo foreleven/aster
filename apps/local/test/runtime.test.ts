@@ -4,12 +4,9 @@ import {
   AsterRuntime,
   ConfigLocation,
   ContextActor,
-  ContextSession,
   ContextCaptures,
   contextPath,
   ContextQueries,
-  ContextRegistry,
-  contextView,
   defineIntegration,
   DurableContext,
   ExternalAgents,
@@ -28,13 +25,15 @@ const Source = ContextActor.define("test/Source", {
   commands: [Schema.TaggedStruct("Ping", {})],
 })((actor) =>
   Effect.gen(function* () {
-    yield* ContextSession.make({
-      path: contextPath(actor),
-      state: Schema.Struct({ value: Schema.Number }),
-      message: Schema.Never,
-      view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
-      initial: { description: "Source", state: { value: 1 } },
-    }).pipe(Effect.orDie);
+    yield* (yield* DurableContext)
+      .open({
+        serialize: (state) => JSON.stringify(state),
+        path: contextPath(actor),
+        state: Schema.Struct({ value: Schema.Number }),
+        message: Schema.Never,
+        initial: { description: "Source", state: { value: 1 } },
+      })
+      .pipe(Effect.orDie);
     return { receive: () => Effect.void };
   }),
 );
@@ -55,14 +54,12 @@ const sourceLayer = (
           capture: (record) => ({ sessionId: record.path, records: Effect.succeed([record]) }),
         },
       ]);
-      const registry = yield* ContextRegistry;
+      const registry = yield* DurableContext;
       yield* modules.register(
         defineIntegration({
           name,
           phase: "source",
-          services: Context.make(ContextRegistry, registry).pipe(
-            Context.add(DurableContext, yield* DurableContext),
-          ),
+          services: Context.make(DurableContext, registry),
           activate: (system) =>
             Effect.gen(function* () {
               events.push(`start:${name}`);
@@ -170,7 +167,7 @@ test("runtime installs multiple sources, captures first changes, exposes API bef
               while (!events.includes("capture:/one") || !events.includes("capture:/two"))
                 yield* Effect.sleep(1);
             }).pipe(Effect.timeout("2 seconds"));
-            assert.deepEqual((yield* ContextRegistry).reader.get("/one")!.state, { value: 1 });
+            assert.equal((yield* DurableContext).get("/one")!.text, JSON.stringify({ value: 1 }));
           }).pipe(Effect.provide(live)),
         );
       }),
@@ -344,7 +341,7 @@ test("runtime activates generic mail and exposes its tree through ListContexts b
         yield* Effect.gen(function* () {
           const runtime = yield* AsterRuntime;
           yield* Deferred.await(entered);
-          const contexts = Object.values((yield* ContextRegistry).reader.snapshot());
+          const contexts = Object.values((yield* DurableContext).snapshot());
           assert.ok(contexts.some((context) => context.path === "/mail"));
           assert.ok(contexts.some((context) => context.path === "/mail/work"));
           assert.ok(!JSON.stringify(contexts).includes("secret"));
@@ -392,7 +389,7 @@ test("runtime owns Apps activation and exposes query commands after readiness", 
         yield* runtime.ready;
         assert.equal(calls, 0);
         assert.ok(
-          Object.values((yield* ContextRegistry).reader.snapshot()).some(
+          Object.values((yield* DurableContext).snapshot()).some(
             (record) => record.path === "/apps/ctrip",
           ),
         );

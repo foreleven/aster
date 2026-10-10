@@ -3,7 +3,7 @@ import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand, ReplyTo } from "@aster/actor";
 import { Context, Schema } from "effect";
 import { SignalDefinition } from "../config/schema.js";
-import { PublicContext } from "../context/contracts.js";
+import { ContextText } from "../context/contracts.js";
 import { GoalPath } from "../goals/contracts.js";
 import { ApplicationError, CommandReceipt } from "../operations.js";
 import { QueryReply } from "../services/actors.js";
@@ -16,7 +16,7 @@ export const SignalReactionInput = Schema.Struct({
   source: Schema.Literal("/system-one"),
   target: Schema.String.check(Schema.isPattern(/^\/signals\/[a-z0-9][a-z0-9-]*$/)),
   version: Schema.Int.check(Schema.isGreaterThan(0)),
-  sourceContext: PublicContext,
+  sourceContext: ContextText,
 });
 export type SignalReactionInput = typeof SignalReactionInput.Type;
 

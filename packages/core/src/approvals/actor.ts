@@ -1,3 +1,4 @@
+import { GetApprovals } from "./queries.js";
 import { Command as ActorCommand, type ActorContext } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
@@ -31,6 +32,7 @@ export class Resolve extends ActorCommand.Class<Resolve>()("Resolve", {
 export class Acknowledge extends ActorCommand.Class<Acknowledge>()("Acknowledge", {
   payload: { id: Schema.String, target: Schema.String },
 }) {}
+
 const Deliver = Schema.TaggedStruct("Deliver", {});
 export const ApprovalCommand = Schema.TaggedUnion({
   Revoke: Revoke.fields,
@@ -52,7 +54,7 @@ export const sendApproval = (
     );
 
 export const ApprovalQueueActor = ContextActor.define("approvals/Queue", {
-  commands: [Revoke, Enqueue, Resolve, Acknowledge],
+  commands: [Revoke, Enqueue, Resolve, Acknowledge, GetApprovals],
   internal: Deliver,
 })(
   Effect.gen(function* () {
@@ -82,6 +84,9 @@ export const ApprovalQueueActor = ContextActor.define("approvals/Queue", {
         state.restore.pipe(Effect.andThen(context.self.tell({ _tag: "Deliver" }))),
       receive: (command, context) =>
         Match.value(command).pipe(
+          Match.tag("GetApprovals", ({ replyTo }) =>
+            state.entries.pipe(Effect.flatMap((entries) => replyTo.tell(entries))),
+          ),
           Match.tag("Enqueue", ({ entry }) => state.enqueue(entry)),
           Match.tag("Revoke", ({ id }) => state.revoke(id)),
           Match.tag("Acknowledge", ({ id, target }) => state.acknowledge(id, target)),
@@ -112,3 +117,5 @@ export const ApprovalQueueActor = ContextActor.define("approvals/Queue", {
     };
   }),
 ).pipe(ContextActor.provide(ApprovalState.layer));
+
+export { GetApprovals } from "./queries.js";

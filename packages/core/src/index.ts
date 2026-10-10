@@ -5,7 +5,7 @@ export * from "./config/settings.js";
 export * from "./context/actor.js";
 export * from "./context/errors.js";
 export * from "./context/model.js";
-export * from "./context/registry.js";
+export * from "./context/store.js";
 export { GoalActor } from "./goals/actor.js";
 export { GoalCommand, GoalCommandReply } from "./goals/protocol.js";
 export { GoalsRootActor, GoalsRootCommand } from "./goals/root.js";
@@ -35,10 +35,6 @@ export { SignalActor } from "./signals/actor.js";
 export { SignalRootActor } from "./signals/root.js";
 export * from "./signals/state/snapshot.js";
 
-export * from "./context/store.js";
-export * from "./context/session.js";
-export * from "./context/session-storage.js";
-
 export * from "./tasks/root.js";
 
 export * from "./memory/actor.js";
@@ -46,8 +42,13 @@ export * from "./memory/actor.js";
 export * from "./context/queries/routes.js";
 export * from "./goals/agent.js";
 
-export * from "./context/view.js";
-
 export * from "./memory/capture.js";
 
 export { ContextCommand, type QueryCommand } from "./context/queries/protocol.js";
+
+export { readGoalState } from "./goals/queries.js";
+export { readTaskState } from "./tasks/queries.js";
+export { readActor } from "./services/domain-reads.js";
+export { SignalRecord, GetSignal } from "./signals/queries.js";
+export { goalBusinessState } from "./goals/view.js";
+export { ContextText } from "./context/contracts.js";

@@ -21,21 +21,23 @@ const settings = (contexts?: unknown) =>
 
 test("Goal settings retain only explicit Context paths and descriptions across both child layouts", async () => {
   const result = await Effect.runPromise(
-    settings({
-      "/lark": {
-        description: "Work account",
-        children: { "/im": { description: "Retained work conversations" } },
-        config: { token: "private-token", "/hidden": { description: "Not a Context" } },
-      },
-      "/apps": {
-        description: "Travel sources",
-        "/xiaohongshu": { description: "Search travel notes and comments" },
-      },
-      "/mail": {
-        children: { "/personal": { description: "Personal email" } },
-        config: { password: "private-password" },
-      },
-    }),
+    Effect.scoped(
+      settings({
+        "/lark": {
+          description: "Work account",
+          children: { "/im": { description: "Retained work conversations" } },
+          config: { token: "private-token", "/hidden": { description: "Not a Context" } },
+        },
+        "/apps": {
+          description: "Travel sources",
+          "/xiaohongshu": { description: "Search travel notes and comments" },
+        },
+        "/mail": {
+          children: { "/personal": { description: "Personal email" } },
+          config: { password: "private-password" },
+        },
+      }),
+    ),
   );
   assert.deepEqual(result.contexts, [
     { path: "/apps", description: "Travel sources" },
@@ -48,7 +50,7 @@ test("Goal settings retain only explicit Context paths and descriptions across b
 });
 
 test("missing Context configuration produces an empty Goal directory", async () => {
-  assert.deepEqual((await Effect.runPromise(settings())).contexts, []);
+  assert.deepEqual((await Effect.runPromise(Effect.scoped(settings()))).contexts, []);
 });
 
 test("invalid Context metadata fails settings acquisition instead of reaching the prompt", async () => {
@@ -57,7 +59,7 @@ test("invalid Context metadata fails settings acquisition instead of reaching th
     { "/apps": { description: "" } },
     { "/apps": { children: "invalid" } },
   ]) {
-    const result = await Effect.runPromise(settings(contexts).pipe(Effect.result));
+    const result = await Effect.runPromise(Effect.scoped(settings(contexts).pipe(Effect.result)));
     assert.equal(result._tag, "Failure");
   }
 });

@@ -1,5 +1,7 @@
-import { Effect, Match, Option, Schema } from "effect";
-import { contextView } from "../context/view.js";
+import { readTaskState } from "./queries.js";
+import { CurrentActors } from "../services/actors.js";
+import { createHash } from "node:crypto";
+import { Effect, Match, Schema } from "effect";
 import { ContextQueryError } from "../context/queries/routes.js";
 import { publicJson } from "../json.js";
 import { ApplicationError } from "../operations.js";
@@ -9,48 +11,14 @@ import { StoredTaskInput, TaskOutcome, TaskSnapshot } from "./state/snapshot.js"
 
 import { AgentConversations } from "@aster/agent/harness";
 import { approvalEntries } from "../approvals/actor.js";
-import { type ContextRegistry } from "../context/registry.js";
+import { type DurableContext } from "../context/store.js";
 import { type CapturePolicy } from "../memory/capture.js";
-const PublicTask = Schema.Struct({
-  status: TaskSnapshot.fields.status,
-  sourcePath: Schema.String,
-  replyTo: Schema.String,
-  agent: Schema.String,
-  inputs: Schema.Int,
-});
-export const taskView: import("../context/view.js").ContextViewPolicy = {
-  matches: (path) => /^\/tasks\/[^/]+$/.test(path),
-  project: (record) => {
-    const canonical = Schema.decodeUnknownOption(TaskSnapshot)(record.state);
-    let publicState = Schema.decodeUnknownOption(PublicTask)(record.state);
-    if (Option.isSome(canonical))
-      publicState = Option.some({
-        status: canonical.value.status,
-        sourcePath: canonical.value.admission.source,
-        replyTo: canonical.value.admission.replyTo,
-        agent: canonical.value.admission.agent,
-        inputs: canonical.value.inputs.length,
-      });
-    if (Option.isNone(publicState)) return undefined;
-    return {
-      path: record.path,
-      revision: record.revision ?? 0,
-      description: record.description,
-      state: publicState.value,
-      messages: [],
-      projection: { visibility: "public" },
-    };
-  },
-};
-export const tasksRootView = contextView({
-  matches: (path) => path === "/tasks",
-  state: Schema.Struct({}),
-});
 
 export const inspectTask = (
-  registry: ContextRegistry["Service"],
+  registry: DurableContext["Service"],
   conversations: Pick<AgentConversations["Service"], "read" | "tools">,
   path: string,
+  actors: CurrentActors["Service"],
 ) =>
   Effect.gen(function* () {
     yield* Schema.decodeUnknownEffect(TaskPath)(path).pipe(
@@ -61,7 +29,7 @@ export const inspectTask = (
     const record = registry.get(path);
     if (!record)
       return yield* new ApplicationError({ kind: "not-found", message: "Task not found" });
-    const state = Schema.decodeUnknownSync(TaskSnapshot)(record.state);
+    const state = yield* readTaskState(actors, path);
     const entries = yield* conversations
       .read(path)
       .pipe(
@@ -128,7 +96,7 @@ export const inspectTask = (
       messages,
       result: state.status === "completed" ? text : undefined,
       error: state.status === "completed" ? undefined : text,
-      requests: approvalEntries(registry)
+      requests: (yield* approvalEntries(actors))
         .filter((entry) => entry.contextPath === path)
         .map((entry) => ({
           id: entry.id,
@@ -149,20 +117,17 @@ export const inspectTask = (
 
 /** Resolve frozen evidence from Pi; later source edits cannot change a capture. */
 export const taskCapture = (messages: AgentConversations["Service"]): CapturePolicy => ({
-  matches: (path) => taskView.matches!(path),
-  capture: (record) => {
-    const decoded = Schema.decodeUnknownOption(TaskSnapshot)(record.state);
-    if (Option.isNone(decoded)) return undefined;
-    const state = decoded.value;
-    return {
-      sessionId: `${record.path}:${state.outcomeEntryId === undefined ? "trigger" : `outcome:${state.outcomeEntryId}`}`,
-      records: Effect.gen(function* () {
-        const entry = yield* messages.get(record.path, state.inputs[0]!.entryId).pipe(Effect.orDie);
-        const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(entry.data);
-        return admission.evidence ? [record, admission.evidence] : undefined;
-      }),
-    };
-  },
+  matches: (path) => /^\/tasks\/[^/]+$/.test(path),
+  capture: (record) => ({
+    sessionId: `${record.path}:text:${createHash("sha256").update(record.text).digest("hex")}`,
+    records: Effect.gen(function* () {
+      const entries = yield* messages.read(record.path).pipe(Effect.orDie);
+      const entry = entries.find((entry) => entry.kind === "task.admission");
+      if (!entry) return undefined;
+      const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(entry.data);
+      return admission.evidence ? [record, admission.evidence] : undefined;
+    }),
+  }),
 });
 
 const renderInput = (data: unknown) =>

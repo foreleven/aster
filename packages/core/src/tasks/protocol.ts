@@ -1,4 +1,4 @@
-import { GetTaskDetails } from "./queries.js";
+import { GetTaskDetails, GetTaskSnapshot } from "./queries.js";
 import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand, ReplyTo } from "@aster/actor";
 import { Schema } from "effect";
@@ -33,7 +33,9 @@ export class Cancel extends ActorCommand.Class<Cancel>()("Cancel", {
     replyTo: Schema.optional(ReplyTo<void>()),
   },
 }) {}
+
 export const TaskCommands = [
+  GetTaskSnapshot,
   StartTask,
   Input,
   CheckTask,
@@ -53,3 +55,5 @@ export const TaskInternal = Schema.TaggedUnion({
   },
 });
 export type TaskCommand = MailboxOf<typeof TaskCommands, typeof TaskInternal>;
+
+export { GetTaskSnapshot } from "./queries.js";

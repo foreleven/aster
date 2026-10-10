@@ -1,9 +1,8 @@
 import { Command } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
-import { accountView } from "../public-views.js";
 import { LarkAccountCommands } from "./queries.js";
 
-import { ContextActor, ContextQueryError, ContextSession } from "@aster/core";
+import { ContextActor, ContextQueryError, DurableContext } from "@aster/core";
 import { LarkConfig } from "../config.js";
 import { LarkImActor } from "../im/channel-actor.js";
 import { LarkEmailChannelActor } from "../mail/channel-actor.js";
@@ -26,13 +25,15 @@ export const LarkRootActor = ContextActor.define("lark/RootActor", {
   Effect.gen(function* () {
     const config = yield* LarkConfig;
     const cli = yield* LarkAccountCli;
-    const session = yield* ContextSession.make({
-      path: "/lark",
-      state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
-      message: Schema.Never,
-      view: accountView,
-      initial: { description: config.description, state: {} },
-    }).pipe(Effect.orDie);
+    const session = yield* (yield* DurableContext)
+      .open({
+        path: "/lark",
+        state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
+        message: Schema.Never,
+        serialize: ({ account }) => (account ? JSON.stringify(account) : ""),
+        initial: { description: config.description, state: {} },
+      })
+      .pipe(Effect.orDie);
     return {
       started: (context) =>
         Effect.gen(function* () {
@@ -66,15 +67,8 @@ export const LarkRootActor = ContextActor.define("lark/RootActor", {
             Match.value(result).pipe(
               Match.tag("Failure", (result) => Effect.logWarning(result.error.message)),
               Match.tag("Success", (result) =>
-                session
-                  .set(
-                    {
-                      description: config.description,
-                      state: { account: result.value },
-                      messages: [],
-                    },
-                    {},
-                  )
+                session.state
+                  .set({ account: result.value }, { ...{}, description: config.description })
                   .pipe(Effect.asVoid, Effect.orDie),
               ),
               Match.exhaustive,

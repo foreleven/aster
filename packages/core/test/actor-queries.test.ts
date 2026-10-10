@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "../src/testing/context.js";
 import { Schema } from "effect";
 import { ContextQueryError } from "../src/context/contracts.js";
 import { DurableContext } from "@aster/core";
@@ -11,7 +12,6 @@ import { ListTasks, ReadTask } from "../src/tasks/queries.js";
 import { ReadSignal } from "../src/signals/queries.js";
 import { ContextQueries } from "../src/context/queries/routes.js";
 import {
-  ContextRegistry,
   ExternalAgents,
   GoalsRootActor,
   SignalRootActor,
@@ -19,7 +19,7 @@ import {
   type GoalCommandReply,
   type StoredContext,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
 import { retainedTask, taskFixture, taskInput } from "./task-fixtures.js";
 import type { TaskAdmissionReply } from "../src/tasks/protocol.js";
@@ -32,6 +32,14 @@ test("Goal list/read query live children and mailbox state rather than the durab
       Effect.gen(function* () {
         const orphan: StoredContext = {
           snapshot: {
+            text: serializeFixtureState({
+              definition: { slug: "orphan", description: "Orphan" },
+              status: "active",
+              summary: "Not live",
+              tasks: [],
+              inputs: [],
+              receipts: [],
+            }),
             path: "/goals/orphan",
             revision: 1,
             description: "Orphan",
@@ -47,14 +55,11 @@ test("Goal list/read query live children and mailbox state rather than the durab
           },
           events: [],
         };
-        const registry = yield* makeContextRegistry({ loadAll: () => [orphan], save: () => {} });
+        const registry = yield* makeTestContext({ loadAll: () => [orphan], save: () => {} });
         const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(ContextQueries, queries),
             Layer.succeed(ExternalAgents, {}),
             Layer.succeed(SignalDefinitions, []),

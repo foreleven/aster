@@ -1,4 +1,4 @@
-import { ContextCommand, ContextQueryError, ContextRegistry, publicJson } from "@aster/core";
+import { ContextCommand, ContextQueryError, DurableContext, publicJson } from "@aster/core";
 import { DateTime, Effect, Match, Schema } from "effect";
 import { MailFetcher } from "./client.js";
 import { mailMessagePath } from "./contexts.js";
@@ -26,7 +26,7 @@ export const MailboxQueries = [ListMail, ReadMail] as const;
 export const queryMailbox = Effect.fn("Mail.query")(
   function* (mailbox: Mailbox, command: ListMail | ReadMail) {
     const fetcher = yield* MailFetcher;
-    const registry = yield* ContextRegistry;
+    const registry = yield* DurableContext;
 
     const timeZone = mailbox.timeZone ?? "Asia/Shanghai";
     const now = yield* DateTime.now;
@@ -37,7 +37,9 @@ export const queryMailbox = Effect.fn("Mail.query")(
           const { id } = yield* Schema.decodeUnknownEffect(readArgs)(command).pipe(Effect.orDie);
           const record = registry.get(mailMessagePath({ id, mailbox: mailbox.id }));
           const email = record
-            ? yield* Schema.decodeUnknownEffect(MailMessage)(record.state).pipe(Effect.orDie)
+            ? yield* Schema.decodeUnknownEffect(Schema.fromJsonString(MailMessage))(
+                record.text,
+              ).pipe(Effect.orDie)
             : yield* fetcher.read(mailbox, id);
           return publicJson({ ...email, dateBasis });
         }),

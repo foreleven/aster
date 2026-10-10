@@ -32,9 +32,13 @@ test("mail settings decode multiple mailboxes and redact passwords", async () =>
     },
   });
   const settings = await Effect.runPromise(
-    Effect.gen(function* () {
-      return yield* MailSettings;
-    }).pipe(Effect.provide(MailSettings.layer.pipe(Layer.provide(ConfigProvider.layer(provider))))),
+    Effect.scoped(
+      Effect.gen(function* () {
+        return yield* MailSettings;
+      }).pipe(
+        Effect.provide(MailSettings.layer.pipe(Layer.provide(ConfigProvider.layer(provider)))),
+      ),
+    ),
   );
   assert.equal(settings.mailboxes.length, 2);
   assert.equal(Redacted.value(settings.mailboxes[0]!.password), "secret");
@@ -55,10 +59,14 @@ test("MailIntegration.services provides configured fetcher without opening conne
     },
   });
   const fetcher = await Effect.runPromise(
-    Effect.gen(function* () {
-      return yield* MailFetcher;
-    }).pipe(
-      Effect.provide(MailIntegration.services.pipe(Layer.provide(ConfigProvider.layer(provider)))),
+    Effect.scoped(
+      Effect.gen(function* () {
+        return yield* MailFetcher;
+      }).pipe(
+        Effect.provide(
+          MailIntegration.services.pipe(Layer.provide(ConfigProvider.layer(provider))),
+        ),
+      ),
     ),
   );
   assert.equal(typeof fetcher.pull, "function");
@@ -111,22 +119,24 @@ test("POP3 mailboxes normalize messages with stable UIDL identities across renum
   try {
     const pull = (known: readonly string[] = []) =>
       Effect.runPromise(
-        Effect.gen(function* () {
-          const fetcher = yield* MailFetcher;
-          return yield* fetcher.pull(
-            {
-              id: "test-pop3",
-              protocol: "pop3",
-              host: "127.0.0.1",
-              port: address.port,
-              secure: false,
-              username: "alice",
-              password: Redacted.make("secret"),
-            },
-            { from: "2026-10-06T16:00:00Z", through: "2026-10-07T16:00:00Z" },
-            known,
-          );
-        }).pipe(Effect.provide(mailFetcherLayer())),
+        Effect.scoped(
+          Effect.gen(function* () {
+            const fetcher = yield* MailFetcher;
+            return yield* fetcher.pull(
+              {
+                id: "test-pop3",
+                protocol: "pop3",
+                host: "127.0.0.1",
+                port: address.port,
+                secure: false,
+                username: "alice",
+                password: Redacted.make("secret"),
+              },
+              { from: "2026-10-06T16:00:00Z", through: "2026-10-07T16:00:00Z" },
+              known,
+            );
+          }).pipe(Effect.provide(mailFetcherLayer())),
+        ),
       );
     assert.deepEqual(
       (await pull(["pop3:stable-one", "pop3:stable-two"])).messages.map((message) => message.id),
@@ -211,20 +221,22 @@ test("IMAP filters by received day before downloading bodies and scopes UIDs to 
   try {
     const pull = () =>
       Effect.runPromise(
-        Effect.gen(function* () {
-          return yield* (yield* MailFetcher).pull(
-            {
-              id: "work",
-              host: "127.0.0.1",
-              port: address.port,
-              secure: false,
-              username: "alice",
-              password: Redacted.make("secret"),
-            },
-            { from: "2026-10-06T16:00:00Z", through: "2026-10-07T16:00:00Z" },
-            [98, 99, 100].map((id) => `imap:INBOX:${validity}:${id}`),
-          );
-        }).pipe(Effect.provide(mailFetcherLayer()), Effect.timeout("5 seconds")),
+        Effect.scoped(
+          Effect.gen(function* () {
+            return yield* (yield* MailFetcher).pull(
+              {
+                id: "work",
+                host: "127.0.0.1",
+                port: address.port,
+                secure: false,
+                username: "alice",
+                password: Redacted.make("secret"),
+              },
+              { from: "2026-10-06T16:00:00Z", through: "2026-10-07T16:00:00Z" },
+              [98, 99, 100].map((id) => `imap:INBOX:${validity}:${id}`),
+            );
+          }).pipe(Effect.provide(mailFetcherLayer()), Effect.timeout("5 seconds")),
+        ),
       );
     omitHeader = true;
     await assert.rejects(pull(), MailFetchError);
@@ -293,12 +305,14 @@ for (const protocol of ["imap", "pop3"] as const)
     );
     try {
       await accepted.promise;
-      await Effect.runPromise(Fiber.interrupt(fiber).pipe(Effect.timeout("5 seconds")));
       await Effect.runPromise(
-        Effect.promise(() => closed.promise).pipe(Effect.timeout("5 seconds")),
+        Effect.scoped(Fiber.interrupt(fiber).pipe(Effect.timeout("5 seconds"))),
+      );
+      await Effect.runPromise(
+        Effect.scoped(Effect.promise(() => closed.promise).pipe(Effect.timeout("5 seconds"))),
       );
     } finally {
-      await Effect.runPromise(Fiber.interrupt(fiber));
+      await Effect.runPromise(Effect.scoped(Fiber.interrupt(fiber)));
       await new Promise<void>((resolve, reject) =>
         server.close((error) => (error ? reject(error) : resolve())),
       );

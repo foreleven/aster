@@ -8,8 +8,7 @@ import { ContextActor, contextPath, contextSpawnOptions } from "../src/context/a
 import { ContextQueryError } from "../src/context/contracts.js";
 import { ContextCommand } from "../src/context/queries/protocol.js";
 import { ContextQueries } from "../src/context/queries/routes.js";
-import { ContextRegistry } from "../src/context/registry.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 
 const SearchResult = Schema.Struct({
   path: Schema.String,
@@ -45,7 +44,7 @@ test("Context commands own response codecs, text presentation and void replies",
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
         const entered = yield* Deferred.make<void>();
         const Owner = ContextActor.define("test/context-command/OwnResponse", {
@@ -75,7 +74,7 @@ test("Context commands own response codecs, text presentation and void replies",
         );
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
+            Layer.succeed(DurableContext, registry.backend),
             Layer.succeed(ContextQueries, queries),
           ),
         );
@@ -130,7 +129,7 @@ test("Context commands derive discovery and typed requests from one class list a
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
         const Owner = ContextActor.define("test/context-command/Owner", {
           commands: [Search, Local],
@@ -153,10 +152,7 @@ test("Context commands derive discovery and typed requests from one class list a
         );
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(ContextQueries, queries),
           ),
         );
@@ -220,7 +216,7 @@ test("Context query cancellation interrupts owned work and owner shutdown fails 
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
         const entered = yield* Queue.unbounded<void>();
         const interrupted = yield* Deferred.make<void>();
@@ -244,10 +240,7 @@ test("Context query cancellation interrupts owned work and owner shutdown fails 
         );
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(ContextQueries, queries),
           ),
         );
@@ -279,7 +272,7 @@ test("query defects enter supervision and restart rebuilds the owner's catalogue
       Effect.gen(function* () {
         const clock = yield* TestClock.make();
         yield* Effect.gen(function* () {
-          const registry = yield* makeContextRegistry();
+          const registry = yield* makeTestContext();
           const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
           let generation = 0;
           const Owner = ContextActor.define("test/context-command/Restart", {
@@ -307,10 +300,7 @@ test("query defects enter supervision and restart rebuilds the owner's catalogue
           );
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
-              Layer.merge(
-                Layer.succeed(ContextRegistry, registry),
-                Layer.succeed(DurableContext, registry.backend),
-              ),
+              Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
               Layer.succeed(ContextQueries, queries),
             ),
           );
@@ -338,7 +328,7 @@ test("concurrent commands may share one explicit reply Actor without losing resp
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
         const entered = yield* Queue.unbounded<void>();
         const release = yield* Deferred.make<void>();
@@ -368,10 +358,7 @@ test("concurrent commands may share one explicit reply Actor without losing resp
         );
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(ContextQueries, queries),
           ),
         );
@@ -400,7 +387,7 @@ test("owner stop replies to active and queued commands sent with a shared reply 
     Effect.scoped(
       Effect.gen(function* () {
         class Fence extends Command.Class<Fence>()("Fence", { payload: {}, reply: Schema.Void }) {}
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
         const entered = yield* Deferred.make<void>();
         const Owner = ContextActor.define("test/context-command/QueuedStop", {
@@ -422,10 +409,7 @@ test("owner stop replies to active and queued commands sent with a shared reply 
         );
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(ContextQueries, queries),
           ),
         );

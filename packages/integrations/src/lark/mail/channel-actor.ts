@@ -2,14 +2,12 @@ import { Command, CommandProcessor, type ActorRef } from "@aster/actor";
 import {
   ContextActor,
   ContextQueryError,
-  ContextRegistry,
-  ContextSession,
+  DurableContext,
   childActorName,
   spawnContextChild,
 } from "@aster/core";
 import { Clock, Effect, Match, Schema } from "effect";
 import { LarkConfig } from "../config.js";
-import { mailChannelView } from "../public-views.js";
 import { LarkMailCommands } from "./queries.js";
 import { LarkMailCli, LarkResponseError } from "./client.js";
 import { GetEmail, LarkMailMessageActor, type MailMessageCommand } from "./message-actor.js";
@@ -53,16 +51,18 @@ export const LarkEmailChannelActor = ContextActor.define("lark/EmailChannelActor
 })(
   Effect.gen(function* () {
     const processor = yield* CommandProcessor.make({ concurrency: 2 });
-    const registry = yield* ContextRegistry;
+    const registry = yield* DurableContext;
     const cli = yield* LarkMailCli;
     const config = yield* LarkConfig;
-    const session = yield* ContextSession.make({
-      path: "/lark/mail",
-      state: MailboxState,
-      message: Schema.Never,
-      view: mailChannelView,
-      initial: { description: config.mail.description, state: { mailbox: config.mail.mailbox } },
-    }).pipe(Effect.orDie);
+    const session = yield* (yield* DurableContext)
+      .open({
+        path: "/lark/mail",
+        state: MailboxState,
+        message: Schema.Never,
+        serialize: ({ profile }) => (profile ? JSON.stringify(profile) : ""),
+        initial: { description: config.mail.description, state: { mailbox: config.mail.mailbox } },
+      })
+      .pipe(Effect.orDie);
     yield* session.state
       .update((state) =>
         state.mailbox === config.mail.mailbox ? state : { mailbox: config.mail.mailbox },
@@ -180,17 +180,13 @@ export const LarkEmailChannelActor = ContextActor.define("lark/EmailChannelActor
             Match.value(command.result).pipe(
               Match.tag("Failure", (result) => Effect.logWarning(result.error.message)),
               Match.tag("Success", (result) =>
-                session
+                session.state
                   .set(
                     {
-                      description: config.mail.description,
-                      state: {
-                        mailbox: config.mail.mailbox,
-                        profile: result.value,
-                      },
-                      messages: [],
+                      mailbox: config.mail.mailbox,
+                      profile: result.value,
                     },
-                    {},
+                    { ...{}, description: config.mail.description },
                   )
                   .pipe(Effect.asVoid, Effect.orDie),
               ),

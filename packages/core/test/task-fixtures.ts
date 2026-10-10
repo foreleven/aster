@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { Actor, ActorSystem } from "@aster/actor";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
@@ -5,7 +6,6 @@ import { Clock, Effect, Layer, Schema, Stream } from "effect";
 import {
   ApprovalQueueActor,
   ContextQueries,
-  ContextRegistry,
   ExternalAgents,
   GoalSettings,
   SignalDefinitions,
@@ -26,7 +26,7 @@ import { GoalCommands, type GoalCommand } from "../src/goals/protocol.js";
 
 import type { TaskDeliveryInput } from "../src/tasks/contracts.js";
 import { taskPathFor } from "../src/tasks/state/admission.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 import { fakeAgent } from "./fixtures.js";
 
 export const taskInput = (requestId = "task", source = "/goals/personal"): TaskDeliveryInput => ({
@@ -51,7 +51,7 @@ export const taskFixture = Effect.fnUntraced(function* (
   } = {},
 ) {
   const records = options.records ?? new Map<string, StoredContext>();
-  const registry = yield* makeContextRegistry({
+  const registry = yield* makeTestContext({
     loadAll: () => [...records.values()],
     save: (record) => {
       records.set(record.snapshot.path, structuredClone(record));
@@ -65,6 +65,15 @@ export const taskFixture = Effect.fnUntraced(function* (
     Effect.succeed({
       receive: (command) =>
         Effect.gen(function* () {
+          if (command._tag === "GetGoalSnapshot")
+            return yield* command.replyTo.tell({
+              definition: { slug: "personal", description: "Assistant" },
+              status: "active",
+              summary: "Assistant",
+              tasks: [],
+              inputs: [],
+              receipts: [],
+            });
           if (command._tag === "AttachTask")
             return yield* command.replyTo.tell({ _tag: "Attached" });
           if (command._tag === "GetGoalDetails")
@@ -92,6 +101,7 @@ export const taskFixture = Effect.fnUntraced(function* (
   if (!registry.get("/goals/personal"))
     yield* registry.commit(
       {
+        text: serializeFixtureState({ status: "active" }),
         path: "/goals/personal",
         description: "Assistant",
         state: { status: "active" },
@@ -102,10 +112,7 @@ export const taskFixture = Effect.fnUntraced(function* (
   const conversations = options.conversations ?? testConversations();
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
-      Layer.merge(
-        Layer.succeed(ContextRegistry, registry),
-        Layer.succeed(DurableContext, registry.backend),
-      ),
+      Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
       Layer.succeed(AgentConversations, conversations),
       Layer.succeed(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
       Layer.succeed(
@@ -113,12 +120,7 @@ export const taskFixture = Effect.fnUntraced(function* (
         options.harness ?? makeHarness(() => Effect.die("Unexpected internal execution")),
       ),
       ContextQueries.layer.pipe(
-        Layer.provide(
-          Layer.merge(
-            Layer.succeed(ContextRegistry, registry),
-            Layer.succeed(DurableContext, registry.backend),
-          ),
-        ),
+        Layer.provide(Layer.mergeAll(Layer.succeed(DurableContext, registry.backend))),
       ),
       emptyRecall,
       Layer.succeed(ExternalAgents, options.agents ?? { test: options.agent ?? fakeAgent() }),
@@ -190,6 +192,7 @@ export const retainedTask = Effect.fnUntraced(function* (
   });
   return {
     snapshot: {
+      text: serializeFixtureState(state),
       path: input.target,
       description: "Retained Task",
       revision: 2,

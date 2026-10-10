@@ -45,7 +45,7 @@ const RuntimeLive = AsterRuntime.layer({
 | External capability                                | Local implementation                  | Internal consumer                                            |
 | -------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------ |
 | ConfigProvider, ConfigLocation, ProcessEnvironment | LocalConfig.layer                     | Module Config declarations and adapters                      |
-| DurableContext                                     | ConfiguredDurableInfrastructure.layer | ContextRegistry.layer                                        |
+| DurableContext                                     | ConfiguredDurableInfrastructure.layer | Scoped domain owner handles and text readers                 |
 | Models                                             | Models.configured                     | Internal Agent, Goal reasoner, Lark summarizer               |
 | SystemOneClient                                    | SystemOneClientLive.layer             | Signal/Goal policies and Lark summary gate                   |
 | MemoryBackend                                      | AgentMemoryBackend.layer              | Core starts the Memory Actor with backend recall and capture |
@@ -77,7 +77,7 @@ Use one credential resolver for exact `${ENV_VAR}` references and memory `apiKey
 
 ## Application interface
 
-Runtime exposes Actor addressing, readiness and native diagnostics, and its Layer publishes the existing ContextRegistry, ContextQueries and AgentConversations services. It has no application API facade. `@aster/api/server` consumes those services, adapts requests into typed Actor commands, awaits admission replies and projects query results. Core owns domain rules and pure contracts; API schemas, wire normalization and query invalidations belong to `@aster/api`. Local selects Protocol/serialization and owns HTTP resources, without assembling core services or implementing RPC handlers.
+Runtime exposes Actor addressing, readiness and native diagnostics, and its Layer publishes the existing DurableContext, ContextQueries and AgentConversations services. It has no application API facade. `@aster/api/server` consumes those services, adapts requests into typed Actor commands, awaits admission replies and projects query results. Core owns domain rules and pure contracts; API schemas, wire normalization and query invalidations belong to `@aster/api`. Local selects Protocol/serialization and owns HTTP resources, without assembling core services or implementing RPC handlers.
 
 ## Refactoring and acceptance
 
@@ -123,7 +123,7 @@ Runtime owns a transient `Deferred<void>` Signal activation gate passed through 
 
 ## Context consumer composition
 
-See [Context design](context-design.md) for Context ownership and persistence contracts. Runtime installs core views and Task capture policy, and constructs the runtime-local `ContextCaptures` registry. Integrations register their capture policies before source writes. Context owners supply descriptions directly. Capture policies select a stable session identity without I/O and return a lazy evidence read; Memory checks durable admission before reading Pi.
+See [Context design](context-design.md) for Context ownership and persistence contracts. Runtime installs Task capture policy, and constructs the runtime-local `ContextCaptures` registry. Integrations register their capture policies before source writes. Context owners supply descriptions directly. Capture policies select a stable session identity without I/O and return a lazy evidence read; Memory checks durable admission before reading Pi.
 
 Memory and System One own independent subscriptions and Behavior-scoped workers. `pipeToSelf` sends worker defects into Actor supervision; a restart reconciles committed source state. Memory scans retained Contexts outside its mailbox and admits captures through its own typed command, acknowledging only after persistence. The mailbox owns capture state, backend scheduling and recall capacity. System One consumes durable events from live notifications and reconciles its journal once at startup. Runtime records permanent core-root termination as failed health, including termination after startup, and closes consumers before draining backend operations. There is no shared Context-maintenance Fiber, capture-sink bridge, deferred target binding or custom Memory/System One Ready command. Storage selection and Local/Pi routing remain in infra.
 

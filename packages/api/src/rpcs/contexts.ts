@@ -1,12 +1,12 @@
-import { ApplicationError, PublicContext, ContextQueryInput } from "@aster/core/contracts";
+import { ApplicationError, ContextText, ContextQueryInput } from "@aster/core/contracts";
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 
 export const ContextRpcs = RpcGroup.make(
-  Rpc.make("ListContexts", { success: Schema.Array(PublicContext), error: ApplicationError }),
+  Rpc.make("ListContexts", { success: Schema.Array(ContextText), error: ApplicationError }),
   Rpc.make("GetContext", {
     payload: { path: Schema.String },
-    success: PublicContext,
+    success: ContextText,
     error: ApplicationError,
   }),
   Rpc.make("QueryContext", {

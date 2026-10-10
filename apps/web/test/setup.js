@@ -65,7 +65,34 @@ export async function setup(page, data = fixture()) {
     let value;
     switch (rpc.tag) {
       case "ListContexts":
-        value = data.contexts;
+        value = data.contexts.map(({ path, revision, description, text }) => ({
+          path,
+          revision,
+          description,
+          text,
+        }));
+        break;
+      case "ListGoals":
+        value = data.contexts
+          .filter(({ path }) => /^\/goals\/[^/]+$/.test(path))
+          .map(({ path, revision, description, state }) => ({
+            path,
+            revision,
+            description,
+            slug: path.split("/").at(-1),
+            ...state,
+          }));
+        break;
+      case "ListTasks":
+      case "ListSignals":
+        value = data.contexts
+          .filter(({ path }) => path.startsWith(rpc.tag === "ListTasks" ? "/tasks/" : "/signals/"))
+          .map(({ path, revision, description, state }) => ({
+            path,
+            revision,
+            description,
+            ...state,
+          }));
         break;
       case "ListApprovals":
         value = data.approvals;

@@ -1,3 +1,5 @@
+import { serializeFixtureState } from "../src/testing/context.js";
+import { SignalSnapshot } from "../src/signals/state/snapshot.js";
 import type { FrozenReaction } from "../src/reactions/state.js";
 import { CurrentActors } from "../src/services/actors.js";
 import { SystemOneActor } from "../src/reactions/actor.js";
@@ -12,19 +14,29 @@ import {
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem, ActorTestKit, type ActorRef } from "@aster/actor";
-import { Deferred, Effect, Fiber, Layer, Schema } from "effect";
+import { Deferred, Effect, Scope, Exit, Fiber, Layer, Schema } from "effect";
 import {
-  ContextRegistry,
   GoalSettings,
   SystemOneClient,
-  contextView,
   type SignalRootCommand,
   type GoalsRootCommand,
   type ContextSnapshot,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 
 const record = (path: string, state: object): ContextSnapshot => ({
+  text: serializeFixtureState(
+    path.startsWith("/goals/")
+      ? {
+          definition: { slug: path.split("/").at(-1), description: path },
+          summary: "",
+          inputs: [],
+          receipts: [],
+          tasks: [],
+          ...state,
+        }
+      : state,
+  ),
   path,
   revision: 1,
   description: path,
@@ -64,20 +76,40 @@ test("source Signal eligibility handles deletion, schedules and completed owners
     ].map((item) => [item.path, item]),
   );
   assert.deepEqual(
-    sourceSignals(snapshot).map((s) => s.slug),
+    sourceSignals(
+      Object.values(snapshot)
+        .filter((record) => record.path.startsWith("/signals/"))
+        .map((record) => ({
+          ...record,
+          state: Schema.decodeUnknownSync(SignalSnapshot)(record.state),
+        })),
+      new Map([["/goals/done", { status: "completed" }]]),
+    ).map((s) => s.slug),
     ["live"],
   );
   assert.deepEqual(
-    sourceSignals(snapshot).map((s) => s.slug),
+    sourceSignals(
+      Object.values(snapshot)
+        .filter((record) => record.path.startsWith("/signals/"))
+        .map((record) => ({
+          ...record,
+          state: Schema.decodeUnknownSync(SignalSnapshot)(record.state),
+        })),
+      new Map([["/goals/done", { status: "completed" }]]),
+    ).map((s) => s.slug),
     ["live"],
   );
 });
 
-test("Context reactions coordinate multiple Signals and Goals without integration knowledge or duplicate Goal screening", async () => {
+test("Context reactions coordinate multiple Signals and Goals without integration knowledge or duplicate Goal screening", async (t) => {
+  const lifetime = await Effect.runPromise(Scope.make());
+  t.after(() => Effect.runPromise(Scope.close(lifetime, Exit.void)));
   const signals: SignalRootCommand[] = [],
     goals: GoalsRootCommand[] = [];
   const screened: string[] = [];
-  const registry = await Effect.runPromise(makeContextRegistry());
+  const registry = await Effect.runPromise(
+    makeTestContext().pipe(Effect.provideService(Scope.Scope, lifetime)),
+  );
   const generic = {
     state: Schema.Record(Schema.String, Schema.Unknown),
     message: Schema.Unknown,
@@ -89,20 +121,23 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
     record("/goals/other", { status: "active", summary: "Other Goal" }),
     record("/goals/done", { status: "completed" }),
   ]) {
-    await Effect.runPromise(registry.register(item.path, generic));
+    await Effect.runPromise(Effect.scoped(registry.register(item.path, generic)));
     await Effect.runPromise(
-      registry.commit(item, { expectedRevision: registry.get(item.path)?.revision ?? 0 }),
+      Effect.scoped(
+        registry.commit(item, { expectedRevision: registry.get(item.path)?.revision ?? 0 }),
+      ),
     );
   }
   await Effect.runPromise(
-    registry.register("/source", {
-      ...generic,
-      changes: "durable-state" as const,
-      view: contextView({ state: Schema.Struct({ summary: Schema.String }) }),
-    }),
+    Effect.scoped(
+      registry.register("/source", {
+        ...generic,
+        events: "state" as const,
+        serialize: (state) => JSON.stringify(state),
+      }),
+    ),
   );
   const layers = Layer.mergeAll(
-    Layer.succeed(ContextRegistry, registry),
     Layer.succeed(DurableContext, registry.backend),
     Layer.succeed(GoalSettings, {
       definitions: ["owned", "other", "done"].map((slug) => ({ slug, description: slug })),
@@ -139,7 +174,6 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         });
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.succeed(ContextRegistry, registry),
             Layer.succeed(DurableContext, registry.backend),
             Layer.succeed(ReactionPolicy, {
               ...policy,
@@ -225,22 +259,23 @@ test("Signal matching sends one condition and preserves the source fields", asyn
       Effect.sync(() => {
         assert.deepEqual(Object.keys(request.questions), ["matches"]);
         assert.match(request.questions.matches!.instructions, /Review request/);
-        assert.equal(JSON.parse(String(request.state)).context.state.subject, "Draft");
+        assert.equal(JSON.parse(JSON.parse(String(request.state)).context.text).subject, "Draft");
         return { answers: { matches: { type: "choice", choice: "yes" } } };
       }),
   };
   assert.deepEqual(
     await Effect.runPromise(
-      matchSignal(
-        client,
-        {
-          path: "/email",
-          revision: 1,
-          description: "Email",
-          state: { subject: "Draft" },
-          messages: [],
-        },
-        { _tag: "Signal", slug: "review", when: "Review request", version: 1 },
+      Effect.scoped(
+        matchSignal(
+          client,
+          {
+            text: serializeFixtureState({ subject: "Draft" }),
+            path: "/email",
+            revision: 1,
+            description: "Email",
+          },
+          { _tag: "Signal", slug: "review", when: "Review request", version: 1 },
+        ),
       ),
     ),
     { _tag: "Matched", reason: "Signal condition satisfied: Review request" },
@@ -285,11 +320,10 @@ test("Signals and Goals share a bounded pool of single-target requests", async (
             id: "source",
             createdAt: "2026-10-07T00:00:00Z",
             record: {
+              text: serializeFixtureState({ summary: "Release evidence" }),
               path: "/source",
               revision: 1,
               description: "Source",
-              state: { summary: "Release evidence" },
-              messages: [],
             },
           },
           status: "frozen",
@@ -330,11 +364,10 @@ test("malformed answers retain failed targets while valid no answers complete wi
       id: "source",
       createdAt: "2026-10-07T00:00:00Z",
       record: {
+        text: serializeFixtureState({ summary: "Release evidence" }),
         path: "/source",
         revision: 1,
         description: "Source",
-        state: { summary: "Release evidence" },
-        messages: [],
       },
     },
     status: "frozen",
@@ -350,19 +383,21 @@ test("malformed answers retain failed targets while valid no answers complete wi
     ],
   };
   const policy = await Effect.runPromise(
-    makeReactionPolicy({
-      client: {
-        systemOne: (request) => {
-          const answers: Effect.Success<ReturnType<SystemOneClient["systemOne"]>>["answers"] =
-            request.questions.matches?.instructions.includes("? no")
-              ? { matches: { type: "choice", choice: "no" } }
-              : {};
-          return Effect.succeed({ answers });
+    Effect.scoped(
+      makeReactionPolicy({
+        client: {
+          systemOne: (request) => {
+            const answers: Effect.Success<ReturnType<SystemOneClient["systemOne"]>>["answers"] =
+              request.questions.matches?.instructions.includes("? no")
+                ? { matches: { type: "choice", choice: "no" } }
+                : {};
+            return Effect.succeed({ answers });
+          },
         },
-      },
-    }),
+      }),
+    ),
   );
-  const plan = await Effect.runPromise(policy.plan(work, 2));
+  const plan = await Effect.runPromise(Effect.scoped(policy.plan(work, 2)));
   assert.ok(plan.every((outcome) => outcome.result._tag !== "Matched"));
   assert.deepEqual(
     plan

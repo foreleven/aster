@@ -17,7 +17,7 @@ import { randomUUID } from "node:crypto";
 import { ContextQueryError } from "./contracts.js";
 import { QueryReply, isQueryCommand, type QueryCommand } from "./queries/protocol.js";
 import { ContextQueries } from "./queries/routes.js";
-import { ContextRegistry } from "./registry.js";
+import { DurableContext } from "./store.js";
 
 export const childContextPath = (parentPath: string, relativePath: string): string => {
   const segments = relativePath.split("/");
@@ -86,7 +86,7 @@ export const ContextActor = {
         options,
       )((owner) =>
         Effect.gen(function* () {
-          const registry = yield* ContextRegistry;
+          const registry = yield* DurableContext;
           const scope = yield* Effect.scope;
           // The runtime filter and conditional requirement use the same descriptor marker.
           // Widened schema arrays conservatively retain the query-registry requirement.

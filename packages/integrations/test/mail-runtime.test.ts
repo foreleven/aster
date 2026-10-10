@@ -1,11 +1,11 @@
 import { ContextQueryError } from "@aster/core";
-import type { TestContextRegistry } from "@aster/core/testing";
+import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ConfigProvider, Effect, Fiber, Layer } from "effect";
-import { ContextQueries, ContextRegistry, RuntimeIntegrations } from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
+import { ContextQueries, RuntimeIntegrations } from "@aster/core";
+import { makeTestContext } from "@aster/core/testing";
 import { MailIntegration } from "../src/mail/integration.js";
 
 const configuration = ConfigProvider.fromUnknown({
@@ -25,7 +25,7 @@ test("configured mail installs a runtime source without opening connections", as
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         yield* Effect.gen(function* () {
           const modules = yield* RuntimeIntegrations;
           yield* Effect.void.pipe(Effect.provide(MailIntegration.layer));
@@ -35,8 +35,8 @@ test("configured mail installs a runtime source without opening connections", as
           );
           assert.equal(Object.keys(registry.snapshot()).length, 0);
         }).pipe(
-          Effect.provide(Layer.merge(RuntimeIntegrations.layer, ContextQueries.layer)),
-          Effect.provideService(ContextRegistry, registry),
+          Effect.provide(Layer.mergeAll(RuntimeIntegrations.layer, ContextQueries.layer)),
+
           Effect.provideService(DurableContext, registry.backend),
           Effect.provide(ConfigProvider.layer(configuration)),
         );
@@ -74,7 +74,7 @@ const email: MailMessage = {
 };
 
 const install = Effect.fnUntraced(function* (
-  registry: TestContextRegistry,
+  registry: TestContext,
   fetcher: MailFetcher["Service"],
   config = settings,
 ) {
@@ -103,8 +103,8 @@ const install = Effect.fnUntraced(function* (
     yield* Effect.yieldNow;
     return { system, completed, logs, queries, handle: yield* module.activate(system) };
   }).pipe(
-    Effect.provide(Layer.merge(RuntimeIntegrations.layer, ContextQueries.layer)),
-    Effect.provideService(ContextRegistry, registry),
+    Effect.provide(Layer.mergeAll(RuntimeIntegrations.layer, ContextQueries.layer)),
+
     Effect.provideService(DurableContext, registry.backend),
     Effect.provideService(MailSettings, config),
     Effect.provideService(MailFetcher, fetcher),
@@ -135,7 +135,7 @@ test("mail publishes its tree before retrieval and acknowledges persistence befo
       Effect.gen(function* () {
         const clock = yield* TestClock.make();
         yield* Effect.gen(function* () {
-          const registry = yield* makeContextRegistry();
+          const registry = yield* makeTestContext();
           const fetching = yield* Deferred.make<void>();
           const releaseFetch = yield* Deferred.make<void>();
           const saving = yield* Deferred.make<void>();
@@ -144,13 +144,22 @@ test("mail publishes its tree before retrieval and acknowledges persistence befo
             ...registry,
             backend: {
               ...registry.backend,
-              commit: (record, options) =>
-                record.path === mailMessagePath(email)
-                  ? Deferred.succeed(saving, undefined).pipe(
-                      Effect.andThen(Deferred.await(releaseSave)),
-                      Effect.andThen(registry.backend.commit(record, options)),
-                    )
-                  : registry.backend.commit(record, options),
+              open: (options) =>
+                registry.backend.open(options).pipe(
+                  Effect.map((owner) => ({
+                    ...owner,
+                    state: {
+                      ...owner.state,
+                      set: (state, commitOptions) =>
+                        options.path === mailMessagePath(email)
+                          ? Deferred.succeed(saving, undefined).pipe(
+                              Effect.andThen(Deferred.await(releaseSave)),
+                              Effect.andThen(owner.state.set(state, commitOptions)),
+                            )
+                          : owner.state.set(state, commitOptions),
+                    },
+                  })),
+                ),
             },
           };
           const { handle, completed } = yield* install(
@@ -168,9 +177,9 @@ test("mail publishes its tree before retrieval and acknowledges persistence befo
             Effect.forkScoped,
           );
           yield* Deferred.await(fetching);
-          const publicRecords = registry.reader.snapshot();
-          assert.equal(publicRecords["/mail"]?.projection?.visibility, "public");
-          assert.equal(publicRecords[mailboxPath("work")]?.projection?.visibility, "public");
+          const publicRecords = registry.backend.snapshot();
+          assert.ok(publicRecords["/mail"]?.text);
+          assert.ok(publicRecords[mailboxPath("work")]?.text);
           assert.ok(!JSON.stringify(publicRecords).includes("secret"));
           assert.ok(!JSON.stringify(publicRecords).includes("imap.example.com"));
           yield* Deferred.succeed(releaseFetch, undefined);
@@ -193,7 +202,7 @@ test("mail publishes its tree before retrieval and acknowledges persistence befo
           assert.equal(saved.revision, 1);
           assert.equal(saved.description, `Email from ${email.from}: ${email.subject}`);
           assert.deepEqual(saved.state, email);
-          assert.equal(registry.views.project(saved).projection?.visibility, "public");
+          assert.ok(registry.backend.get(saved.path)?.text);
           yield* clock.adjust(1_000);
           yield* Queue.take(completed);
           assert.equal(registry.get(mailMessagePath(email))?.revision, 1);
@@ -210,7 +219,7 @@ test("mail retries retrieval errors, isolates mailboxes, and interrupts active p
       Effect.gen(function* () {
         const clock = yield* TestClock.make();
         yield* Effect.gen(function* () {
-          const registry = yield* makeContextRegistry();
+          const registry = yield* makeTestContext();
           const failed = yield* Deferred.make<void>();
           const waiting = yield* Deferred.make<void>();
           const cancelled = yield* Deferred.make<void>();
@@ -218,8 +227,9 @@ test("mail retries retrieval errors, isolates mailboxes, and interrupts active p
           const changes = yield* registry.subscribe;
           yield* Stream.runForEach(changes, (change) =>
             change.record.path === mailboxPath("work") &&
-            Schema.is(MailboxState)(change.record.state) &&
-            change.record.state.status === "error"
+            Schema.is(MailboxState)(registry.get(change.record.path)!.state) &&
+            Schema.decodeUnknownSync(MailboxState)(registry.get(change.record.path)!.state)
+              .status === "error"
               ? Deferred.succeed(failed, undefined)
               : Effect.void,
           ).pipe(Effect.forkScoped);
@@ -256,7 +266,7 @@ test("mail retries retrieval errors, isolates mailboxes, and interrupts active p
               .status,
             "ready",
           );
-          assert.ok(!JSON.stringify(registry.reader.snapshot()).includes("secret"));
+          assert.ok(!JSON.stringify(registry.backend.snapshot()).includes("secret"));
           assert.match(JSON.stringify(logs), /mail.poll.failed/);
           assert.match(JSON.stringify(logs), /ECONNRESET/);
           assert.ok(!JSON.stringify(logs).includes("secret"));
@@ -299,7 +309,7 @@ test("mail restart preserves email revisions and waits for a fresh initial poll"
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry(store);
+          const registry = yield* makeTestContext(store);
           const entered = yield* Deferred.make<void>();
           const release = yield* Deferred.make<void>();
           const { handle } = yield* install(
@@ -317,10 +327,7 @@ test("mail restart preserves email revisions and waits for a fresh initial poll"
             "syncing",
           );
           if (run === 1)
-            assert.equal(
-              registry.views.project(registry.get(mailMessagePath(email))!).projection?.visibility,
-              "public",
-            );
+            assert.equal(registry.backend.get(mailMessagePath(email))?.text, JSON.stringify(email));
           yield* Deferred.succeed(release, undefined);
           yield* handle.ready;
           assert.equal(registry.get(mailMessagePath(email))?.revision, 1);
@@ -335,14 +342,14 @@ test("missing generic mail config installs no source and requires no credentials
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         yield* Effect.gen(function* () {
           const modules = yield* RuntimeIntegrations;
           yield* Effect.void.pipe(Effect.provide(MailIntegration.layer));
           assert.deepEqual(modules.installed(), []);
         }).pipe(
-          Effect.provide(Layer.merge(RuntimeIntegrations.layer, ContextQueries.layer)),
-          Effect.provideService(ContextRegistry, registry),
+          Effect.provide(Layer.mergeAll(RuntimeIntegrations.layer, ContextQueries.layer)),
+
           Effect.provideService(DurableContext, registry.backend),
           Effect.provide(ConfigProvider.layer(ConfigProvider.fromUnknown({}))),
         );
@@ -369,14 +376,16 @@ for (const config of [
   test(`invalid mail config fails acquisition: ${JSON.stringify(config)}`, async () => {
     await assert.rejects(
       Effect.runPromise(
-        Effect.gen(function* () {
-          return yield* MailSettings;
-        }).pipe(
-          Effect.provide(
-            MailSettings.layer.pipe(
-              Layer.provide(
-                ConfigProvider.layer(
-                  ConfigProvider.fromUnknown({ contexts: { "/mail": { config } } }),
+        Effect.scoped(
+          Effect.gen(function* () {
+            return yield* MailSettings;
+          }).pipe(
+            Effect.provide(
+              MailSettings.layer.pipe(
+                Layer.provide(
+                  ConfigProvider.layer(
+                    ConfigProvider.fromUnknown({ contexts: { "/mail": { config } } }),
+                  ),
                 ),
               ),
             ),
@@ -404,7 +413,7 @@ test("mail recovery keeps its baseline, covers missed days, and indexes only tod
             Date.parse(run === 0 ? "2026-10-07T04:00:00Z" : "2026-10-09T04:00:00Z"),
           );
           yield* Effect.gen(function* () {
-            const registry = yield* makeContextRegistry(store);
+            const registry = yield* makeTestContext(store);
             const windows: import("../src/mail/model.js").MailboxWindow[] = [];
             const late = { ...email, id: "late", date: "2026-10-06T04:00:00Z" };
             const current = { ...email, id: "current", date: "2026-10-09T03:00:00Z" };
@@ -461,7 +470,7 @@ test("mail historical queries leave discovery, cursor, Contexts and source event
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const historical = { ...email, id: "history", date: "2026-10-06T04:00:00Z" };
         let remoteReads = 0;
         const { handle, queries } = yield* install(registry, {
@@ -524,14 +533,15 @@ test("mail rotates the default index while retrieval is blocked across midnight"
         const clock = yield* TestClock.make();
         yield* clock.setTime(Date.parse("2026-10-07T15:59:50Z"));
         yield* Effect.gen(function* () {
-          const registry = yield* makeContextRegistry();
+          const registry = yield* makeTestContext();
           const entered = yield* Deferred.make<void>();
           const release = yield* Deferred.make<void>();
           const rotated = yield* Deferred.make<void>();
           yield* Stream.runForEach(yield* registry.subscribe, ({ record }) =>
             record.path === mailboxPath("work") &&
-            Schema.is(MailboxState)(record.state) &&
-            record.state.today.date === "2026-10-08"
+            Schema.is(MailboxState)(registry.get(record.path)!.state) &&
+            Schema.decodeUnknownSync(MailboxState)(registry.get(record.path)!.state).today.date ===
+              "2026-10-08"
               ? Deferred.succeed(rotated, undefined)
               : Effect.void,
           ).pipe(Effect.forkScoped);
@@ -580,12 +590,13 @@ test("mail failure and restart retain the initial population and retrieval bound
             Date.parse(run === 0 ? "2026-10-07T04:00:00Z" : "2026-10-08T04:00:00Z"),
           );
           yield* Effect.gen(function* () {
-            const registry = yield* makeContextRegistry(store);
+            const registry = yield* makeTestContext(store);
             const failed = yield* Deferred.make<void>();
             yield* Stream.runForEach(yield* registry.subscribe, ({ record }) =>
               record.path === mailboxPath("work") &&
-              Schema.is(MailboxState)(record.state) &&
-              record.state.status === "error"
+              Schema.is(MailboxState)(registry.get(record.path)!.state) &&
+              Schema.decodeUnknownSync(MailboxState)(registry.get(record.path)!.state).status ===
+                "error"
                 ? Deferred.succeed(failed, undefined)
                 : Effect.void,
             ).pipe(Effect.forkScoped);
@@ -630,7 +641,7 @@ test("mail queries share the polling connection permit and owner shutdown releas
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const entered = yield* Deferred.make<void>();
         let reads = 0;
         const { handle, queries } = yield* install(registry, {

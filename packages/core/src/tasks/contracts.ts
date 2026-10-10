@@ -1,7 +1,7 @@
 import { Schema } from "effect";
 
 import { CommandIdentifier, ContextRevision } from "../operations.js";
-import { PublicContext } from "../context/contracts.js";
+import { ContextText } from "../context/contracts.js";
 
 import { GoalPath } from "../goals/contracts.js";
 export const RemainingAgentTurns = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 4 }));
@@ -30,7 +30,7 @@ export const TaskMessage = Schema.Struct({
   task: Task,
   createdAt: Schema.NonEmptyString,
   remainingAgentTurns: RemainingAgentTurns,
-  evidence: Schema.optional(PublicContext),
+  evidence: Schema.optional(ContextText),
 });
 export type TaskMessage = typeof TaskMessage.Type;
 /** Internal admission into the durable external execution owner. */
@@ -43,7 +43,7 @@ export const TaskDeliveryInput = Schema.Struct({
   task: PreparedTask,
   replyTo: GoalPath,
   remainingAgentTurns: RemainingAgentTurns,
-  evidence: Schema.optional(PublicContext),
+  evidence: Schema.optional(ContextText),
 });
 export type TaskDeliveryInput = typeof TaskDeliveryInput.Type;
 

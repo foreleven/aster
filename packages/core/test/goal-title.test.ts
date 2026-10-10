@@ -1,3 +1,5 @@
+import { goalBusinessState } from "../src/goals/view.js";
+import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { ConfigProvider, Effect, Layer, Schema } from "effect";
@@ -5,7 +7,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ContextQueries } from "../src/context/queries/routes.js";
 import {
-  ContextRegistry,
   ExternalAgents,
   GoalDefinition,
   GoalSettings,
@@ -13,7 +14,7 @@ import {
   GoalsRootActor,
   type StoredContext,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
 
@@ -45,7 +46,7 @@ test("Goal settings retain optional titles and reject empty or whitespace titles
     const config = configFor(goal);
     const expected = [{ slug: "project", ...goal }];
     assert.deepEqual(
-      (await Effect.runPromise(settingsFor(config))).definitions.filter(
+      (await Effect.runPromise(Effect.scoped(settingsFor(config)))).definitions.filter(
         (goal) => goal.slug !== "personal",
       ),
       expected,
@@ -57,13 +58,16 @@ test("Goal settings retain optional titles and reject empty or whitespace titles
     [42, "42"],
   ] as const) {
     const settings = await Effect.runPromise(
-      settingsFor(configFor({ title, description: "Detailed responsibility" })),
+      Effect.scoped(settingsFor(configFor({ title, description: "Detailed responsibility" }))),
     );
     assert.equal(settings.definitions.find((goal) => goal.slug === "project")?.title, expected);
   }
   for (const title of ["", " \n\t"]) {
     const invalid = configFor({ title, description: "Detailed responsibility" });
-    assert.equal((await Effect.runPromise(Effect.result(settingsFor(invalid))))._tag, "Failure");
+    assert.equal(
+      (await Effect.runPromise(Effect.scoped(Effect.result(settingsFor(invalid)))))._tag,
+      "Failure",
+    );
   }
 });
 
@@ -101,7 +105,7 @@ test("Goal startup refreshes the entire definition without losing work", async (
       Effect.scoped(
         Effect.gen(function* () {
           const previous = saved;
-          const registry = yield* makeContextRegistry({
+          const registry = yield* makeTestContext({
             loadAll: () => (saved ? [saved] : []),
             save: (record) => {
               saved = record;
@@ -110,10 +114,7 @@ test("Goal startup refreshes the entire definition without losing work", async (
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
-              Layer.merge(
-                Layer.succeed(ContextRegistry, registry),
-                Layer.succeed(DurableContext, registry.backend),
-              ),
+              Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
 
               Layer.succeed(ExternalAgents, {}),
               goalWorkflowLayer({
@@ -126,7 +127,11 @@ test("Goal startup refreshes the entire definition without losing work", async (
           const root = yield* system.spawn("goals", GoalsRootActor);
           yield* root.awaitStarted;
           yield* (yield* system.select("/user/goals/project").resolve()).awaitStarted;
-          const record = registry.reader.get("/goals/project")!;
+          const canonicalRecord = registry.get("/goals/project")!;
+          const record = {
+            ...canonicalRecord,
+            state: goalBusinessState(Schema.decodeUnknownSync(GoalSnapshot)(canonicalRecord.state)),
+          };
           const canonical = registry.get(record.path)!;
           const state = Schema.decodeUnknownSync(GoalSnapshot)(canonical.state);
           assert.deepEqual(state.definition, definition);
@@ -137,20 +142,21 @@ test("Goal startup refreshes the entire definition without losing work", async (
           assert.equal(record.description, description);
           assert.deepEqual(saved?.snapshot, canonical);
           assert.deepEqual(
-            Object.values(registry.reader.snapshot()).filter((r) =>
-              /^\/goals\/[^/]+$/.test(r.path),
-            ),
-            [record],
+            Object.values(registry.snapshot()).filter((r) => /^\/goals\/[^/]+$/.test(r.path)),
+            [canonical],
           );
           if (previous) {
             assert.deepEqual(canonical, {
               ...previous.snapshot,
               revision: previous.snapshot.revision + 1,
+              description: definition.description,
               state: { ...previous.snapshot.state, definition },
+              text: serializeFixtureState({ ...previous.snapshot.state, definition }),
             });
           } else {
             // Retain completed business progress while refreshing display metadata.
             const message = { role: "user" as const, content: "Keep existing work", timestamp: 1 };
+            yield* system.stop(root);
             yield* history.append("/goals/project", "kept", "test.record", message);
             yield* registry.register(canonical.path, {
               state: GoalSnapshot,

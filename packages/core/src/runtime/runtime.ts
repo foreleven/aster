@@ -1,17 +1,16 @@
+import { MemoryActor } from "../memory/actor.js";
 import { ActorSystem, type ActorSystemEvent } from "@aster/actor";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
 import { ContextsActor } from "../context/queries/actor.js";
 import { ContextQueries } from "../context/queries/routes.js";
 import { DurableContext } from "../context/store.js";
 import { GoalScreeningStore } from "../goals/screening/decision.js";
-import { MemoryActor, memoryView } from "../memory/actor.js";
 import { ContextCaptures } from "../memory/capture.js";
 import { ApplicationError } from "../operations.js";
 import { SystemOneActor } from "../reactions/actor.js";
 import { ReactionPolicy, makeReactionPolicy } from "../reactions/policy.js";
 import { TasksRootActor } from "../tasks/root.js";
 import { taskCapture } from "../tasks/view.js";
-import { coreContextViews } from "./context-views.js";
 import { RuntimeConfigurationError } from "./errors.js";
 
 import { AgentRunner } from "@aster/agent/agent";
@@ -31,7 +30,6 @@ import {
   Stream,
 } from "effect";
 import { GoalSettings, signalSettings } from "../config/settings.js";
-import { ContextRegistry } from "../context/registry.js";
 import { MemoryBackend } from "../memory/contracts.js";
 import { SystemOneClient } from "../services/system-one.js";
 import { SignalDefinitions } from "../signals/protocol.js";
@@ -56,15 +54,12 @@ type ActorServices =
   | ContextQueries
   | AgentConversations
   | GoalSettings
-  | ContextRegistry
   | DurableContext
   | SignalDefinitions
   | SystemOneClient
   | ExternalAgents;
 
 const acquireRuntime = Effect.gen(function* () {
-  const registry = yield* ContextRegistry;
-  yield* registry.views.register([...coreContextViews, memoryView]);
   const settings = yield* GoalSettings;
   const definitions = yield* SignalDefinitions;
   const decisions = yield* SystemOneClient;
@@ -92,7 +87,6 @@ const acquireRuntime = Effect.gen(function* () {
     ContextQueries,
     AgentConversations,
     GoalSettings,
-    ContextRegistry,
     SignalDefinitions,
     SystemOneClient,
     ExternalAgents,
@@ -257,7 +251,6 @@ export class AsterRuntime extends Context.Service<
     readonly integrations: Layers;
   }) {
     const contextServices = Layer.mergeAll(
-      ContextRegistry.layer,
       ContextCaptures.layer,
       ContextQueries.layer,
       GoalSettings.layer,
@@ -273,10 +266,10 @@ export class AsterRuntime extends Context.Service<
     return Layer.effectContext(
       Effect.gen(function* () {
         const services = Context.pick(
-          ContextRegistry,
+          DurableContext,
           ContextQueries,
           AgentConversations,
-        )(yield* Effect.context<ContextRegistry | ContextQueries | AgentConversations>());
+        )(yield* Effect.context<DurableContext | ContextQueries | AgentConversations>());
         return Context.add(services, AsterRuntime, yield* acquireRuntime);
       }),
     ).pipe(Layer.provide(runtimeServices));

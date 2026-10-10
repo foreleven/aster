@@ -1,168 +1,181 @@
-import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Fiber, Option, Queue, Schema, Stream } from "effect";
 import {
-  ContextRegistry,
-  ContextSession,
-  ContextSessionClosed,
-  contextView,
+  ContextClosed,
+  ContextConflict,
+  ContextMessageConflict,
+  makeDurableContext,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
-
-const State = Schema.Struct({ count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) });
-const Message = Schema.Struct({ id: Schema.String, text: Schema.String, at: Schema.Number });
 const definition = {
-  state: State,
-  message: Message,
-  messageKey: (m: { id: string }) => m.id,
-  compareMessages: (a: { id: string; at: number }, b: { id: string; at: number }) =>
-    a.at - b.at || a.id.localeCompare(b.id),
-  changes: "durable-state" as const,
-  view: contextView({ state: State, message: Message }),
+  path: "/test/context",
+  state: Schema.Struct({ count: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)) }),
+  message: Schema.Struct({ id: Schema.String, text: Schema.String }),
+  keyOf: (message: { id: string }) => message.id,
+  serialize: (state: { count: number }) => `Count: ${state.count}`,
+  events: "state" as const,
+  initial: { description: "Counter", state: { count: 0 } },
 };
-const options = {
-  path: "/test/session",
-  ...definition,
-  initial: { description: "Test", state: { count: 0 }, messages: [] },
-};
-const message = { id: "__proto__", text: "original", at: 1 };
+const setup = () => makeDurableContext({ load: Effect.succeed([]), save: () => Effect.void });
 
-test("Session commits state and conditional message removals atomically and retains edits", async () => {
+test("typed Context handles append in order, reject updates, and delete without retaining identities", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        yield* Effect.gen(function* () {
-          const session = yield* ContextSession.make(options);
-          yield* session.messages.upsert([message], { mode: "bootstrap" });
-          const before = yield* session.snapshot;
-          yield* session.messages.upsert([message]);
-          assert.equal((yield* session.snapshot).revision, before.revision);
-          const edited = { ...message, text: "edited" };
-          yield* session.messages.upsert([edited, { id: "later", text: "later", at: 2 }]);
-          yield* session.commit(() => ({
-            state: { count: 1 },
-            messages: { removeUnchanged: [message] },
-          }));
-          assert.deepEqual(yield* session.messages.get(message.id), Option.some(edited));
-          assert.equal(registry.backend.journal().length, 1);
-          yield* session.commit(() => ({
-            state: { count: 2 },
-            messages: { removeUnchanged: [edited] },
-          }));
-          assert.deepEqual(yield* session.messages.list, [{ id: "later", text: "later", at: 2 }]);
-          assert.equal(registry.backend.journal().at(-1)?.record.messages.length, 1);
-          const committed = yield* session.snapshot;
-          const invalid = yield* session
-            .commit(() => ({
-              state: { count: -1 },
-              messages: { removeUnchanged: [{ id: "later", text: "later", at: 2 }] },
-            }))
-            .pipe(Effect.flip);
-          assert.equal(invalid._tag, "ContextValidationError");
-          assert.deepEqual(yield* session.snapshot, committed);
-          const conflict = yield* session.messages
-            .upsert([message], { expectedRevision: 0 })
-            .pipe(Effect.flip);
-          assert.equal(conflict._tag, "ContextConflict");
-          const duplicate = yield* session.messages.upsert([message, message]).pipe(Effect.flip);
-          assert.equal(duplicate._tag, "ContextValidationError");
-        }).pipe(
-          Effect.provideService(ContextRegistry, registry),
-          Effect.provideService(DurableContext, registry.backend),
+        const durable = yield* setup();
+        const context = yield* durable.open(definition);
+        const messages = [
+          { id: "z", text: "first" },
+          { id: "2", text: "second" },
+          { id: "__proto__", text: "third" },
+        ];
+        yield* context.messages.append(messages);
+        assert.deepEqual(yield* context.messages.list, messages);
+        const revision = (yield* context.snapshot).revision;
+        yield* context.messages.append([messages[0]!]);
+        assert.equal((yield* context.snapshot).revision, revision);
+        assert.ok(
+          (yield* context.messages
+            .append([{ id: "z", text: "changed" }])
+            .pipe(Effect.flip)) instanceof ContextMessageConflict,
+        );
+        assert.equal(
+          (yield* context.messages.append([messages[0]!, messages[0]!]).pipe(Effect.flip))._tag,
+          "ContextValidationError",
+        );
+        yield* context.commit((current) => ({
+          state: { count: current.state.count + 1 },
+          messages: { remove: ["z", "missing"] },
+        }));
+        assert.deepEqual(yield* context.messages.get("z"), Option.none());
+        assert.equal(yield* context.serializeState, "Count: 1");
+        assert.equal(durable.journal().length, 1);
+        yield* context.messages.append([{ id: "z", text: "reused after deletion" }]);
+        assert.equal((yield* context.messages.list).at(-1)?.text, "reused after deletion");
+        const before = yield* context.snapshot;
+        assert.equal(
+          (yield* context
+            .commit(() => ({ state: { count: -1 }, messages: { remove: ["z"] } }))
+            .pipe(Effect.flip))._tag,
+          "ContextValidationError",
+        );
+        assert.deepEqual(yield* context.snapshot, before);
+        assert.ok(
+          (yield* context.state
+            .update((state) => state, { expectedRevision: 0 })
+            .pipe(Effect.flip)) instanceof ContextConflict,
+        );
+        assert.equal(
+          (yield* context
+            .commit(() => ({ messages: { append: [messages[0]!], remove: ["z"] } }))
+            .pipe(Effect.flip))._tag,
+          "ContextValidationError",
         );
       }),
     ),
   );
 });
 
-test("Session message watches fall back to the durable Context change stream", async () => {
+test("Context watches hydrate at consumption, publish committed values and terminate on retirement", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        yield* Effect.gen(function* () {
-          const session = yield* ContextSession.make({
-            ...options,
-            initial: { ...options.initial, messages: [message] },
-          });
-          const values = yield* Queue.unbounded<Option.Option<typeof message>>();
-          const fiber = yield* session.messages.watch(message.id).pipe(
-            Stream.runForEach((value) => Queue.offer(values, value)),
-            Effect.forkScoped,
-          );
-          assert.deepEqual(yield* Queue.take(values), Option.some(message));
-          yield* session.messages.upsert([{ ...message, text: "updated" }]);
-          assert.deepEqual(yield* Queue.take(values), Option.some({ ...message, text: "updated" }));
-          yield* session.messages.removeUnchanged([{ ...message, text: "updated" }]);
-          assert.deepEqual(yield* Queue.take(values), Option.none());
-          yield* Fiber.join(fiber);
-        }).pipe(
-          Effect.provideService(ContextRegistry, registry),
-          Effect.provideService(DurableContext, registry.backend),
+        const durable = yield* setup();
+        const context = yield* durable.open(definition);
+        const beforeAppend = context.messages.watch("m");
+        yield* context.messages.append([{ id: "m", text: "accepted" }]);
+        const values = yield* Queue.unbounded<Option.Option<{ id: string; text: string }>>();
+        const watcher = yield* beforeAppend.pipe(
+          Stream.runForEach((value) => Queue.offer(values, value)),
+          Effect.forkScoped,
+        );
+        assert.deepEqual(yield* Queue.take(values), Option.some({ id: "m", text: "accepted" }));
+        yield* context.commit(() => ({ state: { count: 1 }, messages: { remove: ["m"] } }));
+        assert.deepEqual(yield* Queue.take(values), Option.none());
+        yield* Fiber.join(watcher);
+        assert.deepEqual(yield* context.messages.watch("absent").pipe(Stream.runCollect), [
+          Option.none(),
+        ]);
+        assert.deepEqual(yield* context.state.watch.pipe(Stream.take(1), Stream.runCollect), [
+          { count: 1 },
+        ]);
+      }),
+    ),
+  );
+});
+
+test("owner leases drain scoped work and revoke retired handles", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const durable = yield* setup();
+        const old = yield* Effect.scoped(
+          Effect.gen(function* () {
+            const owner = yield* durable.open(definition);
+            assert.equal(
+              (yield* Effect.scoped(durable.open(definition)).pipe(Effect.flip))._tag,
+              "ContextRecoveryError",
+            );
+            yield* Effect.forEach(
+              Array.from({ length: 10 }),
+              () => owner.state.update((state) => ({ count: state.count + 1 })),
+              { concurrency: "unbounded" },
+            );
+            return owner;
+          }),
+        );
+        const next = yield* durable.open(definition);
+        assert.equal((yield* next.state.get).count, 10);
+        assert.ok(
+          (yield* old.state.update(() => ({ count: 99 })).pipe(Effect.flip)) instanceof
+            ContextClosed,
         );
       }),
     ),
   );
 });
 
-test("Session ownership is scoped; closed handles cannot write to a replacement owner", async () => {
+test("daily Contexts reject invalid dates, timezones and unqualified paths", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        yield* Effect.gen(function* () {
-          const retired = yield* Effect.scoped(
-            Effect.gen(function* () {
-              const session = yield* ContextSession.make(options);
-              const duplicate = yield* Effect.scoped(ContextSession.make(options)).pipe(
-                Effect.flip,
-              );
-              assert.equal(duplicate._tag, "ContextRecoveryError");
-              yield* Effect.forEach(
-                Array.from({ length: 10 }),
-                () => session.state.update((s) => ({ count: s.count + 1 })),
-                { concurrency: "unbounded" },
-              );
-              return session;
-            }),
-          );
-          const next = yield* ContextSession.make(options);
-          assert.equal((yield* next.state.get).count, 10);
-          assert.ok(
-            (yield* retired.state.update(() => ({ count: 99 })).pipe(Effect.flip)) instanceof
-              ContextSessionClosed,
-          );
-          assert.equal((yield* next.state.get).count, 10);
-        }).pipe(
-          Effect.provideService(ContextRegistry, registry),
-          Effect.provideService(DurableContext, registry.backend),
-        );
-      }),
-    ),
-  );
-});
-
-test("daily Sessions validate their calendar date, timezone and public identity", async () => {
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const durable = yield* setup();
         for (const persistence of [
           { layout: "daily" as const, date: "2026-02-30", timeZone: "Asia/Shanghai" },
           { layout: "daily" as const, date: "2026-10-09", timeZone: "invalid" },
           { layout: "daily" as const, date: "2026-10-09", timeZone: "Asia/Shanghai" },
-        ]) {
-          const result = yield* Effect.scoped(
-            ContextSession.make({ ...options, persistence }),
-          ).pipe(
-            Effect.provideService(ContextRegistry, registry),
-            Effect.provideService(DurableContext, registry.backend),
-            Effect.flip,
+        ])
+          assert.equal(
+            (yield* Effect.scoped(durable.open({ ...definition, persistence })).pipe(Effect.flip))
+              ._tag,
+            "ContextValidationError",
           );
-          assert.equal(result._tag, "ContextValidationError");
-        }
+      }),
+    ),
+  );
+});
+
+test("nullable messages remain present until removed", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const durable = yield* setup();
+        const context = yield* durable.open({
+          ...definition,
+          message: Schema.Null,
+          keyOf: () => "null",
+        });
+        yield* context.messages.append([null]);
+        assert.deepEqual(yield* context.messages.get("null"), Option.some(null));
+        const values = yield* Queue.unbounded<Option.Option<null>>();
+        const watcher = yield* context.messages.watch("null").pipe(
+          Stream.runForEach((value) => Queue.offer(values, value)),
+          Effect.forkScoped,
+        );
+        assert.deepEqual(yield* Queue.take(values), Option.some(null));
+        yield* context.messages.remove(["null"]);
+        assert.deepEqual(yield* Queue.take(values), Option.none());
+        yield* Fiber.join(watcher);
       }),
     ),
   );

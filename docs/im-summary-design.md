@@ -1,14 +1,16 @@
 # IM summary design
 
-Status: implemented with [ContextSession](context-session-design.md), 2026-10-09. IM uses the new format only; no old-data compatibility or import is provided.
+Status: implemented with [DurableContext](context-design.md), 2026-10-10. IM uses the new format only; no old-data compatibility or import is provided.
+
+Messages follow the [immutable append-only contract](context-append-only-messages-design.md).
 
 ## Storage and ownership
 
-Each Chat owns one continuous ContextSession. State contains chat metadata, the rolling summary, deduplication receipts (`fingerprint`, source time), the retrieval replay boundary and an optional `flushThrough` date. The separate Messages Document stores pending evidence by message ID. Ordinary writes update individual keys. Actor Behaviors acquire scoped handles; infra owns Pi Sessions, persistence and recovery.
+Each Chat owns one continuous Context handle. State contains chat metadata, the rolling summary, deduplication receipts (`fingerprint`, source time), the retrieval replay boundary and an optional `flushThrough` date. The Messages family stores pending evidence by source ID and content fingerprint. Ordinary writes create or retire members. Actor Behaviors acquire scoped handles; infra owns Pi Sessions, persistence and recovery.
 
 Acceptance normalizes messages to the public evidence schema before saving or fingerprinting them. Transport-only sender fields cannot resurrect already summarized evidence or change an assessment key. Accepted messages, receipts and metadata commit together before the Chat acknowledges ingress.
 
-The public view exposes chat identity, summary and permitted pending evidence. Chat name and purpose contribute to its description. Internal receipts and execution details stay private. Goal relevance receives the public state and description; pending-message changes alone do not initiate screening.
+The owner serializer exposes chat identity and rolling summary as text; pending messages remain owner-only. Chat name and purpose contribute to its description. Internal receipts and execution details stay private. Goal relevance receives the serialized text and description; pending-message changes alone do not initiate screening.
 
 The Channel cursor/readiness and shared Agent admission timing use separate continuous Sessions. Retrieval coverage uses date-qualified daily Sessions in the current business timezone. Daily directories record retrieval coverage; they do not require daily summaries or Markdown archives.
 
@@ -29,7 +31,7 @@ A Chat owns one in-flight workflow and remembers whether evidence or a flush arr
 1. Read the accumulated evidence through the owning mailbox. Within `summary.maxMessages`, System One judges whether it warrants an update. Cache an explicit defer only in this Behavior; unchanged evidence is not judged again until new evidence arrives. Exceeding the configured message limit, a flush, or a recognized gate input-capacity failure requests summarization directly.
 2. Request shared Agent admission once. After admission, an acknowledged `GetSummaryMessages` returns the latest accumulated snapshot, including queued arrivals. This read does not write another summary decision or checkpoint.
 3. Select all messages when within the limit, otherwise take the oldest chronological batch. AgentRunner updates the rolling summary using Lark's prompt, validated source references and required `save_summary` result tool. Model execution runs outside storage transactions.
-4. Send `ApplySummary` to the mailbox and await its acknowledgement. The mailbox checks the Behavior generation, then atomically installs the summary and removes only unchanged selected versions. Edits and arrivals remain pending. An unchanged summary retires covered messages without another source event.
+4. Send `ApplySummary` to the mailbox and await its acknowledgement. The mailbox checks the Behavior generation, then atomically installs the summary and removes the selected observation keys. Edits and arrivals remain pending. An unchanged summary retires covered messages without another source event.
 5. Each remaining batch obtains a separate shared admission. Completed batches remain durable if a later batch fails or the Behavior stops. Once the admitted backlog's obligation is covered, later arrivals and edits of covered messages return to ordinary assessment. A failed cycle waits for new evidence or a subsequent flush; duplicate ingress does not restart it.
 
 `Flush(date)` forces only pending evidence at or before that date. Store the latest outstanding date, and clear it once those versions are covered. An admitted batch can also include newer messages. A capacity-reduced flush stops its forced continuation when its date is covered; newer pending messages return to ordinary assessment. Uncovered edits within the obligated date retain the obligation.

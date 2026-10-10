@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
@@ -7,7 +8,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ContextQueries } from "../src/context/queries/routes.js";
 import {
-  ContextRegistry,
   SignalDefinitions,
   SignalRootActor,
   type SignalCommandReply,
@@ -15,7 +15,7 @@ import {
 } from "../src/index.js";
 import type { SignalChangeInput } from "../src/signals/protocol.js";
 import { readSignalHistory } from "../src/signals/state/store.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { taskFixture } from "./task-fixtures.js";
 
@@ -39,14 +39,11 @@ for (const fails of [false, true])
           const noticed = yield* Deferred.make<typeof TerminationLog.Type>();
           const clock = yield* TestClock.make();
           const messages = testConversations();
-          const registry = yield* makeContextRegistry();
+          const registry = yield* makeTestContext();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
-              Layer.merge(
-                Layer.succeed(ContextRegistry, registry),
-                Layer.succeed(DurableContext, registry.backend),
-              ),
+              Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
               Layer.succeed(Clock.Clock, clock),
               Layer.succeed(SignalDefinitions, [definition, { ...definition, slug: "other" }]),
               Layer.succeed(AgentConversations, {
@@ -85,6 +82,7 @@ for (const fails of [false, true])
                 target: `/signals/${slug}`,
                 version: 1,
                 sourceContext: {
+                  text: serializeFixtureState({}),
                   revision: 0,
                   path: "/source",
                   description: "Evidence",
@@ -148,6 +146,7 @@ for (const operation of ["pause", "delete"] as const)
                 target: path,
                 version: 1,
                 sourceContext: {
+                  text: serializeFixtureState({}),
                   revision: 0,
                   path: "/source",
                   description: "Evidence",
@@ -162,24 +161,28 @@ for (const operation of ["pause", "delete"] as const)
       ),
     );
     // Seed the two records that survived interruption, without running a second writer beside an Actor.
-    const history = await Effect.runPromise(readSignalHistory(messages, path));
+    const history = await Effect.runPromise(Effect.scoped(readSignalHistory(messages, path)));
     const message = history.deliveries[0]!.message;
     await Effect.runPromise(
-      messages.append(path, "event:3", "signal.event", {
-        _tag: "DeliveryChanged",
-        requestId: message.requestId,
-        status: "sending",
-      }),
+      Effect.scoped(
+        messages.append(path, "event:3", "signal.event", {
+          _tag: "DeliveryChanged",
+          requestId: message.requestId,
+          status: "sending",
+        }),
+      ),
     );
     await Effect.runPromise(
-      messages.append(path, "event:4", "signal.event", {
-        _tag: "Changed",
-        snapshot: {
-          ...history.snapshot!,
-          status: operation === "pause" ? "paused" : "deleted",
-          version: 2,
-        },
-      }),
+      Effect.scoped(
+        messages.append(path, "event:4", "signal.event", {
+          _tag: "Changed",
+          snapshot: {
+            ...history.snapshot!,
+            status: operation === "pause" ? "paused" : "deleted",
+            version: 2,
+          },
+        }),
+      ),
     );
     const goal = records.get("/goals/personal")!;
     records.set(goal.snapshot.path, {

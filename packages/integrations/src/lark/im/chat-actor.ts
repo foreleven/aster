@@ -1,12 +1,16 @@
-import { chatView } from "../public-views.js";
 import { ChatMessage } from "./service/model.js";
 import type { ActorContext } from "@aster/actor";
-import { ContextActor, contextPath, ContextSession } from "@aster/core";
+import { ContextActor, contextPath, DurableContext } from "@aster/core";
 import { Effect, Match, Ref } from "effect";
 import { randomUUID } from "node:crypto";
 import { ChatSummaryError } from "../shared/errors.js";
 import { ChatCommands, ChatInternal, type ChatCommand } from "./chat/protocol.js";
-import { ChatSnapshot, type ChatWork, type SummaryCommit } from "./chat/snapshot.js";
+import {
+  ChatSnapshot,
+  observationKey,
+  type ChatWork,
+  type SummaryCommit,
+} from "./chat/snapshot.js";
 import { makeChatState } from "./chat/state.js";
 import { ChatSummaryWork } from "./summary/work.js";
 
@@ -43,19 +47,20 @@ export const LarkChatActor = ContextActor.define("lark/ChatActor", {
 
     const path = contextPath(owner);
     const id = path.slice(path.lastIndexOf("/") + 1);
-    const session = yield* ContextSession.make({
-      path,
-      state: ChatSnapshot,
-      message: ChatMessage,
-      view: chatView,
-      changes: "durable-state",
-      messageKey: (message) => message.id,
-      compareMessages: (a, b) => Date.parse(a.at) - Date.parse(b.at) || a.id.localeCompare(b.id),
-      initial: {
-        description: `Work Lark conversation: ${id}`,
-        state: { chat: { id, name: "", mode: "", description: "" }, seen: {} },
-      },
-    }).pipe(Effect.orDie);
+    const session = yield* (yield* DurableContext)
+      .open({
+        path,
+        state: ChatSnapshot,
+        message: ChatMessage,
+        serialize: ({ chat, summary }) => JSON.stringify({ chat, summary }),
+        events: "state",
+        keyOf: observationKey,
+        initial: {
+          description: `Work Lark conversation: ${id}`,
+          state: { chat: { id, name: "", mode: "", description: "" }, seen: {} },
+        },
+      })
+      .pipe(Effect.orDie);
     const state = makeChatState(session);
     yield* state.restore;
 

@@ -1,8 +1,7 @@
 import { Command as ActorCommand, CommandProcessor, type ActorRef } from "@aster/actor";
 import {
   ContextActor,
-  ContextRegistry,
-  ContextSession,
+  DurableContext,
   childActorName,
   contextPath,
   spawnContextChild,
@@ -11,14 +10,7 @@ import { DateTime, Effect, Match, Schema, Semaphore } from "effect";
 import { randomUUID } from "node:crypto";
 import { MailFetcher } from "./client.js";
 import { MailSettings } from "./config.js";
-import {
-  MailRootState,
-  mailMessagePath,
-  mailMessageView,
-  mailRootView,
-  mailSegment,
-  mailboxPath,
-} from "./contexts.js";
+import { MailRootState, mailMessagePath, mailSegment, mailboxPath } from "./contexts.js";
 import { mailDay } from "./dates.js";
 import { MailFetchError, mailFailureDetails, type MailFailureDetails } from "./errors.js";
 import { MailBatch, MailMessage, MailboxWindow } from "./model.js";
@@ -34,13 +26,15 @@ const MailMessageActor = ContextActor.define("mail/MessageActor", {
   commands: [SetEmail],
 })((owner) =>
   Effect.gen(function* () {
-    const session = yield* ContextSession.make({
-      path: contextPath(owner),
-      state: MailMessage,
-      message: Schema.Never,
-      view: mailMessageView,
-      changes: "durable-state",
-    }).pipe(Effect.orDie);
+    const session = yield* (yield* DurableContext)
+      .open({
+        path: contextPath(owner),
+        state: MailMessage,
+        message: Schema.Never,
+        serialize: (state) => JSON.stringify(state),
+        events: "state",
+      })
+      .pipe(Effect.orDie);
     return {
       started: (context) => context.receiveTimeout("5 minutes"),
       receive: ({ email, replyTo }, context) =>
@@ -50,15 +44,11 @@ const MailMessageActor = ContextActor.define("mail/MessageActor", {
             return yield* Effect.die(new Error("Mail identity mismatch"));
           // The provider identity is immutable. Replay acknowledges the existing durable record.
           if (!(yield* session.current.pipe(Effect.orDie))) {
-            yield* session
-              .set(
-                {
-                  description: `Email from ${email.from}: ${email.subject}`,
-                  state: email,
-                  messages: [],
-                },
-                { expectedRevision: 0 },
-              )
+            yield* session.state
+              .set(email, {
+                ...{ expectedRevision: 0 },
+                description: `Email from ${email.from}: ${email.subject}`,
+              })
               .pipe(Effect.orDie);
           }
           yield* replyTo.tell(undefined);
@@ -103,7 +93,7 @@ const MailboxActor = ContextActor.define("mail/MailboxActor", {
   internal: MailboxCommand,
 })((owner) =>
   Effect.gen(function* () {
-    const registry = yield* ContextRegistry;
+    const registry = yield* DurableContext;
     const settings = yield* MailSettings;
     const fetcher = yield* MailFetcher;
     // POP3 commonly allows only one authenticated session per mailbox.
@@ -318,16 +308,18 @@ export const MailRootActor = ContextActor.define("mail/RootActor", {
 })(
   Effect.gen(function* () {
     const settings = yield* MailSettings;
-    const session = yield* ContextSession.make({
-      path: "/mail",
-      state: MailRootState,
-      message: Schema.Never,
-      view: mailRootView,
-      initial: {
-        description: settings.description ?? "Connected mailboxes",
-        state: { mailboxes: settings.mailboxes.map((mailbox) => mailboxPath(mailbox.id)) },
-      },
-    }).pipe(Effect.orDie);
+    const session = yield* (yield* DurableContext)
+      .open({
+        path: "/mail",
+        state: MailRootState,
+        message: Schema.Never,
+        serialize: (state) => JSON.stringify(state),
+        initial: {
+          description: settings.description ?? "Connected mailboxes",
+          state: { mailboxes: settings.mailboxes.map((mailbox) => mailboxPath(mailbox.id)) },
+        },
+      })
+      .pipe(Effect.orDie);
     yield* session.state
       .update(() => ({ mailboxes: settings.mailboxes.map((mailbox) => mailboxPath(mailbox.id)) }))
       .pipe(Effect.orDie);

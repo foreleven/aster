@@ -1,9 +1,11 @@
+import { CurrentActors } from "../../services/actors.js";
+import { loadGoalStatus } from "../../goals/queries.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AgentConversations } from "@aster/agent/harness";
 import { ApplicationError } from "../../operations.js";
 import { Context, Effect, Layer, Match, Option, Schema } from "effect";
-import { ContextRegistry } from "../../context/registry.js";
+import { DurableContext } from "../../context/store.js";
 import { approvalEntries } from "../../approvals/actor.js";
 import { ExternalAgents } from "../execution/contracts.js";
 import { TaskInput, TaskOutcome, StoredTaskInput, type TaskWork } from "./snapshot.js";
@@ -13,7 +15,8 @@ import { taskPathFor, sourceTask, delegateInput } from "./admission.js";
 const makeTaskState = Effect.fn("TaskState.make")(function* (path: string) {
   const store = yield* makeTaskStore(path);
   const messages = yield* AgentConversations;
-  const registry = yield* ContextRegistry;
+  const registry = yield* DurableContext;
+  const actors = yield* CurrentActors;
   const agents = yield* ExternalAgents;
   const conflict = (message: string) => new ApplicationError({ kind: "conflict", message });
   const applyOutcome = Effect.fnUntraced(function* (outcome: TaskOutcome, entryId: number) {
@@ -107,10 +110,7 @@ const makeTaskState = Effect.fn("TaskState.make")(function* (path: string) {
             kind: "invalid-input",
             message: "Task executor is not configured",
           });
-        if (
-          (registry.get(value.replyTo)?.state as { status?: string } | undefined)?.status !==
-          "active"
-        )
+        if ((yield* loadGoalStatus(registry, value.replyTo)).status !== "active")
           return yield* conflict("Reply Goal is missing or ended");
         const entry = yield* messages.append(path, id, "task.admission", value).pipe(Effect.orDie);
         const receipt = { requestId: id, revision: 1 };
@@ -142,8 +142,7 @@ const makeTaskState = Effect.fn("TaskState.make")(function* (path: string) {
             if (
               input.target !== path ||
               input.source !== state.admission.replyTo ||
-              (registry.get(input.source)?.state as { status?: string } | undefined)?.status !==
-                "active" ||
+              (yield* loadGoalStatus(registry, input.source)).status !== "active" ||
               ["cancelled", "uncertain"].includes(state.status)
             )
               return yield* conflict("Task cannot accept this follow-up");
@@ -151,7 +150,7 @@ const makeTaskState = Effect.fn("TaskState.make")(function* (path: string) {
         ),
         Match.tag("Answer", ({ requestId, response }) =>
           Effect.gen(function* () {
-            const entry = approvalEntries(registry).find((item) => item.id === requestId);
+            const entry = (yield* approvalEntries(actors)).find((item) => item.id === requestId);
             if (
               !entry ||
               entry.target !== `/user${path}` ||

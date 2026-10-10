@@ -1,25 +1,34 @@
+import { goalBusinessState } from "../src/goals/view.js";
+import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { Effect, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ContextRegistry } from "../src/context/registry.js";
 import { GoalSnapshot } from "../src/goals/state/snapshot.js";
 import { makeGoalStore } from "../src/goals/state/store.js";
 import { goalTimeline } from "../src/goals/view.js";
 
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 
 test("Goal keeps message references while public conversation reads Pi history", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const conversations = testConversations();
         const path = "/goals/demo";
         yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
         yield* registry.commit(
           {
+            text: serializeFixtureState({
+              definition: { slug: "demo", description: "Goal" },
+              status: "active",
+              summary: "",
+              inputs: [],
+              receipts: [],
+              tasks: [],
+            }),
             path,
             description: "Goal",
             messages: [],
@@ -48,10 +57,7 @@ test("Goal keeps message references while public conversation reads Pi history",
         const store = yield* makeGoalStore(
           path,
           Schema.decodeUnknownSync(GoalSnapshot)(registry.get(path)!.state),
-        ).pipe(
-          Effect.provideService(ContextRegistry, registry),
-          Effect.provideService(DurableContext, registry.backend),
-        );
+        ).pipe(Effect.provideService(DurableContext, registry.backend));
         yield* store.save({ summary: "Current understanding" });
         assert.deepEqual(registry.get(path)!.messages, []);
         const page = yield* goalTimeline(registry, conversations, "demo", { limit: 100 });
@@ -73,55 +79,80 @@ test("Goal keeps message references while public conversation reads Pi history",
 
 test("Goal public error reflects the latest settled input without storing an error cache", async () => {
   await Effect.runPromise(
-    Effect.gen(function* () {
-      const registry = yield* makeContextRegistry();
-      const path = "/goals/errors";
-      yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
-      const definition = { slug: "errors", description: "Observe errors" };
-      const first = {
-        inputId: "first",
-        remainingAgentTurns: 4,
-        kind: "UserInput",
-        entryId: 1,
-        status: "failed",
-        error: "Model failed",
-      };
-      for (const status of ["failed", "running", "completed"]) {
-        const current = registry.get(path);
-        yield* registry.commit(
-          {
-            path,
-            description: definition.description,
-            messages: [],
-            state: {
-              definition,
-              status: "active",
-              summary: "",
-              receipts: [],
-              tasks: [],
-              inputs:
-                status === "failed"
-                  ? [first]
-                  : [
-                      first,
-                      {
-                        ...first,
-                        inputId: "second",
-                        status,
-                        error: "Old uncertain outcome",
-                      },
-                    ],
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeTestContext();
+        const path = "/goals/errors";
+        yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
+        const definition = { slug: "errors", description: "Observe errors" };
+        const first = {
+          inputId: "first",
+          remainingAgentTurns: 4,
+          kind: "UserInput",
+          entryId: 1,
+          status: "failed",
+          error: "Model failed",
+        };
+        for (const status of ["failed", "running", "completed"]) {
+          const current = registry.get(path);
+          yield* registry.commit(
+            {
+              text: serializeFixtureState({
+                definition,
+                status: "active",
+                summary: "",
+                receipts: [],
+                tasks: [],
+                inputs:
+                  status === "failed"
+                    ? [first]
+                    : [
+                        first,
+                        {
+                          ...first,
+                          inputId: "second",
+                          status,
+                          error: "Old uncertain outcome",
+                        },
+                      ],
+              }),
+              path,
+              description: definition.description,
+              messages: [],
+              state: {
+                definition,
+                status: "active",
+                summary: "",
+                receipts: [],
+                tasks: [],
+                inputs:
+                  status === "failed"
+                    ? [first]
+                    : [
+                        first,
+                        {
+                          ...first,
+                          inputId: "second",
+                          status,
+                          error: "Old uncertain outcome",
+                        },
+                      ],
+              },
             },
-          },
-          { expectedRevision: current?.revision ?? 0 },
-        );
-        const view = registry.reader.get(path)!;
-        const projected = view.state as { lastError?: string };
-        assert.equal(projected.lastError, status === "completed" ? undefined : "Model failed");
-        assert.equal("lastError" in registry.get(path)!.state, false);
-        assert.equal("historyCount" in view.state, false);
-        assert.equal("receipts" in view.state, false);
-      }
-    }),
+            { expectedRevision: current?.revision ?? 0 },
+          );
+          const view = {
+            state: goalBusinessState(
+              Schema.decodeUnknownSync(GoalSnapshot)(registry.get(path)!.state),
+            ),
+          };
+          const projected = view.state as { lastError?: string };
+          assert.equal(projected.lastError, status === "completed" ? undefined : "Model failed");
+          assert.equal("lastError" in registry.get(path)!.state, false);
+          assert.equal("historyCount" in view.state, false);
+          assert.equal("receipts" in view.state, false);
+        }
+      }),
+    ),
   );
 });

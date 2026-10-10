@@ -68,10 +68,12 @@ test("summary Agent uses Effect tools, validates evidence and retires callbacks"
     }),
   );
   const result = await Effect.runPromise(
-    Effect.gen(function* () {
-      const summarizer = yield* makeChatSummarizer("summary-model");
-      return yield* summarizer.summarize(input);
-    }).pipe(Effect.provideService(AgentRunner, runner)),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const summarizer = yield* makeChatSummarizer("summary-model");
+        return yield* summarizer.summarize(input);
+      }).pipe(Effect.provideService(AgentRunner, runner)),
+    ),
   );
   assert.deepEqual(result, summary);
   await assert.rejects(tool!.execute("late", summary));
@@ -79,13 +81,15 @@ test("summary Agent uses Effect tools, validates evidence and retires callbacks"
 
 test("missing summary results remain typed failures", async () => {
   const result = await Effect.runPromise(
-    Effect.gen(function* () {
-      const summarizer = yield* makeChatSummarizer("summary-model");
-      return yield* summarizer.summarize(input).pipe(Effect.result);
-    }).pipe(
-      Effect.provideService(
-        AgentRunner,
-        AgentRunner.make(() => Effect.succeed({ messages: [] })),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const summarizer = yield* makeChatSummarizer("summary-model");
+        return yield* summarizer.summarize(input).pipe(Effect.result);
+      }).pipe(
+        Effect.provideService(
+          AgentRunner,
+          AgentRunner.make(() => Effect.succeed({ messages: [] })),
+        ),
       ),
     ),
   );

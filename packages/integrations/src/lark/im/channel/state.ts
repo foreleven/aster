@@ -1,4 +1,4 @@
-import { ContextRegistry, ContextSession, validateConfig } from "@aster/core";
+import { DurableContext, type ContextHandle, validateConfig } from "@aster/core";
 import { Clock, Effect, Ref, Schema, Struct } from "effect";
 import { LarkConfig } from "../../config.js";
 import { ChatPollError } from "../../shared/errors.js";
@@ -11,9 +11,9 @@ import { ImSnapshot, type ImPollResult } from "./snapshot.js";
 
 /** Cursor advancement follows durable acknowledgements from every affected Chat. */
 export const makeImState = Effect.fn("ImState.make")(function* (
-  session: ContextSession<ImSnapshot, never>,
+  session: ContextHandle<ImSnapshot, never>,
 ) {
-  const registry = yield* ContextRegistry;
+  const registry = yield* DurableContext;
   const config = yield* LarkConfig;
   const cli = yield* LarkChatService;
   const entry = config.im ?? {};
@@ -32,7 +32,8 @@ export const makeImState = Effect.fn("ImState.make")(function* (
       const next = Math.min(dayStart(nextDay(date)), end);
       yield* Effect.scoped(
         Effect.gen(function* () {
-          const progress = yield* ContextSession.make({
+          const progress = yield* (yield* DurableContext).open({
+            serialize: (state) => JSON.stringify(state),
             path: `/lark/im/retrieval/days/${date}`,
             state: RetrievalProgressSchema,
             message: Schema.Never,
@@ -54,7 +55,7 @@ export const makeImState = Effect.fn("ImState.make")(function* (
   return {
     interval: settings.pollIntervalMs,
     restore: Effect.gen(function* () {
-      const chats = registry.reader
+      const chats = registry
         .directory()
         .filter(({ path }) => /^\/lark\/im\/chats\/[^/]+$/.test(path))
         .map(({ path }) => path.slice(path.lastIndexOf("/") + 1));

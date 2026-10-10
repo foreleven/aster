@@ -5,8 +5,8 @@ import { Models } from "@aster/agent";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { ContextRegistry, ContextQueries, contextSpawnOptions } from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
+import { ContextQueries, contextSpawnOptions } from "@aster/core";
+import { makeTestContext } from "@aster/core/testing";
 import {
   ChatSummarizer,
   ImAgentQueue,
@@ -36,13 +36,10 @@ test("a code-registered Lark root starts without YAML entries and creates its ow
   const snapshot = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             ContextQueries.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ChatSummaryGate, { needed: gateStub(async () => true) }),
@@ -86,7 +83,7 @@ test("a code-registered Lark root starts without YAML entries and creates its ow
         const ready = yield* Stream.runHead(
           Stream.filter(
             registry.changes,
-            (change) => change.record.path === "/lark/mail" && "profile" in change.record.state,
+            (change) => change.record.path === "/lark/mail" && change.record.text !== "",
           ),
         ).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
@@ -108,13 +105,10 @@ test("Lark channel publishes today’s startup mail as an email Context", async 
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             ContextQueries.layer,
             Layer.succeed(ImAgentQueue, { run: (_id, execute) => execute }),
             Layer.succeed(ChatSummaryGate, { needed: gateStub(async () => true) }),
@@ -177,23 +171,21 @@ for (const mailbox of ["me", "other"])
       Effect.scoped(
         Effect.gen(function* () {
           const saved = {
+            text: JSON.stringify({ address: "saved@example.com", name: "Saved" }),
             path: "/lark/mail",
             description: "Mailbox",
             revision: 7,
             state: { mailbox: "me", profile: { address: "saved@example.com", name: "Saved" } },
             messages: [],
           };
-          const registry = yield* makeContextRegistry({
+          const registry = yield* makeTestContext({
             loadAll: () => [{ snapshot: saved, events: [] }],
             save: () => {},
           });
           const entered = yield* Deferred.make<void>();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
-              Layer.merge(
-                Layer.succeed(ContextRegistry, registry),
-                Layer.succeed(DurableContext, registry.backend),
-              ),
+              Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
               ContextQueries.layer,
               Layer.succeed(LarkConfig, {
                 description: "Account",

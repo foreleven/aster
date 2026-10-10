@@ -1,9 +1,5 @@
-import {
-  CommandIdentifier,
-  ApplicationError,
-  PublicContext,
-  CommandReceipt,
-} from "@aster/core/contracts";
+import { GoalOverview } from "./business.js";
+import { CommandIdentifier, ApplicationError, CommandReceipt } from "@aster/core/contracts";
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 
@@ -30,7 +26,7 @@ export const GoalTimelinePage = Schema.Struct({
 export type GoalTimelinePage = typeof GoalTimelinePage.Type;
 
 export const GoalRpcs = RpcGroup.make(
-  Rpc.make("ListGoals", { success: Schema.Array(PublicContext), error: ApplicationError }),
+  Rpc.make("ListGoals", { success: Schema.Array(GoalOverview), error: ApplicationError }),
   Rpc.make("GetGoalTimeline", {
     payload: {
       slug: Schema.String,

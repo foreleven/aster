@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "@aster/core/testing";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -23,8 +24,8 @@ test("interrupted capture waits leave admitted transport work for backend drain"
           async (url) => {
             const path = new URL(String(url)).pathname;
             if (path.endsWith("/observe")) {
-              await Effect.runPromise(Deferred.succeed(observed, undefined));
-              await Effect.runPromise(Deferred.await(release));
+              await Effect.runPromise(Effect.scoped(Deferred.succeed(observed, undefined)));
+              await Effect.runPromise(Effect.scoped(Deferred.await(release)));
               return Response.json({ observationId: "one" });
             }
             if (path.endsWith("/observations"))
@@ -47,11 +48,10 @@ test("interrupted capture waits leave admitted transport work for backend drain"
             sessionId: "capture",
             records: [
               {
+                text: serializeFixtureState({ value: 1 }),
                 path: "/source",
                 revision: 1,
                 description: "Source",
-                state: { value: 1 },
-                messages: [],
               },
             ],
           })

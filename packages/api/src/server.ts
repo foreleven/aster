@@ -3,7 +3,7 @@ import type { ActorRef, ReplyTo } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
 import {
   AsterRuntime,
-  ContextRegistry,
+  DurableContext,
   ContextQueries,
   ApplicationError,
   goalTimeline,
@@ -19,9 +19,14 @@ import {
   type ApprovalReply,
   type ReactionCommand,
   type RecoveryReply,
-  type ContextReader,
+  readGoalState,
+  readTaskState,
+  readActor,
+  SignalRecord,
+  GetSignal,
+  goalBusinessState,
 } from "@aster/core";
-import { PublicContext, PublicApprovalEntry } from "@aster/core/contracts";
+import { ContextText, PublicApprovalEntry } from "@aster/core/contracts";
 import { Cause, Effect, Layer, Queue, Schema, Scope, Stream } from "effect";
 import { RpcServer } from "effect/rpc";
 import { ApplicationRpcs } from "./rpc.js";
@@ -60,7 +65,7 @@ const ask = Effect.fn("Rpc.ask")(function* <C, A>(
 });
 
 /** Subscribe before the first refresh. Overflow fails instead of losing invalidations. */
-const invalidations = (reader: ContextReader) =>
+const invalidations = (reader: DurableContext["Service"]) =>
   Stream.unwrap(
     Effect.gen(function* () {
       const sourceScope = yield* Scope.fork(yield* Effect.scope);
@@ -109,20 +114,35 @@ const traced = <A, E, R>(tag: string, requestId: unknown, run: Effect.Effect<A, 
 const handlers = ApplicationRpcs.toLayer(
   Effect.gen(function* () {
     const runtime = yield* AsterRuntime;
-    const registry = yield* ContextRegistry;
+    const registry = yield* DurableContext;
     const queries = yield* ContextQueries;
     const conversations = yield* AgentConversations;
-    const wireContext = (record: PublicContext) =>
-      Schema.decodeUnknownEffect(PublicContext)(publicJson(record)).pipe(Effect.orDie);
+    const wireContext = (record: ContextText) =>
+      Schema.decodeUnknownEffect(ContextText)(publicJson(record)).pipe(Effect.orDie);
     const contexts = Effect.suspend(() =>
-      Effect.forEach(Object.values(registry.reader.snapshot()), wireContext),
+      Effect.forEach(Object.values(registry.snapshot()), wireContext),
     );
+    const liveEntries = Effect.fnUntraced(function* (pattern: RegExp) {
+      const entries = yield* Effect.forEach(
+        registry.directory().filter(({ path }) => pattern.test(path)),
+        (entry) =>
+          runtime.actors
+            .select(`/user${entry.path}`)
+            .resolve()
+            .pipe(
+              Effect.as(entry),
+              Effect.catchTag("ActorNotFound", () => Effect.succeed(undefined)),
+            ),
+        { concurrency: 4 },
+      );
+      return entries.filter((entry) => entry !== undefined);
+    });
     return {
-      SubscribeInvalidations: () => invalidations(registry.reader),
+      SubscribeInvalidations: () => invalidations(registry),
       ListContexts: () => contexts,
       GetContext: ({ path }) =>
         Effect.suspend(() => {
-          const record = registry.reader.get(path);
+          const record = registry.get(path);
           return record
             ? wireContext(record)
             : Effect.fail(
@@ -134,8 +154,59 @@ const handlers = ApplicationRpcs.toLayer(
         }),
       QueryContext: (input) => queries.json(input),
       ListGoals: () =>
-        contexts.pipe(
-          Effect.map((records) => records.filter((r) => /^\/goals\/[^/]+$/.test(r.path))),
+        liveEntries(/^\/goals\/[^/]+$/).pipe(
+          Effect.flatMap((entries) =>
+            Effect.forEach(
+              entries,
+              ({ path }) =>
+                readGoalState(runtime.actors, path).pipe(
+                  Effect.map((state) => ({
+                    path,
+                    revision: registry.get(path)!.revision,
+                    ...goalBusinessState(state),
+                  })),
+                ),
+              { concurrency: 4 },
+            ),
+          ),
+        ),
+      ListTasks: () =>
+        liveEntries(/^\/tasks\/[^/]+$/).pipe(
+          Effect.flatMap((entries) =>
+            Effect.forEach(
+              entries,
+              ({ path, description }) =>
+                readTaskState(runtime.actors, path).pipe(
+                  Effect.map((state) => ({
+                    path,
+                    description,
+                    revision: registry.get(path)!.revision,
+                    status: state.status,
+                    sourcePath: state.admission.source,
+                    replyTo: state.admission.replyTo,
+                    agent: state.admission.agent,
+                    inputs: state.inputs.length,
+                  })),
+                ),
+              { concurrency: 4 },
+            ),
+          ),
+        ),
+      ListSignals: () =>
+        liveEntries(/^\/signals\/[^/]+$/).pipe(
+          Effect.flatMap((entries) =>
+            Effect.forEach(
+              entries,
+              ({ path }) =>
+                readActor(
+                  runtime.actors,
+                  path,
+                  (replyTo) => new GetSignal({ replyTo }),
+                  SignalRecord,
+                ).pipe(Effect.map(({ state, ...metadata }) => ({ ...metadata, ...state }))),
+              { concurrency: 4 },
+            ),
+          ),
         ),
       GetGoalTimeline: ({ slug, ...page }) => goalTimeline(registry, conversations, slug, page),
       SendGoalMessage: (input, options) =>
@@ -208,7 +279,7 @@ const handlers = ApplicationRpcs.toLayer(
             return reply.receipt;
           }),
         ),
-      InspectTask: ({ path }) => inspectTask(registry, conversations, path),
+      InspectTask: ({ path }) => inspectTask(registry, conversations, path, runtime.actors),
       CheckTask: (input, options) =>
         traced(
           "CheckTask",
@@ -239,7 +310,9 @@ const handlers = ApplicationRpcs.toLayer(
         ),
       ListApprovals: () =>
         Effect.suspend(() =>
-          Schema.decodeUnknownEffect(Schema.Array(PublicApprovalEntry))(approvalEntries(registry)),
+          approvalEntries(runtime.actors).pipe(
+            Effect.flatMap(Schema.decodeUnknownEffect(Schema.Array(PublicApprovalEntry))),
+          ),
         ).pipe(Effect.orDie),
       RespondToApproval: ({ id, response }, options) =>
         traced(
@@ -254,7 +327,7 @@ const handlers = ApplicationRpcs.toLayer(
             if (reply._tag === "Rejected") return yield* reply.error;
           }),
         ),
-      InspectProcessing: () => inspectReactions(registry),
+      InspectProcessing: () => inspectReactions(runtime.actors),
       RecoverProcessing: (input, options) =>
         traced(
           "RecoverProcessing",

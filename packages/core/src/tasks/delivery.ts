@@ -1,7 +1,9 @@
+import { loadTaskState } from "./queries.js";
+
 import { type ActorContext, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schedule, Schema } from "effect";
 import { createHash } from "node:crypto";
-import { type ContextRegistry } from "../context/registry.js";
+import { type DurableContext } from "../context/store.js";
 import { GoalPath } from "../goals/contracts.js";
 import {
   type GoalCommand,
@@ -67,12 +69,12 @@ export const startTask = Effect.fn("Tasks.start")(function* <C>(
 /** Ending a Goal revokes unstarted work. Submitted external work retains its execution owner. */
 export const cancelGoalTasks = Effect.fn("Tasks.cancelGoal")(function* <C>(
   actor: Pick<ActorContext<C>, "select">,
-  registry: ContextRegistry["Service"],
+  registry: DurableContext["Service"],
   source: string,
 ) {
   for (const record of Object.values(registry.snapshot())) {
     if (!Schema.is(TaskPath)(record.path)) continue;
-    const state = Schema.decodeUnknownSync(TaskSnapshot)(record.state);
+    const state = yield* loadTaskState(registry, record.path);
     if (state.admission.replyTo !== source || !["ready", "waiting_input"].includes(state.status))
       continue;
     const ref = yield* actor.select(taskActorPath(record.path)).resolve().pipe(Effect.option);
@@ -222,17 +224,16 @@ const Inputs = Schema.Struct({
   inputs: Schema.Array(Schema.Struct({ requestId: Schema.String, receipt: CommandReceipt })),
 });
 /** Read-only reconciliation. Absence is not permission to submit after pause/delete. */
-export const taskDeliveryReceipt = (registry: ContextRegistry["Service"], message: TaskMessage) =>
-  Effect.sync(() => {
+export const taskDeliveryReceipt = (registry: DurableContext["Service"], message: TaskMessage) =>
+  Effect.gen(function* () {
     const target =
       message.task._tag === "Goal"
         ? message.task.target
         : taskPathFor(message.source, message.requestId);
-    const record = registry.get(target);
-    if (!record) return undefined;
+    if (!registry.get(target)) return undefined;
     const entries =
       message.task._tag === "Goal"
-        ? Schema.decodeUnknownSync(Receipts)(record.state).receipts
-        : Schema.decodeUnknownSync(Inputs)(record.state).inputs;
+        ? (yield* registry.readState(target, Receipts).pipe(Effect.orDie)).receipts
+        : (yield* registry.readState(target, Inputs).pipe(Effect.orDie)).inputs;
     return entries.find((entry) => entry.requestId === message.requestId)?.receipt;
   });

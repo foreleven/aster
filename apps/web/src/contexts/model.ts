@@ -1,7 +1,7 @@
-import { Schema, Match } from "effect";
-import { SignalTrigger, Task, type PublicContext } from "@aster/core/contracts";
+import { Schema } from "effect";
+import { SignalTrigger, Task, type ContextText } from "@aster/core/contracts";
 
-// Display only fields supplied by current public Context projections.
+// Structured display fields come from explicit business API responses.
 const DisplayState = Schema.Struct({
   title: Schema.optional(Schema.String),
   status: Schema.optional(Schema.String),
@@ -16,29 +16,27 @@ const DisplayState = Schema.Struct({
   trigger: Schema.optional(SignalTrigger),
   task: Schema.optional(Task),
   nextDue: Schema.optional(Schema.NullOr(Schema.String)),
-  chat: Schema.optional(Schema.Struct({ name: Schema.String })),
-  subject: Schema.optional(Schema.String),
-  from: Schema.optional(Schema.String),
-  bodyPlainText: Schema.optional(Schema.String),
 });
-export interface ContextView extends Omit<PublicContext, "state"> {
+export interface ContextView extends ContextText {
   readonly state: typeof DisplayState.Type;
-  readonly projectionError?: string;
-  readonly rawState: PublicContext["state"];
+  readonly rawState: unknown;
 }
-export const projectContext = (record: PublicContext): ContextView => {
-  const decoded = Schema.decodeUnknownResult(DisplayState)(record.state);
-  return Match.value(decoded).pipe(
-    Match.tag("Success", ({ success }) => ({ ...record, state: success, rawState: record.state })),
-    Match.tag("Failure", () => ({
-      ...record,
-      state: {},
-      rawState: record.state,
-      projectionError: `Cannot display the public fields of ${record.path}.`,
-    })),
-    Match.exhaustive,
-  );
-};
+/** Generic Context data is text. Structured screens consume domain API responses. */
+export const displayContext = (record: ContextText): ContextView => ({
+  ...record,
+  state: {},
+  rawState: record.text,
+});
+export const displayBusiness = (
+  record: { path: string; revision: number; description: string } & object,
+): ContextView => ({
+  path: record.path,
+  revision: record.revision,
+  description: record.description,
+  text: "",
+  state: Schema.decodeUnknownSync(DisplayState)(record),
+  rawState: record,
+});
 export const kindOf = (path: string) => {
   if (/^\/goals\/[^/]+$/.test(path)) return "goal";
   if (/^\/tasks\/[^/]+$/.test(path)) return "task";
@@ -47,11 +45,7 @@ export const kindOf = (path: string) => {
   return "source";
 };
 export const contextTitle = (context: ContextView) =>
-  context.state.title ||
-  context.state.subject ||
-  context.state.chat?.name ||
-  context.description ||
-  context.path;
+  context.state.title || context.description || context.path;
 export const summaryText = (summary: ContextView["state"]["summary"]) =>
   typeof summary === "string" ? summary : summary?.text;
 export const references = (context: ContextView): readonly string[] => {

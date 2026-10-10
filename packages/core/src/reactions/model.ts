@@ -2,9 +2,7 @@ import { Context, Effect, Layer, Option, Schema, Match } from "effect";
 import { ApplicationError } from "../operations.js";
 import { type RecoveryInput, type RecoveryReceipt } from "./contracts.js";
 import { isDeepStrictEqual } from "node:util";
-import { ContextRegistry } from "../context/registry.js";
-import { ContextSession } from "../context/session.js";
-import { reactionView } from "./inspection.js";
+import { DurableContext } from "../context/store.js";
 import type { ContextEvent } from "../context/model.js";
 import { reactionTargets, type ReactionFailure } from "./policy.js";
 import { GoalSettings } from "../config/settings.js";
@@ -64,18 +62,21 @@ const mapDeliveries = (
 
 const path = "/system-one";
 const makeReactionState = Effect.gen(function* () {
-  const registry = yield* ContextRegistry;
+  const registry = yield* DurableContext;
   const settings = yield* GoalSettings;
-  const session = yield* ContextSession.make({
-    path,
-    state: ReactionSnapshot,
-    message: Schema.Never,
-    view: reactionView,
-    initial: {
-      description: "Context reaction processing",
-      state: { work: [], sourceRevisions: {}, recoveryReceipts: [] },
-    },
-  }).pipe(Effect.orDie);
+  const session = yield* (yield* DurableContext)
+    .open({
+      path,
+      state: ReactionSnapshot,
+      message: Schema.Never,
+      serialize: ({ work }) =>
+        JSON.stringify(work.map((item) => ({ id: item.event.id, status: workStatus(item) }))),
+      initial: {
+        description: "Context reaction processing",
+        state: { work: [], sourceRevisions: {}, recoveryReceipts: [] },
+      },
+    })
+    .pipe(Effect.orDie);
   const read = session.state.get.pipe(Effect.orDie);
   const save = Effect.fn("Reactions.commit")(function* (next: ReactionSnapshot) {
     // Keep unfinished work and bounded diagnostics; watermarks prevent replay of pruned events.
@@ -89,7 +90,7 @@ const makeReactionState = Effect.gen(function* () {
       work,
       recoveryReceipts: next.recoveryReceipts.filter((entry) => ids.has(entry.input.workId)),
     };
-    yield* session.set({ state }).pipe(Effect.orDie);
+    yield* session.state.set(state).pipe(Effect.orDie);
   }, Effect.uninterruptible);
   const update = Effect.fnUntraced(function* (id: string, f: (work: ReactionWork) => ReactionWork) {
     const current = yield* read;
@@ -121,6 +122,7 @@ const makeReactionState = Effect.gen(function* () {
 
   return {
     read,
+    snapshot: session.snapshot.pipe(Effect.orDie),
     ingest,
     restore: Effect.gen(function* () {
       const current = yield* read;
@@ -141,7 +143,7 @@ const makeReactionState = Effect.gen(function* () {
       const frozen: FrozenReaction = {
         event: work.event,
         status: "frozen",
-        targets: reactionTargets(registry.reader, settings.definitions).map((input) => ({
+        targets: (yield* reactionTargets(registry, settings.definitions)).map((input) => ({
           input,
           result: { _tag: "Pending" },
         })),

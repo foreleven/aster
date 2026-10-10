@@ -8,7 +8,6 @@ import {
   ItemTitle,
   ItemActions,
 } from "../components/ui/item";
-import { Badge } from "../components/ui/badge";
 import { Status } from "../components/feedback";
 import { contextTitle, kindOf, summaryText, type ContextView } from "./model";
 
@@ -50,11 +49,7 @@ export function ContextList({
                 </ItemDescription>
               </ItemContent>
               <ItemActions>
-                {context.projection?.visibility === "restricted" ? (
-                  <Badge variant="outline">Restricted</Badge>
-                ) : (
-                  <Status value={context.state.status} />
-                )}
+                <Status value={context.state.status} />
                 <ChevronRight />
               </ItemActions>
             </button>

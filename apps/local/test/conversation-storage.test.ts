@@ -19,24 +19,30 @@ test("conversations resolve beside config under the locked root and reopen witho
     envPath: join(directory, ".env"),
     environment: {},
   });
-  const root = (await Effect.runPromise(storageSettings.pipe(Effect.provide(sources)))).root;
+  const root = (
+    await Effect.runPromise(Effect.scoped(storageSettings.pipe(Effect.provide(sources))))
+  ).root;
   assert.equal(root, join(directory, "data"));
   const conversations = localConversationsLayer.pipe(Layer.provide(sources));
   const entry = await Effect.runPromise(
-    withActorStoreLock(
-      root,
-      Effect.gen(function* () {
-        const messages = yield* AgentConversations;
-        return yield* messages.append("/goals/a", "one", "goal.input", { text: "Hello" });
-      }).pipe(Effect.provide(conversations)),
+    Effect.scoped(
+      withActorStoreLock(
+        root,
+        Effect.gen(function* () {
+          const messages = yield* AgentConversations;
+          return yield* messages.append("/goals/a", "one", "goal.input", { text: "Hello" });
+        }).pipe(Effect.provide(conversations)),
+      ),
     ),
   );
   const entries = await Effect.runPromise(
-    withActorStoreLock(
-      root,
-      Effect.gen(function* () {
-        return yield* (yield* AgentConversations).read("/goals/a");
-      }).pipe(Effect.provide(conversations)),
+    Effect.scoped(
+      withActorStoreLock(
+        root,
+        Effect.gen(function* () {
+          return yield* (yield* AgentConversations).read("/goals/a");
+        }).pipe(Effect.provide(conversations)),
+      ),
     ),
   );
   assert.deepEqual(entries, [entry]);

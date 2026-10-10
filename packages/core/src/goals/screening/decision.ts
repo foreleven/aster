@@ -1,11 +1,11 @@
 import { score, DecisionError, type SystemOneClient } from "../../services/system-one.js";
 import type { GoalDefinition } from "../../config/schema.js";
-import { PublicContext, type PublicContext as ContextRecord } from "../../context/contracts.js";
+import { ContextText, type ContextText as ContextRecord } from "../../context/contracts.js";
 import { Clock, Context, Effect, Match, Schema } from "effect";
 import { createHash } from "node:crypto";
 
 export const GoalScreeningSnapshot = Schema.Struct({
-  context: PublicContext,
+  context: ContextText,
   goalTitle: Schema.String,
   goalDescription: Schema.String,
   goalSummary: Schema.String,
@@ -55,26 +55,13 @@ export const makeMemoryGoalScreeningStore = (): GoalScreeningStore["Service"] =>
   };
 };
 
-export const contextSummaryText = (record: ContextRecord): string => {
-  const state = record.state as { summary?: unknown };
-  const summary = state.summary;
-  if (typeof summary === "string") return summary;
-  if (summary && typeof summary === "object" && "text" in summary) {
-    const text = (summary as { text?: unknown }).text;
-    if (typeof text === "string") return text;
-  }
-  return Object.keys(record.state).length ? JSON.stringify(record.state) : "";
-};
-
-export const goalSummaryText = (record: ContextRecord | undefined): string => {
-  const summary = record?.state && (record.state as { summary?: unknown }).summary;
-  return typeof summary === "string" ? summary : "";
-};
-
-export const goalTitleText = (goal: GoalDefinition, record: ContextRecord | undefined): string => {
-  const title = record?.state && (record.state as { title?: unknown }).title;
-  return typeof title === "string" && title.trim() ? title : goal.title?.trim() || goal.description;
-};
+export const contextSummaryText = (record: ContextRecord): string => record.text;
+export const goalSummaryText = (record: { summary: string } | undefined): string =>
+  record?.summary ?? "";
+export const goalTitleText = (
+  goal: GoalDefinition,
+  record: { definition: GoalDefinition } | undefined,
+): string => record?.definition.title?.trim() || goal.title?.trim() || goal.description;
 
 // System One permits at most ten levels, indexed from zero. Keep the prompt,
 // normalization and fallback rationale on the same scale.
@@ -222,7 +209,7 @@ export const matchGoal = Effect.fn("Goal.match")(function* (
   store?: GoalScreeningStore["Service"],
 ) {
   const summary = contextSummaryText(source);
-  if (source.projection?.visibility === "restricted" || !summary.trim())
+  if (!summary.trim())
     return { _tag: "NotMatched" as const, reason: "Context has no summary evidence." };
   const goal = candidate.definition;
   const fingerprint = createHash("sha256")
@@ -230,8 +217,7 @@ export const matchGoal = Effect.fn("Goal.match")(function* (
       JSON.stringify({
         path: source.path,
         description: source.description,
-        state: source.state,
-        messages: source.messages,
+        text: source.text,
       }),
     )
     .digest("hex");

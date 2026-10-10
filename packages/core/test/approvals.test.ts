@@ -1,3 +1,5 @@
+import { serializeFixtureState } from "../src/testing/context.js";
+import { testApprovalEntries } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { Actor, ActorSystem } from "@aster/actor";
 import { Effect, Layer, Match } from "effect";
@@ -7,15 +9,13 @@ import type { ApprovalReply } from "../src/approvals/actor.js";
 import {
   ApprovalQueueActor,
   ApprovalResolved,
-  ContextRegistry,
-  approvalEntries,
   sendApproval,
   type ApprovalEntry,
   type ApprovalResponse,
   type InputRequest,
   type StoredContext,
 } from "../src/index.js";
-import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
+import { makeTestContext, type ContextStore } from "../src/testing/context.js";
 
 const until = (condition: () => boolean) =>
   Effect.gen(function* () {
@@ -129,29 +129,28 @@ test("approval validation rejects invalid answers without saving and accepts com
               id: "external",
               kind: kind === "input" ? "input" : "approval",
               prompt: "Confirm or provide input",
-              questions: scenario.questions,
+              ...(scenario.questions ? { questions: scenario.questions } : {}),
             },
           };
           const initial = {
+            text: serializeFixtureState({
+              entries: scenario.missing ? [] : [entry],
+              revokedIds: [],
+            }),
             path: "/approvals",
             description: "Approval queue",
             state: { entries: scenario.missing ? [] : [entry], revokedIds: [] },
             messages: [],
           };
           let saves = 0;
-          const registry = yield* makeContextRegistry({
+          const registry = yield* makeTestContext({
             loadAll: () => [{ snapshot: { ...initial, revision: 0 }, events: [] }],
             save: () => {
               saves++;
             },
           });
           const system = yield* ActorSystem.make().pipe(
-            ActorSystem.provide(
-              Layer.merge(
-                Layer.succeed(ContextRegistry, registry),
-                Layer.succeed(DurableContext, registry.backend),
-              ),
-            ),
+            ActorSystem.provide(Layer.mergeAll(Layer.succeed(DurableContext, registry.backend))),
           );
           const queue = yield* system.spawn("approvals", ApprovalQueueActor);
           const reply = yield* queue.ask<ApprovalReply>((replyTo) => ({
@@ -173,7 +172,7 @@ test("approval validation rejects invalid answers without saving and accepts com
             assert.deepEqual(reply, { _tag: "Accepted" }, scenario.name);
             assert.equal(saves, 1, scenario.name);
             assert.deepEqual(
-              approvalEntries(registry),
+              testApprovalEntries(registry),
               [{ ...entry, status: "resolved", response: scenario.accepted ?? scenario.response }],
               scenario.name,
             );
@@ -217,14 +216,9 @@ test("persisted approval answers reach a recreated Actor only after it exists, w
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry(store);
+        const registry = yield* makeTestContext(store);
         const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
-          ),
+          ActorSystem.provide(Layer.mergeAll(Layer.succeed(DurableContext, registry.backend))),
         );
         const queue = yield* system.spawn("approvals", ApprovalQueueActor);
         yield* queue.tell({
@@ -245,27 +239,22 @@ test("persisted approval answers reach a recreated Actor only after it exists, w
           replyTo,
         }));
         assert.deepEqual(reply, { _tag: "Accepted" });
-        assert.equal(approvalEntries(registry)[0]!.status, "resolved");
+        assert.equal(testApprovalEntries(registry)[0]!.status, "resolved");
       }),
     ),
   );
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry(store);
+        const registry = yield* makeTestContext(store);
         const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
-          ),
+          ActorSystem.provide(Layer.mergeAll(Layer.succeed(DurableContext, registry.backend))),
         );
         yield* system.spawn("approvals", ApprovalQueueActor);
         yield* Effect.sleep(30);
         assert.equal(received, 0);
         yield* system.spawn("receiver", Receiver);
-        yield* until(() => approvalEntries(registry)[0]?.status === "acknowledged");
+        yield* until(() => testApprovalEntries(registry)[0]?.status === "acknowledged");
         yield* Effect.sleep(1100);
         assert.equal(received, 1);
         assert.equal(

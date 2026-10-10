@@ -1,3 +1,5 @@
+import { serializeFixtureState } from "../src/testing/context.js";
+import { testApprovalEntries } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
@@ -8,15 +10,13 @@ import { test } from "node:test";
 import type { ApprovalReply } from "../src/approvals/actor.js";
 import { ContextQueries } from "../src/context/queries/routes.js";
 import {
-  approvalEntries,
   ApprovalQueueActor,
-  ContextRegistry,
   ExternalAgents,
   GoalsRootActor,
   SignalActor,
   SignalDefinitions,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { goalCommand, submitGoal } from "./goal-command-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
@@ -30,7 +30,7 @@ test("Goal command waits for durable input and history; stopped roots fail inste
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const entered = yield* Deferred.make<void>();
         const release = yield* Deferred.make<void>();
         const underlying = testConversations();
@@ -48,10 +48,7 @@ test("Goal command waits for durable input and history; stopped roots fail inste
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
 
             Layer.succeed(ExternalAgents, {}),
             goalWorkflowLayer({
@@ -115,14 +112,11 @@ test("invalid option stays pending and can be corrected without losing the origi
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
           ),
         );
         const queue = yield* system.spawn("approvals", ApprovalQueueActor);
@@ -150,7 +144,7 @@ test("invalid option stays pending and can be corrected without losing the origi
         }));
         assert.equal(invalid._tag, "Rejected");
         if (invalid._tag === "Rejected") assert.match(invalid.error.message, /offered option/);
-        assert.equal(approvalEntries(registry)[0]!.status, "pending");
+        assert.equal(testApprovalEntries(registry)[0]!.status, "pending");
         assert.deepEqual(
           yield* queue.ask((replyTo) => ({
             _tag: "Resolve",
@@ -160,7 +154,7 @@ test("invalid option stays pending and can be corrected without losing the origi
           })),
           { _tag: "Accepted" },
         );
-        assert.deepEqual(approvalEntries(registry)[0]!.response?.answers, { q: ["A"] });
+        assert.deepEqual(testApprovalEntries(registry)[0]!.response?.answers, { q: ["A"] });
       }),
     ),
   );
@@ -172,6 +166,12 @@ test("malformed Signal delivery state stops before recovery writes or execution"
       Effect.gen(function* () {
         let saves = 0;
         const malformed = {
+          text: serializeFixtureState({
+            ...definition,
+            status: "active",
+            version: 1,
+            nextDue: 123,
+          }),
           path: "/signals/review",
           description: "Signal",
           state: {
@@ -182,7 +182,7 @@ test("malformed Signal delivery state stops before recovery writes or execution"
           },
           messages: [],
         };
-        const registry = yield* makeContextRegistry({
+        const registry = yield* makeTestContext({
           loadAll: () => [{ snapshot: { ...malformed, revision: 0 }, events: [] }],
           save: () => {
             saves++;
@@ -191,10 +191,7 @@ test("malformed Signal delivery state stops before recovery writes or execution"
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
 
             Layer.succeed(ExternalAgents, {}),
             Layer.succeed(SignalDefinitions, [definition]),

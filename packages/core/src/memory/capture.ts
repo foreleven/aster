@@ -1,5 +1,5 @@
 import { Context, Effect, Layer } from "effect";
-import type { ContextSnapshot } from "../context/model.js";
+import type { ContextText } from "../context/contracts.js";
 import type { ContextCapture } from "./contracts.js";
 
 /** Identity selection is cheap; evidence is read only for an uncaptured session. */
@@ -10,13 +10,13 @@ export interface CapturePlan {
 
 export interface CapturePolicy {
   readonly matches: (path: string) => boolean;
-  readonly capture: (record: ContextSnapshot) => CapturePlan | undefined;
+  readonly capture: (record: ContextText) => CapturePlan | undefined;
 }
 export class ContextCaptures extends Context.Service<
   ContextCaptures,
   {
     readonly register: (policies: readonly CapturePolicy[]) => Effect.Effect<void>;
-    readonly select: (record: ContextSnapshot) => CapturePlan | undefined;
+    readonly select: (record: ContextText) => CapturePlan | undefined;
   }
 >()("memory/ContextCaptures") {
   static readonly layer = Layer.sync(ContextCaptures, () => {

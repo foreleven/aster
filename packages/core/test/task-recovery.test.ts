@@ -1,15 +1,11 @@
+import { testApprovalEntries } from "../src/testing/context.js";
 import type { HarnessCall } from "./harness-fixtures.js";
 import { makeHarness } from "./harness-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AgentError } from "@aster/agent";
 import { Deferred, Effect, Schema } from "effect";
-import {
-  TaskSnapshot,
-  ExternalAgentError,
-  approvalEntries,
-  type TaskAdmissionReply,
-} from "../src/index.js";
+import { TaskSnapshot, ExternalAgentError, type TaskAdmissionReply } from "../src/index.js";
 import { taskFixture, taskInput, retainedTask, seedCheckpoint } from "./task-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { fakeAgent } from "./fixtures.js";
@@ -161,7 +157,9 @@ for (const agent of ["internal", "test"] as const) {
         yield* env.tasks.ask((replyTo) => ({ _tag: "StartTask", input, replyTo }));
         if (agent === "test") {
           yield* env.wait(() =>
-            approvalEntries(env.registry).some((entry) => entry.id === `${input.target}:confirm`),
+            testApprovalEntries(env.registry).some(
+              (entry) => entry.id === `${input.target}:confirm`,
+            ),
           );
           yield* env.approvals.ask((replyTo) => ({
             _tag: "Resolve",

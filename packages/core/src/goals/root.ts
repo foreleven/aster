@@ -1,4 +1,4 @@
-import { ContextSession } from "../context/session.js";
+import { DurableContext } from "../context/store.js";
 import { Command as ActorCommand, CommandProcessor, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
 import { GoalSettings } from "../config/settings.js";
@@ -20,12 +20,15 @@ export const GoalsRootActor = ContextActor.define("goals/RootActor", {
   Effect.gen(function* () {
     const processor = yield* CommandProcessor.make({ concurrency: 2 });
     const settings = yield* GoalSettings;
-    yield* ContextSession.make({
-      path: "/goals",
-      state: Schema.Struct({}),
-      message: Schema.Never,
-      initial: { state: {}, description: "Goals" },
-    }).pipe(Effect.orDie);
+    yield* (yield* DurableContext)
+      .open({
+        serialize: (state) => JSON.stringify(state),
+        path: "/goals",
+        state: Schema.Struct({}),
+        message: Schema.Never,
+        initial: { state: {}, description: "Goals" },
+      })
+      .pipe(Effect.orDie);
     return {
       started: (context) =>
         Effect.gen(function* () {

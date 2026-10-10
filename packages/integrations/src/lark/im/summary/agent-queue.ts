@@ -13,7 +13,7 @@ import {
   Schema,
 } from "effect";
 import { LarkConfig } from "../../config.js";
-import { ContextSession, validateConfig } from "@aster/core";
+import { DurableContext, validateConfig } from "@aster/core";
 import { AgentAdmissionConfig } from "../config.js";
 import { ChatSummaryError } from "../../shared/errors.js";
 
@@ -130,12 +130,15 @@ export class ImAgentQueue extends Context.Service<ImAgentQueue, AgentAdmission>(
       const settings = yield* validateConfig("Lark IM Agent admission", () =>
         Schema.decodeUnknownSync(AgentAdmissionConfig)(config.im?.config?.summary ?? {}),
       );
-      const session = yield* ContextSession.make({
-        path: "/lark/im/admission",
-        state: Schema.Struct({ lastStart: Schema.optional(Schema.Number) }),
-        message: Schema.Never,
-        initial: { state: {}, messages: [], description: "Private IM Agent admission timing" },
-      }).pipe(Effect.orDie);
+      const session = yield* (yield* DurableContext)
+        .open({
+          serialize: (state) => JSON.stringify(state),
+          path: "/lark/im/admission",
+          state: Schema.Struct({ lastStart: Schema.optional(Schema.Number) }),
+          message: Schema.Never,
+          initial: { state: {}, messages: [], description: "Private IM Agent admission timing" },
+        })
+        .pipe(Effect.orDie);
       return yield* makeImAgentQueue(
         { startIntervalMs: settings.agentStartIntervalMs, concurrency: settings.agentConcurrency },
         {

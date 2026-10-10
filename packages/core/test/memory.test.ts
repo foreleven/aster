@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { testConversations } from "./conversation-fixtures.js";
 import { retainedTask } from "./task-fixtures.js";
@@ -8,25 +9,22 @@ import { ActorSystem } from "@aster/actor";
 import { Clock, Deferred, Effect, Fiber, Layer, Option, Queue, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import {
-  ContextRegistry,
-  contextView,
   MemoryActor,
   MemoryBackend,
   MemoryCaptureError,
   type ContextCapture,
   type StoredContext,
 } from "../src/index.js";
-import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
+import { makeTestContext, type ContextStore } from "../src/testing/context.js";
 
 const input: ContextCapture = {
   sessionId: "/goals/project/tasks/one:outcome:completed",
   records: [
     {
+      text: serializeFixtureState({ status: "completed" }),
       revision: 0,
       path: "/goals/project/tasks/one",
       description: "Result",
-      state: { status: "completed" },
-      messages: ["Result"],
     },
   ],
 };
@@ -69,14 +67,11 @@ const boot = Effect.fnUntraced(function* (
   impl: MemoryBackend["Service"],
   clock?: Clock.Clock,
 ) {
-  const registry = yield* makeContextRegistry(store);
+  const registry = yield* makeTestContext(store);
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
       ContextCaptures.layer,
-      Layer.merge(
-        Layer.succeed(ContextRegistry, registry),
-        Layer.succeed(DurableContext, registry.backend),
-      ),
+      Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
       Layer.succeed(MemoryBackend, impl),
       ...(clock ? [Layer.succeed(Clock.Clock, clock)] : []),
     ),
@@ -208,6 +203,10 @@ test("recovered captures exclude private source data and Memory queue state stay
         sessionId: "retained",
         records: [
           {
+            text: serializeFixtureState({
+              ...retained.snapshot.state,
+              source: { token: secret },
+            }),
             path: "/tasks/" + "a".repeat(64),
             revision: 1,
             description: "Result",
@@ -222,6 +221,7 @@ test("recovered captures exclude private source data and Memory queue state stay
       const h = yield* harness([
         {
           snapshot: {
+            text: serializeFixtureState({ status: "ready", retrieval: "bm25", pending: [pending] }),
             path: "/memory",
             revision: 4,
             description: "Memory",
@@ -239,7 +239,7 @@ test("recovered captures exclude private source data and Memory queue state stay
             assert.equal(JSON.stringify(received).includes(secret), false);
             assert.equal(
               Schema.decodeUnknownSync(Schema.Struct({ status: Schema.String }))(
-                received.records[0]?.state,
+                JSON.parse(received.records[0]!.text),
               ).status,
               "completed",
             );
@@ -248,9 +248,8 @@ test("recovered captures exclude private source data and Memory queue state stay
         ),
       );
       yield* Deferred.await(captured);
-      const view = registry.views.project(registry.get("/memory")!);
-      assert.equal(view.projection?.visibility, "public");
-      assert.equal("pending" in view.state, false);
+      const text = registry.backend.get("/memory")!.text;
+      assert.equal(text.includes('"pending"'), false);
     }),
   );
 });
@@ -284,15 +283,12 @@ test("backend defects reach Actor supervision without becoming capture success",
   await run(
     Effect.gen(function* () {
       const h = yield* harness();
-      const registry = yield* makeContextRegistry(h.store);
+      const registry = yield* makeTestContext(h.store);
       const release = yield* Deferred.make<void>();
       const system = yield* ActorSystem.make().pipe(
         ActorSystem.provide(
           ContextCaptures.layer,
-          Layer.merge(
-            Layer.succeed(ContextRegistry, registry),
-            Layer.succeed(DurableContext, registry.backend),
-          ),
+          Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
           Layer.succeed(
             MemoryBackend,
             backend(() =>
@@ -324,7 +320,7 @@ test("slow capture evidence never blocks recall and captured sessions skip subse
   await run(
     Effect.gen(function* () {
       const h = yield* harness();
-      const registry = yield* makeContextRegistry(h.store);
+      const registry = yield* makeTestContext(h.store);
       const entered = yield* Deferred.make<void>();
       const release = yield* Deferred.make<void>();
       const clock = yield* TestClock.make();
@@ -347,14 +343,11 @@ test("slow capture evidence never blocks recall and captured sessions skip subse
       yield* registry.register("/source", {
         state: Schema.Struct({ value: Schema.Int }),
         message: Schema.Never,
-        view: contextView({ state: Schema.Struct({ value: Schema.Int }) }),
+        serialize: (state) => JSON.stringify(state),
       });
       const system = yield* ActorSystem.make().pipe(
         ActorSystem.provide(
-          Layer.merge(
-            Layer.succeed(ContextRegistry, registry),
-            Layer.succeed(DurableContext, registry.backend),
-          ),
+          Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
           Layer.succeed(ContextCaptures, captures),
           Layer.succeed(
             MemoryBackend,
@@ -366,7 +359,13 @@ test("slow capture evidence never blocks recall and captured sessions skip subse
       const memory = yield* system.spawn("memory", MemoryActor);
       yield* memory.awaitStarted;
       yield* registry.commit(
-        { path: "/source", description: "Source", state: { value: 1 }, messages: [] },
+        {
+          text: serializeFixtureState({ value: 1 }),
+          path: "/source",
+          description: "Source",
+          state: { value: 1 },
+          messages: [],
+        },
         { expectedRevision: 0 },
       );
       yield* Deferred.await(entered);
@@ -387,7 +386,13 @@ test("slow capture evidence never blocks recall and captured sessions skip subse
       yield* clock.adjust("30 seconds");
       // A later source notification and the reconciliation scan share the durable session identity.
       yield* registry.commit(
-        { path: "/source", description: "Source", state: { value: 2 }, messages: [] },
+        {
+          text: serializeFixtureState({ value: 2 }),
+          path: "/source",
+          description: "Source",
+          state: { value: 2 },
+          messages: [],
+        },
         { expectedRevision: 1 },
       );
       yield* memory.ask((replyTo) => ({ _tag: "Search", query: "after", cancelled, replyTo }));

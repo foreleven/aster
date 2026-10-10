@@ -1,9 +1,8 @@
 import { GoalPath } from "../../goals/contracts.js";
 import { SignalTrigger, SignalTime } from "../contracts.js";
 import { Task } from "../../tasks/contracts.js";
-import { type PublicContext } from "../../context/contracts.js";
+
 import { Schema } from "effect";
-import { contextView } from "../../context/view.js";
 
 export { SignalTime } from "../contracts.js";
 export const SignalSnapshot = Schema.Struct({
@@ -24,17 +23,5 @@ export type SignalSnapshot = typeof SignalSnapshot.Type;
 
 export const signalEnabled = (
   state: Pick<SignalSnapshot, "status" | "owner">,
-  getGoal: (path: string) => PublicContext | undefined,
-) =>
-  state.status === "active" &&
-  (!state.owner ||
-    (getGoal(state.owner)?.state as { status?: string } | undefined)?.status === "active");
-
-export const signalView = contextView({
-  matches: (path) => /^\/signals\/[^/]+$/.test(path),
-  state: SignalSnapshot,
-});
-export const signalsRootView = contextView({
-  matches: (path) => path === "/signals",
-  state: Schema.Struct({}),
-});
+  getGoal: (path: string) => { status: string } | undefined,
+) => state.status === "active" && (!state.owner || getGoal(state.owner)?.status === "active");

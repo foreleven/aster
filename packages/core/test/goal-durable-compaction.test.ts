@@ -17,8 +17,8 @@ import { testConversations } from "./conversation-fixtures.js";
 import { toolSystem } from "./tool-fixtures.js";
 
 import { Effect, Layer } from "effect";
-import { ContextRegistry, ExternalAgents, GoalAgent, GoalSettings } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { ExternalAgents, GoalAgent, GoalSettings } from "../src/index.js";
+import { makeTestContext } from "../src/testing/context.js";
 
 test("durable Goal compacts its native transcript and finishes the same request", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "aster-goal-compaction-"));
@@ -98,7 +98,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
       }),
   });
   const run = Effect.gen(function* () {
-    const registry = yield* makeContextRegistry();
+    const registry = yield* makeTestContext();
     yield* registry.register("/goals/test", { state: GoalSnapshot, message: Schema.Never });
     const { system } = yield* toolSystem({ registry, messages: conversations });
     return yield* GoalAgent.use((agent) =>
@@ -124,7 +124,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
       ]),
       Effect.provideService(AgentConversations, conversations),
       Effect.provideService(CurrentActors, system),
-      Effect.provideService(ContextRegistry, registry),
+
       Effect.provideService(DurableContext, registry.backend),
       Effect.provideService(GoalSettings, {
         definitions: [],
@@ -142,7 +142,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
     Effect.timeout("15 seconds"),
     Effect.scoped,
   );
-  const result = await Effect.runPromise(run);
+  const result = await Effect.runPromise(Effect.scoped(run));
   assert.equal(result, "Review completed");
   assert.ok(summaries > 0, "Native compaction must run before the Goal gives up");
   assert.equal(sawSummary, true);
@@ -154,6 +154,6 @@ test("durable Goal compacts its native transcript and finishes the same request"
     /"kind":"pi.compaction"/,
   );
   const calls = generations + summaries;
-  assert.deepEqual(await Effect.runPromise(run), result);
+  assert.deepEqual(await Effect.runPromise(Effect.scoped(run)), result);
   assert.equal(generations + summaries, calls, "Completed request replay does not call the model");
 });

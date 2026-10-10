@@ -8,14 +8,13 @@ import { ContextQueries } from "../src/context/queries/routes.js";
 import { type GoalIntentInput } from "../src/goals/screening/intent.js";
 import { goalInputId } from "../src/goals/state/inputs.js";
 import {
-  ContextRegistry,
   ExternalAgents,
   GoalSnapshot,
   GoalsRootActor,
   type GoalCommandReply,
   type StoredContext,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { goalIntentRecords } from "./goal-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
@@ -54,7 +53,7 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
         Effect.scoped(
           Effect.gen(function* () {
             const cut = yield* Deferred.make<void>();
-            const registry = yield* makeContextRegistry({
+            const registry = yield* makeTestContext({
               loadAll: () => [...records.values()],
               save: (record) => {
                 records.set(record.snapshot.path, structuredClone(record));
@@ -74,10 +73,7 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
                 ContextQueries.layer,
-                Layer.merge(
-                  Layer.succeed(ContextRegistry, registry),
-                  Layer.succeed(DurableContext, registry.backend),
-                ),
+                Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
                 Layer.succeed(ExternalAgents, {}),
                 goalWorkflowLayer({
                   definitions: [{ slug: "project", description: "Monitor release" }],
@@ -190,15 +186,12 @@ test("a Context intent remains admissible after user input advances the Goal rev
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const history = testConversations();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(ExternalAgents, {}),
             goalWorkflowLayer({
               definitions: [{ slug: "project", description: "Monitor release" }],

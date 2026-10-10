@@ -40,24 +40,26 @@ test("IM config owns defaults and validates polling and summary settings", () =>
 
 test("the Lark configuration layer preserves IM overrides and applies field defaults", async () => {
   const config = await Effect.runPromise(
-    LarkConfig.pipe(
-      Effect.provide(LarkConfig.layer),
-      Effect.provideService(
-        ConfigProvider.ConfigProvider,
-        ConfigProvider.fromUnknown({
-          contexts: {
-            "/lark": {
-              children: {
-                "/im": {
-                  config: {
-                    pollIntervalMs: 5_000,
-                    summary: { model: "summary", agentConcurrency: 3 },
+    Effect.scoped(
+      LarkConfig.pipe(
+        Effect.provide(LarkConfig.layer),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({
+            contexts: {
+              "/lark": {
+                children: {
+                  "/im": {
+                    config: {
+                      pollIntervalMs: 5_000,
+                      summary: { model: "summary", agentConcurrency: 3 },
+                    },
                   },
                 },
               },
             },
-          },
-        }),
+          }),
+        ),
       ),
     ),
   );
@@ -75,13 +77,15 @@ test("the Lark configuration layer preserves IM overrides and applies field defa
 
 test("an incomplete summary configuration remains enabled for consumer validation", async () => {
   const config = await Effect.runPromise(
-    LarkConfig.pipe(
-      Effect.provide(LarkConfig.layer),
-      Effect.provideService(
-        ConfigProvider.ConfigProvider,
-        ConfigProvider.fromUnknown({
-          contexts: { "/lark": { children: { "/im": { config: { summary: {} } } } } },
-        }),
+    Effect.scoped(
+      LarkConfig.pipe(
+        Effect.provide(LarkConfig.layer),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({
+            contexts: { "/lark": { children: { "/im": { config: { summary: {} } } } } },
+          }),
+        ),
       ),
     ),
   );

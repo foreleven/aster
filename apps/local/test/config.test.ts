@@ -11,33 +11,35 @@ import { signalSettings } from "@aster/core";
 
 const settings = (file: string) =>
   Effect.runPromise(
-    Effect.gen(function* () {
-      return {
-        lark: yield* LarkConfig.pipe(Effect.provide(LarkConfig.layer)),
-        memory: yield* memorySettings,
-        custom: yield* Config.schema(Schema.optional(Schema.String), [
-          "contexts",
-          "/custom",
-          "children",
-          "/anything",
-          "private",
-        ]),
-        systemOne: yield* Config.schema(
-          Schema.optional(
-            Schema.Struct({ url: Schema.String, model: Schema.String, apiKey: Schema.String }),
+    Effect.scoped(
+      Effect.gen(function* () {
+        return {
+          lark: yield* LarkConfig.pipe(Effect.provide(LarkConfig.layer)),
+          memory: yield* memorySettings,
+          custom: yield* Config.schema(Schema.optional(Schema.String), [
+            "contexts",
+            "/custom",
+            "children",
+            "/anything",
+            "private",
+          ]),
+          systemOne: yield* Config.schema(
+            Schema.optional(
+              Schema.Struct({ url: Schema.String, model: Schema.String, apiKey: Schema.String }),
+            ),
+            ["config", "system-one"],
           ),
-          ["config", "system-one"],
+          signals: yield* signalSettings,
+        };
+      }).pipe(
+        Effect.provide(
+          LocalConfig.layer({
+            configPath: file,
+            envPath: `${file}.env`,
+            projectRoot: "/tmp",
+            environment: {},
+          }),
         ),
-        signals: yield* signalSettings,
-      };
-    }).pipe(
-      Effect.provide(
-        LocalConfig.layer({
-          configPath: file,
-          envPath: `${file}.env`,
-          projectRoot: "/tmp",
-          environment: {},
-        }),
       ),
     ),
   );

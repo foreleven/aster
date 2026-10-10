@@ -1,13 +1,13 @@
+import { serializeFixtureState } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import {
   ContextQueries,
-  ContextRegistry,
   ContextQueryError,
   childActorName,
   type ContextQueryInput,
 } from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
+import { makeTestContext } from "@aster/core/testing";
 import { Clock, Effect, Layer, Queue, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
@@ -22,7 +22,6 @@ import { ImAgentQueue, type AgentAdmission } from "../src/lark/im/summary/agent-
 import { ReadChatMessages } from "../src/lark/im/queries.js";
 import { LarkMailCli, LarkResponseError } from "../src/lark/mail/client.js";
 import { LarkCliError } from "../src/lark/shared/errors.js";
-import { larkContextViews } from "../src/lark/public-views.js";
 
 const email = {
   messageId: "retained",
@@ -43,10 +42,11 @@ test("Lark queries use owner state and child Actors; provider history stays inde
         const clock = yield* TestClock.make();
         yield* clock.adjust(Date.parse("2026-10-09T04:00:00Z"));
         yield* Effect.gen(function* () {
-          const registry = yield* makeContextRegistry({
+          const registry = yield* makeTestContext({
             loadAll: () => [
               {
                 snapshot: {
+                  text: serializeFixtureState({ chat, summary, seen: {}, checkpoint: "PRIVATE" }),
                   path: "/lark/im/chats/team",
                   revision: 1,
                   description: "Team",
@@ -57,6 +57,7 @@ test("Lark queries use owner state and child Actors; provider history stays inde
               },
               {
                 snapshot: {
+                  text: serializeFixtureState(email),
                   path: "/lark/mail/me/retained",
                   revision: 1,
                   description: "Mail",
@@ -68,7 +69,6 @@ test("Lark queries use owner state and child Actors; provider history stays inde
             ],
             save: () => {},
           });
-          yield* registry.views.register(larkContextViews);
           const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
           let profileReads = 0,
             messageReads = 0,
@@ -78,10 +78,7 @@ test("Lark queries use owner state and child Actors; provider history stays inde
           let mailFailure: LarkResponseError | LarkCliError | undefined;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
-              Layer.merge(
-                Layer.succeed(ContextRegistry, registry),
-                Layer.succeed(DurableContext, registry.backend),
-              ),
+              Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
               Layer.succeed(ContextQueries, queries),
               Layer.succeed(LarkConfig, { ...parseLarkConfig({}), im: {} }),
               Layer.succeed(LarkAccountCli, {

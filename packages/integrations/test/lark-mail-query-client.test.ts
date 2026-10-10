@@ -28,18 +28,20 @@ test("Mail query uses CLI full-text search and exact filters without fetching bo
     }),
   );
   const result = await Effect.runPromise(
-    client.listMessages("me", {
-      query: "budget",
-      folder: "sent",
-      from: "alice@example.com, bob@example.com",
-      to: "team@example.com",
-      isUnread: false,
-      hasAttachment: true,
-      start: "2026-10-01T00:00:00+08:00",
-      end: "2026-10-09T00:00:00+08:00",
-      limit: 25,
-      pageToken: "search:first",
-    }),
+    Effect.scoped(
+      client.listMessages("me", {
+        query: "budget",
+        folder: "sent",
+        from: "alice@example.com, bob@example.com",
+        to: "team@example.com",
+        isUnread: false,
+        hasAttachment: true,
+        start: "2026-10-01T00:00:00+08:00",
+        end: "2026-10-09T00:00:00+08:00",
+        limit: 25,
+        pageToken: "search:first",
+      }),
+    ),
   );
   assert.equal(calls.length, 1);
   const args = calls[0]!;
@@ -67,7 +69,9 @@ test("Mail list validation and incomplete cursor responses fail before reporting
     { start: "2026-10-02T00:00:00Z", end: "2026-10-01T00:00:00Z" },
     { query: "x".repeat(51) },
   ]) {
-    const error = await Effect.runPromise(noRun.listMessages("me", args).pipe(Effect.flip));
+    const error = await Effect.runPromise(
+      Effect.scoped(noRun.listMessages("me", args).pipe(Effect.flip)),
+    );
     assert.equal(error._tag, "LarkResponseError");
     if (error._tag === "LarkResponseError") assert.equal(error.kind, "invalid-input");
   }
@@ -76,9 +80,12 @@ test("Mail list validation and incomplete cursor responses fail before reporting
       Effect.succeed(JSON.stringify({ data: { messages: [], ...page } })),
     );
     await assert.rejects(
-      Effect.runPromise(client.listMessages("me", { pageToken: "first" })),
+      Effect.runPromise(Effect.scoped(client.listMessages("me", { pageToken: "first" }))),
       /pagination/,
     );
   }
-  await assert.rejects(Effect.runPromise(noRun.listMessages("me", {})), /reached CLI/);
+  await assert.rejects(
+    Effect.runPromise(Effect.scoped(noRun.listMessages("me", {}))),
+    /reached CLI/,
+  );
 });

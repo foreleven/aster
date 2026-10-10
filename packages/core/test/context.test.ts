@@ -1,8 +1,9 @@
+import { serializeFixtureState } from "../src/testing/context.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Fiber, Schema, Stream } from "effect";
 import { type StoredContext, childActorName, childContextPath } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 
 const definition = {
   state: Schema.Struct({ value: Schema.Number }),
@@ -19,7 +20,7 @@ test("only schema fields notify automatically and owner snapshots are detached",
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         yield* registry.register("/x", definition);
         const events: unknown[] = [];
         const listener = yield* Stream.runForEach(registry.changes, (event) =>
@@ -30,6 +31,7 @@ test("only schema fields notify automatically and owner snapshots are detached",
         yield* Effect.yieldNow;
         const state = { value: 1, cursor: "private" };
         const input = {
+          text: serializeFixtureState(state),
           path: "/x",
           description: "My test",
           state,
@@ -56,25 +58,35 @@ test("only schema fields notify automatically and owner snapshots are detached",
     ),
   );
   assert.deepEqual(result.record, {
+    text: serializeFixtureState({ value: 1 }),
     path: "/x",
-    revision: 1,
+    revision: 2,
     description: "My test",
     state: { value: 1 },
     messages: ["one"],
   });
-  assert.deepEqual(result.events, [{ record: result.record }]);
+  assert.deepEqual(
+    result.events.map((event) => (event as { record: { revision: number } }).record.revision),
+    [1, 2],
+  );
 });
 
 test("invalid public state and unregistered Context paths are rejected", async () => {
   for (const record of [
-    { path: "/x", description: "x", state: [], messages: [] },
-    { path: "/missing", description: "x", state: {}, messages: [] },
+    { text: serializeFixtureState([]), path: "/x", description: "x", state: [], messages: [] },
+    {
+      text: serializeFixtureState({}),
+      path: "/missing",
+      description: "x",
+      state: {},
+      messages: [],
+    },
   ]) {
     await assert.rejects(
       Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const registry = yield* makeContextRegistry();
+            const registry = yield* makeTestContext();
             yield* registry.register("/x", definition);
             yield* registry.commit(record, {
               expectedRevision: registry.get(record.path)?.revision ?? 0,
@@ -90,7 +102,7 @@ test("every changed commit publishes its detached revision", async () => {
   const changes = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         yield* registry.register("/x", definition);
         const changes: number[] = [];
         yield* Stream.runForEach(registry.changes, (change) =>
@@ -100,6 +112,7 @@ test("every changed commit publishes its detached revision", async () => {
         ).pipe(Effect.forkScoped);
         yield* Effect.yieldNow;
         const record = {
+          text: serializeFixtureState({ value: 1 }),
           path: "/x",
           description: "",
           state: { value: 1 },
@@ -129,23 +142,33 @@ test("every changed commit publishes its detached revision", async () => {
 });
 
 test("storage adapters cannot mutate the registry through loaded or saved record references", async () => {
-  const loaded = { path: "/x", description: "x", state: { value: 1 }, messages: [] };
+  const loaded = {
+    text: serializeFixtureState({ value: 1 }),
+    path: "/x",
+    description: "x",
+    state: { value: 1 },
+    messages: [],
+  };
   let saved: StoredContext | undefined;
   const registry = await Effect.runPromise(
-    makeContextRegistry({
-      loadAll: () => [{ snapshot: { ...loaded, revision: 0 }, events: [] }],
-      save: (record) => {
-        saved = record;
-      },
-    }),
+    Effect.scoped(
+      makeTestContext({
+        loadAll: () => [{ snapshot: { ...loaded, revision: 0 }, events: [] }],
+        save: (record) => {
+          saved = record;
+        },
+      }),
+    ),
   );
   loaded.state.value = 99;
   assert.deepEqual(registry.get("/x")?.state, { value: 1 });
-  await Effect.runPromise(registry.register("/x", definition));
+  await Effect.runPromise(Effect.scoped(registry.register("/x", definition)));
   await Effect.runPromise(
-    registry.commit(
-      { ...loaded, state: { value: 2 } },
-      { expectedRevision: registry.get(loaded.path)?.revision ?? 0 },
+    Effect.scoped(
+      registry.commit(
+        { ...loaded, state: { value: 2 } },
+        { expectedRevision: registry.get(loaded.path)?.revision ?? 0 },
+      ),
     ),
   );
   (saved!.snapshot.state as { value: number }).value = 100;

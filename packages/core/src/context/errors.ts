@@ -22,3 +22,9 @@ export class ContextRecoveryError extends Data.TaggedError("ContextRecoveryError
   readonly path: string;
   readonly cause: unknown;
 }> {}
+
+export class ContextClosed extends Data.TaggedError("ContextClosed")<{ readonly path: string }> {}
+export class ContextMessageConflict extends Data.TaggedError("ContextMessageConflict")<{
+  readonly path: string;
+  readonly key: string;
+}> {}

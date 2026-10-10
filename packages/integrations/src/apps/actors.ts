@@ -1,10 +1,10 @@
 import { Command as ActorCommand, CommandProcessor, type ActorRef } from "@aster/actor";
-import { ContextActor, contextPath, ContextSession, spawnContextChild } from "@aster/core";
+import { ContextActor, contextPath, DurableContext, spawnContextChild } from "@aster/core";
 import { Effect, Match, Schema } from "effect";
 import { OpenCli } from "./client.js";
 import { appCommands, queryArgv } from "./commands.js";
 import { AppsSettings } from "./config.js";
-import { AppsState, AppState, appsView, appView } from "./contexts.js";
+import { AppsState, AppState } from "./contexts.js";
 
 export class Ready extends ActorCommand.Class<Ready>()("Ready", {
   payload: {},
@@ -21,17 +21,19 @@ const AppActor = (appName: import("./commands.js").AppName) =>
       const processor = yield* CommandProcessor.make({ concurrency: 1 });
       const path = contextPath(owner);
       const app = settings.apps.find((app) => path === `/apps/${app.name}`)!;
-      const session = yield* ContextSession.make({
-        path,
-        state: AppState,
-        message: Schema.Never,
-        view: appView,
-        initial: { description: app.description, state: { app: app.name, mode: "query-only" } },
-      }).pipe(Effect.orDie);
-      yield* session
+      const session = yield* (yield* DurableContext)
+        .open({
+          path,
+          state: AppState,
+          message: Schema.Never,
+          serialize: (state) => JSON.stringify(state),
+          initial: { description: app.description, state: { app: app.name, mode: "query-only" } },
+        })
+        .pipe(Effect.orDie);
+      yield* session.state
         .set(
-          { description: app.description, state: { app: app.name, mode: "query-only" } },
-          { mode: "bootstrap" },
+          { app: app.name, mode: "query-only" },
+          { ...{ mode: "bootstrap" }, description: app.description },
         )
         .pipe(Effect.orDie);
       return {
@@ -86,23 +88,22 @@ export const AppsRootActor = ContextActor.define("apps/RootActor", {
 })(
   Effect.gen(function* () {
     const settings = yield* AppsSettings;
-    const session = yield* ContextSession.make({
-      path: "/apps",
-      state: AppsState,
-      message: Schema.Never,
-      view: appsView,
-      initial: {
-        description: settings.description,
-        state: { apps: settings.apps.map((app) => `/apps/${app.name}`) },
-      },
-    }).pipe(Effect.orDie);
-    yield* session
-      .set(
-        {
+    const session = yield* (yield* DurableContext)
+      .open({
+        path: "/apps",
+        state: AppsState,
+        message: Schema.Never,
+        serialize: (state) => JSON.stringify(state),
+        initial: {
           description: settings.description,
           state: { apps: settings.apps.map((app) => `/apps/${app.name}`) },
         },
-        { mode: "bootstrap" },
+      })
+      .pipe(Effect.orDie);
+    yield* session.state
+      .set(
+        { apps: settings.apps.map((app) => `/apps/${app.name}`) },
+        { ...{ mode: "bootstrap" }, description: settings.description },
       )
       .pipe(Effect.orDie);
     const children: ActorRef<typeof Ready.Type>[] = [];

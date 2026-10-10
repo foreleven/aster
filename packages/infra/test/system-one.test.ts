@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "@aster/core/testing";
 import { Deferred, Effect, Fiber, Logger, References } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -5,6 +6,7 @@ import { choice, matchGoal, type GoalScreeningRecord } from "@aster/core";
 import { makeSystemOneClient } from "../src/index.js";
 
 const screeningSource = {
+  text: serializeFixtureState({ summary: "Private launch evidence" }),
   path: "/lark/im/chats/project",
   revision: 1,
   description: "Project chat",
@@ -39,17 +41,19 @@ test("concurrent System One calls correlate attempts, retries and headers withou
     return Response.json({ answers: {}, usage: { input_tokens: 1, output_tokens: 1 } });
   });
   await Effect.runPromise(
-    Effect.all(
-      ["private chat one", "private chat two"].map((state) =>
-        client.systemOne({
-          state,
-          questions: { intent: choice("private question", { yes: "private criterion" }) },
-        }),
+    Effect.scoped(
+      Effect.all(
+        ["private chat one", "private chat two"].map((state) =>
+          client.systemOne({
+            state,
+            questions: { intent: choice("private question", { yes: "private criterion" }) },
+          }),
+        ),
+        { concurrency: "unbounded" },
+      ).pipe(
+        Effect.annotateLogs({ contextPath: "/test/logging" }),
+        Effect.provide(Logger.layer([logger])),
       ),
-      { concurrency: "unbounded" },
-    ).pipe(
-      Effect.annotateLogs({ contextPath: "/test/logging" }),
-      Effect.provide(Logger.layer([logger])),
     ),
   );
   const entries = logs.map((line) => JSON.parse(line));
@@ -100,12 +104,14 @@ test("System One connection failures expose nested network codes and preserve SD
     });
   });
   const result = await Effect.runPromise(
-    client
-      .systemOne({
-        state: "private chat",
-        questions: { intent: choice("Choose", { yes: "Yes" }) },
-      })
-      .pipe(Effect.result, Effect.provide(Logger.layer([logger]))),
+    Effect.scoped(
+      client
+        .systemOne({
+          state: "private chat",
+          questions: { intent: choice("Choose", { yes: "Yes" }) },
+        })
+        .pipe(Effect.result, Effect.provide(Logger.layer([logger]))),
+    ),
   );
   assert.equal(result._tag, "Failure");
   const entries = logs.map((line) => JSON.parse(line));
@@ -138,7 +144,9 @@ test("Goal screening respects the System One level limit and normalizes the top 
       usage: { input_tokens: 0, output_tokens: 0 },
     });
   });
-  const result = await Effect.runPromise(matchGoal(client, screeningSource, candidate));
+  const result = await Effect.runPromise(
+    Effect.scoped(matchGoal(client, screeningSource, candidate)),
+  );
   assert.equal(result._tag === "Matched" ? result.relevance.score : undefined, 1);
 });
 
@@ -154,9 +162,11 @@ test("failed Goal screening emits an error log and audit record while retaining 
     return Response.json({ error: { message: levelError } }, { status: 400 });
   });
   const result = await Effect.runPromise(
-    matchGoal(client, screeningSource, candidate, {
-      append: (record) => Effect.sync(() => records.push(record)),
-    }).pipe(Effect.result, Effect.provide(Logger.layer([logger]))),
+    Effect.scoped(
+      matchGoal(client, screeningSource, candidate, {
+        append: (record) => Effect.sync(() => records.push(record)),
+      }).pipe(Effect.result, Effect.provide(Logger.layer([logger]))),
+    ),
   );
   assert.equal(result._tag, "Failure");
   if (result._tag === "Failure") assert.match(result.failure.message, /400 Too many score levels/);
@@ -244,12 +254,14 @@ test("configured URL, model and resolved credential reach the System One request
       },
     );
     const result = await Effect.runPromise(
-      client.systemOne({
-        state: "I was charged twice for my order.",
-        questions: {
-          intent: choice("What does the user need?", { refund: "Refund", shipping: "Shipping" }),
-        },
-      }),
+      Effect.scoped(
+        client.systemOne({
+          state: "I was charged twice for my order.",
+          questions: {
+            intent: choice("What does the user need?", { refund: "Refund", shipping: "Shipping" }),
+          },
+        }),
+      ),
     );
     assert.equal(request!.url, "http://localhost:8000/proxy/v1/systemone");
     assert.equal(request!.headers.get("Authorization"), "Bearer test-laya-key");
@@ -274,10 +286,12 @@ test("resolved credentials work; missing or invalid settings fail before request
     });
   });
   await Effect.runPromise(
-    client.systemOne({
-      state: "test",
-      questions: { intent: choice("intent", { a: "first", b: "second" }) },
-    }),
+    Effect.scoped(
+      client.systemOne({
+        state: "test",
+        questions: { intent: choice("intent", { a: "first", b: "second" }) },
+      }),
+    ),
   );
   assert.throws(() => makeSystemOneClient(undefined), /config\.system-one is required/);
   assert.throws(() => makeSystemOneClient({ ...config, apiKey: " " }), /apiKey must be nonempty/);

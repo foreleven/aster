@@ -47,37 +47,46 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   );
   let restored: ReturnType<typeof makeCodexAgent> | undefined;
   try {
-    const session = await Effect.runPromise(agent.submit({ instructions: "Prepared", input: [] }));
+    const session = await Effect.runPromise(
+      Effect.scoped(agent.submit({ instructions: "Prepared", input: [] })),
+    );
     assert.equal(session.sessionId, "session-1");
     assert.equal(session.runId, "run-1");
-    let status = await Effect.runPromise(agent.status(session));
+    let status = await Effect.runPromise(Effect.scoped(agent.status(session)));
     for (let i = 0; i < 30 && status.state !== "waiting_input"; i++) {
       await new Promise((r) => setTimeout(r, 5));
-      status = await Effect.runPromise(agent.status(session));
+      status = await Effect.runPromise(Effect.scoped(agent.status(session)));
     }
     assert.equal(status.state, "waiting_input");
-    await Effect.runPromise(agent.respond(session, status.requests![0]!, { decision: "approve" }));
-    assert.deepEqual((await Effect.runPromise(agent.wait(session))).result, {
+    await Effect.runPromise(
+      Effect.scoped(agent.respond(session, status.requests![0]!, { decision: "approve" })),
+    );
+    assert.deepEqual((await Effect.runPromise(Effect.scoped(agent.wait(session)))).result, {
       text: "Final result",
     });
-    await Effect.runPromise(agent.close());
+    await Effect.runPromise(Effect.scoped(agent.close()));
     restored = makeCodexAgent(
       agentEnvironment({ values: process.env, privateKeys: ["TEST_INTEGRATION_TOKEN"] }),
       executable,
       join(dir, "tasks"),
     );
-    assert.equal((await Effect.runPromise(restored.status(session))).state, "completed");
-    assert.deepEqual(await Effect.runPromise(restored.resume(session)), session);
+    assert.equal(
+      (await Effect.runPromise(Effect.scoped(restored.status(session)))).state,
+      "completed",
+    );
+    assert.deepEqual(await Effect.runPromise(Effect.scoped(restored.resume(session))), session);
     const followUp = await Effect.runPromise(
-      restored.followUp(session, { text: "Prepared follow-up", requestId: "follow-up" }),
+      Effect.scoped(
+        restored.followUp(session, { text: "Prepared follow-up", requestId: "follow-up" }),
+      ),
     );
     assert.equal(followUp.sessionId, session.sessionId);
     assert.equal(typeof followUp.metadata?.processId, "number");
     assert.notEqual(followUp.metadata?.processId, session.metadata?.processId);
     process.kill(Number(followUp.metadata?.processId), 0);
   } finally {
-    await Effect.runPromise(agent.close());
-    if (restored) await Effect.runPromise(restored.close());
+    await Effect.runPromise(Effect.scoped(agent.close()));
+    if (restored) await Effect.runPromise(Effect.scoped(restored.close()));
     if (originalKey === undefined) delete process.env.TEST_INTEGRATION_TOKEN;
     else process.env.TEST_INTEGRATION_TOKEN = originalKey;
     await rm(dir, { recursive: true, force: true });
@@ -112,22 +121,30 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const agent = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
   const restored = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
   try {
-    const session = await Effect.runPromise(agent.submit({ instructions: "Prepared", input: [] }));
-    assert.equal((await Effect.runPromise(agent.status(session))).state, "running");
-    await Effect.runPromise(agent.close());
-    assert.equal((await Effect.runPromise(restored.status(session))).resumable, true);
-    const resumed = await Effect.runPromise(restored.resume(session));
+    const session = await Effect.runPromise(
+      Effect.scoped(agent.submit({ instructions: "Prepared", input: [] })),
+    );
+    assert.equal((await Effect.runPromise(Effect.scoped(agent.status(session)))).state, "running");
+    await Effect.runPromise(Effect.scoped(agent.close()));
+    assert.equal(
+      (await Effect.runPromise(Effect.scoped(restored.status(session)))).resumable,
+      true,
+    );
+    const resumed = await Effect.runPromise(Effect.scoped(restored.resume(session)));
     assert.equal(resumed.sessionId, session.sessionId);
     assert.equal(resumed.runId, "run-2");
     await writeFile(
       join(dir, "state.json"),
       JSON.stringify({ status: "interrupted", turn: "run-2" }),
     );
-    assert.equal((await Effect.runPromise(restored.status(resumed))).state, "cancelled");
-    await assert.rejects(Effect.runPromise(restored.resume(resumed)), /interrupted/);
+    assert.equal(
+      (await Effect.runPromise(Effect.scoped(restored.status(resumed)))).state,
+      "cancelled",
+    );
+    await assert.rejects(Effect.runPromise(Effect.scoped(restored.resume(resumed))), /interrupted/);
   } finally {
-    await Effect.runPromise(agent.close());
-    await Effect.runPromise(restored.close());
+    await Effect.runPromise(Effect.scoped(agent.close()));
+    await Effect.runPromise(Effect.scoped(restored.close()));
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -170,7 +187,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   };
   try {
     await assert.rejects(
-      Effect.runPromise(agent.submit({ instructions: "cancelled", input: [] }), {
+      Effect.runPromise(Effect.scoped(agent.submit({ instructions: "cancelled", input: [] })), {
         signal: AbortSignal.abort(new Error("already cancelled")),
       }),
       isInterrupted,
@@ -178,7 +195,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     await assert.rejects(access(log));
     const controller = new AbortController();
     const submission = Effect.runPromise(
-      agent.submit({ instructions: "cancel during thread", input: [] }),
+      Effect.scoped(agent.submit({ instructions: "cancel during thread", input: [] })),
       { signal: controller.signal },
     );
     const rejected = assert.rejects(submission, isInterrupted);
@@ -187,12 +204,14 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     await rejected;
     await delay(150);
     assert.equal((await methods()).includes("turn/start"), false);
-    const session = await Effect.runPromise(agent.submit({ instructions: "live", input: [] }));
+    const session = await Effect.runPromise(
+      Effect.scoped(agent.submit({ instructions: "live", input: [] })),
+    );
     assert.ok(session.sessionId);
     assert.equal((await methods()).filter((m) => m === "initialize").length, 1);
     const reading = new AbortController();
     const status = assert.rejects(
-      Effect.runPromise(agent.status(session), { signal: reading.signal }),
+      Effect.runPromise(Effect.scoped(agent.status(session)), { signal: reading.signal }),
       isInterrupted,
     );
     await until(async () => (await methods()).includes("thread/read"));
@@ -200,7 +219,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     await status;
     const before = (await methods()).length;
     await assert.rejects(
-      Effect.runPromise(agent.resume(session), {
+      Effect.runPromise(Effect.scoped(agent.resume(session)), {
         signal: AbortSignal.abort(new Error("stop resume")),
       }),
       isInterrupted,
@@ -208,9 +227,12 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     assert.equal((await methods()).length, before);
     const executing = new AbortController();
     const turn = assert.rejects(
-      Effect.runPromise(agent.submit({ instructions: "cancel during turn", input: [] }), {
-        signal: executing.signal,
-      }),
+      Effect.runPromise(
+        Effect.scoped(agent.submit({ instructions: "cancel during turn", input: [] })),
+        {
+          signal: executing.signal,
+        },
+      ),
       isInterrupted,
     );
     await until(async () => (await methods()).filter((m) => m === "turn/start").length === 2);
@@ -219,7 +241,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     await delay(150);
     assert.equal((await methods()).filter((m) => m === "turn/start").length, 2);
   } finally {
-    await Effect.runPromise(agent.close());
+    await Effect.runPromise(Effect.scoped(agent.close()));
     await rm(dir, { recursive: true, force: true });
   }
 });
@@ -250,15 +272,17 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const agent = makeCodexAgent({ ...process.env }, executable, join(dir, "tasks"));
   try {
     const first = await Effect.runPromise(
-      agent.submit({ instructions: "Initial work", input: [] }),
+      Effect.scoped(agent.submit({ instructions: "Initial work", input: [] })),
     );
     assert.deepEqual(
-      await Effect.runPromise(agent.followUp(first, { requestId: "busy", text: "Add regions" })),
+      await Effect.runPromise(
+        Effect.scoped(agent.followUp(first, { requestId: "busy", text: "Add regions" })),
+      ),
       first,
     );
     await writeFile(join(dir, "completed"), "");
     const next = await Effect.runPromise(
-      agent.followUp(first, { requestId: "later", text: "Extend report" }),
+      Effect.scoped(agent.followUp(first, { requestId: "later", text: "Extend report" })),
     );
     assert.equal(next.sessionId, first.sessionId);
     assert.notEqual(next.runId, first.runId);
@@ -272,7 +296,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     assert.equal(steer.params.expectedTurnId, first.runId);
     assert.equal(steer.params.input[0].text, "Add regions");
   } finally {
-    await Effect.runPromise(agent.close());
+    await Effect.runPromise(Effect.scoped(agent.close()));
     await rm(dir, { recursive: true, force: true });
   }
 });

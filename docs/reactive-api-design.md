@@ -31,7 +31,7 @@ app composition -> Runtime Layer + selected transport
 | `apps/local/src/http-api.ts`    | HTTP Protocol, serialization, assets, host policy, Node server and scoped shutdown.                                                    |
 | `apps/web/src/api`              | Browser Protocol, AtomRpc queries/mutations, notification consumption and UI connection state.                                         |
 
-AsterRuntime has no `api` property or application facade. Its value exposes `actors` (Actor selection only), `ready` and `inspect`. Its Layer publishes the same ContextRegistry, ContextQueries and AgentConversations instances used by the running domain. Local does not reconstruct these services. `makeApplicationApi`, `ApplicationApi` and `core/runtime/api.ts` are removed.
+AsterRuntime has no `api` property or application facade. Its value exposes `actors` (Actor selection only), `ready` and `inspect`. Its Layer publishes the same DurableContext, ContextQueries and AgentConversations instances used by the running domain. Local does not reconstruct these services. `makeApplicationApi`, `ApplicationApi` and `core/runtime/api.ts` are removed.
 
 RPC-only command adapters stay in server. For example, SendGoalMessage trims ingress text, assigns an identity when omitted, selects the Goal root, sends Route/SubmitInput and translates the reply. There is no core sendGoalMessage wrapper. The Goal Actor remains responsible for admission, deduplication, state changes and persistence before acknowledgement. An accepted request is not a completed conversation; a transport timeout does not prove that the operation was cancelled. RPC handlers never automatically replay uncertain submissions.
 

@@ -6,13 +6,12 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ContextQueries } from "../src/context/queries/routes.js";
 import {
-  ContextRegistry,
   ExternalAgents,
   GoalSnapshot,
   GoalsRootActor,
   type GoalCommandReply,
 } from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { goalWorkflowLayer } from "./workflow-fixtures.js";
 
@@ -32,7 +31,7 @@ for (const fails of [false, true]) {
           const noticed = yield* Deferred.make<typeof TerminationLog.Type>();
           const clock = yield* TestClock.make();
           const history = testConversations();
-          const registry = yield* makeContextRegistry();
+          const registry = yield* makeTestContext();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
@@ -45,10 +44,7 @@ for (const fails of [false, true]) {
                       Deferred.doneUnsafe(noticed, Effect.succeed(entry));
                 }),
               ]),
-              Layer.merge(
-                Layer.succeed(ContextRegistry, registry),
-                Layer.succeed(DurableContext, registry.backend),
-              ),
+              Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
               Layer.succeed(ExternalAgents, {}),
               goalWorkflowLayer({
                 definitions: ["slow", "fast"].map((slug) => ({ slug, description: slug })),

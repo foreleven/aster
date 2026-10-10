@@ -1,16 +1,17 @@
 import { Effect, Schema, Ref } from "effect";
-import { ContextSession } from "../../context/session.js";
-import { taskView } from "../view.js";
+import { DurableContext } from "../../context/store.js";
 import { TaskSnapshot } from "./snapshot.js";
 
 /** An unadmitted Task has no durable state. Its first accepted command creates it. */
 export const makeTaskStore = Effect.fn("TaskStore.make")(function* (path: string) {
-  const session = yield* ContextSession.make({
-    path,
-    state: TaskSnapshot,
-    message: Schema.Never,
-    view: taskView,
-  }).pipe(Effect.orDie);
+  const session = yield* (yield* DurableContext)
+    .open({
+      path,
+      state: TaskSnapshot,
+      message: Schema.Never,
+      serialize: serializeTaskState,
+    })
+    .pipe(Effect.orDie);
   const current = session.current.pipe(Effect.orDie);
   const restored = yield* current;
   const committed = yield* Ref.make(
@@ -25,8 +26,10 @@ export const makeTaskStore = Effect.fn("TaskStore.make")(function* (path: string
     state: TaskSnapshot,
     expectedRevision?: number,
   ) {
-    yield* session.set({ state, description: "Task" }, { expectedRevision }).pipe(Effect.orDie);
-    yield* Ref.set(committed, state);
+    const saved = yield* session.state
+      .set(state, { expectedRevision, description: "Task" })
+      .pipe(Effect.orDie);
+    yield* Ref.set(committed, saved.state);
   }, Effect.uninterruptible);
   const save = Effect.fnUntraced(function* (patch: Partial<TaskSnapshot>) {
     yield* commit({ ...(yield* read), ...patch });
@@ -41,3 +44,12 @@ export const makeTaskStore = Effect.fn("TaskStore.make")(function* (path: string
   };
 });
 export type TaskStore = Effect.Success<ReturnType<typeof makeTaskStore>>;
+
+export const serializeTaskState = ({ status, admission, outcomeEntryId }: TaskSnapshot) =>
+  JSON.stringify({
+    status,
+    source: admission.source,
+    goal: admission.replyTo,
+    agent: admission.agent,
+    outcomeEntryId,
+  });

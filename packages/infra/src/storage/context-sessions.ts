@@ -15,19 +15,19 @@ import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/n
 import {
   ContextCommitError,
   ContextRecoveryError,
-  ContextSessionLayout,
+  ContextPartition,
   StoredContext,
   publicJson,
   type ContextPersistence,
 } from "@aster/core";
-import { Effect, Queue, Schema, Semaphore, Stream } from "effect";
-import type { ContextStore } from "./file-context-store.js";
+import { Effect, Schema, Semaphore } from "effect";
 
 const MetadataSchema = Schema.Struct({
   path: Schema.String,
-  partition: ContextSessionLayout,
+  partition: ContextPartition,
   revision: Schema.Int,
   description: Schema.String,
+  text: Schema.String,
   order: Schema.Array(Schema.String),
 });
 type Metadata = typeof MetadataSchema.Type;
@@ -51,14 +51,6 @@ const MessagesDoc = defineDocFamily<{ value: JsonValue }, JsonValue>({
   initial: (value) => ({ value }),
   checkpointWhen,
 });
-/** Read-only compatibility token for sessions written before messages became a family. */
-const LegacyMessagesDoc = defineDoc<{ messages: Record<string, JsonValue> }>({
-  kind: "aster.context.messages",
-  version: 1,
-  scope: "session",
-  initial: () => ({ messages: {} }),
-  checkpointWhen,
-});
 const MetadataDoc = defineDoc<{ value: JsonValue }>({
   kind: "aster.context.metadata",
   version: 1,
@@ -76,7 +68,7 @@ const EventsDoc = defineDoc<{ events: Record<string, JsonValue> }>({
 
 // Prefixing is injective and avoids Chord's reserved object-path segments.
 const messageKey = (key: string) => `message:${key}`;
-const contextSessionDirectory = (root: string, path: string, partition: ContextSessionLayout) => {
+const contextSessionDirectory = (root: string, path: string, partition: ContextPartition) => {
   const owner =
     partition.layout === "daily" ? path.slice(0, -`/days/${partition.date}`.length) : path;
   const directory = join(root, createHash("sha256").update(owner).digest("hex"));
@@ -104,9 +96,8 @@ const ensureDirectory = async (path: string) => {
   }
 };
 
-/** Pi owns Document deltas; core retains revision, projection and publication semantics. */
+/** Pi owns Document deltas; core owns owner validation, revisions and committed publication. */
 export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistence.make")(function* (
-  fileStore: ContextStore,
   directory: string,
 ) {
   const root = resolve(directory);
@@ -146,9 +137,7 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
         locations.clear();
         const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
         await ensureDirectory(root);
-        const records = new Map(
-          fileStore.loadAll().map((record) => [record.snapshot.path, record]),
-        );
+        const records = new Map<string, StoredContext>();
         const files = await readdir(root, { recursive: true, withFileTypes: true });
         for (const file of files) {
           if (!file.isFile() || file.name !== "main.jsonl") continue;
@@ -156,9 +145,8 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
           const session = await openSession(directory, context);
           const meta = await session.snapshot(MetadataDoc, context);
           const state = await session.snapshot(StateDoc, context);
-          const legacyMessages = await session.snapshot(LegacyMessagesDoc, context);
           const events = await session.snapshot(EventsDoc, context);
-          if (!meta && !state && !legacyMessages && !events) continue;
+          if (!meta && !state && !events) continue;
           if (!meta || !state || !events)
             throw new Error(`Incomplete Context Session: ${directory}`);
           const metadata = Schema.decodeUnknownSync(MetadataSchema)(meta.value);
@@ -170,22 +158,17 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
             throw new Error(`Invalid Context message index: ${metadata.path}`);
           const messages = await Promise.all(
             metadata.order.map(async (id) => {
-              const value = await session.snapshot(MessagesDoc, messageKey(id), context);
-              return value ? value.value : legacyMessages?.messages[messageKey(id)];
+              const message = await session.snapshot(MessagesDoc, messageKey(id), context);
+              if (!message) throw new Error(`Missing Context message: ${metadata.path}/${id}`);
+              return message.value;
             }),
           );
-          if (
-            messages.some((value) => value === undefined) &&
-            !metadata.order.every((id) =>
-              Object.hasOwn(legacyMessages?.messages ?? {}, messageKey(id)),
-            )
-          )
-            throw new Error(`Missing Context message document: ${metadata.path}`);
           const record = Schema.decodeUnknownSync(StoredContext)({
             snapshot: {
               path: metadata.path,
               revision: metadata.revision,
               description: metadata.description,
+              text: metadata.text,
               state: state.value,
               messages,
             },
@@ -201,7 +184,7 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
       catch: (cause) => new ContextRecoveryError({ path: "/", cause }),
     }).pipe(Effect.uninterruptible),
   );
-  const configureSession: NonNullable<ContextPersistence["configureSession"]> = (path, config) =>
+  const bind: NonNullable<ContextPersistence["bind"]> = (path, config) =>
     gate.withPermit(
       Effect.try({
         try: () => {
@@ -211,13 +194,11 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
           if (
             existing &&
             !isDeepStrictEqual(
-              existing.record.snapshot.messages.map(config.messageKey),
+              existing.record.snapshot.messages.map(config.keyOf),
               existing.metadata.order,
             )
           )
             throw new Error(`Context Session message identities changed for ${path}`);
-          if (fileStore.loadAll().some((record) => record.snapshot.path === path))
-            throw new Error(`Context path ${path} is already owned by file storage`);
         },
         catch: (cause) => new ContextRecoveryError({ path, cause }),
       }),
@@ -227,18 +208,10 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
       Effect.tryPromise({
         try: async (signal) => {
           const path = record.snapshot.path;
-          if (!config) {
-            if (locations.has(path))
-              throw new Error(
-                `ContextSession owner must acquire its Session before writing ${path}`,
-              );
-            fileStore.save(record);
-            return;
-          }
           const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
           const directory = contextSessionDirectory(root, path, config.partition);
           const session = await openSession(directory, context);
-          const order = record.snapshot.messages.map(config.messageKey);
+          const order = record.snapshot.messages.map(config.keyOf);
           if (order.some((key) => !key) || new Set(order).size !== order.length)
             throw new Error("Messages require unique nonempty IDs");
           const metadata: Metadata = {
@@ -246,6 +219,7 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
             partition: config.partition,
             revision: record.snapshot.revision,
             description: record.snapshot.description,
+            text: record.snapshot.text,
             order,
           };
           // Normalize optional object properties once; all document placements are strict JSON.
@@ -268,9 +242,9 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
             }
             for (const [key, value] of values) {
               const message = await tx.doc(MessagesDoc, key, value);
-              if (!isDeepStrictEqual(message.value, value)) message.value = value;
+              if (!isDeepStrictEqual(message.value, value))
+                throw new Error("Message family members are immutable");
             }
-            await tx.retireDoc(LegacyMessagesDoc);
             meta.value = copyJson(publicJson(metadata));
             // Retain source evidence without rewriting earlier event bodies on every commit.
             for (const event of record.events)
@@ -283,33 +257,5 @@ export const makeContextSessionPersistence = Effect.fn("ContextSessionPersistenc
         catch: (cause) => new ContextCommitError({ path: record.snapshot.path, cause }),
       }).pipe(Effect.uninterruptible),
     );
-  const watchMessage: NonNullable<ContextPersistence["watchMessage"]> = (path, key) =>
-    Stream.unwrap(
-      Effect.tryPromise({
-        try: async (signal) => {
-          const location = locations.get(path);
-          if (!location) return Stream.succeed(null);
-          const context = withAbortSignal(signal, BACKGROUND_CONTEXT);
-          const session = await openSession(location.directory, context);
-          const watch = await session.watchDoc(MessagesDoc, messageKey(key), context);
-          if (!watch) return Stream.succeed(null);
-          return Stream.callback<JsonValue | null>((queue) => {
-            Queue.offerUnsafe(queue, watch.value?.value ?? null);
-            watch.start((value) => {
-              Queue.offerUnsafe(queue, value?.value ?? null);
-              if (value === null) Queue.endUnsafe(queue);
-              return Promise.resolve();
-            });
-            return Effect.acquireRelease(Effect.void, () =>
-              Effect.tryPromise({
-                try: () => watch.stop(),
-                catch: (cause) => new Error(String(cause)),
-              }).pipe(Effect.asVoid, Effect.orDie),
-            );
-          });
-        },
-        catch: (cause) => new ContextRecoveryError({ path, cause }),
-      }),
-    );
-  return { load, save, configureSession, watchMessage } satisfies ContextPersistence;
+  return { load, save, bind } satisfies ContextPersistence;
 });

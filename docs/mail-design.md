@@ -24,7 +24,7 @@ The mailbox index contains today's summaries only. Rollover clears that index in
 | `mail/queries.ts`        | Read-only mailbox command definitions and handlers.                           |
 | `mail/dates.ts`          | Calendar validation, zoned day boundaries and interval membership.            |
 
-`MailboxState` uses `ContextRegistry` and the existing `DurableContext` store. It introduces no independent Store or Ref. Canonical persistence, committed memory, revision checks, source journals and subscriptions remain owned by Context infrastructure. Every business transition runs inside the mailbox Actor and commits against the revision it read.
+`MailboxState` uses `DurableContext` and the existing `DurableContext` store. It introduces no independent Store or Ref. Canonical persistence, committed memory, revision checks, source journals and subscriptions remain owned by Context infrastructure. Every business transition runs inside the mailbox Actor and commits against the revision it read.
 
 The model exposes `snapshot`, `baseline`, `nextWindow`, `rollDay`, `completeSync` and `failSync`. It has no generic field setter and does not own remote clients, child Actors or timers. Mailbox commits update readers without emitting source events; individual Email Contexts produce those events.
 

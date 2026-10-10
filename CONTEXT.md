@@ -8,16 +8,19 @@ This context describes how activity from connected services and local tools beco
 An occurrence received through a Channel, such as a chat message, ticket change, monitoring alert, or local tool activity. It does not by itself imply that local work should begin.
 
 **Context**:
-A coherent, independently addressable body of information relevant to identifying or pursuing work. Its outward-visible content consists of structured Context State and ordered Messages; chats, emails, workspaces, Signal definitions, and Signal runs are all Contexts.
+A coherent, independently addressable body of information relevant to identifying or pursuing work. Generic readers receive its identity, description, and serialized State text; its owner retains structured State and ordered Messages.
 
 **Context State**:
-The outward-visible structured information about a Context, such as account information, mailbox information, or a Signal definition. It is distinct from the Context's ordered Messages and its implementation's private bookkeeping.
+The owner-managed structured information about a Context, such as account information, mailbox information, or a Signal definition. Its serialized text is available to generic readers; structured business queries have their own response contracts.
+
+**Context Text**:
+The current reader-visible textual representation of committed Context State. System One, Memory, and generic Context reads use this representation rather than raw owner State or pending Messages.
 
 **Chat Summary**:
 The current condensed understanding of a chat, carried forward from its previous summary and newly observed messages and exposed as part of its Context State. It retains relevant progress, decisions, blockers, pending work, and source references for deciding which Goals concern the conversation.
 
 **Pending Chat Messages**:
-Observed chat messages whose current content has not yet been incorporated into a durably saved Chat Summary. A newer edit remains pending even if an earlier version of that message has already been summarized.
+Observed chat messages that have not yet been incorporated into a durably saved Chat Summary. Messages are appended as immutable observations; a later source change is a new observation rather than an update to an existing Message.
 
 **Chat Summary Request**:
 A request to refresh one chat's summary from its accumulated Pending Chat Messages. Its message coverage is determined when an IM Agent Permit is granted, so messages observed while awaiting admission can join the same summary.
@@ -41,13 +44,17 @@ A fixed, human-readable explanation of a Context's basic identity, purpose, and 
 Information retained for later recall across observations and Agent sessions, associated with the Context from which it was learned. Examples include the user's work identity and work email address.
 
 **Context Implementation**:
-The Actor code that owns one Context and defines its public State and Message Schemas, Commands, behavior, and interfaces. Root implementations are registered in code, create their own children, and consume their own optional configuration subtrees. Public Context data has no type tag.
+The Actor code that owns one Context and defines its State and Message schemas, State serialization, Commands, behavior, and business interfaces. Root implementations are registered in code, create their own children, and consume their own optional configuration subtrees.
 
 **Provider**:
 A shared integration implementation that can supply one or more Context implementations with external capabilities and resources. For example, a Lark Provider can supply separate IM and Mail Channel implementations.
 
 **Message**:
-An ordered, retained item of Context information, such as observed activity, a user decision, or a delegation result. Retention depends on the Context; a Message may be removed after its information has been incorporated into a durable summary.
+An immutable, append-ordered item of Context information, such as observed activity, a user decision, or a delegation result. Retention depends on the Context; a Message may be removed after its information has been incorporated into a durable summary.
+
+An append with an existing Message identity and identical content is an idempotent retry. An append with the same identity and different content is rejected as a duplicate conflict; Messages are never updated.
+
+A Message identity identifies a currently retained observation. Removing the Message removes that identity from the retained collection; Context does not remember or deduplicate previously removed Messages.
 
 **Summary Checkpoint**:
 A durable, compressed representation that replaces a prefix of a Context's Message history. Messages covered by the checkpoint no longer need to be retained; the checkpoint never replaces exact structured state.

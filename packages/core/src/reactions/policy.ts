@@ -1,18 +1,16 @@
 import { CurrentActors } from "../services/actors.js";
 import { createHash } from "node:crypto";
-import type { ContextReader } from "../context/registry.js";
+import type { DurableContext } from "../context/store.js";
+
+import { loadGoalState } from "../goals/queries.js";
+import { SignalRecord } from "../signals/queries.js";
 import type { ActorRef } from "@aster/actor";
-import { type PublicContext } from "../context/contracts.js";
+import { type ContextText } from "../context/contracts.js";
 import { Clock, Context, Effect, Match, Schema } from "effect";
 import { choice, type SystemOneClient } from "../services/system-one.js";
 import { SignalSnapshot, signalEnabled } from "../signals/state/snapshot.js";
 import type { GoalDefinition } from "../config/schema.js";
-import {
-  matchGoal,
-  goalTitleText,
-  goalSummaryText,
-  type GoalScreeningStore,
-} from "../goals/screening/decision.js";
+import { matchGoal, goalTitleText, type GoalScreeningStore } from "../goals/screening/decision.js";
 
 import { makeGoalIntent } from "../goals/screening/intent.js";
 import type { GoalsRootCommand } from "../goals/root.js";
@@ -27,67 +25,70 @@ import {
   type ReactionCandidate,
 } from "./state.js";
 
-export const sourceSignals = (snapshot: Readonly<Record<string, PublicContext>>) =>
-  Object.values(snapshot)
-    .filter(
-      (record) =>
-        /^\/signals\/[^/]+$/.test(record.path) && record.projection?.visibility !== "restricted",
-    )
-    .flatMap((record) => {
-      const state = Schema.decodeUnknownSync(SignalSnapshot)(record.state);
-      return state.trigger._tag === "Context" && signalEnabled(state, (path) => snapshot[path])
-        ? [
-            {
-              _tag: "Signal" as const,
-              slug: record.path.slice("/signals/".length),
-              when: state.trigger.when,
-              version: state.version,
-            },
-          ]
-        : [];
-    });
+export const sourceSignals = (
+  signals: readonly SignalRecord[],
+  goals: ReadonlyMap<string, { status: string }>,
+) =>
+  signals.flatMap((record) => {
+    const state = record.state;
+    return state.trigger._tag === "Context" && signalEnabled(state, (path) => goals.get(path))
+      ? [
+          {
+            _tag: "Signal" as const,
+            slug: record.path.slice("/signals/".length),
+            when: state.trigger.when,
+            version: state.version,
+          },
+        ]
+      : [];
+  });
 
-/** Freeze only candidate rules and Goal context, never the entire Context tree. */
-export const reactionTargets = (
-  reader: ContextReader,
-  goals: readonly GoalDefinition[],
-): readonly ReactionCandidate[] => {
-  const records = Object.fromEntries(
-    reader
-      .directory()
-      .filter(({ path }) => /^\/(signals|goals)\/[^/]+$/.test(path))
-      .flatMap(({ path }) => {
-        const record = reader.get(path);
-        return record ? [[path, record]] : [];
-      }),
+/** Freeze domain rules from schema-decoded committed state; serialized Context text is evidence only. */
+export const reactionTargets = Effect.fn("Reactions.targets")(function* (
+  durable: DurableContext["Service"],
+  definitions: readonly GoalDefinition[],
+) {
+  const goals = new Map<string, Awaited<Effect.Success<ReturnType<typeof loadGoalState>>>>();
+  for (const definition of definitions) {
+    const path = `/goals/${definition.slug}`;
+    if (!durable.get(path)) continue;
+    const state = yield* loadGoalState(durable, path).pipe(Effect.option);
+    if (state._tag === "Some") goals.set(path, state.value);
+  }
+  const signals = yield* Effect.forEach(
+    durable.directory().filter(({ path }) => /^\/signals\/[^/]+$/.test(path)),
+    ({ path }) =>
+      durable
+        .readState(path, SignalSnapshot)
+        .pipe(Effect.map((state) => ({ ...durable.get(path)!, state })))
+        .pipe(Effect.option),
+    { concurrency: 4 },
   );
   return [
-    ...sourceSignals(records),
-    ...goals.flatMap((definition): ReactionCandidate[] => {
-      const record = records[`/goals/${definition.slug}`];
-      if (
-        !record ||
-        record.projection?.visibility === "restricted" ||
-        !Schema.is(Schema.Struct({ status: Schema.Literal("active") }))(record.state)
-      )
-        return [];
+    ...sourceSignals(
+      signals.flatMap((value) => (value._tag === "Some" ? [value.value] : [])),
+      goals,
+    ),
+    ...definitions.flatMap((definition): ReactionCandidate[] => {
+      const state = goals.get(`/goals/${definition.slug}`);
+      if (!state || state.status !== "active") return [];
       return [
         {
           _tag: "Goal",
           slug: definition.slug,
           description: definition.description,
-          title: goalTitleText(definition, record),
-          summary: goalSummaryText(record),
+          title: goalTitleText(definition, state),
+          summary: state.summary,
         },
       ];
     }),
   ];
-};
+});
 
 /** One request per Signal; a missing or malformed answer is a failure, not a negative match. */
 export const matchSignal = Effect.fn("Signal.match")(function* (
   client: SystemOneClient,
-  record: PublicContext,
+  record: ContextText,
   signal: Extract<ReactionCandidate, { _tag: "Signal" }>,
 ) {
   const response = yield* client.systemOne({

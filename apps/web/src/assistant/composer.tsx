@@ -126,9 +126,7 @@ export function Composer({
                     <div className="p-4">
                       <ContextList
                         contexts={contexts.filter(
-                          (context) =>
-                            context.path !== `/goals/${slug}` &&
-                            context.projection?.visibility !== "restricted",
+                          (context) => context.path !== `/goals/${slug}` && true,
                         )}
                         navigate={(path) => {
                           setText(`${draft.text}${draft.text ? "\n" : ""}${path}`);

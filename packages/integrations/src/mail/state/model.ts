@@ -1,5 +1,4 @@
-import { mailboxView } from "../contexts.js";
-import { ContextSession } from "@aster/core";
+import { DurableContext } from "@aster/core";
 import { DateTime, Effect, Schema } from "effect";
 import { MailboxSnapshot } from "./snapshot.js";
 import { mailDay } from "../dates.js";
@@ -12,23 +11,34 @@ export const makeMailboxState = Effect.fn("MailboxState.make")(function* (
 ) {
   const timeZone = mailbox.timeZone ?? "Asia/Shanghai";
   const now = yield* DateTime.now;
-  const session = yield* ContextSession.make({
-    path,
-    state: MailboxSnapshot,
-    message: Schema.Never,
-    view: mailboxView,
-    initial: {
-      description: `Mailbox ${mailbox.id}. List messages by day or read a selected email.`,
-      state: {
-        timeZone,
-        dateBasis: mailbox.protocol === "pop3" ? "sent" : "received",
-        startedAt: DateTime.formatIsoOffset(DateTime.setZoneNamedUnsafe(now, timeZone)),
-        today: { date: DateTime.formatIsoDate(mailDay(now, timeZone)), emails: [] },
-        status: "syncing",
-        undatedObserved: 0,
+  const session = yield* (yield* DurableContext)
+    .open({
+      path,
+      state: MailboxSnapshot,
+      message: Schema.Never,
+      serialize: ({ timeZone, dateBasis, through, today, status, undatedObserved, lastFailure }) =>
+        JSON.stringify({
+          timeZone,
+          dateBasis,
+          through,
+          today,
+          status,
+          undatedObserved,
+          lastFailure,
+        }),
+      initial: {
+        description: `Mailbox ${mailbox.id}. List messages by day or read a selected email.`,
+        state: {
+          timeZone,
+          dateBasis: mailbox.protocol === "pop3" ? "sent" : "received",
+          startedAt: DateTime.formatIsoOffset(DateTime.setZoneNamedUnsafe(now, timeZone)),
+          today: { date: DateTime.formatIsoDate(mailDay(now, timeZone)), emails: [] },
+          status: "syncing",
+          undatedObserved: 0,
+        },
       },
-    },
-  }).pipe(Effect.orDie);
+    })
+    .pipe(Effect.orDie);
   const snapshot = session.state.get.pipe(Effect.orDie);
   const update = (change: (state: MailboxSnapshot) => MailboxSnapshot) =>
     session.state.update(change, { mode: "bootstrap" }).pipe(Effect.orDie, Effect.asVoid);

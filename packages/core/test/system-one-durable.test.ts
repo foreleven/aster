@@ -1,16 +1,10 @@
+import { serializeFixtureState } from "../src/testing/context.js";
 import { ActorSystem } from "@aster/actor";
 import { ConfigProvider, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { DurableContext } from "../src/context/store.js";
-import {
-  ContextRegistry,
-  DecisionError,
-  GoalSettings,
-  contextView,
-  type ContextSnapshot,
-  type StoredContext,
-} from "../src/index.js";
+import { DecisionError, GoalSettings, type StoredContext } from "../src/index.js";
 import { type RecoveryReply } from "../src/reactions/contracts.js";
 import { inspectReactions } from "../src/reactions/inspection.js";
 import {
@@ -23,18 +17,19 @@ import {
   type ReactionPlan,
   type ReactionWork,
 } from "../src/reactions/state.js";
-import { makeContextRegistry, type TestContextRegistry } from "../src/testing/context.js";
+import { makeTestContext, type TestContext } from "../src/testing/context.js";
 
 import { SystemOneActor } from "../src/reactions/actor.js";
 import { ReactionFailure, ReactionPolicy, makeReactionPolicy } from "../src/reactions/policy.js";
 
 const sourceDefinition = {
-  changes: "durable-state" as const,
+  events: "state" as const,
   state: Schema.Struct({ summary: Schema.String }),
   message: Schema.String,
-  view: contextView({ state: Schema.Struct({ summary: Schema.String }), message: Schema.String }),
+  serialize: (state: object) => JSON.stringify(state),
 };
 const source = {
+  text: serializeFixtureState({ summary: "First evidence" }),
   path: "/source",
   description: "Source",
   state: { summary: "First evidence" },
@@ -66,12 +61,13 @@ const unmatched = (work: FrozenReaction): ReactionPlan =>
       target: targetPath(input),
       result: { _tag: "NotMatched", reason: "Unrelated test evidence" },
     }));
-const completed = (record: ContextSnapshot) =>
-  record.path === "/system-one" &&
-  Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work.length > 0 &&
-  Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work.every(
-    (work) => workStatus(work) === "completed",
-  );
+const completed = (record: { path: string; text: string }) => {
+  if (record.path !== "/system-one") return false;
+  const work = Schema.decodeUnknownSync(
+    Schema.fromJsonString(Schema.Array(Schema.Struct({ status: Schema.String }))),
+  )(record.text);
+  return work.length > 0 && work.every((item) => item.status === "completed");
+};
 const storeFor = (records: Map<string, StoredContext>) => ({
   loadAll: () => [...records.values()],
   save: (record: StoredContext) => {
@@ -81,15 +77,10 @@ const storeFor = (records: Map<string, StoredContext>) => ({
 const candidateDefinition = {
   state: Schema.ObjectKeyword,
   message: Schema.Never,
-  view: contextView({ state: Schema.ObjectKeyword }),
+  serialize: (state: object) => JSON.stringify(state),
 };
-const layerFor = (
-  registry: TestContextRegistry,
-  policy: ReactionPolicy["Service"],
-  slugs = ["review"],
-) =>
+const layerFor = (registry: TestContext, policy: ReactionPolicy["Service"], slugs = ["review"]) =>
   Layer.mergeAll(
-    Layer.succeed(ContextRegistry, registry),
     Layer.succeed(DurableContext, registry.backend),
     Layer.succeed(GoalSettings, { definitions: [] }),
     Layer.succeed(ReactionPolicy, policy),
@@ -101,6 +92,12 @@ const layerFor = (
           if (!registry.get(path))
             yield* registry.commit(
               {
+                text: serializeFixtureState({
+                  status: "active",
+                  version: 1,
+                  trigger: { _tag: "Context", when: slug },
+                  task: { _tag: "Goal", target: "/goals/personal", text: "Review" },
+                }),
                 path,
                 description: slug,
                 messages: [],
@@ -121,22 +118,24 @@ const layerFor = (
 test("System One coalesces retained queued versions without source Actors or live change replay", async () => {
   const records = new Map<string, StoredContext>();
   await Effect.runPromise(
-    Effect.gen(function* () {
-      const registry = yield* makeContextRegistry(storeFor(records));
-      yield* registry.register(source.path, sourceDefinition);
-      yield* registry.commit(source, { expectedRevision: 0 });
-      yield* registry.commit(
-        { ...source, state: { summary: "Second evidence" } },
-        { expectedRevision: 1 },
-      );
-    }),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeTestContext(storeFor(records));
+        yield* registry.register(source.path, sourceDefinition);
+        yield* registry.commit(source, { expectedRevision: 0 });
+        yield* registry.commit(
+          { ...source, state: { summary: "Second evidence" } },
+          { expectedRevision: 1 },
+        );
+      }),
+    ),
   );
   const seen: string[] = [];
   for (const restart of [false, true]) {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry(storeFor(records));
+          const registry = yield* makeTestContext(storeFor(records));
           const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
@@ -144,7 +143,7 @@ test("System One coalesces retained queued versions without source Actors or liv
                 plan: (work) =>
                   Effect.sync(() => {
                     assert.equal(work.event.record.revision, work.event.record.revision);
-                    seen.push((work.event.record.state as { summary: string }).summary);
+                    seen.push(JSON.parse(work.event.record.text).summary);
                     return unmatched(work);
                   }),
                 deliver: () => Effect.die(new Error("No decisions to deliver")),
@@ -168,7 +167,7 @@ test("System One coalesces retained queued versions without source Actors or liv
             1,
           );
           assert.equal("events" in registry.get("/system-one")!, false);
-          const view = JSON.stringify(registry.views.project(registry.get("/system-one")!));
+          const view = JSON.stringify(registry.backend.get("/system-one"));
           assert.equal(
             view.includes("First evidence"),
             false,
@@ -188,7 +187,7 @@ test("a persisted decision survives lost commit acknowledgement without re-scree
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry({
+        const registry = yield* makeTestContext({
           ...storeFor(records),
           save: (record) => {
             records.set(record.snapshot.path, structuredClone(record));
@@ -255,7 +254,7 @@ test("lost receiver acknowledgement replays the frozen decision after restart wi
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry(storeFor(records));
+          const registry = yield* makeTestContext(storeFor(records));
           if (!restart) {
             yield* registry.register(source.path, sourceDefinition);
             yield* registry.commit(source, { expectedRevision: 0 });
@@ -294,9 +293,9 @@ test("lost receiver acknowledgement replays the frozen decision after restart wi
                 change.record.path === "/system-one" &&
                 (restart
                   ? completed(change.record)
-                  : Schema.decodeUnknownSync(ReactionSnapshot)(change.record.state).work.some(
-                      (work) => deliveriesOf(work)[0]?.status === "unknown",
-                    )),
+                  : Schema.decodeUnknownSync(ReactionSnapshot)(
+                      registry.get(change.record.path)!.state,
+                    ).work.some((work) => deliveriesOf(work)[0]?.status === "unknown")),
             ),
             Stream.take(1),
             Stream.runDrain,
@@ -317,7 +316,7 @@ test("interrupted planning reuses its admitted source and catalogue despite late
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry(storeFor(records));
+          const registry = yield* makeTestContext(storeFor(records));
           yield* registry.register(source.path, sourceDefinition);
           if (!restart) yield* registry.commit(source, { expectedRevision: 0 });
           const entered = yield* Deferred.make<void>();
@@ -369,68 +368,80 @@ test("interrupted planning reuses its admitted source and catalogue despite late
 
 test("System One rejects corrupted recovered work before any planning or delivery", async () => {
   await Effect.runPromise(
-    Effect.gen(function* () {
-      const registry = yield* makeContextRegistry();
-      yield* registry.register(source.path, sourceDefinition);
-      yield* registry.commit(source, { expectedRevision: 0 });
-      const event = registry.backend.journal()[0]!;
-      const work: ReactionWork = { event, status: "frozen", targets: [] };
-      const target = {
-        input: { _tag: "Signal", slug: "review", when: "Review", version: 1 },
-        result: { _tag: "Pending" },
-      };
-      for (const invalid of [
-        [work, work],
-        [{ ...work, event: { ...event, id: "forged" } }],
-        [{ ...work, targets: [{ ...target, input: { ...target.input, version: 0 } }] }],
-        [{ ...work, targets: [{ input: { _tag: "Goal" }, result: { _tag: "Pending" } }] }],
-        [{ ...work, targets: [target, target] }],
-        [
-          {
-            ...work,
-            targets: [
-              {
-                ...target,
-                result: {
-                  _tag: "Matched",
-                  reason: "Relevant",
-                  delivery: {
-                    command: proposed(work),
-                    status: "delivered",
-                    attempts: 1,
-                    receipt: { requestId: "other", revision: 2 },
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeTestContext();
+        yield* registry.register(source.path, sourceDefinition);
+        yield* registry.commit(source, { expectedRevision: 0 });
+        const event = registry.backend.journal()[0]!;
+        const work: ReactionWork = { event, status: "frozen", targets: [] };
+        const target = {
+          input: { _tag: "Signal", slug: "review", when: "Review", version: 1 },
+          result: { _tag: "Pending" },
+        };
+        for (const invalid of [
+          [work, work],
+          [{ ...work, event: { ...event, id: "forged" } }],
+          [{ ...work, targets: [{ ...target, input: { ...target.input, version: 0 } }] }],
+          [{ ...work, targets: [{ input: { _tag: "Goal" }, result: { _tag: "Pending" } }] }],
+          [{ ...work, targets: [target, target] }],
+          [
+            {
+              ...work,
+              targets: [
+                {
+                  ...target,
+                  result: {
+                    _tag: "Matched",
+                    reason: "Relevant",
+                    delivery: {
+                      command: proposed(work),
+                      status: "delivered",
+                      attempts: 1,
+                      receipt: { requestId: "other", revision: 2 },
+                    },
                   },
                 },
-              },
-            ],
-          },
-        ],
-      ]) {
-        const recovered = yield* makeContextRegistry({
-          loadAll: () => [
-            {
-              snapshot: {
-                path: "/system-one",
-                description: "Reactions",
-                revision: 1,
-                state: {
-                  work: invalid,
-                  sourceRevisions: { [source.path]: event.record.revision },
-                  recoveryReceipts: [],
-                },
-                messages: [],
-              },
-              events: [],
+              ],
             },
           ],
-          save: () => assert.fail("Corrupted recovery must never rewrite stored state"),
-        });
-        const result = yield* recovered
-          .register("/system-one", { state: ReactionSnapshot, message: Schema.Never })
-          .pipe(Effect.exit);
-        assert.equal(result._tag, "Failure");
-      }
-    }),
+        ]) {
+          const recovered = yield* makeTestContext({
+            loadAll: () => [
+              {
+                snapshot: {
+                  text: serializeFixtureState({
+                    work: invalid,
+                    sourceRevisions: { [source.path]: event.record.revision },
+                    recoveryReceipts: [],
+                  }),
+                  path: "/system-one",
+                  description: "Reactions",
+                  revision: 1,
+                  state: {
+                    work: invalid,
+                    sourceRevisions: { [source.path]: event.record.revision },
+                    recoveryReceipts: [],
+                  },
+                  messages: [],
+                },
+                events: [],
+              },
+            ],
+            save: () => assert.fail("Corrupted recovery must never rewrite stored state"),
+          });
+          const result = yield* recovered.backend
+            .open({
+              path: "/system-one",
+              state: ReactionSnapshot,
+              message: Schema.Never,
+              serialize: () => "",
+            })
+            .pipe(Effect.exit);
+          assert.equal(result._tag, "Failure");
+        }
+      }),
+    ),
   );
 });
 
@@ -442,7 +453,7 @@ test("interrupted delivery attempts stay bounded across restarts and explicit re
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry(storeFor(records));
+          const registry = yield* makeTestContext(storeFor(records));
           if (restart === 0) {
             yield* registry.register(source.path, sourceDefinition);
             yield* registry.commit(source, { expectedRevision: 0 });
@@ -525,7 +536,7 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         yield* registry.register(source.path, sourceDefinition);
         yield* registry.commit(source, { expectedRevision: 0 });
         const admitted: FrozenReaction[] = [];
@@ -609,24 +620,43 @@ for (const retryMatched of [true, false])
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const registry = yield* makeContextRegistry(storeFor(records));
+            const registry = yield* makeTestContext(storeFor(records));
             const definition = {
               state: Schema.ObjectKeyword,
               message: Schema.Never,
-              view: contextView({ state: Schema.ObjectKeyword }),
+              serialize: (state: object) => JSON.stringify(state),
             };
             if (!restart) {
               for (const slug of ["healthy", "broken", "ignored"]) {
                 const path = `/goals/${slug}`;
                 yield* registry.register(path, definition);
                 yield* registry.commit(
-                  { path, description: slug, state: { status: "active" }, messages: [] },
+                  {
+                    text: serializeFixtureState({ status: "active" }),
+                    path,
+                    description: slug,
+                    state: {
+                      definition: { slug, description: slug },
+                      status: "active",
+                      summary: "",
+                      tasks: [],
+                      inputs: [],
+                      receipts: [],
+                    },
+                    messages: [],
+                  },
                   { expectedRevision: 0 },
                 );
               }
               yield* registry.register("/signals/review", definition);
               yield* registry.commit(
                 {
+                  text: serializeFixtureState({
+                    status: "active",
+                    version: 1,
+                    trigger: { _tag: "Context", when: "Review" },
+                    task: { _tag: "Goal", target: "/goals/healthy", text: "Review" },
+                  }),
                   path: "/signals/review",
                   description: "Review",
                   messages: [],
@@ -685,7 +715,6 @@ for (const retryMatched of [true, false])
             });
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
-                Layer.succeed(ContextRegistry, registry),
                 Layer.succeed(DurableContext, registry.backend),
                 Layer.succeed(GoalSettings, {
                   definitions: ["healthy", "broken", "ignored"].map((slug) => ({
@@ -729,7 +758,9 @@ for (const retryMatched of [true, false])
             yield* changes.pipe(
               Stream.filter(({ record }) => {
                 if (record.path !== "/system-one") return false;
-                const work = Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work[0];
+                const work = Schema.decodeUnknownSync(ReactionSnapshot)(
+                  registry.get(record.path)!.state,
+                ).work[0];
                 return (
                   work &&
                   workStatus(work) === (restart ? "completed" : "failed") &&
@@ -740,7 +771,7 @@ for (const retryMatched of [true, false])
               Stream.take(1),
               Stream.runDrain,
             );
-            const inspection = yield* inspectReactions(registry);
+            const inspection = yield* inspectReactions(system);
             assert.equal(inspection.owner, "system-one");
             const matches = inspection.entries.find(
               (entry) => entry.kind === "screening",
@@ -756,10 +787,10 @@ for (const retryMatched of [true, false])
               restart ? (retryMatched ? "Matched" : "NotMatched") : "Failed",
             );
             if (broken._tag === "NotMatched") assert.match(broken.reason, /below threshold/);
-            const view = registry.reader.get("/system-one")!.state as {
-              work: { matches: unknown }[];
-            };
-            assert.deepEqual(view.work[0]!.matches, matches);
+            assert.deepEqual(
+              inspection.entries.find((entry) => entry.kind === "screening")?.matches,
+              matches,
+            );
             assert.ok(!JSON.stringify(inspection).includes("First evidence"));
           }),
         ).pipe(Effect.timeout("5 seconds")),
@@ -781,7 +812,7 @@ test("live coalescing retains in-flight work and the latest queued revision acro
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry(storeFor(records));
+          const registry = yield* makeTestContext(storeFor(records));
           yield* registry.register(source.path, sourceDefinition);
           if (!restart) yield* registry.commit(source, { expectedRevision: 0 });
           const entered = yield* Deferred.make<void>();
@@ -821,9 +852,8 @@ test("live coalescing retains in-flight work and the latest queued revision acro
               Stream.filter(
                 ({ record }) =>
                   record.path === "/system-one" &&
-                  Schema.decodeUnknownSync(ReactionSnapshot)(record.state).sourceRevisions[
-                    source.path
-                  ] === 4,
+                  Schema.decodeUnknownSync(ReactionSnapshot)(registry.get(record.path)!.state)
+                    .sourceRevisions[source.path] === 4,
               ),
               Stream.take(1),
               Stream.runDrain,
@@ -857,7 +887,7 @@ test("slow delivery does not block matching or other targets and delivery concur
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         yield* registry.register(source.path, sourceDefinition);
         yield* registry.commit(source, { expectedRevision: 0 });
         const slow = yield* Deferred.make<void>();
@@ -954,7 +984,7 @@ test("completed history is bounded and source watermarks prevent replay after pr
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry(storeFor(records));
+          const registry = yield* makeTestContext(storeFor(records));
           yield* registry.register(source.path, sourceDefinition);
           const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
@@ -980,7 +1010,9 @@ test("completed history is bounded and source watermarks prevent replay after pr
                 Stream.filter(
                   ({ record }) =>
                     record.path === "/system-one" &&
-                    Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work.some(
+                    Schema.decodeUnknownSync(ReactionSnapshot)(
+                      registry.get(record.path)!.state,
+                    ).work.some(
                       (item) =>
                         item.event.record.revision === revision && workStatus(item) === "completed",
                     ),
@@ -1010,7 +1042,7 @@ test("delivery receipts remain visible during matching retry and survive interru
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry(storeFor(records));
+          const registry = yield* makeTestContext(storeFor(records));
           yield* registry.register(source.path, sourceDefinition);
           if (!restart) yield* registry.commit(source, { expectedRevision: 0 });
           const delivering = yield* Deferred.make<void>();
@@ -1091,13 +1123,15 @@ test("delivery receipts remain visible during matching retry and survive interru
             yield* changes.pipe(
               Stream.filter(({ record }) => {
                 if (record.path !== "/system-one") return false;
-                const work = Schema.decodeUnknownSync(ReactionSnapshot)(record.state).work[0];
+                const work = Schema.decodeUnknownSync(ReactionSnapshot)(
+                  registry.get(record.path)!.state,
+                ).work[0];
                 return work !== undefined && deliveriesOf(work)[0]?.status === "delivered";
               }),
               Stream.take(1),
               Stream.runDrain,
             );
-            const inspection = yield* inspectReactions(registry);
+            const inspection = yield* inspectReactions(system);
             assert.equal(
               inspection.entries.find((entry) => entry.kind === "screening")!.status,
               "planning",
@@ -1135,7 +1169,7 @@ test("an event without eligible targets completes and is not reconsidered on res
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry(storeFor(records));
+          const registry = yield* makeTestContext(storeFor(records));
           yield* registry.register(source.path, sourceDefinition);
           if (!restart) yield* registry.commit(source, { expectedRevision: 0 });
           const policy = yield* makeReactionPolicy({
@@ -1146,13 +1180,13 @@ test("an event without eligible targets completes and is not reconsidered on res
             ActorSystem.provide(layerFor(registry, policy, [])),
           );
           yield* (yield* system.spawn("system-one", SystemOneActor)).awaitStarted;
-          if (!completed(registry.get("/system-one")!))
+          if (!completed(registry.backend.get("/system-one")!))
             yield* changes.pipe(
               Stream.filter(({ record }) => completed(record)),
               Stream.take(1),
               Stream.runDrain,
             );
-          assert.equal((yield* inspectReactions(registry)).entries.length, 1);
+          assert.equal((yield* inspectReactions(system)).entries.length, 1);
           assert.equal(
             Schema.decodeUnknownSync(ReactionSnapshot)(registry.get("/system-one")!.state).work
               .length,

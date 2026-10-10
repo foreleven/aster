@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "../src/testing/context.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Fiber, Schema, Stream } from "effect";
@@ -50,6 +51,7 @@ test("malformed restored Task fails closed before execution or recovery writes",
     Effect.scoped(
       Effect.gen(function* () {
         const record = {
+          text: serializeFixtureState({ status: "checking" }),
           path: "/broken",
           description: "Corrupt Task",
           messages: [],

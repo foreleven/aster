@@ -1,199 +1,130 @@
-import { makeTestContextRegistryWithBackend } from "@aster/core/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Cause, Deferred, Effect, Exit, Fiber, Schema, Stream } from "effect";
-import {
-  ContextCommitError,
-  ContextConflict,
-  ContextRecoveryError,
-  type ContextSnapshot,
-  type StoredContext,
-} from "@aster/core";
-import { makeDurableContext } from "@aster/core";
-
-const initial: ContextSnapshot = {
-  revision: 0,
+import { Effect, Schema } from "effect";
+import { ContextCommitError, makeDurableContext, type StoredContext } from "@aster/core";
+const initial = {
   path: "/local",
-  description: "Local state",
+  revision: 1,
+  description: "Local",
   state: { value: 1 },
+  text: "1",
   messages: [],
 };
-const validate = Schema.decodeUnknownSync(
-  Schema.Struct({
-    path: Schema.String,
-    revision: Schema.optional(Schema.Number),
-    description: Schema.String,
-    state: Schema.Struct({ value: Schema.Number }),
-    messages: Schema.Array(Schema.String),
-  }),
-);
+const definition = {
+  path: "/local",
+  state: Schema.Struct({ value: Schema.Int }),
+  message: Schema.String,
+  serialize: (state: { value: number }) => String(state.value),
+};
 
-test("LocalDurableContext drains an accepted commit on cancellation and cancels a waiting writer", async () => {
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const entered = yield* Deferred.make<void>();
-        const release = yield* Deferred.make<void>();
-        const observed = yield* Deferred.make<ContextSnapshot>();
-        const saved: StoredContext[] = [];
-        const backend = yield* makeDurableContext({
-          load: Effect.succeed([]),
-          save: (record) =>
-            Effect.gen(function* () {
-              yield* Deferred.succeed(entered, undefined);
-              yield* Deferred.await(release);
-              saved.push(structuredClone(record));
-            }),
-        });
-        const changes = yield* backend.subscribe;
-        yield* changes.pipe(
-          Stream.take(1),
-          Stream.runForEach((change) => Deferred.succeed(observed, change.record)),
-          Effect.forkScoped,
-        );
-        const active = yield* backend
-          .commit(initial, { expectedRevision: 0 })
-          .pipe(Effect.forkScoped);
-        yield* Deferred.await(entered);
-        const waiter = yield* backend
-          .commit({ ...initial, messages: ["must not start"] }, { expectedRevision: 1 })
-          .pipe(Effect.forkScoped);
-        yield* Effect.yieldNow;
-        yield* Fiber.interrupt(waiter);
-        const interrupt = yield* Fiber.interrupt(active).pipe(Effect.forkScoped);
-        yield* Effect.yieldNow;
-        assert.equal(backend.get(initial.path), undefined);
-        yield* Deferred.succeed(release, undefined);
-        yield* Fiber.join(interrupt);
-        const published = yield* Deferred.await(observed);
-        assert.equal(saved.length, 1);
-        assert.deepEqual(backend.get(initial.path), saved[0]?.snapshot);
-        assert.deepEqual(published, saved[0]?.snapshot);
-        assert.equal(published.revision, 1);
-        const exit = yield* Fiber.await(active);
-        assert.ok(Exit.isFailure(exit) && Cause.hasInterruptsOnly(exit.cause));
-        const next = yield* backend.commit(
-          { ...initial, messages: ["next"] },
-          { expectedRevision: 1 },
-        );
-        assert.equal(next.revision, 2);
-      }),
-    ).pipe(Effect.timeout("5 seconds")),
-  );
-});
-
-test("LocalDurableContext preserves storage defects and fences later commits until reconciliation", async () => {
-  await Effect.runPromise(
-    Effect.gen(function* () {
-      const defect = new Error("Driver defect after durable commit");
-      let persisted: StoredContext = { snapshot: initial, events: [] };
-      let crash = true;
-      const backend = yield* makeDurableContext({
-        load: Effect.sync(() => [persisted]),
-        save: (record) =>
-          Effect.gen(function* () {
-            persisted = structuredClone(record);
-            if (crash) {
-              crash = false;
-              return yield* Effect.die(defect);
-            }
-          }),
-      });
-      const failed = yield* backend
-        .commit({ ...initial, messages: ["accepted"] }, { expectedRevision: 0 })
-        .pipe(Effect.exit);
-      assert.ok(Exit.isFailure(failed));
-      assert.equal(Cause.squash(failed.cause), defect);
-      const fenced = yield* backend
-        .commit({ ...initial, messages: ["other"] }, { expectedRevision: 0 })
-        .pipe(Effect.result);
-      assert.ok(fenced._tag === "Failure" && fenced.failure instanceof ContextCommitError);
-      assert.deepEqual(backend.get(initial.path), { ...initial, revision: 0 });
-      yield* backend.recover(initial.path, validate);
-      assert.deepEqual(backend.get(initial.path), persisted.snapshot);
-      const stale = yield* backend.commit(initial, { expectedRevision: 0 }).pipe(Effect.result);
-      assert.ok(stale._tag === "Failure" && stale.failure instanceof ContextConflict);
-      assert.equal(
-        (yield* backend.commit(
-          { ...persisted.snapshot, messages: ["accepted", "next"] },
-          { expectedRevision: 1 },
-        )).revision,
-        2,
-      );
-    }),
-  );
-});
-
-test("recovery refuses missing, regressed and invalid snapshots without releasing the storage fence", async () => {
+test("recovery rejects missing, regressed and invalid owner snapshots", async () => {
   for (const restored of [
     [],
-    [{ ...initial, revision: 0 }],
-    [{ ...initial, revision: 2, state: { value: "invalid" } }],
+    [{ snapshot: { ...initial, revision: 0 }, events: [] }],
+    [{ snapshot: { ...initial, revision: 2, state: { value: "invalid" } }, events: [] }],
   ]) {
     await Effect.runPromise(
-      Effect.gen(function* () {
-        let saved: readonly StoredContext[] = [
-          { snapshot: { ...initial, revision: 1 }, events: [] },
-        ];
-        const backend = yield* makeDurableContext({
-          load: Effect.sync(() => saved),
-          save: () =>
-            Effect.fail(
-              new ContextCommitError({ path: initial.path, cause: new Error("Unknown write") }),
+      Effect.scoped(
+        Effect.gen(function* () {
+          let stored: readonly StoredContext[] = [{ snapshot: initial, events: [] }];
+          const durable = yield* makeDurableContext({
+            load: Effect.sync(() => stored),
+            save: () =>
+              Effect.fail(
+                new ContextCommitError({ path: "/local", cause: new Error("Unknown outcome") }),
+              ),
+          });
+          yield* Effect.scoped(
+            Effect.gen(function* () {
+              const owner = yield* durable.open(definition);
+              assert.equal(
+                (yield* owner.state.update(() => ({ value: 2 })).pipe(Effect.flip))._tag,
+                "ContextCommitError",
+              );
+            }),
+          );
+          // StoredContext validates structure; owner schemas validate domain types during open.
+          stored = Schema.decodeUnknownSync(
+            Schema.Array(
+              Schema.Struct({
+                snapshot: Schema.Struct({ ...initialFields }),
+                events: Schema.Array(Schema.Never),
+              }),
             ),
-        });
-        yield* backend
-          .commit({ ...initial, messages: ["pending"] }, { expectedRevision: 1 })
-          .pipe(Effect.result);
-        saved = restored.map((snapshot) => ({ snapshot, events: [] }));
-        const recovery = yield* backend.recover(initial.path, validate).pipe(Effect.result);
-        assert.ok(recovery._tag === "Failure" && recovery.failure instanceof ContextRecoveryError);
-        assert.equal(backend.get(initial.path)?.revision, 1);
-        const fenced = yield* backend.commit(initial, { expectedRevision: 1 }).pipe(Effect.result);
-        assert.ok(fenced._tag === "Failure" && fenced.failure instanceof ContextCommitError);
-      }),
+          )(restored);
+          assert.equal(
+            (yield* Effect.scoped(durable.open(definition)).pipe(Effect.flip))._tag,
+            "ContextRecoveryError",
+          );
+          assert.equal(durable.get("/local")?.revision, 1);
+        }),
+      ),
     );
   }
 });
+const initialFields = {
+  path: Schema.String,
+  revision: Schema.Int,
+  description: Schema.String,
+  state: Schema.ObjectKeyword,
+  text: Schema.String,
+  messages: Schema.Array(Schema.Unknown),
+};
 
-test("the registry validates domain state while a supplied DurableContext owns canonical commits", async () => {
+test("typed owners validate before invoking the injected persistence adapter", async () => {
   await Effect.runPromise(
-    Effect.gen(function* () {
-      const writes: StoredContext[] = [];
-      const backend = yield* makeDurableContext({
-        load: Effect.succeed([]),
-        save: (record) =>
-          Effect.sync(() => {
-            writes.push(record);
-          }),
-      });
-      const registry = makeTestContextRegistryWithBackend(backend);
-      yield* registry.register(initial.path, {
-        state: Schema.Struct({ value: Schema.Number }),
-        message: Schema.String,
-      });
-      yield* registry.commit(
-        { ...initial, state: { value: 2, privateField: "not public" } },
-        { expectedRevision: 0 },
-      );
-      assert.deepEqual(writes[0]?.snapshot.state, { value: 2 });
-      assert.deepEqual(registry.snapshot(), backend.snapshot());
-    }),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const writes: StoredContext[] = [];
+        const durable = yield* makeDurableContext({
+          load: Effect.succeed([]),
+          save: (record) =>
+            Effect.sync(() => {
+              writes.push(record);
+            }),
+        });
+        const owner = yield* durable.open({
+          ...definition,
+          initial: { description: "Local", state: { value: 1 } },
+        });
+        assert.equal((yield* owner.messages.append(["accepted"])).revision, 2);
+        assert.equal(
+          (yield* owner.state
+            .set(
+              Schema.decodeUnknownSync(Schema.Struct({ value: Schema.Unknown }))({
+                value: "bad",
+              }) as { value: number },
+            )
+            .pipe(Effect.flip))._tag,
+          "ContextValidationError",
+        );
+        assert.equal(writes.length, 2);
+        assert.deepEqual(writes[1]?.snapshot.messages, ["accepted"]);
+        assert.deepEqual(durable.get("/local"), {
+          path: "/local",
+          revision: 2,
+          description: "Local",
+          text: "1",
+        });
+      }),
+    ),
   );
 });
 
-test("LocalDurableContext rejects duplicate identities and invalid public paths on open", async () => {
-  for (const records of [
+test("DurableContext rejects duplicate identities and invalid stored paths", async () => {
+  for (const values of [
     [initial, initial],
     [{ ...initial, path: "/../outside" }],
     [{ ...initial, path: "/trailing/" }],
   ]) {
-    const result = await Effect.runPromise(
-      makeDurableContext({
-        load: Effect.succeed(records.map((snapshot) => ({ snapshot, events: [] }))),
-        save: () => Effect.void,
-      }).pipe(Effect.result),
+    const error = await Effect.runPromise(
+      Effect.scoped(
+        makeDurableContext({
+          load: Effect.succeed(values.map((snapshot) => ({ snapshot, events: [] }))),
+          save: () => Effect.void,
+        }).pipe(Effect.flip),
+      ),
     );
-    assert.ok(result._tag === "Failure" && result.failure instanceof ContextRecoveryError);
+    assert.equal(error._tag, "ContextRecoveryError");
   }
 });

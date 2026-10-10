@@ -1,9 +1,11 @@
+import { loadTaskState } from "../../tasks/queries.js";
+import { goalBusinessState } from "../view.js";
 import { TaskSnapshot } from "../../tasks/state/snapshot.js";
 import { makeGoalStore } from "./store.js";
 import type { GoalSnapshot, StoredGoalInput } from "./snapshot.js";
 import { goalInputs } from "./inputs.js";
 import { goalAdmission } from "./admission.js";
-import { ContextRegistry } from "../../context/registry.js";
+import { DurableContext } from "../../context/store.js";
 import type { GoalDefinition } from "../../config/schema.js";
 import { Context, Effect, Layer, Match, Ref, Result, Schema, Semaphore } from "effect";
 import { ApplicationError } from "../../operations.js";
@@ -16,7 +18,7 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
   path: string,
   definition: GoalDefinition,
 ) {
-  const registry = yield* ContextRegistry;
+  const registry = yield* DurableContext;
   const messages = yield* AgentConversations;
   const initial: GoalSnapshot = {
     definition,
@@ -46,11 +48,7 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
   const belongsToGoal = (task: TaskSnapshot) =>
     task.admission.source === path || task.admission.replyTo === path;
   const attachTask = Effect.fn("GoalState.attachTask")(function* (taskPath: string) {
-    const task = yield* Schema.decodeUnknownEffect(TaskSnapshot)(
-      registry.get(taskPath)?.state,
-    ).pipe(
-      Effect.mapError(() => new ApplicationError({ kind: "not-found", message: "Task not found" })),
-    );
+    const task = yield* loadTaskState(registry, taskPath);
     if (!Schema.is(TaskPath)(taskPath) || !belongsToGoal(task))
       return yield* new ApplicationError({
         kind: "conflict",
@@ -79,12 +77,15 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
     yield* save({
       definition,
       // Task admission is authoritative if its Goal attachment was interrupted.
-      tasks: Object.values(registry.snapshot()).flatMap((record) =>
-        Schema.is(TaskPath)(record.path) &&
-        belongsToGoal(Schema.decodeUnknownSync(TaskSnapshot)(record.state))
-          ? [record.path]
-          : [],
-      ),
+      tasks: (yield* Effect.forEach(
+        registry.directory().filter(({ path }) => Schema.is(TaskPath)(path)),
+        ({ path }) =>
+          loadTaskState(registry, path).pipe(
+            Effect.map((task) => (belongsToGoal(task) ? [path] : [])),
+            Effect.orDie,
+          ),
+        { concurrency: 4 },
+      )).flat(),
       inputs: recovered.inputs.map((input) =>
         recovered.status === "active" && input.status === "unknown"
           ? { ...input, status: "running" }
@@ -173,13 +174,26 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
     read,
     inspect: Effect.gen(function* () {
       const state = yield* read;
-      return { goal: state.definition, state: registry.reader.get(path)!.state };
+      return { goal: state.definition, state: goalBusinessState(state) };
     }),
-    listTasks: Effect.map(read, (state) =>
-      state.tasks.flatMap((path) => {
-        const task = registry.reader.get(path);
-        return task ? [task] : [];
-      }),
+    listTasks: read.pipe(
+      Effect.flatMap((state) =>
+        Effect.forEach(state.tasks, (path) =>
+          loadTaskState(registry, path).pipe(
+            Effect.map((task) => ({
+              path,
+              state: {
+                status: task.status,
+                sourcePath: task.admission.source,
+                replyTo: task.admission.replyTo,
+                agent: task.admission.agent,
+                inputs: task.inputs.length,
+              },
+            })),
+            Effect.orDie,
+          ),
+        ),
+      ),
     ),
     attachTask: (taskPath: string) => mutate(attachTask(taskPath)),
     accept: (...args: Parameters<typeof accept>) => mutate(accept(...args)),

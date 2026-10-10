@@ -29,3 +29,7 @@ export const messageFingerprint = (message: ChatMessage) =>
   createHash("sha256")
     .update(JSON.stringify(publicChatMessage(message)))
     .digest("hex");
+
+/** Source edits are new observations; Context message family members stay immutable. */
+export const observationKey = (message: ChatMessage) =>
+  `${message.id}:${messageFingerprint(message)}`;

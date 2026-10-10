@@ -1,10 +1,11 @@
+import { publicJson } from "../json.js";
 import { goalQueryData } from "./view.js";
 import { Command, type ActorContext, type ActorRef } from "@aster/actor";
 import { Context, Deferred, Effect, Layer, Match, Ref, Result, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 import { GoalSettings } from "../config/settings.js";
 import { ContextActor, contextPath } from "../context/actor.js";
-import { ContextRegistry } from "../context/registry.js";
+import { DurableContext } from "../context/store.js";
 import { CurrentActors } from "../services/actors.js";
 import type { SignalRootCommand } from "../signals/protocol.js";
 import { cancelGoalTasks } from "../tasks/delivery.js";
@@ -29,7 +30,7 @@ export const GoalActor = ContextActor.define("goals/Actor", {
   Effect.gen(function* () {
     const agent = yield* GoalAgent;
     const scope = yield* Effect.scope;
-    const registry = yield* ContextRegistry;
+    const registry = yield* DurableContext;
     const settings = yield* GoalSettings;
     const incarnation = randomUUID();
     // Only lifecycle/mailbox handlers access these refs. Workers return through pipeToSelf.
@@ -213,7 +214,7 @@ export const GoalActor = ContextActor.define("goals/Actor", {
     const services = yield* Layer.buildWithScope(
       GoalState.layer(contextPath(owner), definition),
       scope,
-    );
+    ).pipe(Effect.provideService(CurrentActors, owner));
     const model = Context.get(services, GoalState);
 
     return {
@@ -222,6 +223,11 @@ export const GoalActor = ContextActor.define("goals/Actor", {
       receive: (command, context) =>
         Effect.gen(function* () {
           yield* Match.value(command).pipe(
+            Match.tag("GetGoalSnapshot", ({ replyTo }) =>
+              Effect.gen(function* () {
+                yield* replyTo.tell(publicJson(yield* model.read));
+              }),
+            ),
             Match.tag("GetGoalDetails", ({ detail, replyTo }) =>
               Command.reply(
                 replyTo,

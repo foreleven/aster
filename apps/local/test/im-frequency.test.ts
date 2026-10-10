@@ -20,7 +20,7 @@ const message = {
   deleted: false,
 };
 
-// Actor timing and recovery are tested against ContextSession in the integration package.
+// Actor timing and recovery are tested against DurableContext handles in the integration package.
 test("hourly catch-up bounds every successful window", async () => {
   const now = Date.parse("2026-09-29T02:20:00Z");
   const windows: [string, string][] = [];
@@ -35,7 +35,7 @@ test("hourly catch-up bounds every successful window", async () => {
   let startup = true;
   for (let i = 0; i < 20; i++) {
     const result = await Effect.runPromise(
-      pollChats(client, cursor, now, startup, dayStart("2026-09-29")),
+      Effect.scoped(pollChats(client, cursor, now, startup, dayStart("2026-09-29"))),
     );
     assert.ok(Date.parse(result.through) - Date.parse(result.start) <= 3600000);
     if (cursor) assert.ok(Date.parse(result.through) > Date.parse(cursor));
@@ -126,11 +126,14 @@ test("System One handles sparse important messages and rejects invalid decisions
         return { answers: { summarize: { type: "choice", choice: "yes" } } };
       }),
   });
-  assert.equal(await Effect.runPromise(gate.needed({ path, chat, messages: [message] })), true);
+  assert.equal(
+    await Effect.runPromise(Effect.scoped(gate.needed({ path, chat, messages: [message] }))),
+    true,
+  );
   assert.match(captured, /single important message/);
   const invalid = makeImSummaryGate({ systemOne: () => Effect.sync(() => ({ answers: {} })) });
   await assert.rejects(
-    Effect.runPromise(invalid.needed({ path, chat, messages: [message] })),
+    Effect.runPromise(Effect.scoped(invalid.needed({ path, chat, messages: [message] }))),
     /valid summary decision/,
   );
 });

@@ -1,4 +1,3 @@
-import { imChannelView } from "../public-views.js";
 import { LarkConfig } from "../config.js";
 import { ImSnapshot } from "./channel/snapshot.js";
 import { LarkChatService } from "./service/chat-service.js";
@@ -6,7 +5,7 @@ import { CommandProcessor, type ActorContext, type ActorRef } from "@aster/actor
 import {
   childActorName,
   ContextActor,
-  ContextSession,
+  DurableContext,
   contextPath,
   spawnContextChild,
 } from "@aster/core";
@@ -39,16 +38,18 @@ export const LarkImActor = ContextActor.define("lark/ImActor", {
     const cli = yield* LarkChatService;
     const processor = yield* CommandProcessor.make({ concurrency: 2 });
     const config = yield* LarkConfig;
-    const session = yield* ContextSession.make({
-      path: contextPath(owner),
-      state: ImSnapshot,
-      message: Schema.Never,
-      view: imChannelView,
-      initial: {
-        description: config.im?.description || "My work Lark messages",
-        state: { ready: false, chats: 0 },
-      },
-    }).pipe(Effect.orDie);
+    const session = yield* (yield* DurableContext)
+      .open({
+        path: contextPath(owner),
+        state: ImSnapshot,
+        message: Schema.Never,
+        serialize: (state) => JSON.stringify(state),
+        initial: {
+          description: config.im?.description || "My work Lark messages",
+          state: { ready: false, chats: 0 },
+        },
+      })
+      .pipe(Effect.orDie);
     const state = yield* makeImState(session);
     const busy = yield* Ref.make(false);
     const schedule = (context: ActorContext<ImCommand>) =>

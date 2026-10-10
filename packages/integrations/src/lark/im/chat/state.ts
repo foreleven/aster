@@ -1,9 +1,15 @@
 import { isDeepStrictEqual } from "node:util";
-import type { ContextSession } from "@aster/core";
+import type { ContextHandle } from "@aster/core";
 import { Clock, Effect, Struct } from "effect";
 import { publicChatMessage, ChatMessage, type ChatBatch } from "../service/model.js";
 import { formatDate, dayStart } from "../service/dates.js";
-import { messageFingerprint, type ChatWork, ChatSnapshot, type SummaryCommit } from "./snapshot.js";
+import {
+  messageFingerprint,
+  observationKey,
+  type ChatWork,
+  ChatSnapshot,
+  type SummaryCommit,
+} from "./snapshot.js";
 
 const retainReceipts = (state: ChatSnapshot, pending: ReadonlySet<string>): ChatSnapshot => ({
   ...state,
@@ -18,7 +24,7 @@ const retainReceipts = (state: ChatSnapshot, pending: ReadonlySet<string>): Chat
 });
 
 /** The mailbox owns every mutation; model workers receive detached evidence. */
-export const makeChatState = (session: ContextSession<ChatSnapshot, ChatMessage>) => {
+export const makeChatState = (session: ContextHandle<ChatSnapshot, ChatMessage>) => {
   const { path } = session;
   const work = session.snapshot.pipe(
     Effect.map(({ state, messages }): ChatWork => ({
@@ -70,11 +76,11 @@ export const makeChatState = (session: ContextSession<ChatSnapshot, ChatMessage>
             const incoming = new Map(
               batch.messages.map((message) => [message.id, publicChatMessage(message)]),
             );
-            const upsert = [...incoming.values()].filter(
+            const append = [...incoming.values()].filter(
               (message) =>
                 current.state.seen[message.id]?.fingerprint !== messageFingerprint(message),
             );
-            changed = upsert.length > 0;
+            changed = append.length > 0;
             return {
               state: {
                 ...current.state,
@@ -82,14 +88,14 @@ export const makeChatState = (session: ContextSession<ChatSnapshot, ChatMessage>
                 seen: {
                   ...current.state.seen,
                   ...Object.fromEntries(
-                    upsert.map((message) => [
+                    append.map((message) => [
                       message.id,
                       { fingerprint: messageFingerprint(message), at: message.at },
                     ]),
                   ),
                 },
               },
-              messages: { upsert },
+              messages: { append },
             };
           },
           {
@@ -107,7 +113,7 @@ export const makeChatState = (session: ContextSession<ChatSnapshot, ChatMessage>
           (current) => ({
             state: retainReceipts(
               { ...current.state, replayFrom: from },
-              new Set(Object.keys(current.messages)),
+              new Set(current.messages.map((message) => message.id)),
             ),
           }),
           { mode: "bootstrap" },
@@ -116,12 +122,12 @@ export const makeChatState = (session: ContextSession<ChatSnapshot, ChatMessage>
     }),
     commit: Effect.fn("ChatState.commit")(function* (result: SummaryCommit) {
       const previous = yield* session.state.get.pipe(Effect.orDie);
-      const covered = new Map(result.batch.map((message) => [message.id, message]));
+      const covered = new Set(result.batch.map(observationKey));
       yield* session
         .commit(
           (current) => {
             const pending = Object.values(current.messages).filter(
-              (message) => !isDeepStrictEqual(covered.get(message.id), message),
+              (message) => !covered.has(observationKey(message)),
             );
             const flushThrough = current.state.flushThrough;
             return {
@@ -136,7 +142,7 @@ export const makeChatState = (session: ContextSession<ChatSnapshot, ChatMessage>
                 },
                 new Set(pending.map((message) => message.id)),
               ),
-              messages: { removeUnchanged: result.batch },
+              messages: { remove: [...covered] },
             };
           },
           { mode: isDeepStrictEqual(previous.summary, result.rolling) ? "bootstrap" : "update" },

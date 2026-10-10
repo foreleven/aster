@@ -1,3 +1,5 @@
+import { serializeFixtureState } from "../src/testing/context.js";
+import { testApprovalEntries } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { AgentError, type AgentResult, type AssistantMessage } from "@aster/agent";
@@ -14,7 +16,6 @@ import type { GoalSubmission } from "../src/goals/protocol.js";
 import {
   ApprovalQueueActor,
   ContextQueries,
-  ContextRegistry,
   ExternalAgents,
   GoalSettings,
   GoalSnapshot,
@@ -23,11 +24,10 @@ import {
   SignalRootActor,
   SignalSnapshot,
   TasksRootActor,
-  approvalEntries,
   type GoalCommandReply,
   type StoredContext,
 } from "../src/index.js";
-import { makeContextRegistry, type ContextStore } from "../src/testing/context.js";
+import { makeTestContext, type ContextStore } from "../src/testing/context.js";
 import { fakeAgent } from "./fixtures.js";
 import {
   agentResult,
@@ -54,15 +54,12 @@ const setup = Effect.fnUntraced(function* (
     history?: ReturnType<typeof testConversations>;
   } = {},
 ) {
-  const registry = yield* makeContextRegistry(options.store);
+  const registry = yield* makeTestContext(options.store);
   const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
   const conversations = options.history ?? testConversations();
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
-      Layer.merge(
-        Layer.succeed(ContextRegistry, registry),
-        Layer.succeed(DurableContext, registry.backend),
-      ),
+      Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
       Layer.succeed(ContextQueries, queries),
 
       emptyRecall,
@@ -923,11 +920,11 @@ test("Tasks execute independently through shared Run approval and return feedbac
         },
       );
       yield* env.wait(() =>
-        approvalEntries(env.registry).some((entry) => entry.status === "pending"),
+        testApprovalEntries(env.registry).some((entry) => entry.status === "pending"),
       );
       assert.equal(submissions, 0);
       yield* env.wait(() => env.state().inputs[0]!.status === "completed");
-      const approval = approvalEntries(env.registry)[0]!;
+      const approval = testApprovalEntries(env.registry)[0]!;
       yield* env.approvals.ask((replyTo) => ({
         _tag: "Resolve",
         id: approval.id,
@@ -958,7 +955,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
       assert.deepEqual(env.state().tasks, [approval.contextPath]);
       assert.deepEqual(
         Schema.decodeUnknownSync(Schema.Struct({ tasks: Schema.Array(Schema.String) }))(
-          env.registry.reader.get("/goals/project")!.state,
+          env.registry.get("/goals/project")!.state,
         ).tasks,
         [approval.contextPath],
       );
@@ -1047,9 +1044,9 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
         },
       );
       yield* env.wait(() =>
-        approvalEntries(env.registry).some((entry) => entry.status === "pending"),
+        testApprovalEntries(env.registry).some((entry) => entry.status === "pending"),
       );
-      const approval = approvalEntries(env.registry)[0]!;
+      const approval = testApprovalEntries(env.registry)[0]!;
       yield* env.approvals.ask((replyTo) => ({
         _tag: "Resolve",
         id: approval.id,
@@ -1135,7 +1132,7 @@ test("an ended Goal retains uncertain delivery on restart without restarting Pi"
   );
 });
 
-test("Goal receipts normalize nested object keys, retain array order and omit duplicate payloads", async () => {
+test("Goal receipts normalize envelope keys, retain exact serialized evidence and omit duplicate payloads", async () => {
   await run(
     Effect.gen(function* () {
       const env = yield* setup(() => Effect.succeed({ messages: [] }));
@@ -1146,6 +1143,7 @@ test("Goal receipts normalize nested object keys, retain array order and omit du
         task: { _tag: "Goal" as const, target: "/goals/project", text: "Review" },
         remainingAgentTurns: 2,
         evidence: {
+          text: serializeFixtureState({ first: 1, nested: { a: 2, b: 3 }, items: [1, 2] }),
           revision: 1,
           path: "/source",
           description: "Evidence",
@@ -1168,7 +1166,10 @@ test("Goal receipts normalize nested object keys, retain array order and omit du
       );
       const changed = {
         ...reordered,
-        evidence: { ...reordered.evidence, state: { ...reordered.evidence.state, items: [2, 1] } },
+        evidence: {
+          ...reordered.evidence,
+          text: JSON.stringify({ first: 1, nested: { a: 2, b: 3 }, items: [2, 1] }),
+        },
       };
       assert.equal(
         (yield* env.submit(delivery.requestId, { _tag: "TaskMessage", delivery: changed }))._tag,

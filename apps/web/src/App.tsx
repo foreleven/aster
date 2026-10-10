@@ -98,7 +98,7 @@ export default function App() {
             ) : view ? (
               <Collection key={view} view={view} contexts={contexts} navigate={navigate} />
             ) : active ? (
-              kindOf(active.path) === "goal" && active.projection?.visibility !== "restricted" ? (
+              kindOf(active.path) === "goal" ? (
                 <GoalWorkspace
                   key={active.path}
                   goal={active}

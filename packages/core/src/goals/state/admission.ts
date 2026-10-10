@@ -1,17 +1,18 @@
+import { loadTaskState } from "../../tasks/queries.js";
 import { goalInputs, goalInputId } from "./inputs.js";
 import { goalRequestFingerprint, type GoalRequestData, type GoalReceipt } from "../protocol.js";
-import type { ContextRegistry } from "../../context/registry.js";
+import type { DurableContext } from "../../context/store.js";
 import type { AgentConversations } from "@aster/agent/harness";
 import type { GoalStore } from "./store.js";
 import { ApplicationError } from "../../operations.js";
-import { RemainingAgentTurns, TaskPath } from "../../tasks/contracts.js";
+import { TaskPath } from "../../tasks/contracts.js";
 
 import { Effect, Match, Schema } from "effect";
 import { validateTaskMessage } from "../../tasks/state/admission.js";
 
 /** Private admission rules run within the owning GoalState mutation. */
 export const goalAdmission = (
-  registry: ContextRegistry["Service"],
+  registry: DurableContext["Service"],
   working: GoalStore,
   history: AgentConversations["Service"],
 ) => {
@@ -118,22 +119,7 @@ export const goalAdmission = (
               kind: "invalid-input",
               message: "Invalid feedback Task path",
             });
-          const run = yield* Schema.decodeUnknownEffect(
-            Schema.Struct({
-              admission: Schema.Struct({
-                replyTo: Schema.String,
-                remainingAgentTurns: RemainingAgentTurns,
-              }),
-            }),
-          )(registry.get(input.taskPath)?.state).pipe(
-            Effect.mapError(
-              () =>
-                new ApplicationError({
-                  kind: "invalid-input",
-                  message: "Execution feedback Task is missing or invalid",
-                }),
-            ),
-          );
+          const run = yield* loadTaskState(registry, input.taskPath);
           if (run.admission.replyTo !== current.path)
             return yield* new ApplicationError({
               kind: "invalid-input",

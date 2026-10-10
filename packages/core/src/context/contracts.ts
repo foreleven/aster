@@ -1,18 +1,12 @@
 import { Schema } from "effect";
-export const PublicContext = Schema.Struct({
-  projection: Schema.optional(
-    Schema.Struct({
-      visibility: Schema.Literals(["public", "restricted"]),
-      reason: Schema.optional(Schema.Literals(["missing-policy", "invalid-data"])),
-    }),
-  ),
+/** Generic evidence contains serialized State only; business APIs own structured data. */
+export const ContextText = Schema.Struct({
   path: Schema.String,
   revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
   description: Schema.String,
-  state: Schema.ObjectKeyword,
-  messages: Schema.Array(Schema.Unknown),
+  text: Schema.String,
 });
-export type PublicContext = typeof PublicContext.Type;
+export type ContextText = typeof ContextText.Type;
 
 /** Query adapters accept named scalar arguments, never shell text. */
 export const ContextQueryInput = Schema.Struct({

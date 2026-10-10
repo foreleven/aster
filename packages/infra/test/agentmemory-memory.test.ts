@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "@aster/core/testing";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -159,6 +160,7 @@ test("session ends only after compression; search provenance survives reopening"
   let client = makeMemoryClient(connection, fakeFetch);
   try {
     const record = {
+      text: serializeFixtureState({ name: "Alice" }),
       path: "/lark",
       revision: 1,
       description: "My work account",
@@ -301,7 +303,7 @@ test("failed compression leaves its session open and reports failure", async () 
     await assert.rejects(
       client.capture({
         sessionId: "failed",
-        records: [{ path: "/x", revision: 1, description: "x", state: {}, messages: [] }],
+        records: [{ text: serializeFixtureState({}), path: "/x", revision: 1, description: "x" }],
       }),
       /timed out/,
     );

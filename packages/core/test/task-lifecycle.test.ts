@@ -1,7 +1,9 @@
+import { serializeFixtureState } from "../src/testing/context.js";
+import { testApprovalEntries } from "../src/testing/context.js";
 import { Deferred, Effect, Fiber, Schema, Stream } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { approvalEntries, DEFAULT_EXECUTOR_PROMPT } from "../src/index.js";
+import { DEFAULT_EXECUTOR_PROMPT } from "../src/index.js";
 import { SignalRootActor } from "../src/signals/root.js";
 import { TaskDeliveryInput } from "../src/tasks/contracts.js";
 import type { TaskAdmissionReply } from "../src/tasks/protocol.js";
@@ -80,7 +82,7 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
         replyTo,
       }));
       assert.equal(resume._tag, "Rejected");
-      yield* env.wait(() => approvalEntries(env.registry).length === 1);
+      yield* env.wait(() => testApprovalEntries(env.registry).length === 1);
       const decide = () =>
         env.approvals.ask((replyTo) => ({
           _tag: "Resolve",
@@ -139,11 +141,10 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
         target,
         version: 1,
         sourceContext: {
+          text: serializeFixtureState({ text: "frozen" }),
           path: "/source",
           description: "Evidence",
           revision: 1,
-          state: { text: "frozen" },
-          messages: [],
         },
       };
       const accepted = yield* signals.ask((replyTo) => ({

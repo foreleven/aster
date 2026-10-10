@@ -33,30 +33,32 @@ test("local provider precedence, exact credentials and config-relative locations
       overrides,
     });
     await Effect.runPromise(
-      Effect.gen(function* () {
-        assert.equal(yield* port, expected);
-        assert.equal((yield* ConfigLocation).baseDir, dir);
-        assert.deepEqual((yield* signalSettings)[0]!.task, {
-          _tag: "Goal",
-          target: "/goals/personal",
-          text: "Keep ${UNEXPANDED}",
-        });
-        const provider = yield* ConfigProvider.ConfigProvider;
-        const secret = yield* secretConfig("${TEST_SECRET}", provider);
-        assert.equal(String(secret), "<redacted>");
-        assert.equal(Redacted.value(secret), "dotenv-secret");
-        assert.equal(
-          yield* Config.schema(Schema.Int, [
-            "contexts",
-            "/lark",
-            "children",
-            "/im",
-            "config",
-            "pollIntervalMs",
-          ]),
-          900000,
-        );
-      }).pipe(Effect.provide(layer)),
+      Effect.scoped(
+        Effect.gen(function* () {
+          assert.equal(yield* port, expected);
+          assert.equal((yield* ConfigLocation).baseDir, dir);
+          assert.deepEqual((yield* signalSettings)[0]!.task, {
+            _tag: "Goal",
+            target: "/goals/personal",
+            text: "Keep ${UNEXPANDED}",
+          });
+          const provider = yield* ConfigProvider.ConfigProvider;
+          const secret = yield* secretConfig("${TEST_SECRET}", provider);
+          assert.equal(String(secret), "<redacted>");
+          assert.equal(Redacted.value(secret), "dotenv-secret");
+          assert.equal(
+            yield* Config.schema(Schema.Int, [
+              "contexts",
+              "/lark",
+              "children",
+              "/im",
+              "config",
+              "pollIntervalMs",
+            ]),
+            900000,
+          );
+        }).pipe(Effect.provide(layer)),
+      ),
     );
   }
   assert.equal(
@@ -67,14 +69,16 @@ test("local provider precedence, exact credentials and config-relative locations
   for (const invalid of ["bad", ""]) {
     await assert.rejects(
       Effect.runPromise(
-        port.pipe(
-          Effect.provide(
-            LocalConfig.layer({
-              configPath,
-              envPath,
-              projectRoot: dir,
-              environment: { ASTER_HTTP_PORT: invalid },
-            }),
+        Effect.scoped(
+          port.pipe(
+            Effect.provide(
+              LocalConfig.layer({
+                configPath,
+                envPath,
+                projectRoot: dir,
+                environment: { ASTER_HTTP_PORT: invalid },
+              }),
+            ),
           ),
         ),
       ),
@@ -83,9 +87,11 @@ test("local provider precedence, exact credentials and config-relative locations
   await rm(envPath);
   assert.equal(
     await Effect.runPromise(
-      port.pipe(
-        Effect.provide(
-          LocalConfig.layer({ configPath, envPath, projectRoot: dir, environment: {} }),
+      Effect.scoped(
+        port.pipe(
+          Effect.provide(
+            LocalConfig.layer({ configPath, envPath, projectRoot: dir, environment: {} }),
+          ),
         ),
       ),
     ),
@@ -94,9 +100,11 @@ test("local provider precedence, exact credentials and config-relative locations
   await writeFile(configPath, "invalid: [");
   await assert.rejects(
     Effect.runPromise(
-      port.pipe(
-        Effect.provide(
-          LocalConfig.layer({ configPath, envPath, projectRoot: dir, environment: {} }),
+      Effect.scoped(
+        port.pipe(
+          Effect.provide(
+            LocalConfig.layer({ configPath, envPath, projectRoot: dir, environment: {} }),
+          ),
         ),
       ),
     ),
@@ -112,23 +120,25 @@ test("module settings read structured provider values and disabled decisions nee
     }),
   );
   await Effect.runPromise(
-    Effect.gen(function* () {
-      assert.deepEqual(
-        (yield* GoalSettings).definitions.map((goal) => goal.slug),
-        ["personal"],
-      );
-      assert.equal((yield* SystemOneClient).configured, false);
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(GoalSettings.layer, SystemOneClientLive.layer).pipe(
-          Layer.provide(
-            Layer.mergeAll(
-              config,
-              Layer.succeed(ConfigLocation, {
-                baseDir: "/tmp",
-                projectRoot: "/tmp",
-                envPath: "/tmp/.env",
-              }),
+    Effect.scoped(
+      Effect.gen(function* () {
+        assert.deepEqual(
+          (yield* GoalSettings).definitions.map((goal) => goal.slug),
+          ["personal"],
+        );
+        assert.equal((yield* SystemOneClient).configured, false);
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(GoalSettings.layer, SystemOneClientLive.layer).pipe(
+            Layer.provide(
+              Layer.mergeAll(
+                config,
+                Layer.succeed(ConfigLocation, {
+                  baseDir: "/tmp",
+                  projectRoot: "/tmp",
+                  envPath: "/tmp/.env",
+                }),
+              ),
             ),
           ),
         ),
@@ -147,18 +157,20 @@ test("executor environments use captured private keys even after dotenv changes"
   await writeFile(configPath, "{}");
   await writeFile(envPath, "PROJECT_SECRET=private\n");
   const captured = await Effect.runPromise(
-    ProcessEnvironment.pipe(
-      Effect.provide(
-        LocalConfig.layer({
-          configPath,
-          envPath,
-          projectRoot: dir,
-          environment: {
-            PATH: "/captured/bin",
-            DOUBAO_CDP_ENDPOINT: "http://captured:9226",
-            ASTER_HTTP_PORT: "9000",
-          },
-        }),
+    Effect.scoped(
+      ProcessEnvironment.pipe(
+        Effect.provide(
+          LocalConfig.layer({
+            configPath,
+            envPath,
+            projectRoot: dir,
+            environment: {
+              PATH: "/captured/bin",
+              DOUBAO_CDP_ENDPOINT: "http://captured:9226",
+              ASTER_HTTP_PORT: "9000",
+            },
+          }),
+        ),
       ),
     ),
   );
@@ -177,7 +189,9 @@ test("System One resolves credential references exactly once in its Layer", asyn
     }),
   );
   const client = await Effect.runPromise(
-    SystemOneClient.pipe(Effect.provide(SystemOneClientLive.layer.pipe(Layer.provide(sources)))),
+    Effect.scoped(
+      SystemOneClient.pipe(Effect.provide(SystemOneClientLive.layer.pipe(Layer.provide(sources)))),
+    ),
   );
   assert.equal(client.configured, true);
 });

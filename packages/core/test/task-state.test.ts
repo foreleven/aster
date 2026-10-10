@@ -1,20 +1,23 @@
-import type { TestContextRegistry } from "@aster/core/testing";
+import { observeContextWrites } from "../src/testing/context.js";
+import { CurrentActors } from "../src/services/actors.js";
+import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { AgentConversations } from "@aster/agent/harness";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ContextRegistry, ExternalAgents, TaskSnapshot } from "../src/index.js";
+import { ExternalAgents, TaskSnapshot } from "../src/index.js";
 import { TaskState } from "../src/tasks/state/model.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext, testActors } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { retainedTask, taskInput } from "./task-fixtures.js";
 
-const openTask = (registry: TestContextRegistry, history: AgentConversations["Service"]) =>
+const openTask = (registry: TestContext, history: AgentConversations["Service"]) =>
   Layer.build(TaskState.layer(taskInput().target)).pipe(
     Effect.map((services) => Context.get(services, TaskState)),
-    Effect.provideService(ContextRegistry, registry),
+
     Effect.provideService(DurableContext, registry.backend),
+    Effect.provideService(CurrentActors, testActors(registry)),
     Effect.provideService(AgentConversations, history),
     Effect.provideService(ExternalAgents, {}),
   );
@@ -25,7 +28,7 @@ test("TaskState drains committed storage into its Ref despite interruption", asy
       Effect.gen(function* () {
         const history = testConversations();
         const retained = yield* retainedTask(history, "running");
-        const registry = yield* makeContextRegistry({ loadAll: () => [retained], save: () => {} });
+        const registry = yield* makeTestContext({ loadAll: () => [retained], save: () => {} });
         yield* registry.register(retained.snapshot.path, {
           state: TaskSnapshot,
           message: Schema.Never,
@@ -35,19 +38,12 @@ test("TaskState drains committed storage into its Ref despite interruption", asy
         const task = yield* openTask(
           {
             ...registry,
-            backend: {
-              ...registry.backend,
-              commit: (record, options) =>
-                registry.backend
-                  .commit(record, options)
-                  .pipe(
-                    Effect.tap(() =>
-                      Deferred.succeed(stored, undefined).pipe(
-                        Effect.andThen(Deferred.await(release)),
-                      ),
-                    ),
-                  ),
-            },
+            backend: observeContextWrites(registry.backend, () =>
+              Deferred.succeed(stored, undefined).pipe(
+                Effect.andThen(Deferred.await(release)),
+                Effect.asVoid,
+              ),
+            ),
           },
           history,
         );
@@ -76,10 +72,11 @@ test("failed Task persistence leaves the committed Ref unchanged", async () => {
       Effect.gen(function* () {
         const history = testConversations();
         const retained = yield* retainedTask(history, "running");
-        const registry = yield* makeContextRegistry({
+        let fail = false;
+        const registry = yield* makeTestContext({
           loadAll: () => [retained],
           save: () => {
-            throw new Error("Injected storage failure");
+            if (fail) throw new Error("Injected storage failure");
           },
         });
         yield* registry.register(retained.snapshot.path, {
@@ -87,6 +84,7 @@ test("failed Task persistence leaves the committed Ref unchanged", async () => {
           message: Schema.Never,
         });
         const task = yield* openTask(registry, history);
+        fail = true;
         const result = yield* task
           .settle({ roundId: "task", status: "waiting_input", text: "Need input", covered: [] })
           .pipe(Effect.exit);
@@ -108,7 +106,7 @@ test("settlement covers only the executed inputs and leaves later input ready", 
       Effect.gen(function* () {
         const history = testConversations();
         const retained = yield* retainedTask(history, "running");
-        const registry = yield* makeContextRegistry({ loadAll: () => [retained], save: () => {} });
+        const registry = yield* makeTestContext({ loadAll: () => [retained], save: () => {} });
         yield* registry.register(retained.snapshot.path, {
           state: TaskSnapshot,
           message: Schema.Never,

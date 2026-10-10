@@ -36,7 +36,7 @@ export function GoalWorkspace({
   const compact = useIsMobile(1024);
   const [activityOpen, setActivityOpen] = useState(false);
   const empty = page?.total === 0;
-  const canWrite = goal.state.status === "active" && !goal.projectionError;
+  const canWrite = goal.state.status === "active";
   const spaces = contexts
     .filter((context) => kindOf(context.path) === "goal" && context.path !== goal.path)
     .slice(0, 3);
@@ -69,9 +69,9 @@ export function GoalWorkspace({
             </Sheet>
           )}
         </header>
-        {(goal.projectionError || goal.state.lastError) && (
+        {goal.state.lastError && (
           <div className="px-5 pb-3">
-            <ErrorNotice error={goal.projectionError || goal.state.lastError || ""} />
+            <ErrorNotice error={goal.state.lastError || ""} />
           </div>
         )}
         {goal.state.retryableInputId && (

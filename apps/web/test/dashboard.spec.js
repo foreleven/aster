@@ -241,23 +241,18 @@ test("a failed Goal turn exposes retry without confusing it with task execution"
   expect(errors).toEqual([]);
 });
 
-test("restricted and missing contexts remain explicit", async ({ page }) => {
+test("serialized and missing contexts remain explicit", async ({ page }) => {
   const data = fixture();
   data.contexts.push({
     path: "/private",
     description: "Private record",
     revision: 9,
-    state: {},
-    messages: [],
-    projection: { visibility: "restricted", reason: "missing-policy" },
+    text: "Owner supplied text",
   });
   const { errors } = await setup(page, data);
   await page.getByLabel("Find context").fill("Private record");
   await page.getByRole("button", { name: "Private record", exact: true }).click();
-  await expect(
-    page.getByText("Only this record’s name, path and revision are available."),
-  ).toBeVisible();
-  await expect(page.getByText("Public context data", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("Owner supplied text", { exact: true })).toBeVisible();
   data.contexts = data.contexts.filter((context) => context.path !== "/private");
   await page.evaluate(() => window.testEvents.emit("ready"));
   await expect(page.getByText("Context unavailable", { exact: true })).toBeVisible();
@@ -335,58 +330,25 @@ test("context references and multiline drafts stay editable until explicitly sen
   expect(errors).toEqual([]);
 });
 
-test("source messages and email bodies are readable while unfamiliar records stay expandable", async ({
-  page,
-}) => {
+test("source workspace renders the owner's serialized state", async ({ page }) => {
   const data = fixture();
-  data.contexts
-    .find((context) => context.path === "/sources/release")
-    .messages.push(
-      { content: "The release is approved.", sender: { name: "Morgan" }, at },
-      { content: "Removed content", deleted: true },
-      { metrics: { builds: 3 } },
-    );
   data.contexts.push({
     path: "/lark/mail/inbox/one",
-    description: "Email",
+    description: "Release sign-off",
     revision: 1,
-    messages: [],
-    projection: { visibility: "public" },
-    state: {
-      subject: "Release sign-off",
-      from: "morgan@example.com",
-      bodyPlainText: "Please verify the release tomorrow.",
-    },
+    text: "Please verify the release tomorrow.",
   });
   const { errors } = await setup(page, data);
   await navigate(page, "Sources");
   await page.getByRole("button", { name: "Release notes", exact: true }).click();
-  await expect(page.getByText("Frontend checks are ready.", { exact: true })).toBeVisible();
-  await expect(page.getByText("The release is approved.", { exact: true })).toBeVisible();
-  await expect(page.getByText("Morgan", { exact: true })).toBeVisible();
-  await expect(page.getByText("Removed content", { exact: true })).toHaveCount(0);
-  await page.getByText("Structured record", { exact: true }).click();
-  await expect(page.locator("pre").filter({ hasText: '"builds": 3' })).toBeVisible();
+  await expect(
+    page.getByText("Integration is complete. Validation starts this week.", { exact: true }),
+  ).toBeVisible();
   await navigate(page, "Sources");
   await page.getByRole("button", { name: "Release sign-off", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Release sign-off", exact: true })).toBeVisible();
   await expect(
     page.getByText("Please verify the release tomorrow.", { exact: true }),
   ).toBeVisible();
-  expect(errors).toEqual([]);
-});
-
-test("malformed display fields affect only their own record", async ({ page }) => {
-  const data = fixture();
-  data.contexts.find((context) => context.path === "/sources/release").state.summary = 42;
-  const { errors } = await setup(page, data);
-  await navigate(page, "Sources");
-  await page.getByRole("button", { name: "Release notes", exact: true }).click();
-  await expect(page.getByRole("alert")).toContainText(
-    "Cannot display the public fields of /sources/release",
-  );
-  await navigate(page, "Your assistant");
-  await expect(composer(page)).toBeEnabled();
   expect(errors).toEqual([]);
 });
 

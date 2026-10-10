@@ -1,12 +1,8 @@
+import { testApprovalEntries } from "../src/testing/context.js";
 import { Deferred, Effect, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  TaskSnapshot,
-  approvalEntries,
-  type StoredContext,
-  type TaskAdmissionReply,
-} from "../src/index.js";
+import { TaskSnapshot, type StoredContext, type TaskAdmissionReply } from "../src/index.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { fakeAgent } from "./fixtures.js";
 import { makeHarness } from "./harness-fixtures.js";
@@ -108,7 +104,7 @@ test("external follow-up supersedes late completion from the earlier execution",
         Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(input.target)!.state);
       yield* env.tasks.ask((replyTo) => ({ _tag: "StartTask", input, replyTo }));
       yield* env.wait(() =>
-        approvalEntries(env.registry).some((entry) => entry.id === `${input.target}:confirm`),
+        testApprovalEntries(env.registry).some((entry) => entry.id === `${input.target}:confirm`),
       );
       yield* env.approvals.ask((replyTo) => ({
         _tag: "Resolve",
@@ -355,12 +351,14 @@ test("follow-up does not discard a successful answer to an earlier approval requ
         env.approvals.ask((replyTo) => ({ _tag: "Resolve", id, response, replyTo }));
       yield* env.tasks.ask((replyTo) => ({ _tag: "StartTask", input, replyTo }));
       yield* env.wait(() =>
-        approvalEntries(env.registry).some((entry) => entry.id === `${input.target}:confirm`),
+        testApprovalEntries(env.registry).some((entry) => entry.id === `${input.target}:confirm`),
       );
       yield* resolve(`${input.target}:confirm`, { decision: "approve" });
       yield* (yield* env.system.select(env.approvals.path).resolve()).tell({ _tag: "Deliver" });
       const question = `${input.target}:input:question`;
-      yield* env.wait(() => approvalEntries(env.registry).some((entry) => entry.id === question));
+      yield* env.wait(() =>
+        testApprovalEntries(env.registry).some((entry) => entry.id === question),
+      );
       yield* resolve(question, { text: "Europe" });
       yield* (yield* env.system.select(env.approvals.path).resolve()).tell({ _tag: "Deliver" });
       yield* Deferred.await(answering);
@@ -378,7 +376,7 @@ test("follow-up does not discard a successful answer to an earlier approval requ
       yield* Deferred.await(followed);
       yield* env.wait(
         () =>
-          approvalEntries(env.registry).find((entry) => entry.id === question)?.status ===
+          testApprovalEntries(env.registry).find((entry) => entry.id === question)?.status ===
           "acknowledged",
       );
       assert.equal(

@@ -1,4 +1,5 @@
-import { makeTestContextRegistryWithBackend } from "@aster/core/testing";
+import { serializeFixtureState } from "@aster/core/testing";
+import { makeTestContextWithBackend } from "@aster/core/testing";
 import assert from "node:assert/strict";
 import {
   existsSync,
@@ -15,7 +16,7 @@ import { test } from "node:test";
 import { Effect, Schema } from "effect";
 import { ContextCommitError } from "@aster/core";
 import { LocalDurableContext } from "../src/storage/local-durable.js";
-import { makeContextRegistry } from "@aster/core/testing";
+import { makeTestContext } from "@aster/core/testing";
 import { makeFileContextStore } from "../src/index.js";
 
 test("JSON state and JSONL messages survive restart, append, and history compaction", async () => {
@@ -28,10 +29,11 @@ test("JSON state and JSONL messages survive restart, append, and history compact
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry(makeFileContextStore(dir));
+          const registry = yield* makeTestContext(makeFileContextStore(dir));
           yield* registry.register("/goals/test", definition);
           yield* registry.commit(
             {
+              text: serializeFixtureState({ status: "active" }),
               path: "/goals/test",
               description: "Goal",
               state: { status: "active" },
@@ -53,7 +55,7 @@ test("JSON state and JSONL messages survive restart, append, and history compact
     const store = makeFileContextStore(dir);
     const records = store.loadAll();
     assert.equal(records[0]?.snapshot.messages.length, 2);
-    assert.equal(records[0]?.snapshot.revision, 2);
+    assert.equal(records[0]?.snapshot.revision, 3);
     assert.deepEqual(records[0]?.snapshot.state, { status: "completed" });
     assert.equal(
       readFileSync(join(dir, "goals/test/messages.jsonl"), "utf8").trim().split("\n").length,
@@ -81,6 +83,7 @@ test("interrupted two-file commit recovers its intended state and messages exact
   try {
     const store = makeFileContextStore(dir);
     const original = {
+      text: serializeFixtureState({ status: "running" }),
       path: "/signals/a",
       description: "test",
       state: { status: "running" },
@@ -108,6 +111,7 @@ test("interrupted two-file commit recovers its intended state and messages exact
 test("LocalDurableContext recovers state, message, receipt and outbox together after a native rename failure", async () => {
   const root = mkdtempSync(join(tmpdir(), "aster-local-rename-"));
   const original = {
+    text: serializeFixtureState({ receipts: [], outbox: [] }),
     path: "/personal",
     description: "Personal",
     state: { receipts: [], outbox: [] },
@@ -123,41 +127,54 @@ test("LocalDurableContext recovers state, message, receipt and outbox together a
   };
   try {
     await Effect.runPromise(
-      Effect.gen(function* () {
-        const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
-        const registry = makeTestContextRegistryWithBackend(backend);
-        const definition = {
-          state: Schema.Struct({
-            receipts: Schema.Array(Schema.Unknown),
-            outbox: Schema.Array(Schema.Unknown),
-          }),
-          message: Schema.Unknown,
-        };
-        yield* registry.register(original.path, definition);
-        yield* registry.commit(original, { expectedRevision: 0 });
-        const statePath = join(root, "personal/state.json");
-        renameSync(statePath, `${statePath}.previous`);
-        mkdirSync(statePath);
-        const failed = yield* registry
-          .commit(intended, { expectedRevision: 1 })
-          .pipe(Effect.result);
-        assert.ok(failed._tag === "Failure" && failed.failure instanceof ContextCommitError);
-        assert.equal(existsSync(join(root, "personal/.pending.json")), true);
-        assert.deepEqual(registry.get(original.path), { ...original, revision: 1 });
-        rmSync(statePath, { recursive: true });
-        // Reopen the real driver: the durable intent replaces both public files.
-        const recoveredBackend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
-        const recovered = makeTestContextRegistryWithBackend(recoveredBackend);
-        yield* recovered.register(original.path, definition);
-        const accepted = recovered.get(original.path)!;
-        assert.deepEqual(accepted, { ...intended, revision: 2 });
-        assert.equal(existsSync(join(root, "personal/.pending.json")), false);
-        assert.deepEqual(makeFileContextStore(root).loadAll(), [
-          { snapshot: accepted, events: [] },
-        ]);
-        // A no-op at the recovered revision neither duplicates messages nor receipts.
-        assert.deepEqual(yield* recovered.commit(intended, { expectedRevision: 2 }), accepted);
-      }),
+      Effect.scoped(
+        Effect.gen(function* () {
+          const backend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
+          const registry = makeTestContextWithBackend(backend);
+          const definition = {
+            state: Schema.Struct({
+              receipts: Schema.Array(Schema.Unknown),
+              outbox: Schema.Array(Schema.Unknown),
+            }),
+            message: Schema.Unknown,
+          };
+          yield* registry.register(original.path, definition);
+          yield* registry.commit(original, { expectedRevision: 0 });
+          const statePath = join(root, "personal/state.json");
+          renameSync(statePath, `${statePath}.previous`);
+          mkdirSync(statePath);
+          const failed = yield* registry
+            .commit(intended, { expectedRevision: 1 })
+            .pipe(Effect.result);
+          assert.ok(failed._tag === "Failure" && failed.failure instanceof ContextCommitError);
+          assert.equal(existsSync(join(root, "personal/.pending.json")), true);
+          assert.deepEqual(registry.get(original.path), { ...original, revision: 1 });
+          rmSync(statePath, { recursive: true });
+          // Reopen the real driver: the durable intent replaces both public files.
+          const recoveredBackend = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
+          const recovered = makeTestContextWithBackend(
+            recoveredBackend,
+            new Map(
+              makeFileContextStore(root)
+                .loadAll()
+                .map((record) => [record.snapshot.path, record]),
+            ),
+          );
+          yield* recovered.register(original.path, definition);
+          const accepted = recovered.get(original.path)!;
+          assert.deepEqual(accepted, {
+            ...intended,
+            text: serializeFixtureState(intended.state),
+            revision: 2,
+          });
+          assert.equal(existsSync(join(root, "personal/.pending.json")), false);
+          assert.deepEqual(makeFileContextStore(root).loadAll(), [
+            { snapshot: accepted, events: [] },
+          ]);
+          // A no-op at the recovered revision neither duplicates messages nor receipts.
+          assert.deepEqual(yield* recovered.commit(intended, { expectedRevision: 2 }), accepted);
+        }),
+      ),
     );
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -169,6 +186,7 @@ test("invalid pending recovery data is rejected before rewriting committed publi
   try {
     const store = makeFileContextStore(root);
     const original = {
+      text: serializeFixtureState({}),
       path: "/context",
       description: "Original",
       state: {},

@@ -1,6 +1,6 @@
 import { Command, type ActorContext, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
-import { ContextQueryError, PublicContext } from "../context/contracts.js";
+import { ContextQueryError } from "../context/contracts.js";
 import { ContextCommand } from "../context/queries/protocol.js";
 import { publicJson } from "../json.js";
 import { SignalSnapshot } from "./state/snapshot.js";
@@ -20,9 +20,16 @@ export class ReadSignal extends ContextCommand.Class<ReadSignal>()("read", {
 }) {}
 export const SignalsQueries = [ListSignals, ReadSignal] as const;
 
+export const SignalRecord = Schema.Struct({
+  path: Schema.String,
+  revision: Schema.Int,
+  description: Schema.String,
+  state: SignalSnapshot,
+});
+export type SignalRecord = typeof SignalRecord.Type;
 export class GetSignal extends Command.Class<GetSignal>()("GetSignal", {
   payload: {},
-  reply: Schema.optional(PublicContext),
+  reply: Schema.optional(SignalRecord),
 }) {}
 const readSignal = (child: ActorRef<unknown>) =>
   (child as ActorRef<GetSignal>)
@@ -47,7 +54,7 @@ export const querySignals = Effect.fn("Signal.query")(function* (
   command: ListSignals | ReadSignal,
   actor: Pick<ActorContext<unknown>, "children" | "child">,
 ) {
-  const select = (record: PublicContext, detail: boolean) => {
+  const select = (record: SignalRecord, detail: boolean) => {
     const state = Schema.decodeUnknownSync(SignalSnapshot)(record.state);
     return publicJson({
       path: record.path,

@@ -1,13 +1,13 @@
-import { SignalSnapshot } from "../src/signals/state/snapshot.js";
+import { serializeFixtureState } from "../src/testing/context.js";
+
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
-import { Effect, Layer, Schema } from "effect";
+import { Effect, Layer } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ContextQueries } from "../src/context/queries/routes.js";
 import {
-  ContextRegistry,
   SignalDefinitions,
   SignalRootActor,
   type SignalCommandReply,
@@ -15,7 +15,7 @@ import {
 } from "../src/index.js";
 import { SignalReactionInput } from "../src/signals/protocol.js";
 import { readSignalHistory } from "../src/signals/state/store.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 const definition = {
   slug: "review",
@@ -32,7 +32,7 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const registry = yield* makeContextRegistry({
+          const registry = yield* makeTestContext({
             loadAll: () => [...records.values()],
             save: (record) => {
               records.set(record.snapshot.path, structuredClone(record));
@@ -41,10 +41,7 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
-              Layer.merge(
-                Layer.succeed(ContextRegistry, registry),
-                Layer.succeed(DurableContext, registry.backend),
-              ),
+              Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
               Layer.succeed(AgentConversations, messages),
               Layer.succeed(SignalDefinitions, [definition]),
             ),
@@ -59,27 +56,15 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
             target: "/signals/review",
             version: 1,
             sourceContext: {
+              text: serializeFixtureState({ summary: "Release delayed" }),
               path: "/source",
               revision: 1,
               description: "Evidence",
-              state: { summary: "Release delayed" },
-              messages: [],
             },
           };
           const send = (value: SignalReactionInput) =>
             root.ask<SignalCommandReply>((replyTo) => ({ _tag: "React", input: value, replyTo }));
-          // Metadata revisions do not change the screened rule version.
-          if (!restart) {
-            const current = registry.get(input.target)!;
-            yield* registry.register(current.path, {
-              state: SignalSnapshot,
-              message: Schema.Never,
-            });
-            yield* registry.commit(
-              { ...current, description: "Updated metadata" },
-              { expectedRevision: current.revision },
-            );
-          }
+          // The same screened rule version remains valid across receipt replay.
           const reply = yield* send(input);
           assert.equal(reply._tag, "Accepted");
           const state = yield* readSignalHistory(messages, input.target);
@@ -111,14 +96,11 @@ test("scheduled Signals reject Context reactions", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(AgentConversations, messages),
             Layer.succeed(SignalDefinitions, [
               {
@@ -144,6 +126,7 @@ test("scheduled Signals reject Context reactions", async () => {
             target: "/signals/review",
             version: 1,
             sourceContext: {
+              text: serializeFixtureState({}),
               revision: 0,
               path: "/source",
               description: "Source",

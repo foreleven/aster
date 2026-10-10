@@ -1,8 +1,16 @@
+import { ApplicationError } from "../operations.js";
+import { readActor } from "../services/domain-reads.js";
+import { TaskSnapshot } from "./state/snapshot.js";
 import { Command, type ActorContext, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
 import { ContextCommand } from "../context/queries/protocol.js";
 import { ContextQueryError } from "../context/contracts.js";
 import { publicJson } from "../json.js";
+
+export class GetTaskSnapshot extends Command.Class<GetTaskSnapshot>()("GetTaskSnapshot", {
+  payload: {},
+  reply: Schema.Json,
+}) {}
 
 export class ListTasks extends ContextCommand.Class<ListTasks>()("list", {
   success: Schema.Json,
@@ -87,3 +95,18 @@ export const queryTasks = Effect.fn("Task.query")(function* (
   );
   return data;
 });
+
+export const readTaskState = (
+  actors: import("../services/actors.js").CurrentActors["Service"],
+  path: string,
+) => readActor(actors, path, (replyTo) => new GetTaskSnapshot({ replyTo }), TaskSnapshot);
+
+export const loadTaskState = (
+  durable: import("../context/store.js").DurableContext["Service"],
+  path: string,
+) =>
+  durable
+    .readState(path, TaskSnapshot)
+    .pipe(
+      Effect.mapError(() => new ApplicationError({ kind: "not-found", message: "Task not found" })),
+    );

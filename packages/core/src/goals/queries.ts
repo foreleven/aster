@@ -1,8 +1,16 @@
+import { ApplicationError } from "../operations.js";
+import { readActor } from "../services/domain-reads.js";
+import { GoalSnapshot } from "./state/snapshot.js";
 import { Command, type ActorContext, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
 import { ContextCommand } from "../context/queries/protocol.js";
 import { ContextQueryError } from "../context/contracts.js";
 import { publicJson } from "../json.js";
+
+export class GetGoalSnapshot extends Command.Class<GetGoalSnapshot>()("GetGoalSnapshot", {
+  payload: {},
+  reply: Schema.Json,
+}) {}
 
 export class ListGoals extends ContextCommand.Class<ListGoals>()("list", {
   success: Schema.Json,
@@ -87,3 +95,28 @@ export const queryGoals = Effect.fn("Goal.query")(function* (
   );
   return data;
 });
+
+/** Owner-mediated business read, separate from generic Context text. */
+export const readGoalState = (
+  actors: import("../services/actors.js").CurrentActors["Service"],
+  path: string,
+) => readActor(actors, path, (replyTo) => new GetGoalSnapshot({ replyTo }), GoalSnapshot);
+
+export const loadGoalState = (
+  durable: import("../context/store.js").DurableContext["Service"],
+  path: string,
+) =>
+  durable
+    .readState(path, GoalSnapshot)
+    .pipe(
+      Effect.mapError(() => new ApplicationError({ kind: "not-found", message: "Goal not found" })),
+    );
+export const loadGoalStatus = (
+  durable: import("../context/store.js").DurableContext["Service"],
+  path: string,
+) =>
+  durable
+    .readState(path, Schema.Struct({ status: Schema.Literals(["active", "completed"]) }))
+    .pipe(
+      Effect.mapError(() => new ApplicationError({ kind: "not-found", message: "Goal not found" })),
+    );

@@ -1,13 +1,12 @@
-import { ContextSession } from "../context/session.js";
+import { DurableContext } from "../context/store.js";
 import { Effect, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
-import { ContextRegistry } from "../context/registry.js";
 import { ApplicationError } from "../operations.js";
 import { TaskActor } from "./actor.js";
 import { FollowupTaskInput, TaskDeliveryInput, TaskPath, TaskRecoveryInput } from "./contracts.js";
 import { taskActorPath } from "./delivery.js";
 import { taskPathFor } from "./state/admission.js";
-import { TaskSnapshot } from "./state/snapshot.js";
+
 import { queryTasks, TasksQueries } from "./queries.js";
 
 import { CommandProcessor, type ActorRef } from "@aster/actor";
@@ -20,21 +19,21 @@ export const TasksRootActor = ContextActor.define("tasks/Root", {
 })(
   Effect.gen(function* () {
     const processor = yield* CommandProcessor.make({ concurrency: 2 });
-    const registry = yield* ContextRegistry;
-    yield* ContextSession.make({
-      path: "/tasks",
-      state: Schema.Struct({}),
-      message: Schema.Never,
-      initial: { state: {}, description: "Persistent Tasks" },
-    }).pipe(Effect.orDie);
+    const registry = yield* DurableContext;
+    yield* (yield* DurableContext)
+      .open({
+        serialize: (state) => JSON.stringify(state),
+        path: "/tasks",
+        state: Schema.Struct({}),
+        message: Schema.Never,
+        initial: { state: {}, description: "Persistent Tasks" },
+      })
+      .pipe(Effect.orDie);
     return {
       started: (actor) =>
         Effect.gen(function* () {
           for (const record of Object.values(registry.snapshot())) {
             if (!Schema.is(TaskPath)(record.path)) continue;
-            const state = Schema.decodeUnknownSync(TaskSnapshot)(record.state);
-            if (taskPathFor(state.admission.source, state.inputs[0]!.requestId) !== record.path)
-              continue;
             const name = record.path.slice("/tasks/".length);
             const child = (yield* actor.child(name)) ?? (yield* actor.spawn(name, TaskActor));
             yield* actor.watch(child);

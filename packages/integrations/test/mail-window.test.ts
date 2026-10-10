@@ -19,7 +19,9 @@ test("mail search serializes second-precision timestamps with an explicit timezo
     }),
   );
   assert.deepEqual(
-    await Effect.runPromise(cli.listIds("me", midnight + 123, midnight + 3_600_000 + 789)),
+    await Effect.runPromise(
+      Effect.scoped(cli.listIds("me", midnight + 123, midnight + 3_600_000 + 789)),
+    ),
     [],
   );
 });
@@ -73,7 +75,9 @@ test("mail time filter stays fixed across all pages and does not truncate at 100
       });
     }),
   );
-  const result = await Effect.runPromise(cli.listIds("me", midnight, midnight + 3_600_000));
+  const result = await Effect.runPromise(
+    Effect.scoped(cli.listIds("me", midnight, midnight + 3_600_000)),
+  );
   assert.equal(result.length, 101);
   assert.equal(result.at(-1), "100");
   assert.equal(calls.length, 2);
@@ -105,7 +109,7 @@ for (const page of [
       }),
     );
     const result = await Effect.runPromise(
-      Effect.result(cli.listIds("me", midnight, midnight + 1000)),
+      Effect.scoped(Effect.result(cli.listIds("me", midnight, midnight + 1000))),
     );
     assert.equal(result._tag, "Failure");
     if (result._tag === "Failure") assert.equal(result.failure._tag, "LarkResponseError");

@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { Schema } from "effect";
 import { GoalSnapshot } from "@aster/core";
@@ -16,14 +17,8 @@ import { testConversations } from "./conversation-fixtures.js";
 import { toolSystem } from "./tool-fixtures.js";
 
 import { Effect, Layer } from "effect";
-import {
-  ContextRegistry,
-  ExternalAgents,
-  GoalAgent,
-  GoalSettings,
-  MemoryRecall,
-} from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { ExternalAgents, GoalAgent, GoalSettings, MemoryRecall } from "../src/index.js";
+import { makeTestContext } from "../src/testing/context.js";
 
 test("reopened Goal sessions keep their policy and history while tools read the new turn", async (t) => {
   const directory = await mkdtemp(join(tmpdir(), "aster-goal-current-"));
@@ -109,72 +104,82 @@ test("reopened Goal sessions keep their policy and history while tools read the 
   });
   const run = (turn: number) =>
     Effect.runPromise(
-      Effect.gen(function* () {
-        const registry = yield* makeContextRegistry({
-          loadAll: () => [
-            {
-              snapshot: {
-                revision: 0,
-                path: "/goals/test",
-                description: "Goal",
-                state: {
-                  definition: { slug: "test", description: `PRIVATE_goal_${turn}` },
-                  status: "active",
-                  inputs: [],
-                  receipts: [],
-                  tasks: [],
-                  summary: `PRIVATE_summary_${turn}`,
+      Effect.scoped(
+        Effect.gen(function* () {
+          const registry = yield* makeTestContext({
+            loadAll: () => [
+              {
+                snapshot: {
+                  text: serializeFixtureState({
+                    definition: { slug: "test", description: `PRIVATE_goal_${turn}` },
+                    status: "active",
+                    inputs: [],
+                    receipts: [],
+                    tasks: [],
+                    summary: `PRIVATE_summary_${turn}`,
+                  }),
+                  revision: 0,
+                  path: "/goals/test",
+                  description: "Goal",
+                  state: {
+                    definition: { slug: "test", description: `PRIVATE_goal_${turn}` },
+                    status: "active",
+                    inputs: [],
+                    receipts: [],
+                    tasks: [],
+                    summary: `PRIVATE_summary_${turn}`,
+                  },
+                  messages: [],
                 },
-                messages: [],
+                events: [],
               },
-              events: [],
-            },
-          ],
-          save: () => {},
-        });
-        yield* registry.register("/goals/test", { state: GoalSnapshot, message: Schema.Never });
-        const { system } = yield* toolSystem({
-          registry,
-          messages: conversations,
-        });
-        return yield* GoalAgent.use((agent) =>
-          agent.converse({
-            goal: { slug: "test", description: `PRIVATE_goal_${turn}` },
-            input: {
-              kind: "UserInput",
-              entryId: 0,
-              inputId: `turn-${turn}`,
-              receivedAt: "2026-10-01T00:00:00Z",
-              remainingAgentTurns: 4,
-              status: "pending",
-              payload: { _tag: "UserInput", text: "Continue the Goal" },
-            },
-          }),
-        ).pipe(
-          Effect.provide([
-            GoalAgent.layer,
-            GoalState.layer("/goals/test", { slug: "test", description: `PRIVATE_goal_${turn}` }),
-          ]),
-          Effect.provideService(AgentConversations, conversations),
-          Effect.provideService(CurrentActors, system),
-          Effect.provideService(ContextRegistry, registry),
-          Effect.provideService(DurableContext, registry.backend),
-          Effect.provideService(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
-          Effect.provideService(MemoryRecall, {
-            search: () => Effect.succeed([]),
-            expand: () => Effect.succeed([]),
-          }),
-          Effect.provideService(ExternalAgents, {}),
-        );
-      }).pipe(
-        Effect.provide(
-          Layer.mergeAll(AgentRunner.layer, DurableHarness.layer).pipe(
-            Layer.provide(models),
-            Layer.provide(Layer.succeed(AgentConversations, conversations)),
+            ],
+            save: () => {},
+          });
+          yield* registry.register("/goals/test", { state: GoalSnapshot, message: Schema.Never });
+          const { system } = yield* toolSystem({
+            registry,
+            messages: conversations,
+          });
+          return yield* GoalAgent.use((agent) =>
+            agent.converse({
+              goal: { slug: "test", description: `PRIVATE_goal_${turn}` },
+              input: {
+                kind: "UserInput",
+                entryId: 0,
+                inputId: `turn-${turn}`,
+                receivedAt: "2026-10-01T00:00:00Z",
+                remainingAgentTurns: 4,
+                status: "pending",
+                payload: { _tag: "UserInput", text: "Continue the Goal" },
+              },
+            }),
+          ).pipe(
+            Effect.provide([
+              GoalAgent.layer,
+              GoalState.layer("/goals/test", { slug: "test", description: `PRIVATE_goal_${turn}` }),
+            ]),
+            Effect.provideService(AgentConversations, conversations),
+            Effect.provideService(CurrentActors, system),
+
+            Effect.provideService(DurableContext, registry.backend),
+            Effect.provideService(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
+            Effect.provideService(MemoryRecall, {
+              search: () => Effect.succeed([]),
+              expand: () => Effect.succeed([]),
+            }),
+            Effect.provideService(ExternalAgents, {}),
+          );
+        }).pipe(
+          Effect.provide(
+            Layer.mergeAll(AgentRunner.layer, DurableHarness.layer).pipe(
+              Layer.provide(models),
+              Layer.provide(Layer.succeed(AgentConversations, conversations)),
+            ),
           ),
+          Effect.timeout("10 seconds"),
+          Effect.scoped,
         ),
-        Effect.timeout("10 seconds"),
-        Effect.scoped,
       ),
     );
   const first = await run(0);

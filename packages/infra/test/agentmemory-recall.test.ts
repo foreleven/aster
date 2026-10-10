@@ -90,7 +90,7 @@ test("the memory adapter exposes tagged failures with the original backend cause
     },
   });
   for (const operation of [recall.search("project"), recall.expand([{ obsId: "one" }])]) {
-    const error = await Effect.runPromise(Effect.flip(operation));
+    const error = await Effect.runPromise(Effect.scoped(Effect.flip(operation)));
     assert.ok(error instanceof MemoryRecallError);
     assert.equal(error.cause, cause);
     assert.equal(error.message, "backend unavailable");

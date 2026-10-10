@@ -17,7 +17,7 @@ tasks/
     snapshot.ts             # Business state, inputs, outcomes and work contracts
     model.ts                # accept, start, settle, cancel and Pi handoff recovery
     admission.ts            # Task identity, frozen Signal authority and envelopes
-    store.ts                # Committed Ref and ContextRegistry persistence
+    store.ts                # Committed Ref and DurableContext persistence
   execution/
     service.ts              # run, send, cancel; internal/external orchestration
     checkpoint.ts           # Private Pi executor journal
@@ -33,9 +33,9 @@ TaskState has four business operations:
 - `settle(outcome)` saves a Pi result and updates only the inputs explicitly covered by that outcome. Later inputs remain pending.
 - `cancel(reason)` revokes work that can safely stop without a provider cancellation. Running work first needs TaskExecution confirmation, then settles as cancelled.
 
-The snapshot contains admission metadata, lifecycle status, input references and receipts, a round identity, the latest result reference and outstanding requests. Its statuses are `ready`, `running`, `waiting_input`, `completed`, `failed`, `cancelled` and `uncertain`. Input references are pending or completed; their transport delivery phases do not belong to the business snapshot. The private Store commits through ContextRegistry before updating its Ref, with an uninterruptible commit-to-Ref handoff.
+The snapshot contains admission metadata, lifecycle status, input references and receipts, a round identity, the latest result reference and outstanding requests. Its statuses are `ready`, `running`, `waiting_input`, `completed`, `failed`, `cancelled` and `uncertain`. Input references are pending or completed; their transport delivery phases do not belong to the business snapshot. The private Store commits through DurableContext before updating its Ref, with an uninterruptible commit-to-Ref handoff.
 
-TaskExecution exposes `run(work)`, `send(input)` and `cancel()`. It owns internal invocation, native steering, external submission, follow-up, responses, polling and recovery. Its private Pi `task.execution` checkpoints retain frozen executor policy, confirmation, provider handles, delivery markers and retained outcomes. A Semaphore serializes executor transitions and submissions outside the Task mailbox. Provider handles, prompts and transport phases never enter TaskSnapshot or public Context projections.
+TaskExecution exposes `run(work)`, `send(input)` and `cancel()`. It owns internal invocation, native steering, external submission, follow-up, responses, polling and recovery. Its private Pi `task.execution` checkpoints retain frozen executor policy, confirmation, provider handles, delivery markers and retained outcomes. A Semaphore serializes executor transitions and submissions outside the Task mailbox. Provider handles, prompts and transport phases never enter TaskSnapshot or public business responses.
 
 TasksRootActor registers and watches retained children without awaiting their recovery. A supervised root restart reuses existing children. Each child mailbox queues commands during startup; a slow or failed Task does not block its siblings or Goal registration. Supervision owns retries and terminal child failures reach the root through watch. Goal startup repairs its Task references, but does not wake or recover Task execution.
 

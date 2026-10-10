@@ -1,3 +1,4 @@
+import { loadGoalStatus } from "../../goals/queries.js";
 import type { AgentConversations } from "@aster/agent/harness";
 import { signalMessage } from "../../signals/state/store.js";
 import { createHash } from "node:crypto";
@@ -5,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { ApplicationError } from "../../operations.js";
 import { TaskMessage, TaskDeliveryInput, type Task } from "../contracts.js";
 import { Effect } from "effect";
-import { ContextRegistry } from "../../context/registry.js";
+import { DurableContext } from "../../context/store.js";
 
 export const taskPathFor = (source: string, requestId: string) =>
   `/tasks/${createHash("sha256")
@@ -27,19 +28,19 @@ export const delegateInput = (
 });
 /** A Signal may only deliver its frozen occurrence; Goal tools run in the active owner's scope. */
 export const sourceTask: (
-  registry: ContextRegistry["Service"],
+  registry: DurableContext["Service"],
   messages: AgentConversations["Service"],
   source: string,
   requestId: string,
 ) => Effect.Effect<TaskMessage | undefined, ApplicationError> = Effect.fn("Task.source")(function* (
-  registry: ContextRegistry["Service"],
+  registry: DurableContext["Service"],
   messages: AgentConversations["Service"],
   source: string,
   requestId: string,
 ): Effect.fn.Return<TaskMessage | undefined, ApplicationError> {
   const record = registry.get(source);
   if (source.startsWith("/goals/")) {
-    if ((record?.state as { status?: string } | undefined)?.status === "active") return undefined;
+    if ((yield* loadGoalStatus(registry, source)).status === "active") return undefined;
   } else if (record && source.startsWith("/signals/")) {
     const message = yield* signalMessage(messages, source, requestId);
     if (message) return message;
@@ -50,11 +51,11 @@ export const sourceTask: (
   });
 });
 export const validateTaskMessage: (
-  registry: ContextRegistry["Service"],
+  registry: DurableContext["Service"],
   input: TaskMessage,
   messages: AgentConversations["Service"],
 ) => Effect.Effect<void, ApplicationError> = Effect.fn("Task.validateMessage")(function* (
-  registry: ContextRegistry["Service"],
+  registry: DurableContext["Service"],
   input: TaskMessage,
   messages: AgentConversations["Service"],
 ): Effect.fn.Return<void, ApplicationError> {

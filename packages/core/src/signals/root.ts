@@ -1,8 +1,7 @@
-import { ContextSession } from "../context/session.js";
+import { DurableContext } from "../context/store.js";
 import { CommandProcessor, type ActorContext, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
-import { ContextRegistry } from "../context/registry.js";
 import { ApplicationError } from "../operations.js";
 import { SignalActor } from "./actor.js";
 import {
@@ -35,14 +34,17 @@ export const SignalRootActor = ContextActor.define("signals/RootActor", {
 })(
   Effect.gen(function* () {
     const processor = yield* CommandProcessor.make({ concurrency: 2 });
-    const registry = yield* ContextRegistry;
+    const registry = yield* DurableContext;
     const definitions = yield* SignalDefinitions;
-    yield* ContextSession.make({
-      path: "/signals",
-      state: Schema.Struct({}),
-      message: Schema.Never,
-      initial: { state: {}, description: "Context and scheduled Tasks" },
-    }).pipe(Effect.orDie);
+    yield* (yield* DurableContext)
+      .open({
+        serialize: (state) => JSON.stringify(state),
+        path: "/signals",
+        state: Schema.Struct({}),
+        message: Schema.Never,
+        initial: { state: {}, description: "Context and scheduled Tasks" },
+      })
+      .pipe(Effect.orDie);
     return {
       started: (actor) =>
         Effect.gen(function* () {

@@ -1,4 +1,4 @@
-import type { TestContextRegistry } from "@aster/core/testing";
+import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
@@ -6,12 +6,11 @@ import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import {
   ContextQueries,
-  ContextRegistry,
   ContextQueryError,
   ProcessEnvironment,
   RuntimeIntegrations,
 } from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
+import { makeTestContext } from "@aster/core/testing";
 import {
   Clock,
   ConfigProvider,
@@ -43,7 +42,7 @@ const settings: AppsConfiguration = {
 };
 const launch = Effect.fnUntraced(function* (
   cli: OpenCli["Service"],
-  registry: TestContextRegistry,
+  registry: TestContext,
   config = settings,
 ) {
   return yield* Effect.gen(function* () {
@@ -59,11 +58,11 @@ const launch = Effect.fnUntraced(function* (
       system,
       handle,
       queries,
-      reader: registry.reader,
+      reader: registry.backend,
     };
   }).pipe(
-    Effect.provide(Layer.merge(RuntimeIntegrations.layer, ContextQueries.layer)),
-    Effect.provideService(ContextRegistry, registry),
+    Effect.provide(Layer.mergeAll(RuntimeIntegrations.layer, ContextQueries.layer)),
+
     Effect.provideService(DurableContext, registry.backend),
     Effect.provideService(AppsSettings, config),
     Effect.provideService(OpenCli, cli),
@@ -75,7 +74,7 @@ test("apps register discoverable query-only Contexts without running OpenCLI; qu
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const mutableCalls: string[][] = [];
         const runtime = yield* launch(
           {
@@ -95,8 +94,8 @@ test("apps register discoverable query-only Contexts without running OpenCLI; qu
           "/apps/xiaohongshu",
         ]);
         const ctrip = runtime.reader.get(input.path)!;
-        assert.equal(Schema.decodeUnknownSync(AppState)(ctrip.state).mode, "query-only");
-        assert.ok(!JSON.stringify(ctrip.state).includes("hotel-search"));
+        assert.equal(Schema.decodeUnknownSync(AppState)(JSON.parse(ctrip.text)).mode, "query-only");
+        assert.ok(!JSON.stringify(JSON.parse(ctrip.text)).includes("hotel-search"));
         assert.ok(
           JSON.stringify(yield* runtime.queries.describe(input.path)).includes("hotel-search"),
         );
@@ -121,7 +120,7 @@ test("apps reject writes and invalid arguments before transport; failure leaves 
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         let calls = 0;
         const runtime = yield* launch(
           {
@@ -167,7 +166,7 @@ test("Apps queue requests and cancellation releases the worker for the next requ
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const entered = yield* Queue.unbounded<number>();
         const released = yield* Queue.unbounded<number>();
         let calls = 0;
@@ -210,18 +209,20 @@ test("supported query arguments map to exact OpenCLI argv and validate dates, si
     "https://www.xiaohongshu.com/explore/abc123?xsec_token=token&xsec_source=pc_search";
   assert.deepEqual(
     await Effect.runPromise(
-      queryArgv("xiaohongshu", "comments", { url: signed, withReplies: true }),
+      Effect.scoped(queryArgv("xiaohongshu", "comments", { url: signed, withReplies: true })),
     ),
     ["xiaohongshu", "comments", signed, "--limit", "10", "--with-replies", "-f", "json"],
   );
   assert.deepEqual(
     await Effect.runPromise(
-      queryArgv("ctrip", "hotel-search", {
-        city: "43",
-        checkin: "2027-02-05",
-        checkout: "2027-02-10",
-        limit: 5,
-      }),
+      Effect.scoped(
+        queryArgv("ctrip", "hotel-search", {
+          city: "43",
+          checkin: "2027-02-05",
+          checkout: "2027-02-10",
+          limit: 5,
+        }),
+      ),
     ),
     [
       "ctrip",
@@ -247,7 +248,7 @@ test("supported query arguments map to exact OpenCLI argv and validate dates, si
     ["xiaohongshu", "search", { query: "travel", sort: "invalid" }],
   ] as const)
     assert.equal(
-      (await Effect.runPromise(Effect.flip(queryArgv(app, command, args)))).kind,
+      (await Effect.runPromise(Effect.scoped(Effect.flip(queryArgv(app, command, args))))).kind,
       "invalid-input",
     );
   assert.equal(Object.keys(appCommands.ctrip).length, 13);
@@ -264,9 +265,10 @@ test("apps configuration preserves direct child paths; absent configuration disa
         ConfigProvider.fromUnknown(value, { preserveEmptyStrings: true }),
       ),
     );
-  assert.deepEqual((await Effect.runPromise(read({}))).apps, []);
+  assert.deepEqual((await Effect.runPromise(Effect.scoped(read({})))).apps, []);
   assert.equal(
-    (await Effect.runPromise(read({ contexts: { "/apps": { "/ctrip": {} } } }))).apps[0]?.name,
+    (await Effect.runPromise(Effect.scoped(read({ contexts: { "/apps": { "/ctrip": {} } } }))))
+      .apps[0]?.name,
     "ctrip",
   );
   assert.ok(
@@ -333,22 +335,24 @@ test("OpenCLI process boundary uses explicit argv/environment, checks exit statu
   let released = false;
   assert.deepEqual(
     await Effect.runPromise(
-      cliRun(
-        fakeSpawner({
-          stdout: '[{"name":"Sanya"}]',
-          released: () => {
-            released = true;
-          },
-          inspect: (command) => {
-            assert.equal(command._tag, "StandardCommand");
-            if (command._tag !== "StandardCommand") return;
-            assert.equal(command.command, "opencli");
-            assert.equal(command.options.shell, false);
-            assert.equal(command.options.env?.PRIVATE, undefined);
-            assert.equal(command.options.env?.MINIMAX_API_KEY, undefined);
-            assert.equal(command.options.env?.PATH, "/bin");
-          },
-        }),
+      Effect.scoped(
+        cliRun(
+          fakeSpawner({
+            stdout: '[{"name":"Sanya"}]',
+            released: () => {
+              released = true;
+            },
+            inspect: (command) => {
+              assert.equal(command._tag, "StandardCommand");
+              if (command._tag !== "StandardCommand") return;
+              assert.equal(command.command, "opencli");
+              assert.equal(command.options.shell, false);
+              assert.equal(command.options.env?.PRIVATE, undefined);
+              assert.equal(command.options.env?.MINIMAX_API_KEY, undefined);
+              assert.equal(command.options.env?.PATH, "/bin");
+            },
+          }),
+        ),
       ),
     ),
     [{ name: "Sanya" }],
@@ -359,7 +363,7 @@ test("OpenCLI process boundary uses explicit argv/environment, checks exit statu
     { stdout: "[]", code: 1 },
     { stdout: "x".repeat(128 * 1024 + 1) },
   ]) {
-    const error = await Effect.runPromise(Effect.flip(cliRun(fakeSpawner(options))));
+    const error = await Effect.runPromise(Effect.scoped(Effect.flip(cliRun(fakeSpawner(options)))));
     assert.ok(Schema.is(ContextQueryError)(error));
     assert.equal(error.kind, "failed");
   }
@@ -396,7 +400,7 @@ test("stopping an Apps Actor releases active query work and rejects its waiting 
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const entered = yield* Deferred.make<void>();
         let released = false;
         const runtime = yield* launch(
@@ -428,20 +432,23 @@ test("stopping an Apps Actor releases active query work and rejects its waiting 
 
 test("OpenCLI preserves its structured failure code and actionable diagnostic", async () => {
   const error = await Effect.runPromise(
-    Effect.flip(
-      cliRun(
-        fakeSpawner({
-          code: 1,
-          stderr: JSON.stringify({
-            ok: false,
-            error: {
-              code: "SECURITY_BLOCK",
-              message: "Xiaohongshu search was blocked by request-frequency or security controls.",
-              help: "Wait before retrying or check the logged-in browser session.",
-              exitCode: 1,
-            },
+    Effect.scoped(
+      Effect.flip(
+        cliRun(
+          fakeSpawner({
+            code: 1,
+            stderr: JSON.stringify({
+              ok: false,
+              error: {
+                code: "SECURITY_BLOCK",
+                message:
+                  "Xiaohongshu search was blocked by request-frequency or security controls.",
+                help: "Wait before retrying or check the logged-in browser session.",
+                exitCode: 1,
+              },
+            }),
           }),
-        }),
+        ),
       ),
     ),
   );
@@ -452,11 +459,12 @@ test("OpenCLI preserves its structured failure code and actionable diagnostic", 
 
 test("OpenCLI reads YAML stderr emitted by version 1.8.8 and excludes private fields", async () => {
   const error = await Effect.runPromise(
-    Effect.flip(
-      cliRun(
-        fakeSpawner({
-          code: 1,
-          stderr: `ok: false
+    Effect.scoped(
+      Effect.flip(
+        cliRun(
+          fakeSpawner({
+            code: 1,
+            stderr: `ok: false
 error:
   code: COMMAND_EXEC
   message: >-
@@ -470,7 +478,8 @@ trace:
   dir: /private/traces
 # AutoFix: re-run with --trace=retain-on-failure
 `,
-        }),
+          }),
+        ),
       ),
     ),
   );
@@ -492,15 +501,17 @@ for (const [code, kind] of [
 ])
   test(`OpenCLI classifies ${code} and can read a JSON error from stdout`, async () => {
     const error = await Effect.runPromise(
-      Effect.flip(
-        cliRun(
-          fakeSpawner({
-            code: 1,
-            stdout: JSON.stringify({
-              ok: false,
-              error: { code, message: "Query failed", help: "Check the local browser" },
+      Effect.scoped(
+        Effect.flip(
+          cliRun(
+            fakeSpawner({
+              code: 1,
+              stdout: JSON.stringify({
+                ok: false,
+                error: { code, message: "Query failed", help: "Check the local browser" },
+              }),
             }),
-          }),
+          ),
         ),
       ),
     );
@@ -510,19 +521,21 @@ for (const [code, kind] of [
 
 test("OpenCLI diagnostics redact credentials and bound large or malformed error output", async () => {
   const error = await Effect.runPromise(
-    Effect.flip(
-      cliRun(
-        fakeSpawner({
-          code: 1,
-          stderr: JSON.stringify({
-            error: {
-              code: "UNKNOWN",
-              message:
-                "secret\nAuthorization: Bearer private-auth\nCookie: session=private-cookie\nxsec_token=private-token\n" +
-                "x".repeat(5000),
-            },
+    Effect.scoped(
+      Effect.flip(
+        cliRun(
+          fakeSpawner({
+            code: 1,
+            stderr: JSON.stringify({
+              error: {
+                code: "UNKNOWN",
+                message:
+                  "secret\nAuthorization: Bearer private-auth\nCookie: session=private-cookie\nxsec_token=private-token\n" +
+                  "x".repeat(5000),
+              },
+            }),
           }),
-        }),
+        ),
       ),
     ),
   );
@@ -530,15 +543,17 @@ test("OpenCLI diagnostics redact credentials and bound large or malformed error 
   assert.ok(error.message.length < 1700);
   let released = false;
   const malformed = await Effect.runPromise(
-    Effect.flip(
-      cliRun(
-        fakeSpawner({
-          code: 1,
-          stderr: "<html>private browser body" + "x".repeat(128 * 1024),
-          released: () => {
-            released = true;
-          },
-        }),
+    Effect.scoped(
+      Effect.flip(
+        cliRun(
+          fakeSpawner({
+            code: 1,
+            stderr: "<html>private browser body" + "x".repeat(128 * 1024),
+            released: () => {
+              released = true;
+            },
+          }),
+        ),
       ),
     ),
   );
@@ -549,15 +564,17 @@ test("OpenCLI diagnostics redact credentials and bound large or malformed error 
 
 test("OpenCLI diagnostics redact short Chinese query arguments", async () => {
   const error = await Effect.runPromise(
-    Effect.flip(
-      cliRun(
-        fakeSpawner({
-          code: 1,
-          stderr: JSON.stringify({
-            error: { code: "COMMAND_EXEC", message: "Search failed for 春节" },
+    Effect.scoped(
+      Effect.flip(
+        cliRun(
+          fakeSpawner({
+            code: 1,
+            stderr: JSON.stringify({
+              error: { code: "COMMAND_EXEC", message: "Search failed for 春节" },
+            }),
           }),
-        }),
-        ["xiaohongshu", "search", "春节", "--limit", "10", "-f", "json"],
+          ["xiaohongshu", "search", "春节", "--limit", "10", "-f", "json"],
+        ),
       ),
     ),
   );
@@ -591,14 +608,16 @@ test("OpenCLI logs a copyable command preserving quotes, spaces and signed URLs"
   ]) {
     messages.length = 0;
     await Effect.runPromise(
-      cliRun(
-        fakeSpawner({
-          inspect: () => {
-            assert.equal(messages.length, 1);
-          },
-        }),
-        args,
-      ).pipe(Effect.provide(Logger.layer([logger]))),
+      Effect.scoped(
+        cliRun(
+          fakeSpawner({
+            inspect: () => {
+              assert.equal(messages.length, 1);
+            },
+          }),
+          args,
+        ).pipe(Effect.provide(Logger.layer([logger]))),
+      ),
     );
     const [logged] = Schema.decodeUnknownSync(
       Schema.Array(

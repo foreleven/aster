@@ -45,33 +45,35 @@ config:
   });
   const { Layer } = await import("effect");
   await Effect.runPromise(
-    Effect.gen(function* () {
-      assert.deepEqual(
-        (yield* signalSettings)
-          .map((s) => [s.slug, s.task._tag === "Goal" ? s.task.text : ""])
-          .sort(),
-        [
-          ["another", "explicit"],
-          ["my-signal", "overridden"],
-        ],
-      );
-      assert.equal((yield* LarkConfig).im?.config?.pollIntervalMs, 5000);
-      assert.equal((yield* memorySettings).dataDir, join(dir, "memory"));
-      const models = yield* Models;
-      const one = yield* models.resolve("one");
-      assert.equal(one.model.id, "replacement");
-      assert.equal(one.getApiKey(), "captured-secret");
-      assert.equal((yield* models.resolve("two")).model.id, "second");
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(LarkConfig.layer, Models.configured).pipe(Layer.provideMerge(layer)),
+    Effect.scoped(
+      Effect.gen(function* () {
+        assert.deepEqual(
+          (yield* signalSettings)
+            .map((s) => [s.slug, s.task._tag === "Goal" ? s.task.text : ""])
+            .sort(),
+          [
+            ["another", "explicit"],
+            ["my-signal", "overridden"],
+          ],
+        );
+        assert.equal((yield* LarkConfig).im?.config?.pollIntervalMs, 5000);
+        assert.equal((yield* memorySettings).dataDir, join(dir, "memory"));
+        const models = yield* Models;
+        const one = yield* models.resolve("one");
+        assert.equal(one.model.id, "replacement");
+        assert.equal(one.getApiKey(), "captured-secret");
+        assert.equal((yield* models.resolve("two")).model.id, "second");
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(LarkConfig.layer, Models.configured).pipe(Layer.provideMerge(layer)),
+        ),
       ),
     ),
   );
   for (const invalid of ["- item", "42"]) {
     await writeFile(configPath, invalid);
     await assert.rejects(
-      Effect.runPromise(Config.String("value").pipe(Effect.provide(layer))),
+      Effect.runPromise(Effect.scoped(Config.String("value").pipe(Effect.provide(layer)))),
       /Invalid YAML/,
     );
   }

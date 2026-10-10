@@ -6,3 +6,4 @@ export * from "./rpcs/approvals.js";
 export * from "./rpcs/processing.js";
 export * from "./rpcs/runtime.js";
 export * from "./rpcs/notifications.js";
+export * from "./rpcs/business.js";

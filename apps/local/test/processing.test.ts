@@ -1,22 +1,21 @@
+import { serializeFixtureState } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { Schema } from "effect";
 import { TaskSnapshot } from "@aster/core";
 import { AccountProfile } from "@aster/integrations";
 import { MailboxProfile } from "@aster/integrations";
 import { EmailData } from "@aster/integrations";
-import { emailView } from "@aster/integrations";
 import {
   ApprovalQueueActor,
   ContextCaptures,
-  ContextRegistry,
   ExternalAgents,
   MemoryActor,
   MemoryBackend,
   type ContextInput,
   type ContextCapture as MemoryCapture,
 } from "@aster/core";
-import { makeContextRegistry, taskCapture } from "@aster/core/testing";
-import { larkCaptures, larkContextViews } from "@aster/integrations";
+import { makeTestContext, taskCapture } from "@aster/core/testing";
+import { larkCaptures } from "@aster/integrations";
 import { testConversations } from "./conversation-fixtures.js";
 
 import { ActorSystem } from "@aster/actor";
@@ -25,7 +24,15 @@ import { test } from "node:test";
 
 import { Effect, Layer } from "effect";
 
-const source = (subject: string): ContextInput => ({
+const source = (subject: string): ContextInput & { text: string } => ({
+  text: serializeFixtureState({
+    messageId: "test",
+    mailbox: "me",
+    from: "Alice",
+    subject,
+    bodyPlainText: "Please review",
+    attachments: [],
+  }),
   path: "/lark/mail/me/test",
   description: "An email in Lark mailbox me",
   state: {
@@ -52,14 +59,19 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        yield* registry.views.register(larkContextViews);
+        const registry = yield* makeTestContext();
         const capturesPolicy = yield* ContextCaptures;
         const conversations = testConversations();
         yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
 
         yield* registry.register("/lark", {
           state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
+          serialize: (state) => {
+            const account = Schema.decodeUnknownSync(
+              Schema.Struct({ account: Schema.optional(AccountProfile) }),
+            )(state).account;
+            return account ? JSON.stringify(account) : "";
+          },
           message: Schema.Never,
         });
         yield* registry.register("/lark/mail", {
@@ -67,21 +79,24 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
             mailbox: Schema.String,
             profile: Schema.optional(MailboxProfile),
           }),
+          serialize: (state) => {
+            const profile = Schema.decodeUnknownSync(
+              Schema.Struct({ profile: Schema.optional(MailboxProfile) }),
+            )(state).profile;
+            return profile ? JSON.stringify(profile) : "";
+          },
           message: Schema.Never,
         });
         yield* registry.register("/lark/mail/me/test", {
           state: EmailData,
           message: Schema.Never,
-          changes: "durable-state",
-          view: emailView,
+          events: "state",
+          serialize: (state) => JSON.stringify(state),
         });
         const captures: MemoryCapture[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(ContextCaptures, capturesPolicy),
             Layer.succeed(ExternalAgents, {}),
             Layer.succeed(MemoryBackend, {
@@ -101,6 +116,7 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         yield* system.spawn("approvals", ApprovalQueueActor);
         yield* registry.commit(
           {
+            text: serializeFixtureState({ mailbox: "me" }),
             path: "/lark/mail",
             description: "Work mailbox",
             state: { mailbox: "me" },
@@ -115,7 +131,7 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         yield* registry.commit(source("Confirmed request"), {
           expectedRevision: registry.get("/lark/mail/me/test")?.revision ?? 0,
         });
-        const confirmed = registry.reader.get("/lark/mail/me/test")!;
+        const confirmed = registry.backend.get("/lark/mail/me/test")!;
         const taskPath = "/tasks/" + "a".repeat(64);
         const input = {
           requestId: "task",
@@ -132,6 +148,23 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         yield* registry.register(taskPath, { state: TaskSnapshot, message: Schema.Never });
         yield* registry.commit(
           {
+            text: serializeFixtureState({
+              status: "ready",
+              inputs: [
+                {
+                  requestId: "task",
+                  entryId: entry.id,
+                  receipt: { requestId: "task", revision: 1 },
+                  status: "pending",
+                },
+              ],
+              admission: {
+                source: "/signals/review",
+                agent: "test",
+                replyTo: "/goals/personal",
+                remainingAgentTurns: 3,
+              },
+            }),
             path: taskPath,
             description: "Review",
             messages: [],
@@ -170,8 +203,8 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
   );
   assert.equal(result.captures.length, 1);
   const capture = result.captures[0]!;
-  assert.match(capture.sessionId, /^\/tasks\/[a-f0-9]{64}:trigger$/);
-  assert.equal((capture.records[1]!.state as { subject: string }).subject, "Confirmed request");
+  assert.match(capture.sessionId, /^\/tasks\/[a-f0-9]{64}:text:[a-f0-9]{64}$/);
+  assert.equal(JSON.parse(capture.records[1]!.text).subject, "Confirmed request");
   assert.equal("type" in result.snapshot[capture.records[0]!.path]!, false);
 });
 
@@ -179,14 +212,19 @@ test("discovered account and mailbox identities use separate sessions; no captur
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
-        yield* registry.views.register(larkContextViews);
+        const registry = yield* makeTestContext();
         const capturesPolicy = yield* ContextCaptures;
         const conversations = testConversations();
         yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
 
         yield* registry.register("/lark", {
           state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
+          serialize: (state) => {
+            const account = Schema.decodeUnknownSync(
+              Schema.Struct({ account: Schema.optional(AccountProfile) }),
+            )(state).account;
+            return account ? JSON.stringify(account) : "";
+          },
           message: Schema.Never,
         });
         yield* registry.register("/lark/mail", {
@@ -194,21 +232,24 @@ test("discovered account and mailbox identities use separate sessions; no captur
             mailbox: Schema.String,
             profile: Schema.optional(MailboxProfile),
           }),
+          serialize: (state) => {
+            const profile = Schema.decodeUnknownSync(
+              Schema.Struct({ profile: Schema.optional(MailboxProfile) }),
+            )(state).profile;
+            return profile ? JSON.stringify(profile) : "";
+          },
           message: Schema.Never,
         });
         yield* registry.register("/lark/mail/me/test", {
           state: EmailData,
           message: Schema.Never,
-          changes: "durable-state",
-          view: emailView,
+          events: "state",
+          serialize: (state) => JSON.stringify(state),
         });
         const captures: MemoryCapture[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(ContextCaptures, capturesPolicy),
             Layer.succeed(MemoryBackend, {
               description: "Memory",
@@ -226,6 +267,7 @@ test("discovered account and mailbox identities use separate sessions; no captur
         yield* memory.awaitStarted;
         yield* registry.commit(
           {
+            text: serializeFixtureState({}),
             path: "/lark",
             description: "Work account",
             state: {},
@@ -235,6 +277,7 @@ test("discovered account and mailbox identities use separate sessions; no captur
         );
         yield* registry.commit(
           {
+            text: serializeFixtureState({ mailbox: "me" }),
             path: "/lark/mail",
             description: "Work mailbox",
             state: { mailbox: "me" },
@@ -246,6 +289,10 @@ test("discovered account and mailbox identities use separate sessions; no captur
         assert.equal(captures.length, 0);
         yield* registry.commit(
           {
+            text: serializeFixtureState({
+              mailbox: "me",
+              profile: { address: "test@example.com", name: "Work mailbox" },
+            }),
             path: "/lark/mail",
             description: "Work mailbox",
             state: {
@@ -259,6 +306,14 @@ test("discovered account and mailbox identities use separate sessions; no captur
         yield* waitFor(() => captures.length === 1);
         yield* registry.commit(
           {
+            text: serializeFixtureState({
+              account: {
+                openId: "ou_test",
+                name: "Test",
+                email: "test@example.com",
+                enterpriseEmail: "",
+              },
+            }),
             path: "/lark",
             description: "Work account",
             state: {

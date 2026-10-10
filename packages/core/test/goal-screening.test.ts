@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "../src/testing/context.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Exit, Logger } from "effect";
@@ -19,7 +20,7 @@ const relevantGoals = (
   source: ContextSnapshot,
   goals: readonly GoalDefinition[],
   options: {
-    goalRecords?: Record<string, import("../src/context/contracts.js").PublicContext>;
+    goalRecords?: Record<string, { definition: GoalDefinition; summary: string }>;
     screening?: GoalScreeningStore["Service"];
   } = {},
 ) =>
@@ -41,6 +42,7 @@ const relevantGoals = (
   );
 
 const source: ContextSnapshot = {
+  text: serializeFixtureState({ summary: "The launch is blocked by a backend API delay." }),
   path: "/lark/im/chats/project",
   revision: 1,
   description: "Project chat",
@@ -51,40 +53,42 @@ const source: ContextSnapshot = {
 test("Goal screening sends project identity rules with overlapping dataset evidence", async () => {
   let inspected = false;
   await Effect.runPromise(
-    relevantGoals(
-      {
-        systemOne: (request) =>
-          Effect.sync(() => {
-            const question = request.questions.relevance!;
-            assert.equal(question.type, "score");
-            assert.match(
-              question.instructions,
-              /same project or an explicitly evidenced dependency/,
-            );
-            assert.match(question.instructions, /Without that link, score at most 3/);
-            assert.match(question.instructions, /P0 severity, overdue bugs/);
-            assert.match(question.instructions, /Aliases must be established/);
-            assert.match(question.instructions, /explicit dependency can be relevant/);
-            assert.match(JSON.stringify(request.state), /DataAgent/);
-            assert.match(JSON.stringify(request.state), /high-quality dataset project/);
-            inspected = true;
-            return { answers: { relevance: { type: "score", score: 2 } } };
-          }),
-      },
-      {
-        ...source,
-        state: {
-          summary:
-            "The high-quality dataset project has overdue P0 labeling permission bugs and P1 agent node bugs, with a daily 18:00 standup. No dependency on DataAgent is stated.",
-        },
-      },
-      [
+    Effect.scoped(
+      relevantGoals(
         {
-          slug: "data-agent",
-          title: "DataAgent (iDA)",
-          description: "Track DataAgent project progress.",
+          systemOne: (request) =>
+            Effect.sync(() => {
+              const question = request.questions.relevance!;
+              assert.equal(question.type, "score");
+              assert.match(
+                question.instructions,
+                /same project or an explicitly evidenced dependency/,
+              );
+              assert.match(question.instructions, /Without that link, score at most 3/);
+              assert.match(question.instructions, /P0 severity, overdue bugs/);
+              assert.match(question.instructions, /Aliases must be established/);
+              assert.match(question.instructions, /explicit dependency can be relevant/);
+              assert.match(JSON.stringify(request.state), /DataAgent/);
+              assert.match(JSON.stringify(request.state), /high-quality dataset project/);
+              inspected = true;
+              return { answers: { relevance: { type: "score", score: 2 } } };
+            }),
         },
-      ],
+        {
+          ...source,
+          state: {
+            summary:
+              "The high-quality dataset project has overdue P0 labeling permission bugs and P1 agent node bugs, with a daily 18:00 standup. No dependency on DataAgent is stated.",
+          },
+        },
+        [
+          {
+            slug: "data-agent",
+            title: "DataAgent (iDA)",
+            description: "Track DataAgent project progress.",
+          },
+        ],
+      ),
     ),
   );
   assert.equal(inspected, true);
@@ -113,32 +117,32 @@ test("Goal screening scores each Goal independently and records admitted evidenc
       }),
   };
   const result = await Effect.runPromise(
-    relevantGoals(
-      client,
-      source,
-      [
-        { slug: "release", title: "Release readiness", description: "Release risks" },
-        { slug: "hiring", title: "Hiring", description: "Hiring plans" },
-      ],
-      {
-        goalRecords: {
-          "/goals/release": {
-            revision: 0,
-            path: "/goals/release",
-            description: "Release Goal",
-            state: { title: "Release readiness", summary: "Prepare this release." },
-            messages: [],
+    Effect.scoped(
+      relevantGoals(
+        client,
+        source,
+        [
+          { slug: "release", title: "Release readiness", description: "Release risks" },
+          { slug: "hiring", title: "Hiring", description: "Hiring plans" },
+        ],
+        {
+          goalRecords: {
+            "/goals/release": {
+              definition: {
+                slug: "release",
+                title: "Release readiness",
+                description: "Release Goal",
+              },
+              summary: "Prepare this release.",
+            },
+            "/goals/hiring": {
+              definition: { slug: "hiring", title: "Hiring", description: "Hiring Goal" },
+              summary: "Build the team.",
+            },
           },
-          "/goals/hiring": {
-            revision: 0,
-            path: "/goals/hiring",
-            description: "Hiring Goal",
-            state: { title: "Hiring", summary: "Build the team." },
-            messages: [],
-          },
+          screening: { append: (record) => Effect.sync(() => records.push(record)) },
         },
-        screening: { append: (record) => Effect.sync(() => records.push(record)) },
-      },
+      ),
     ),
   );
   assert.equal(requests.length, 2);
@@ -153,9 +157,7 @@ test("Goal screening scores each Goal independently and records admitted evidenc
     records.map((record) => record.admitted),
     [true, false],
   );
-  assert.ok(
-    records.every((record) => JSON.stringify(record.input.context.state).includes("launch")),
-  );
+  assert.ok(records.every((record) => record.input.context.text.includes("launch")));
 });
 
 test("invalid Goal screening scores fail closed", async () => {
@@ -165,9 +167,11 @@ test("invalid Goal screening scores fail closed", async () => {
   };
   const records: GoalScreeningRecord[] = [];
   const result = await Effect.runPromise(
-    relevantGoals(client, source, [{ slug: "release", description: "Release risks" }], {
-      screening: { append: (record) => Effect.sync(() => records.push(record)) },
-    }).pipe(Effect.result),
+    Effect.scoped(
+      relevantGoals(client, source, [{ slug: "release", description: "Release risks" }], {
+        screening: { append: (record) => Effect.sync(() => records.push(record)) },
+      }).pipe(Effect.result),
+    ),
   );
   assert.equal(result._tag, "Failure");
   assert.equal(records[0]?.admitted, false);
@@ -183,11 +187,13 @@ test("ten-level relevance preserves continuous scores and the normalized admissi
   ] as const) {
     const records: GoalScreeningRecord[] = [];
     const result = await Effect.runPromise(
-      relevantGoals(
-        { systemOne: () => Effect.succeed({ answers: { relevance: { type: "score", score } } }) },
-        source,
-        [{ slug: "release", description: "Release risks" }],
-        { screening: { append: (record) => Effect.sync(() => records.push(record)) } },
+      Effect.scoped(
+        relevantGoals(
+          { systemOne: () => Effect.succeed({ answers: { relevance: { type: "score", score } } }) },
+          source,
+          [{ slug: "release", description: "Release risks" }],
+          { screening: { append: (record) => Effect.sync(() => records.push(record)) } },
+        ),
       ),
     );
     assert.equal(result.length, admitted ? 1 : 0);
@@ -205,12 +211,14 @@ test("scores outside the ten-level rubric and non-score answers fail closed", as
   ]) {
     const records: GoalScreeningRecord[] = [];
     const result = await Effect.runPromise(
-      relevantGoals(
-        { systemOne: () => Effect.succeed({ answers: { relevance: answer } }) },
-        source,
-        [{ slug: "release", description: "Release risks" }],
-        { screening: { append: (record) => Effect.sync(() => records.push(record)) } },
-      ).pipe(Effect.result),
+      Effect.scoped(
+        relevantGoals(
+          { systemOne: () => Effect.succeed({ answers: { relevance: answer } }) },
+          source,
+          [{ slug: "release", description: "Release risks" }],
+          { screening: { append: (record) => Effect.sync(() => records.push(record)) } },
+        ).pipe(Effect.result),
+      ),
     );
     assert.equal(result._tag, "Failure");
     assert.equal(records[0]?.error, "invalid-score");
@@ -221,12 +229,14 @@ test("screening audits typed failures before returning the original error", asyn
   const failure = new DecisionError({ message: "Service unavailable" });
   const records: GoalScreeningRecord[] = [];
   const result = await Effect.runPromise(
-    relevantGoals(
-      { systemOne: () => Effect.fail(failure) },
-      source,
-      [{ slug: "release", description: "Release risks" }],
-      { screening: { append: (record) => Effect.sync(() => records.push(record)) } },
-    ).pipe(Effect.result, Effect.provide(Logger.layer([]))),
+    Effect.scoped(
+      relevantGoals(
+        { systemOne: () => Effect.fail(failure) },
+        source,
+        [{ slug: "release", description: "Release risks" }],
+        { screening: { append: (record) => Effect.sync(() => records.push(record)) } },
+      ).pipe(Effect.result, Effect.provide(Logger.layer([]))),
+    ),
   );
   assert.equal(result._tag, "Failure");
   if (result._tag === "Failure") assert.equal(result.failure, failure);
@@ -238,12 +248,16 @@ test("screening audits typed failures before returning the original error", asyn
 test("screening audit storage failures remain failures", async () => {
   const failure = new GoalScreeningStoreError({ message: "Disk full" });
   const result = await Effect.runPromise(
-    relevantGoals(
-      { systemOne: () => Effect.succeed({ answers: { relevance: { type: "score", score: 9 } } }) },
-      source,
-      [{ slug: "release", description: "Release risks" }],
-      { screening: { append: () => Effect.fail(failure) } },
-    ).pipe(Effect.result),
+    Effect.scoped(
+      relevantGoals(
+        {
+          systemOne: () => Effect.succeed({ answers: { relevance: { type: "score", score: 9 } } }),
+        },
+        source,
+        [{ slug: "release", description: "Release risks" }],
+        { screening: { append: () => Effect.fail(failure) } },
+      ).pipe(Effect.result),
+    ),
   );
   assert.equal(result._tag, "Failure");
   if (result._tag === "Failure") assert.equal(result.failure, failure);
@@ -267,37 +281,42 @@ test("screening does not turn defects or interruption into audit decisions", asy
 
 test("empty Goal evidence is explicitly NotMatched without a model request", async () => {
   const result = await Effect.runPromise(
-    matchGoal(
-      {
-        systemOne: () => Effect.die(new Error("Empty evidence must not call the model")),
-      },
-      { ...source, state: { summary: "  " } },
-      {
-        definition: { slug: "launch", description: "Launch" },
-        title: "Launch",
-        summary: "",
-      },
+    Effect.scoped(
+      matchGoal(
+        {
+          systemOne: () => Effect.die(new Error("Empty evidence must not call the model")),
+        },
+        { ...source, text: "  " },
+        {
+          definition: { slug: "launch", description: "Launch" },
+          title: "Launch",
+          summary: "",
+        },
+      ),
     ),
   );
   assert.deepEqual(result, { _tag: "NotMatched", reason: "Context has no summary evidence." });
 });
 
-test("Goal evidence identity includes public metadata and messages but ignores revision", async () => {
+test("Goal evidence identity includes metadata and serialized text but ignores revision", async () => {
   const records: GoalScreeningRecord[] = [];
   for (const evidence of [
     source,
     { ...source, revision: 2 },
     { ...source, description: "A different project chat" },
-    { ...source, messages: [{ text: "An explicit project dependency" }] },
+    { ...source, text: "An explicit project dependency" },
   ]) {
     await Effect.runPromise(
-      relevantGoals(
-        {
-          systemOne: () => Effect.succeed({ answers: { relevance: { type: "score", score: 9 } } }),
-        },
-        evidence,
-        [{ slug: "release", description: "Release risks" }],
-        { screening: { append: (record) => Effect.sync(() => records.push(record)) } },
+      Effect.scoped(
+        relevantGoals(
+          {
+            systemOne: () =>
+              Effect.succeed({ answers: { relevance: { type: "score", score: 9 } } }),
+          },
+          evidence,
+          [{ slug: "release", description: "Release risks" }],
+          { screening: { append: (record) => Effect.sync(() => records.push(record)) } },
+        ),
       ),
     );
   }

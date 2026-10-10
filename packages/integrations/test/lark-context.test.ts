@@ -2,8 +2,7 @@ import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { ContextRegistry } from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
+import { makeTestContext } from "@aster/core/testing";
 import { Effect, Layer } from "effect";
 import { LarkMailMessageActor } from "../src/lark/mail/message-actor.js";
 
@@ -11,14 +10,9 @@ test("email updates retain the owner-supplied Context description and identical 
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
-          ),
+          ActorSystem.provide(Layer.mergeAll(Layer.succeed(DurableContext, registry.backend))),
         );
         const path = "/lark/mail/me/message";
         const actor = yield* system.spawn("mail", LarkMailMessageActor, {

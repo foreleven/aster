@@ -1,10 +1,11 @@
+import { GetProcessing } from "./queries.js";
+import { publicJson } from "../json.js";
 import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand, type ActorContext } from "@aster/actor";
-import { Config, Effect, Match, Schema, Stream } from "effect";
+import { Config, Context, Effect, Layer, Match, Schema, Stream } from "effect";
 import { randomUUID } from "node:crypto";
 import { ContextActor } from "../context/actor.js";
 import { ContextEvent } from "../context/model.js";
-import { ContextRegistry } from "../context/registry.js";
 import { DurableContext } from "../context/store.js";
 import { CurrentActors } from "../services/actors.js";
 import { RecoveryInput, RecoveryReply } from "./contracts.js";
@@ -20,7 +21,8 @@ export class Recover extends ActorCommand.Class<Recover>()("Recover", {
   payload: { input: RecoveryInput },
   reply: RecoveryReply,
 }) {}
-export const ReactionCommands = [Ingest, Recover] as const;
+
+export const ReactionCommands = [Ingest, Recover, GetProcessing] as const;
 export const ReactionInternal = Schema.TaggedUnion({
   Continue: { deliveryId: Schema.String, generation: Schema.String },
   Planned: {
@@ -48,9 +50,10 @@ export const SystemOneActor = ContextActor.define("context/SystemOneActor", {
   internal: ReactionInternal,
 })(
   Effect.gen(function* () {
-    const registry = yield* ContextRegistry;
+    const registry = yield* DurableContext;
     const changes = yield* registry.subscribe;
-    const state = yield* ReactionState;
+    const services = yield* Layer.buildWithScope(ReactionState.layer, yield* Effect.scope);
+    const state = Context.get(services, ReactionState);
     const policy = yield* ReactionPolicy;
     const durable = yield* DurableContext;
     const limit = Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(32));
@@ -113,7 +116,7 @@ export const SystemOneActor = ContextActor.define("context/SystemOneActor", {
       }
     });
     return {
-      started: (context) =>
+      started: (context: ActorContext<ReactionCommand>) =>
         Effect.gen(function* () {
           yield* state.restore;
           yield* context.pipeToSelf(
@@ -127,8 +130,15 @@ export const SystemOneActor = ContextActor.define("context/SystemOneActor", {
           yield* state.ingest(durable.journal());
           yield* drive(context);
         }),
-      receive: (command, context) =>
+      receive: (command: ReactionCommand, context: ActorContext<ReactionCommand>) =>
         Match.value(command).pipe(
+          Match.tag("GetProcessing", ({ replyTo }) =>
+            state.snapshot.pipe(
+              Effect.flatMap((value) =>
+                replyTo.tell(publicJson({ revision: value.revision, state: value.state })),
+              ),
+            ),
+          ),
           Match.tag("Ingest", ({ events }) =>
             state.ingest(events).pipe(Effect.andThen(drive(context))),
           ),
@@ -177,4 +187,6 @@ export const SystemOneActor = ContextActor.define("context/SystemOneActor", {
         ),
     };
   }),
-).pipe(ContextActor.provide(ReactionState.layer));
+);
+
+export { GetProcessing } from "./queries.js";

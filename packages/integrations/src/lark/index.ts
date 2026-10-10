@@ -22,5 +22,4 @@ export * from "./im/summary/agent-queue.js";
 export * from "./im/summary/gate.js";
 export * from "./shared/errors.js";
 
-export * from "./public-views.js";
 export * from "./mail/window.js";

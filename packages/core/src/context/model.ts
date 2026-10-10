@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { PublicContext } from "./contracts.js";
+import { ContextText } from "./contracts.js";
 import { Schema } from "effect";
 
 export const ContextPath = Schema.String.check(
@@ -18,12 +18,13 @@ export type ContextInput = typeof ContextInput.Type;
 export const ContextSnapshot = Schema.Struct({
   ...ContextInput.fields,
   revision: Schema.Int.check(Schema.isGreaterThanOrEqualTo(0)),
+  text: Schema.String,
 });
 export type ContextSnapshot = typeof ContextSnapshot.Type;
 
 /** Committed owner snapshot and new source events; the journal covers missed notifications. */
 export interface ContextChange {
-  readonly record: ContextSnapshot;
+  readonly record: ContextText;
   /** Newly committed durable source events; absent for metadata/private updates. */
   readonly events?: readonly ContextEvent[];
 }
@@ -31,7 +32,7 @@ export interface ContextChange {
 export const ContextEvent = Schema.Struct({
   id: Schema.NonEmptyString,
   record: Schema.Struct({
-    ...PublicContext.fields,
+    ...ContextText.fields,
     revision: Schema.Int.check(Schema.isGreaterThan(0)),
   }),
   createdAt: Schema.String,

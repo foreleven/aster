@@ -1,5 +1,5 @@
 import { GoalIntent } from "../contracts.js";
-import { type PublicContext as ContextRecord } from "../../context/contracts.js";
+import { type ContextText as ContextRecord } from "../../context/contracts.js";
 import { contextSummaryText, type GoalRelevance } from "./decision.js";
 import { Schema } from "effect";
 import { createHash } from "node:crypto";

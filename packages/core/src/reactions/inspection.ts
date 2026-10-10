@@ -1,6 +1,7 @@
-import { Effect, Schema, Option } from "effect";
-import { ApplicationError } from "../operations.js";
-import type { ContextRegistry } from "../context/registry.js";
+import { GetProcessing } from "./queries.js";
+import { readActor } from "../services/domain-reads.js";
+import { Effect, Schema } from "effect";
+
 import {
   ReactionSnapshot,
   deliveriesOf,
@@ -37,20 +38,15 @@ export const reactionWorkView = (work: ReactionWork) => {
 };
 
 export const inspectReactions = Effect.fn("Reactions.inspect")(function* (
-  registry: ContextRegistry["Service"],
+  actors: import("../services/actors.js").CurrentActors["Service"],
 ) {
-  const current = registry.get("/system-one");
-  if (!current)
-    return yield* new ApplicationError({
-      kind: "not-found",
-      message: "Processing owner not found",
-    });
-
-  const state = yield* Schema.decodeUnknownEffect(ReactionSnapshot)(current.state).pipe(
-    Effect.mapError(
-      () => new ApplicationError({ kind: "unavailable", message: "Reaction state unavailable" }),
-    ),
+  const current = yield* readActor(
+    actors,
+    "/system-one",
+    (replyTo) => new GetProcessing({ replyTo }),
+    Schema.Struct({ revision: Schema.Int, state: ReactionSnapshot }),
   );
+  const state = current.state;
   return {
     owner: "system-one" as const,
     revision: current.revision ?? 0,
@@ -78,18 +74,3 @@ export const inspectReactions = Effect.fn("Reactions.inspect")(function* (
     ]),
   };
 });
-
-export const reactionView: import("../context/view.js").ContextViewPolicy = {
-  matches: (path) => path === "/system-one",
-  project: (record) => {
-    const state = Schema.decodeUnknownOption(ReactionSnapshot)(record.state);
-    if (Option.isNone(state)) return undefined;
-    return {
-      ...record,
-      revision: record.revision ?? 0,
-      state: { work: state.value.work.map(reactionWorkView) },
-      messages: [],
-      projection: { visibility: "public" },
-    };
-  },
-};

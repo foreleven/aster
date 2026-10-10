@@ -28,7 +28,7 @@ test("execution effects are lazy and preserve operation and cause without retryi
   );
   const submission = agent.submit({ instructions: "Review", input: [] });
   assert.equal(submissions, 0);
-  const error = await Effect.runPromise(Effect.flip(submission));
+  const error = await Effect.runPromise(Effect.scoped(Effect.flip(submission)));
   assert.ok(error instanceof ExternalAgentError);
   assert.equal(error.operation, "submit");
   assert.equal(error.cause, cause);
@@ -83,9 +83,11 @@ test("external adapter forwards stable submission identity and explicit cancella
     }),
   );
   assert.deepEqual(
-    await Effect.runPromise(agent.submit({ instructions: "Review", input: [] }, identity)),
+    await Effect.runPromise(
+      Effect.scoped(agent.submit({ instructions: "Review", input: [] }, identity)),
+    ),
     session,
   );
-  assert.equal(await Effect.runPromise(agent.cancel!(session)), true);
+  assert.equal(await Effect.runPromise(Effect.scoped(agent.cancel!(session))), true);
   assert.equal(adaptExternalAgent(driver({})).cancel, undefined);
 });

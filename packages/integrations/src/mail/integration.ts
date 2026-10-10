@@ -1,8 +1,6 @@
-import { MailboxSnapshot } from "./state/snapshot.js";
 import { Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
 import {
   ContextQueries,
-  ContextRegistry,
   DurableContext,
   RuntimeIntegrations,
   defineIntegration,
@@ -10,7 +8,7 @@ import {
 import { MailSettings } from "./config.js";
 import { MailFetcher, mailFetcherLayer } from "./client.js";
 import { MailRootActor } from "./actors.js";
-import { mailContextViews, mailboxPath } from "./contexts.js";
+import { mailboxPath } from "./contexts.js";
 
 const services = mailFetcherLayer().pipe(Layer.provideMerge(MailSettings.layer));
 
@@ -18,21 +16,15 @@ const services = mailFetcherLayer().pipe(Layer.provideMerge(MailSettings.layer))
 const installation = Layer.effectDiscard(
   Effect.gen(function* () {
     const settings = yield* MailSettings;
-    const registry = yield* ContextRegistry;
-    yield* registry.views.register(mailContextViews);
+    const registry = yield* DurableContext;
     if (settings.mailboxes.length === 0) return;
     const modules = yield* RuntimeIntegrations;
     const dependencies = Context.pick(
       MailSettings,
       MailFetcher,
       ContextQueries,
-      ContextRegistry,
       DurableContext,
-    )(
-      yield* Effect.context<
-        MailSettings | MailFetcher | ContextRegistry | DurableContext | ContextQueries
-      >(),
-    );
+    )(yield* Effect.context<MailSettings | MailFetcher | DurableContext | ContextQueries>());
     yield* modules.register(
       defineIntegration({
         name: "mail",
@@ -46,15 +38,16 @@ const installation = Layer.effectDiscard(
             const changes = yield* registry.subscribe;
             const observer = yield* Stream.runForEach(changes, (change) =>
               Effect.gen(function* () {
-                if (
-                  pending.has(change.record.path) &&
-                  Schema.is(MailboxSnapshot)(change.record.state) &&
-                  change.record.state.status === "ready"
-                ) {
+                if (!pending.has(change.record.path)) return;
+                const state = yield* registry.readState(
+                  change.record.path,
+                  Schema.Struct({ status: Schema.String }),
+                );
+                if (state.status === "ready") {
                   pending.delete(change.record.path);
                   if (pending.size === 0) yield* Deferred.succeed(ready, undefined);
                 }
-              }),
+              }).pipe(Effect.orDie),
             ).pipe(Effect.forkScoped);
             const actor = yield* system.spawn("mail", MailRootActor);
             return {

@@ -1,3 +1,5 @@
+import { loadGoalStatus } from "../goals/queries.js";
+import { publicJson } from "../json.js";
 import { taskQueryData } from "./view.js";
 import { CommandProcessor, type ActorContext } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
@@ -5,7 +7,7 @@ import { Context, Effect, Fiber, Layer, Match, Option, Ref, Schema, Scope } from
 import { randomUUID } from "node:crypto";
 import { approvalEntries, sendApproval } from "../approvals/actor.js";
 import { ContextActor, contextPath } from "../context/actor.js";
-import { ContextRegistry } from "../context/registry.js";
+import { DurableContext } from "../context/store.js";
 import { CurrentActors } from "../services/actors.js";
 import { deliverTaskFeedback } from "./delivery.js";
 import { TaskExecution } from "./execution/service.js";
@@ -20,7 +22,7 @@ const makeHandlers = Effect.gen(function* () {
   const queries = yield* CommandProcessor.make({ concurrency: 2 });
   const execution = yield* TaskExecution;
   const messages = yield* AgentConversations;
-  const registry = yield* ContextRegistry;
+  const registry = yield* DurableContext;
   const running = yield* Ref.make<
     { generation: string; inputs: readonly string[]; fiber: Fiber.Fiber<TaskOutcome> } | undefined
   >(undefined);
@@ -41,7 +43,7 @@ const makeHandlers = Effect.gen(function* () {
     if (!result.requests?.some((request) => request.kind === "confirmation"))
       yield* notify(owner, result);
     if (result.status === "cancelled")
-      for (const request of approvalEntries(registry))
+      for (const request of yield* approvalEntries(owner).pipe(Effect.orDie))
         if (
           request.contextPath === state.path &&
           request.target === owner.path &&
@@ -58,8 +60,8 @@ const makeHandlers = Effect.gen(function* () {
     if (yield* Ref.get(running)) return;
     const snapshot = yield* state.snapshot;
     if (
-      (registry.get(snapshot.admission.replyTo)?.state as { status?: string } | undefined)
-        ?.status !== "active" &&
+      (yield* loadGoalStatus(registry, snapshot.admission.replyTo).pipe(Effect.orDie)).status !==
+        "active" &&
       snapshot.status === "ready"
     ) {
       if (yield* state.cancel("The owning Goal has ended")) yield* reportOutcome(owner);
@@ -109,6 +111,11 @@ const makeHandlers = Effect.gen(function* () {
     }),
     receive: (command: TaskCommand, owner: Owner) =>
       Match.value(command).pipe(
+        Match.tag("GetTaskSnapshot", ({ replyTo }) =>
+          Effect.gen(function* () {
+            yield* replyTo.tell(publicJson(yield* state.snapshot));
+          }),
+        ),
         Match.tag("GetTaskDetails", (command) =>
           Effect.gen(function* () {
             // Capture mailbox-owned state before reading its selected Pi evidence in a request scope.

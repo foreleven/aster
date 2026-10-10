@@ -1,7 +1,8 @@
+import { CurrentActors } from "../services/actors.js";
 import { type ActorContext } from "@aster/actor";
 import { Clock, Context, Deferred, Effect, Fiber, Layer, Match, Ref, Scope } from "effect";
 import { ContextActor, contextPath } from "../context/actor.js";
-import { ContextRegistry } from "../context/registry.js";
+import { DurableContext } from "../context/store.js";
 import { deliverTask, taskDeliveryReceipt } from "../tasks/delivery.js";
 import {
   type SignalCommand,
@@ -10,12 +11,11 @@ import {
   SignalInternal,
 } from "./protocol.js";
 import { SignalState } from "./state/model.js";
-import { signalView } from "./state/snapshot.js";
 
 type Owner = ActorContext<SignalCommand>;
 const handlers = Effect.gen(function* () {
   const state = yield* SignalState;
-  const registry = yield* ContextRegistry;
+  const registry = yield* DurableContext;
   const scope = yield* Effect.scope;
   const active = yield* Ref.make(false);
   const timer = yield* Ref.make<{ key: string; fiber: Fiber.Fiber<void> } | undefined>(undefined);
@@ -75,7 +75,14 @@ const handlers = Effect.gen(function* () {
             const snapshot = yield* state.snapshot;
             const record = yield* state.record;
             yield* replyTo.tell(
-              snapshot && record ? signalView.project({ ...record, state: snapshot }) : undefined,
+              snapshot && record
+                ? {
+                    path: state.path,
+                    description: record.description,
+                    revision: record.revision,
+                    state: snapshot,
+                  }
+                : undefined,
             );
           }),
         ),
@@ -155,7 +162,7 @@ export const SignalActor = ContextActor.define("signals/Actor", {
         definitions.find((item) => `/signals/${item.slug}` === path),
       ),
       scope,
-    );
+    ).pipe(Effect.provideService(CurrentActors, owner));
     const behavior = yield* handlers.pipe(
       Effect.provideService(SignalState, Context.get(services, SignalState)),
       Effect.provideService(Scope.Scope, scope),

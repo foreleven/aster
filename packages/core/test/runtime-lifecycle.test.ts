@@ -1,5 +1,5 @@
+import { readGoalState } from "../src/goals/queries.js";
 import { makeHarness } from "./harness-fixtures.js";
-import { ContextRegistry } from "../src/context/registry.js";
 import { submitGoal } from "./goal-command-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
@@ -15,12 +15,10 @@ import {
   Exit,
   Fiber,
   Layer,
-  Schema,
   Stream,
 } from "effect";
 import {
   AsterRuntime,
-  GoalSnapshot,
   goalTimeline,
   MemoryBackend,
   DurableContext,
@@ -91,25 +89,27 @@ test("runtime readiness includes the built-in Goal assistant and ordinary Goal c
     Layer.provide(config),
   );
   await Effect.runPromise(
-    Effect.gen(function* () {
-      const runtime = yield* AsterRuntime;
-      yield* runtime.ready;
-      const accepted = yield* submitGoal(
-        runtime.actors,
-        "personal",
-        "Track my work",
-        "runtime-input",
-      );
-      const personal = (yield* ContextRegistry).reader.get("/goals/personal")!;
-      assert.equal(personal.path, "/goals/personal");
-      assert.deepEqual(
-        yield* submitGoal(runtime.actors, "personal", "Track my work", "runtime-input"),
-        accepted,
-      );
-      const paths = (yield* runtime.inspect).actors.map((actor) => actor.path);
-      assert.ok(paths.includes("/user/goals/personal"));
-      assert.ok(!paths.includes("/user/personal") && !paths.includes("/user/notifications"));
-    }).pipe(Effect.provide(live)),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const runtime = yield* AsterRuntime;
+        yield* runtime.ready;
+        const accepted = yield* submitGoal(
+          runtime.actors,
+          "personal",
+          "Track my work",
+          "runtime-input",
+        );
+        const personal = (yield* DurableContext).get("/goals/personal")!;
+        assert.equal(personal.path, "/goals/personal");
+        assert.deepEqual(
+          yield* submitGoal(runtime.actors, "personal", "Track my work", "runtime-input"),
+          accepted,
+        );
+        const paths = (yield* runtime.inspect).actors.map((actor) => actor.path);
+        assert.ok(paths.includes("/user/goals/personal"));
+        assert.ok(!paths.includes("/user/personal") && !paths.includes("/user/notifications"));
+      }).pipe(Effect.provide(live)),
+    ),
   );
 });
 
@@ -119,13 +119,15 @@ test("a readiness defect settles runtime.ready with its original cause", async (
     integrations: [integration("source", "source", Effect.void, Effect.die(defect))],
   }).pipe(Layer.provide(infrastructure()), Layer.provide(config));
   await Effect.runPromise(
-    Effect.gen(function* () {
-      const runtime = yield* AsterRuntime;
-      const exit = yield* Effect.exit(runtime.ready.pipe(Effect.timeout("200 millis")));
-      assert.ok(Exit.isFailure(exit));
-      assert.equal(Cause.squash(exit.cause), defect);
-      assert.equal((yield* runtime.inspect).phase, "failed");
-    }).pipe(Effect.provide(live)),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const runtime = yield* AsterRuntime;
+        const exit = yield* Effect.exit(runtime.ready.pipe(Effect.timeout("200 millis")));
+        assert.ok(Exit.isFailure(exit));
+        assert.equal(Cause.squash(exit.cause), defect);
+        assert.equal((yield* runtime.inspect).phase, "failed");
+      }).pipe(Effect.provide(live)),
+    ),
   );
 });
 
@@ -159,7 +161,7 @@ test("closing a runtime before readiness also settles later readiness callers", 
   const live = AsterRuntime.layer({
     integrations: [integration("pending", "source", Effect.void, Effect.never)],
   }).pipe(Layer.provide(infrastructure()), Layer.provide(config));
-  const runtime = await Effect.runPromise(AsterRuntime.pipe(Effect.provide(live)));
+  const runtime = await Effect.runPromise(Effect.scoped(AsterRuntime.pipe(Effect.provide(live))));
   const exit = await Effect.runPromiseExit(runtime.ready.pipe(Effect.timeout("200 millis")));
   assert.ok(Exit.isFailure(exit));
   assert.ok(Cause.hasInterruptsOnly(exit.cause));
@@ -216,17 +218,24 @@ for (const slug of ["personal", "project"]) {
           );
           yield* Effect.gen(function* () {
             const runtime = yield* AsterRuntime;
-            const registry = yield* ContextRegistry;
+            const registry = yield* DurableContext;
             const conversations = yield* AgentConversations;
             const readiness = yield* runtime.ready.pipe(Effect.forkScoped);
             const changes = yield* registry.subscribe;
             yield* submitGoal(runtime.actors, slug, "Hello", "before-ready");
-            const replied = () =>
-              Schema.decodeUnknownSync(GoalSnapshot)(
-                registry.get(`/goals/${slug}`)!.state,
-              ).inputs.some((input) => input.kind === "UserInput" && input.status === "completed");
-            if (!replied())
-              yield* changes.pipe(Stream.filter(replied), Stream.take(1), Stream.runDrain);
+            const replied = readGoalState(runtime.actors, `/goals/${slug}`).pipe(
+              Effect.map((state) =>
+                state.inputs.some(
+                  (input) => input.kind === "UserInput" && input.status === "completed",
+                ),
+              ),
+            );
+            if (!(yield* replied))
+              yield* changes.pipe(
+                Stream.filterEffect(() => replied),
+                Stream.take(1),
+                Stream.runDrain,
+              );
             const timeline = yield* goalTimeline(registry, conversations, slug);
             assert.ok(
               timeline.messages.some(
@@ -332,20 +341,22 @@ test("a stopped core owner makes runtime health failed after readiness", async (
     Layer.provide(config),
   );
   await Effect.runPromise(
-    Effect.gen(function* () {
-      const runtime = yield* AsterRuntime;
-      yield* runtime.ready;
-      yield* yield* Deferred.await(stopMemory);
-      const snapshot = yield* runtime.inspect.pipe(
-        Effect.repeat({ until: (snapshot) => snapshot.phase === "failed" }),
-        Effect.timeout("2 seconds"),
-      );
-      assert.equal(snapshot.phase, "failed");
-      assert.ok(
-        snapshot.events.some(
-          (event) => event._tag === "ActorStopped" && event.path === "/user/memory",
-        ),
-      );
-    }).pipe(Effect.provide(live)),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const runtime = yield* AsterRuntime;
+        yield* runtime.ready;
+        yield* yield* Deferred.await(stopMemory);
+        const snapshot = yield* runtime.inspect.pipe(
+          Effect.repeat({ until: (snapshot) => snapshot.phase === "failed" }),
+          Effect.timeout("2 seconds"),
+        );
+        assert.equal(snapshot.phase, "failed");
+        assert.ok(
+          snapshot.events.some(
+            (event) => event._tag === "ActorStopped" && event.path === "/user/memory",
+          ),
+        );
+      }).pipe(Effect.provide(live)),
+    ),
   );
 });

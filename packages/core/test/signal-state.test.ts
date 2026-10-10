@@ -1,4 +1,7 @@
-import type { TestContextRegistry } from "@aster/core/testing";
+import { serializeFixtureState } from "../src/testing/context.js";
+import { observeContextWrites } from "../src/testing/context.js";
+import { CurrentActors } from "../src/services/actors.js";
+import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { AgentConversations } from "@aster/agent/harness";
 import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
@@ -6,12 +9,12 @@ import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type SignalDefinition } from "../src/config/schema.js";
-import { ContextRegistry, SignalSnapshot, SignalTime, type ContextInput } from "../src/index.js";
+import { SignalSnapshot, SignalTime } from "../src/index.js";
 import { ApplicationError } from "../src/operations.js";
 import { type SignalChangeInput } from "../src/signals/protocol.js";
 import { SignalState, nextSignalTime } from "../src/signals/state/model.js";
 import { readSignalHistory, signalMessage } from "../src/signals/state/store.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { makeTestContext, testActors } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 
 const path = "/signals/personal--watch";
@@ -27,7 +30,7 @@ const create: SignalChangeInput = {
   change: { operation: "create", definition },
 };
 const open = (
-  registry: TestContextRegistry,
+  registry: TestContext,
   messages: AgentConversations["Service"],
   configured?: SignalDefinition,
 ) =>
@@ -37,18 +40,19 @@ const open = (
       SignalState.layer(path, configured),
       lifetime,
     ).pipe(
-      Effect.provideService(ContextRegistry, registry),
       Effect.provideService(DurableContext, registry.backend),
+      Effect.provideService(CurrentActors, testActors(registry)),
       Effect.provideService(AgentConversations, messages),
     );
     return { ...Context.get(services, SignalState), close: Scope.close(lifetime, Exit.void) };
   });
 const setup = Effect.fnUntraced(function* () {
   const messages = testConversations();
-  const registry = yield* makeContextRegistry({
+  const registry = yield* makeTestContext({
     loadAll: () => [
       {
         snapshot: {
+          text: serializeFixtureState({ status: "active" }),
           revision: 0,
           path: "/goals/personal",
           description: "Assistant",
@@ -71,11 +75,10 @@ const setup = Effect.fnUntraced(function* () {
       target: path,
       version: Schema.decodeUnknownSync(SignalSnapshot)(registry.get(path)!.state).version,
       sourceContext: {
+        text: serializeFixtureState({ text: id }),
         revision: 1,
         path: "/source",
         description: "Evidence",
-        state: { text: id },
-        messages: [],
       },
     });
   const change = Effect.fnUntraced(function* (operation: "pause" | "resume" | "delete") {
@@ -202,7 +205,7 @@ test("one-shot firing and exhaustion recover atomically without triggering again
     Effect.gen(function* () {
       const clock = yield* TestClock.make();
       const messages = testConversations();
-      const registry = yield* makeContextRegistry();
+      const registry = yield* makeTestContext();
       yield* registry.register(path, { state: SignalSnapshot, message: Schema.Never });
       const configured: SignalDefinition = {
         ...definition,
@@ -240,7 +243,16 @@ test("Signal Pi commit survives failed Context projection; recovery restores sta
           ...env.registry,
           backend: {
             ...env.registry.backend,
-            commit: () => Effect.die(new Error("Injected projection failure")),
+            open: (options) =>
+              env.registry.backend.open(options).pipe(
+                Effect.map((owner) => ({
+                  ...owner,
+                  state: {
+                    ...owner.state,
+                    set: () => Effect.die(new Error("Injected persistence failure")),
+                  },
+                })),
+              ),
           },
         },
         env.messages,
@@ -276,19 +288,12 @@ test("Signal commit drains to the Ref after durable projection despite interrupt
       const state = yield* open(
         {
           ...env.registry,
-          backend: {
-            ...env.registry.backend,
-            commit: (record: ContextInput, options) =>
-              env.registry.backend
-                .commit(record, options)
-                .pipe(
-                  Effect.tap(() =>
-                    Deferred.succeed(stored, undefined).pipe(
-                      Effect.andThen(Deferred.await(release)),
-                    ),
-                  ),
-                ),
-          },
+          backend: observeContextWrites(env.registry.backend, () =>
+            Deferred.succeed(stored, undefined).pipe(
+              Effect.andThen(Deferred.await(release)),
+              Effect.asVoid,
+            ),
+          ),
         },
         env.messages,
       );

@@ -1,52 +1,16 @@
-import { type ContextViewPolicy, contextView } from "../context/view.js";
 import { publicJson } from "../json.js";
 import { GoalSnapshot } from "./state/snapshot.js";
 
 import { AgentConversations } from "@aster/agent/harness";
-import { Effect, Option, Schema } from "effect";
-import type { ContextRegistry } from "../context/registry.js";
+import { Effect, Schema } from "effect";
+import type { DurableContext } from "../context/store.js";
 import { ApplicationError } from "../operations.js";
 import { GoalInputPayload } from "./contracts.js";
 
 /** Display metadata and the latest settled error are derived from canonical Goal state. */
-export const goalView: ContextViewPolicy = {
-  matches: (path) => /^\/goals\/[^/]+$/.test(path),
-  project: (record) => {
-    const decoded = Schema.decodeUnknownOption(GoalSnapshot)(record.state);
-    if (Option.isNone(decoded)) return undefined;
-    const state = decoded.value;
-    const latest = state.inputs.findLast((input) =>
-      ["completed", "failed", "unknown"].includes(input.status),
-    );
-    return {
-      path: record.path,
-      revision: record.revision ?? 0,
-      description: state.definition.description,
-      state: {
-        ...state.definition,
-        title: state.definition.title ?? state.definition.description,
-        status: state.status,
-        summary: state.summary,
-        tasks: state.tasks,
-        ...(state.status === "active" &&
-        latest?.status === "failed" &&
-        !state.inputs.some((input) => ["pending", "running", "unknown"].includes(input.status))
-          ? { retryableInputId: latest.inputId }
-          : {}),
-        ...(latest?.status !== "completed" && latest?.error ? { lastError: latest.error } : {}),
-      },
-      messages: [],
-      projection: { visibility: "public" },
-    };
-  },
-};
-export const goalsRootView = contextView({
-  matches: (path) => path === "/goals",
-  state: Schema.Struct({}),
-});
 
 export const goalTimeline: (
-  registry: ContextRegistry["Service"],
+  registry: DurableContext["Service"],
   conversations: Pick<AgentConversations["Service"], "read">,
   slug: string,
   page?: { before?: number; limit?: number },
@@ -58,7 +22,7 @@ export const goalTimeline: (
   },
   ApplicationError
 > = Effect.fn("Goal.timeline")(function* (
-  registry: ContextRegistry["Service"],
+  registry: DurableContext["Service"],
   conversations: Pick<AgentConversations["Service"], "read">,
   slug: string,
   page: { before?: number; limit?: number } = {},
@@ -133,3 +97,22 @@ export const goalQueryData = (path: string, state: GoalSnapshot, detail: boolean
     summary: state.summary,
     ...(detail ? { tasks: state.tasks } : {}),
   });
+
+export const goalBusinessState = (state: GoalSnapshot) => {
+  const latest = state.inputs.findLast((input) =>
+    ["completed", "failed", "unknown"].includes(input.status),
+  );
+  return {
+    ...state.definition,
+    title: state.definition.title ?? state.definition.description,
+    status: state.status,
+    summary: state.summary,
+    tasks: state.tasks,
+    ...(state.status === "active" &&
+    latest?.status === "failed" &&
+    !state.inputs.some((input) => ["pending", "running", "unknown"].includes(input.status))
+      ? { retryableInputId: latest.inputId }
+      : {}),
+    ...(latest?.status !== "completed" && latest?.error ? { lastError: latest.error } : {}),
+  };
+};

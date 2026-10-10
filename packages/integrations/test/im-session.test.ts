@@ -2,8 +2,8 @@ import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { ContextQueries, ContextRegistry, contextSpawnOptions } from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
+import { ContextQueries, contextSpawnOptions } from "@aster/core";
+import { makeTestContext } from "@aster/core/testing";
 import { Clock, Deferred, Effect, Fiber, Layer, Queue, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { LarkChatActor } from "../src/lark/im/chat-actor.js";
@@ -38,14 +38,11 @@ const setup = (
   maxMessages = 200,
 ) =>
   Effect.gen(function* () {
-    const registry = yield* makeContextRegistry();
+    const registry = yield* makeTestContext();
     const changes = yield* registry.subscribe;
     const system = yield* ActorSystem.make().pipe(
       ActorSystem.provide(
-        Layer.merge(
-          Layer.succeed(ContextRegistry, registry),
-          Layer.succeed(DurableContext, registry.backend),
-        ),
+        Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
         ContextQueries.layer,
         Layer.succeed(ChatSummarizer, model),
         Layer.succeed(ChatSummaryGate, gate),
@@ -81,7 +78,10 @@ const setup = (
         Stream.filter(
           ({ record }) =>
             record.path === contextPath &&
-            predicate(Schema.decodeUnknownSync(ChatSnapshot)(record.state), record.messages),
+            predicate(
+              Schema.decodeUnknownSync(ChatSnapshot)(registry.get(record.path)!.state),
+              registry.get(record.path)!.messages,
+            ),
         ),
         Stream.runHead,
       );
@@ -130,7 +130,7 @@ test("one rolling summary atomically retires unchanged evidence and retains an i
       yield* waitFor((state) => state.summary?.text === summary.text);
       assert.equal(calls, 1);
       assert.deepEqual(registry.get(path)?.messages, [edited]);
-      assert.deepEqual(registry.backend.journal().at(-1)?.record.messages, [edited]);
+      assert.ok(registry.backend.journal().at(-1)?.record.text.includes(summary.text));
       assert.equal(registry.backend.journal().length, 1);
     }),
   );
@@ -750,8 +750,8 @@ test("message-count overflow skips the gate and shrinking commits every successf
       );
       assert.equal(registry.get(path)?.messages.length, 0);
       assert.deepEqual(
-        registry.backend.journal().map((event) => event.record.messages.length),
-        [3, 1, 0],
+        registry.backend.journal().map((event) => JSON.parse(event.record.text).summary.text),
+        ["0,1", "0,1,2,3", "0,1,2,3,4"],
       );
     }),
   );

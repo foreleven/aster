@@ -1,17 +1,10 @@
-import { ContextSession } from "../src/context/session.js";
 import { DurableContext } from "@aster/core";
 import { ActorSystem, ReplyTo, type ActorRef } from "@aster/actor";
 import { Effect, Fiber, Layer, Match, Schema, Stream } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  ContextActor,
-  ContextRegistry,
-  contextPath,
-  contextSpawnOptions,
-  spawnContextChild,
-} from "../src/index.js";
-import { makeContextRegistry } from "../src/testing/context.js";
+import { ContextActor, contextPath, contextSpawnOptions, spawnContextChild } from "../src/index.js";
+import { makeTestContext } from "../src/testing/context.js";
 
 const Command = Schema.TaggedUnion({
   Set: { value: Schema.Number },
@@ -26,12 +19,15 @@ const Counter = ContextActor.define("test/ContextCounter", {
 })((owner) =>
   Effect.gen(function* () {
     const path = contextPath(owner);
-    const session = yield* ContextSession.make({
-      path,
-      state: Schema.Struct({ value: Schema.Number }),
-      message: Schema.String,
-      initial: { description: "Counter", state: { value: 0 } },
-    }).pipe(Effect.orDie);
+    const session = yield* (yield* DurableContext)
+      .open({
+        serialize: (state) => JSON.stringify(state),
+        path,
+        state: Schema.Struct({ value: Schema.Number }),
+        message: Schema.String,
+        initial: { description: "Counter", state: { value: 0 } },
+      })
+      .pipe(Effect.orDie);
     return {
       receive: (command, actor) =>
         Match.value(command).pipe(
@@ -47,7 +43,7 @@ const Counter = ContextActor.define("test/ContextCounter", {
             session
               .commit(() => ({
                 state: { value },
-                messages: { upsert: ["updated"] },
+                messages: { append: ["updated"] },
               }))
               .pipe(Effect.asVoid, Effect.orDie),
           ),
@@ -65,12 +61,15 @@ const Parent = ContextActor.define("test/ContextParent", {
   ],
 })((owner) =>
   Effect.gen(function* () {
-    yield* ContextSession.make({
-      path: contextPath(owner),
-      state: Schema.Struct({}),
-      message: Schema.Never,
-      initial: { description: "Parent", state: {} },
-    }).pipe(Effect.orDie);
+    yield* (yield* DurableContext)
+      .open({
+        serialize: (state) => JSON.stringify(state),
+        path: contextPath(owner),
+        state: Schema.Struct({}),
+        message: Schema.Never,
+        initial: { description: "Parent", state: {} },
+      })
+      .pipe(Effect.orDie);
     return {
       receive: (command, actor) =>
         Match.value(command).pipe(
@@ -91,14 +90,9 @@ test("Context Session restores in setup before started and commands, and survive
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
-          ),
+          ActorSystem.provide(Layer.mergeAll(Layer.succeed(DurableContext, registry.backend))),
         );
         const actor = yield* system.spawn("counter", Counter);
         yield* actor.tell({ _tag: "Set", value: 7 });
@@ -131,14 +125,9 @@ test("explicit public paths propagate to direct and virtual children independent
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
-          ActorSystem.provide(
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
-          ),
+          ActorSystem.provide(Layer.mergeAll(Layer.succeed(DurableContext, registry.backend))),
         );
         const parent = yield* system.spawn(
           "physical",
@@ -166,7 +155,7 @@ test("explicit public paths propagate to direct and virtual children independent
 
 const dependencyChecks = Effect.gen(function* () {
   const system = yield* ActorSystem.make();
-  // @ts-expect-error ContextActor adds ContextRegistry to its required services automatically.
+  // @ts-expect-error ContextActor adds DurableContext to its required services automatically.
   yield* system.spawn("missing-registry", Counter);
 });
 void dependencyChecks;

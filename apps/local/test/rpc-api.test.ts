@@ -1,3 +1,4 @@
+import { serializeFixtureState } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { GoalSnapshot } from "@aster/core";
 import { Actor, ActorSystem } from "@aster/actor";
@@ -9,8 +10,6 @@ import {
   ApplicationError,
   ApprovalCommand,
   ContextQueries,
-  ContextRegistry,
-  contextView,
   ExternalAgents,
   GoalSettings,
   GoalsRootActor,
@@ -18,7 +17,7 @@ import {
   goalTimeline,
   MemoryRecall,
 } from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
+import { makeTestContext } from "@aster/core/testing";
 import { NodeHttpServer, NodeSocket } from "@effect/platform-node";
 import { Deferred, Effect, Exit, Layer, Queue, Schema, Scope, Stream } from "effect";
 import { FetchHttpClient, HttpRouter } from "effect/http";
@@ -27,15 +26,15 @@ import { RpcClient, RpcSerialization, RpcServer } from "effect/rpc";
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { test } from "node:test";
-import { apiServices, rpcRequest, startTestHttp } from "./api-fixtures.js";
+import { createTestContext, apiServices, rpcRequest, startTestHttp } from "./api-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 
 const definition = {
-  view: contextView({ state: Schema.Struct({ value: Schema.Number }) }),
   state: Schema.Struct({ value: Schema.Number }),
   message: Schema.Unknown,
 };
 const record = {
+  text: serializeFixtureState({ value: 1 }),
   path: "/goals/test",
   description: "API test Goal",
   state: { value: 1 },
@@ -47,14 +46,11 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
     Effect.scoped(
       Effect.gen(function* () {
         const conversations = testConversations();
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(GoalSettings, {
               definitions: [{ slug: "personal", description: "Assistant" }],
               reasoning: { model: "test" },
@@ -113,38 +109,34 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
   );
 });
 
-test("ListContexts encodes cleared optional fields in public state and nested messages", async () => {
-  const registry = await Effect.runPromise(makeContextRegistry());
+test("ListContexts encodes cleared optional fields in public state and nested messages", async (t) => {
+  const registry = await createTestContext(t);
   const path = "/goals/cleared";
   await Effect.runPromise(
-    registry.register(path, {
-      view: contextView({
-        state: Schema.Struct({
-          lastError: Schema.optional(Schema.String),
-          nested: Schema.Struct({ active: Schema.Boolean }),
-        }),
-        message: Schema.Struct({
-          role: Schema.String,
-          content: Schema.Array(
-            Schema.Struct({ type: Schema.Literal("text"), text: Schema.String }),
-          ),
-        }),
+    Effect.scoped(
+      registry.register(path, {
+        state: Schema.Struct({ lastError: Schema.optional(Schema.String), nested: Schema.Unknown }),
+        message: Schema.Unknown,
       }),
-      state: Schema.Struct({ lastError: Schema.optional(Schema.String), nested: Schema.Unknown }),
-      message: Schema.Unknown,
-    }),
+    ),
   );
   await Effect.runPromise(
-    registry.commit(
-      {
-        path,
-        description: "Cleared error",
-        state: { lastError: undefined, nested: { goal: undefined, active: false } },
-        messages: [
-          { role: "assistant", content: [{ type: "text", text: "done", signature: undefined }] },
-        ],
-      },
-      { expectedRevision: registry.get(path)?.revision ?? 0 },
+    Effect.scoped(
+      registry.commit(
+        {
+          text: serializeFixtureState({
+            lastError: undefined,
+            nested: { goal: undefined, active: false },
+          }),
+          path,
+          description: "Cleared error",
+          state: { lastError: undefined, nested: { goal: undefined, active: false } },
+          messages: [
+            { role: "assistant", content: [{ type: "text", text: "done", signature: undefined }] },
+          ],
+        },
+        { expectedRevision: registry.get(path)?.revision ?? 0 },
+      ),
     ),
   );
   const api = await startTestHttp({
@@ -167,12 +159,10 @@ test("ListContexts encodes cleared optional fields in public state and nested me
     const reply = JSON.parse(await response.text());
     assert.equal(reply.exit._tag, "Success", JSON.stringify(reply));
     assert.deepEqual(reply.exit.value[0], {
+      text: serializeFixtureState({ nested: { active: false } }),
       path,
-      revision: 1,
+      revision: 2,
       description: "Cleared error",
-      projection: { visibility: "public" },
-      state: { nested: { active: false } },
-      messages: [{ role: "assistant", content: [{ type: "text", text: "done" }] }],
     });
   } finally {
     await api.close();
@@ -184,14 +174,14 @@ test("failed persistence and unchanged writes do not invalidate application quer
     Effect.scoped(
       Effect.gen(function* () {
         let fail = false;
-        const registry = yield* makeContextRegistry({
+        const registry = yield* makeTestContext({
           loadAll: () => [],
           save: () => {
             if (fail) throw new Error("Storage unavailable");
           },
         });
         yield* registry.register(record.path, definition);
-        const changes = yield* registry.reader.subscribe;
+        const changes = yield* registry.backend.subscribe;
         const received: unknown[] = [];
         yield* Stream.runForEach(changes, (change) =>
           Effect.sync(() => {
@@ -228,7 +218,7 @@ for (const protocol of ["http", "websocket"] as const) {
       await Effect.runPromise(
         Effect.scoped(
           Effect.gen(function* () {
-            const registry = yield* makeContextRegistry();
+            const registry = yield* makeTestContext();
             yield* registry.register(record.path, definition);
             yield* registry.commit(record, { expectedRevision: 0 });
             let submissions = 0;
@@ -257,8 +247,8 @@ for (const protocol of ["http", "websocket"] as const) {
               actors: system,
               registry: {
                 ...registry,
-                reader: {
-                  ...registry.reader,
+                backend: {
+                  ...registry.backend,
                   subscribe: Effect.acquireRelease(
                     Effect.sync(() => {
                       active++;
@@ -268,7 +258,7 @@ for (const protocol of ["http", "websocket"] as const) {
                         active--;
                         if (!active) yield* Deferred.succeed(released, undefined);
                       }),
-                  ).pipe(Effect.andThen(registry.reader.subscribe)),
+                  ).pipe(Effect.andThen(registry.backend.subscribe)),
                 },
               },
             });
@@ -337,8 +327,8 @@ for (const protocol of ["http", "websocket"] as const) {
   );
 }
 
-test("RPC host rejects cross-origin and oversized input; removed endpoints return 404", async () => {
-  const registry = await Effect.runPromise(makeContextRegistry());
+test("RPC host rejects cross-origin and oversized input; removed endpoints return 404", async (t) => {
+  const registry = await createTestContext(t);
   const server = await startTestHttp({ registry });
   try {
     const call = rpcRequest("SendGoalMessage", { slug: "personal", text: "hello" });
@@ -371,35 +361,47 @@ test("RPC host rejects cross-origin and oversized input; removed endpoints retur
   }
 });
 
-test("Goal RPC paginates persisted public conversation entries", async () => {
-  const registry = await Effect.runPromise(makeContextRegistry());
+test("Goal RPC paginates persisted public conversation entries", async (t) => {
+  const registry = await createTestContext(t);
   const conversations = testConversations();
   await Effect.runPromise(
-    registry.register("/goals/feed", { state: GoalSnapshot, message: Schema.Never }),
+    Effect.scoped(registry.register("/goals/feed", { state: GoalSnapshot, message: Schema.Never })),
   );
   await Effect.runPromise(
-    registry.commit(
-      {
-        path: "/goals/feed",
-        description: "Feed",
-        messages: [],
-        state: {
-          definition: { slug: "feed", description: "Feed" },
-          status: "active",
-          summary: "",
-          inputs: [],
-          receipts: [],
-          tasks: [],
+    Effect.scoped(
+      registry.commit(
+        {
+          text: serializeFixtureState({
+            definition: { slug: "feed", description: "Feed" },
+            status: "active",
+            summary: "",
+            inputs: [],
+            receipts: [],
+            tasks: [],
+          }),
+          path: "/goals/feed",
+          description: "Feed",
+          messages: [],
+          state: {
+            definition: { slug: "feed", description: "Feed" },
+            status: "active",
+            summary: "",
+            inputs: [],
+            receipts: [],
+            tasks: [],
+          },
         },
-      },
-      { expectedRevision: 0 },
+        { expectedRevision: 0 },
+      ),
     ),
   );
   for (let i = 0; i < 65; i++)
     await Effect.runPromise(
-      conversations.append("/goals/feed", `input-${i}`, "goal.input", {
-        payload: { _tag: "UserInput", text: `Record ${i}` },
-      }),
+      Effect.scoped(
+        conversations.append("/goals/feed", `input-${i}`, "goal.input", {
+          payload: { _tag: "UserInput", text: `Record ${i}` },
+        }),
+      ),
     );
   const server = await startTestHttp({ registry, conversations });
   try {
@@ -437,7 +439,7 @@ test("Approval RPC decodes payloads before sending commands and preserves reject
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         let submissions = 0;
         const Approvals = Actor.define("test/RpcApprovals", {
           commands: Object.values(ApprovalCommand.cases),
@@ -483,14 +485,14 @@ test("Approval RPC decodes payloads before sending commands and preserves reject
 test(
   "bounded invalidation capture reports overflow and releases the source",
   { timeout: 5000 },
-  async () => {
-    const registry = await Effect.runPromise(makeContextRegistry());
+  async (t) => {
+    const registry = await createTestContext(t);
     let released = false;
     const server = await startTestHttp({
       registry: {
         ...registry,
-        reader: {
-          ...registry.reader,
+        backend: {
+          ...registry.backend,
           subscribe: Effect.acquireRelease(
             Effect.succeed(
               Stream.fromIterable(
@@ -533,3 +535,60 @@ test(
     }
   },
 );
+
+test("business lists omit dormant owners while generic Context reads retain their text", async (t) => {
+  const registry = await createTestContext(t);
+  for (const slug of ["live", "dormant"]) {
+    const path = `/goals/${slug}`;
+    await Effect.runPromise(
+      registry.register(path, { state: GoalSnapshot, message: Schema.Never }),
+    );
+    await Effect.runPromise(
+      Effect.scoped(
+        registry.commit(
+          {
+            path,
+            description: slug,
+            messages: [],
+            state: {
+              definition: { slug, description: slug },
+              status: "active",
+              summary: "",
+              tasks: [],
+              inputs: [],
+              receipts: [],
+            },
+          },
+          { expectedRevision: 0 },
+        ),
+      ),
+    );
+  }
+  const { testActors } = await import("@aster/core/testing");
+  const { ActorNotFound } = await import("@aster/actor");
+  const current = testActors(registry);
+  const server = await startTestHttp({
+    registry,
+    actors: {
+      select: (path) =>
+        path.endsWith("/dormant")
+          ? { path, resolve: () => Effect.fail(new ActorNotFound(path)) }
+          : current.select(path),
+    },
+  });
+  try {
+    const goals = await (await fetch(`${server.url}/api/rpc`, rpcRequest("ListGoals"))).json();
+    assert.equal(goals.exit._tag, "Success");
+    assert.deepEqual(
+      goals.exit.value.map((goal: { slug: string }) => goal.slug),
+      ["live"],
+    );
+    const contexts = await (
+      await fetch(`${server.url}/api/rpc`, rpcRequest("ListContexts"))
+    ).json();
+    assert.equal(contexts.exit.value.length, 2);
+    assert.ok(contexts.exit.value.every((context: object) => !Object.hasOwn(context, "state")));
+  } finally {
+    await server.close();
+  }
+});

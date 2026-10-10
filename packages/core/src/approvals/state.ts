@@ -1,16 +1,19 @@
+import { GetApprovals } from "./queries.js";
+import { readActor } from "../services/domain-reads.js";
 import { isDeepStrictEqual } from "node:util";
 import { ApprovalEntry, ApprovalResponse, InputRequest } from "./contracts.js";
 import { Clock, Context, Data, Effect, Layer, Match, Schema } from "effect";
-import { ContextRegistry } from "../context/registry.js";
-import { ContextSession } from "../context/session.js";
-import { approvalView } from "./view.js";
+import { DurableContext } from "../context/store.js";
 
 import { ApprovalSnapshot, ApprovalEvent } from "./snapshot.js";
 export { ApprovalSnapshot, ApprovalEvent } from "./snapshot.js";
-export const approvalEntries = (registry: ContextRegistry["Service"]): readonly ApprovalEntry[] => {
-  const record = registry.get("/approvals");
-  return record ? Schema.decodeUnknownSync(ApprovalSnapshot)(record.state).entries : [];
-};
+export const approvalEntries = (actors: import("../services/actors.js").CurrentActors["Service"]) =>
+  readActor(
+    actors,
+    "/approvals",
+    (replyTo) => new GetApprovals({ replyTo }),
+    Schema.Array(ApprovalEntry),
+  );
 
 const hasAnswer = (values: readonly string[] = []): boolean =>
   values.some((value) => value.trim().length > 0);
@@ -91,17 +94,19 @@ const validateApprovalResponse = (
   );
 
 const makeApprovalState = Effect.gen(function* () {
-  const session = yield* ContextSession.make({
-    path: "/approvals",
-    state: ApprovalSnapshot,
-    message: ApprovalEvent,
-    view: approvalView,
-    messageKey: (event) => `${event.requestId}:${event.type}:${event.at}`,
-    initial: {
-      state: { entries: [], revokedIds: [] },
-      description: "Task requests awaiting confirmation or additional information",
-    },
-  }).pipe(Effect.orDie);
+  const session = yield* (yield* DurableContext)
+    .open({
+      path: "/approvals",
+      state: ApprovalSnapshot,
+      message: ApprovalEvent,
+      serialize: serializeApprovalState,
+      keyOf: (event) => `${event.requestId}:${event.type}:${event.at}`,
+      initial: {
+        state: { entries: [], revokedIds: [] },
+        description: "Task requests awaiting confirmation or additional information",
+      },
+    })
+    .pipe(Effect.orDie);
   const read = session.state.get.pipe(Effect.orDie);
   const commit = Effect.fn("Approvals.commit")(function* (
     state: typeof ApprovalSnapshot.Type,
@@ -109,10 +114,11 @@ const makeApprovalState = Effect.gen(function* () {
   ) {
     const at = new Date(yield* Clock.currentTimeMillis).toISOString();
     yield* session
-      .commit(() => ({ state, ...(event ? { messages: { upsert: [{ ...event, at }] } } : {}) }))
+      .commit(() => ({ state, ...(event ? { messages: { append: [{ ...event, at }] } } : {}) }))
       .pipe(Effect.orDie);
   });
   return {
+    entries: read.pipe(Effect.map((state) => state.entries)),
     restore: Effect.void,
     pending: read.pipe(
       Effect.map((state) => state.entries.filter((entry) => entry.status === "resolved")),
@@ -196,3 +202,14 @@ export class ApprovalState extends Context.Service<
 >()("approvals/State") {
   static readonly layer = Layer.effect(ApprovalState, makeApprovalState);
 }
+
+export const serializeApprovalState = ({ entries }: typeof ApprovalSnapshot.Type) =>
+  JSON.stringify(
+    entries.map(({ id, kind, status, contextPath, request }) => ({
+      id,
+      kind,
+      status,
+      contextPath,
+      prompt: request.prompt,
+    })),
+  );

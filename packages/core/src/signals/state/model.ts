@@ -1,10 +1,11 @@
+import { loadGoalStatus } from "../../goals/queries.js";
 import { isDeepStrictEqual } from "node:util";
 import { ApplicationError } from "../../operations.js";
 import { Clock, Context, Cron, Effect, Layer, Match, Schema } from "effect";
-import { ContextRegistry } from "../../context/registry.js";
+import { DurableContext } from "../../context/store.js";
 import { type SignalDefinition, validateSignalTime } from "../../config/schema.js";
 import { SignalChangeInput, SignalReactionInput } from "../protocol.js";
-import { signalEnabled, type SignalSnapshot } from "./snapshot.js";
+import { type SignalSnapshot } from "./snapshot.js";
 import { makeSignalStore } from "./store.js";
 
 export const nextSignalTime = (
@@ -33,11 +34,20 @@ const makeState = Effect.fn("SignalState.make")(function* (
   path: string,
   configured?: SignalDefinition,
 ) {
-  const registry = yield* ContextRegistry;
+  const registry = yield* DurableContext;
   const store = yield* makeSignalStore(path);
   const snapshot = store.read.pipe(Effect.map((history) => history.snapshot));
   const enabled = snapshot.pipe(
-    Effect.map((state) => !!state && signalEnabled(state, (path) => registry.get(path))),
+    Effect.flatMap(
+      Effect.fnUntraced(function* (state) {
+        if (!state || state.status !== "active") return false;
+        if (!state.owner) return true;
+        return yield* loadGoalStatus(registry, state.owner).pipe(
+          Effect.map((goal) => goal.status === "active"),
+          Effect.catchTag("ApplicationError", () => Effect.succeed(false)),
+        );
+      }),
+    ),
   );
   const current = Effect.gen(function* () {
     const state = yield* snapshot;
@@ -103,7 +113,7 @@ const makeState = Effect.fn("SignalState.make")(function* (
     const state = history.snapshot;
     if (configured || (state && state.owner !== input.source))
       return yield* conflict("Signal belongs to another owner");
-    if ((registry.get(input.source)?.state as { status?: string } | undefined)?.status !== "active")
+    if ((yield* loadGoalStatus(registry, input.source)).status !== "active")
       return yield* conflict("Goal has ended or is missing");
     const change = input.change;
     if (change.operation === "create" ? !!state : !state || state.status === "deleted")

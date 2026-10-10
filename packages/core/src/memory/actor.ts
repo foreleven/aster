@@ -1,11 +1,9 @@
-import { ContextSession } from "../context/session.js";
+import { DurableContext } from "../context/store.js";
 import type { MailboxOf } from "@aster/actor";
 import { type ActorContext, Command as ActorCommand } from "@aster/actor";
 import { Deferred, Effect, HashSet, Match, Schedule, Schema, Stream } from "effect";
 import { ContextActor } from "../context/actor.js";
-import { PublicContext as ContextRecord } from "../context/contracts.js";
-import { contextView } from "../context/view.js";
-import { ContextRegistry } from "../context/registry.js";
+import { ContextText as ContextRecord } from "../context/contracts.js";
 import { ApplicationError } from "../operations.js";
 import { cancellableQuery, queryCancelled, QueryReply } from "../services/actors.js";
 import { ContextCaptures } from "./capture.js";
@@ -51,15 +49,6 @@ export const MemoryInternal = Schema.TaggedUnion({
 });
 export type MemoryCommand = MailboxOf<typeof MemoryCommands, typeof MemoryInternal>;
 
-export const memoryView = contextView({
-  matches: (path) => path === "/memory",
-  state: Schema.Struct({
-    status: Schema.Literal("ready"),
-    retrieval: Schema.Literals(["bm25", "hybrid"]),
-    llm: Schema.optional(Schema.Struct({ provider: Schema.String, model: Schema.String })),
-  }),
-});
-
 export const MemoryActor = ContextActor.define("memory/Actor", {
   commands: MemoryCommands,
   internal: MemoryInternal,
@@ -68,24 +57,26 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
     const backend = yield* MemoryBackend;
     const recalls = new Map<string, Extract<MemoryCommand, { _tag: "Search" | "Expand" }>>();
     const captures = yield* ContextCaptures;
-    const registry = yield* ContextRegistry;
+    const registry = yield* DurableContext;
     const changes = yield* registry.subscribe;
     // Only the mailbox changes this set. Each Behavior gets a fresh set on recovery.
     let inFlight = HashSet.empty<string>();
-    const session = yield* ContextSession.make({
-      path: "/memory",
-      state: MemoryState,
-      message: Schema.Never,
-      view: memoryView,
-      initial: {
-        description: backend.description,
-        state: {
-          status: "ready",
-          retrieval: backend.retrieval,
-          ...(backend.llm ? { llm: backend.llm } : {}),
+    const session = yield* (yield* DurableContext)
+      .open({
+        path: "/memory",
+        state: MemoryState,
+        message: Schema.Never,
+        serialize: ({ status, retrieval, llm }) => JSON.stringify({ status, retrieval, llm }),
+        initial: {
+          description: backend.description,
+          state: {
+            status: "ready",
+            retrieval: backend.retrieval,
+            ...(backend.llm ? { llm: backend.llm } : {}),
+          },
         },
-      },
-    }).pipe(Effect.orDie);
+      })
+      .pipe(Effect.orDie);
     const state = session.state.get.pipe(Effect.orDie);
     const save = (patch: Partial<typeof MemoryState.Type>) =>
       session.state
@@ -99,10 +90,7 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
       )
         return;
       yield* save({
-        pending: [
-          ...(current.pending ?? []),
-          { ...input, records: input.records.map(registry.views.project) },
-        ],
+        pending: [...(current.pending ?? []), { ...input, records: input.records }],
       });
     });
     const dispatch = Effect.fn("Memory.dispatch")(function* (context: ActorContext<MemoryCommand>) {
@@ -113,7 +101,7 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
         // Re-project recovered payloads as well as new captures. Backend results return
         // through the Behavior-owned mailbox; defects retain Actor supervision semantics.
         yield* context.pipeToSelf(
-          backend.capture({ ...input, records: input.records.map(registry.views.project) }),
+          backend.capture({ ...input, records: input.records }),
           (result) => ({ _tag: "Captured", sessionId: input.sessionId, result }),
         );
       }

@@ -6,7 +6,7 @@ const context = (path, description, state, messages = []) => ({
   state,
   messages,
   revision: 1,
-  projection: { visibility: "public" },
+  text: typeof state.summary === "string" ? state.summary : description,
 });
 export function fixture() {
   return {

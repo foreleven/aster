@@ -21,17 +21,19 @@ test("Lark IM builds its summary gate from the injected global System One client
       }),
   });
   await Effect.runPromise(
-    Effect.gen(function* () {
-      const gate = yield* ChatSummaryGate;
-      assert.equal(yield* gate.needed(input), false);
-      answer = "yes";
-      assert.equal(yield* gate.needed(input), true);
-      answer = "invalid";
-      const result = yield* Effect.result(gate.needed(input));
-      assert.equal(result._tag, "Failure");
-      if (result._tag === "Failure")
-        assert.match(result.failure.message, /no valid summary decision/);
-    }).pipe(Effect.provide(ChatSummaryGate.layer.pipe(Layer.provide(client)))),
+    Effect.scoped(
+      Effect.gen(function* () {
+        const gate = yield* ChatSummaryGate;
+        assert.equal(yield* gate.needed(input), false);
+        answer = "yes";
+        assert.equal(yield* gate.needed(input), true);
+        answer = "invalid";
+        const result = yield* Effect.result(gate.needed(input));
+        assert.equal(result._tag, "Failure");
+        if (result._tag === "Failure")
+          assert.match(result.failure.message, /no valid summary decision/);
+      }).pipe(Effect.provide(ChatSummaryGate.layer.pipe(Layer.provide(client)))),
+    ),
   );
   assert.equal(calls, 3);
 });

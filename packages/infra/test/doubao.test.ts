@@ -28,19 +28,23 @@ test("Doubao retains session/run IDs, checks existing work, and routes native co
     },
   );
   const session = await Effect.runPromise(
-    agent.submit({
-      instructions: "Analyze",
-      input: [{ content: "Evidence", sources: ["/source"] }],
-    }),
+    Effect.scoped(
+      agent.submit({
+        instructions: "Analyze",
+        input: [{ content: "Evidence", sources: ["/source"] }],
+      }),
+    ),
   );
   assert.match(agent.executorPrompt!, /Do not repeat completed work/);
   assert.ok(calls.find((call) => call[1] === "create")![2]!.startsWith(agent.executorPrompt!));
   assert.equal(session.sessionId, "session");
   assert.equal(session.runId, "run");
-  assert.deepEqual(await Effect.runPromise(agent.resume(session)), session);
-  const state = await Effect.runPromise(agent.wait(session));
+  assert.deepEqual(await Effect.runPromise(Effect.scoped(agent.resume(session))), session);
+  const state = await Effect.runPromise(Effect.scoped(agent.wait(session)));
   assert.equal(state.state, "waiting_input");
-  await Effect.runPromise(agent.respond(session, state.requests![0]!, { decision: "approve" }));
+  await Effect.runPromise(
+    Effect.scoped(agent.respond(session, state.requests![0]!, { decision: "approve" })),
+  );
   assert.ok(calls.some((call) => call[0] === "native-response"));
   assert.ok(!calls.some((call) => call[1] === "send"));
   assert.equal(calls.filter((call) => call[1] === "create").length, 1);
@@ -144,7 +148,9 @@ test("Malformed Doubao status is a typed adapter failure", async () => {
     status: "waiting_input",
     pending: "invalid",
   }));
-  const result = await Effect.runPromise(Effect.result(agent.status({ sessionId: "s" })));
+  const result = await Effect.runPromise(
+    Effect.scoped(Effect.result(agent.status({ sessionId: "s" }))),
+  );
   assert.equal(result._tag, "Failure");
   if (result._tag === "Failure") {
     assert.equal(result.failure._tag, "ExternalAgentError");
@@ -166,10 +172,12 @@ test("Doubao native replies retain the adapter's captured endpoint", async (t) =
   });
   await assert.rejects(
     Effect.runPromise(
-      agent.respond(
-        { sessionId: "original", runId: "run" },
-        { id: "child:m:b", kind: "approval", prompt: "Allow?" },
-        { decision: "approve" },
+      Effect.scoped(
+        agent.respond(
+          { sessionId: "original", runId: "run" },
+          { id: "child:m:b", kind: "approval", prompt: "Allow?" },
+          { decision: "approve" },
+        ),
       ),
     ),
     /renderer is unavailable/,

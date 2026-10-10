@@ -39,3 +39,13 @@ export const resultError = <A, E>(result: AsyncResult.AsyncResult<A, E>): string
 
 export const checkTask = ApplicationClient.mutation("CheckTask");
 export const retryTask = ApplicationClient.mutation("RetryTask");
+
+export const goalsQuery = ApplicationClient.query("ListGoals", undefined, {
+  reactivityKeys: [QueryKeys.all, QueryKeys.contexts],
+});
+export const tasksQuery = ApplicationClient.query("ListTasks", undefined, {
+  reactivityKeys: [QueryKeys.all, QueryKeys.contexts],
+});
+export const signalsQuery = ApplicationClient.query("ListSignals", undefined, {
+  reactivityKeys: [QueryKeys.all, QueryKeys.contexts],
+});

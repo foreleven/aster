@@ -1,7 +1,6 @@
 import { Context, Effect, Layer } from "effect";
 import {
   ContextQueries,
-  ContextRegistry,
   DurableContext,
   RuntimeIntegrations,
   defineIntegration,
@@ -9,26 +8,19 @@ import {
 import { AppsSettings } from "./config.js";
 import { OpenCli } from "./client.js";
 import { AppsRootActor } from "./actors.js";
-import { appsView, appView } from "./contexts.js";
 
 const installation = Layer.effectDiscard(
   Effect.gen(function* () {
     const settings = yield* AppsSettings;
-    const registry = yield* ContextRegistry;
-    yield* registry.views.register([appsView, appView]);
+
     if (settings.apps.length === 0) return;
     const modules = yield* RuntimeIntegrations;
     const services = Context.pick(
       AppsSettings,
       OpenCli,
       ContextQueries,
-      ContextRegistry,
       DurableContext,
-    )(
-      yield* Effect.context<
-        AppsSettings | OpenCli | ContextQueries | ContextRegistry | DurableContext
-      >(),
-    );
+    )(yield* Effect.context<AppsSettings | OpenCli | ContextQueries | DurableContext>());
     yield* modules.register(
       defineIntegration({
         name: "apps",

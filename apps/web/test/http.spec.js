@@ -1,5 +1,4 @@
 import { test, expect } from "@playwright/test";
-import { at } from "./fixtures.js";
 test("built dashboard reads real HTTP runtime and refreshes public Context changes", async ({
   page,
 }) => {
@@ -7,13 +6,38 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   const { fileURLToPath } = await import("node:url");
   const requireLocal = createRequire(new URL("../../local/package.json", import.meta.url));
   const { Effect, Layer, Schema } = await import(requireLocal.resolve("effect"));
-  const { AsterRuntime, ContextRegistry, ContextQueries, GoalActor } =
+  const { AsterRuntime, DurableContext, ContextQueries } =
     await import("../../../packages/core/dist/index.js");
+  const { GoalSnapshot } = await import("../../../packages/core/dist/goals/state/snapshot.js");
   const { ActorSystem, Actor } = await import("../../../packages/actor/dist/index.js");
   const { makeHttpApi } = await import("../../local/dist/http-api.js");
-  const { makeContextRegistry } = await import("../../../packages/core/dist/testing/context.js");
-  const registry = await Effect.runPromise(makeContextRegistry());
-  await Effect.runPromise(registry.register("/goals/real-http", GoalActor.context));
+  const { makeTestContext, testActors } =
+    await import("../../../packages/core/dist/testing/context.js");
+  const { Scope, Exit } = await import(requireLocal.resolve("effect"));
+  const scope = await Effect.runPromise(Scope.make());
+  const registry = await Effect.runPromise(
+    makeTestContext().pipe(Effect.provideService(Scope.Scope, scope)),
+  );
+  await Effect.runPromise(
+    registry.register("/goals/real-http", { state: GoalSnapshot, message: Schema.Never }),
+  );
+  const { ApprovalSnapshot } = await import("../../../packages/core/dist/approvals/snapshot.js");
+  await Effect.runPromise(
+    registry.register("/approvals", { state: ApprovalSnapshot, message: Schema.Never }),
+  );
+  await Effect.runPromise(
+    Effect.scoped(
+      registry.commit(
+        {
+          path: "/approvals",
+          description: "Approvals",
+          state: { entries: [], revokedIds: [] },
+          messages: [],
+        },
+        { expectedRevision: 0 },
+      ),
+    ),
+  );
   const record = {
     path: "/goals/real-http",
     revision: 1,
@@ -28,22 +52,19 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
     },
     messages: [],
   };
-  await Effect.runPromise(registry.commit(record, { expectedRevision: 0 }));
-  const { Scope, Exit } = await import(requireLocal.resolve("effect"));
-  const scope = await Effect.runPromise(Scope.make());
+  await Effect.runPromise(Effect.scoped(registry.commit(record, { expectedRevision: 0 })));
   const system = await Effect.runPromise(
     ActorSystem.make().pipe(Effect.provideService(Scope.Scope, scope)),
   );
-  class Preview extends Actor.Service()("dashboard/Preview", {
-    command: Schema.String,
-  }) {}
-  Preview.layer = Layer.succeed(Preview, Preview.of({ receive: () => Effect.void }));
+  const Preview = Actor.define("dashboard/Preview", {
+    commands: [Schema.TaggedStruct("Inspect", {})],
+  })(Effect.succeed({ receive: () => Effect.void }));
   const ref = await Effect.runPromise(
     system.spawn("preview", Preview, {
       metadata: { contextPath: record.path },
     }),
   );
-  await Effect.runPromise(ref.tell("inspect"));
+  await Effect.runPromise(ref.tell({ _tag: "Inspect" }));
   const errors = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (message) => {
@@ -62,13 +83,13 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
       Effect.provide(
         Layer.mergeAll(
           Layer.succeed(AsterRuntime, {
-            actors: system,
+            actors: testActors(registry),
             ready: Effect.void,
             inspect: system
               .inspect({ metadata: ["contextPath"] })
               .pipe(Effect.map((actors) => ({ actors, events: [], phase: "ready" }))),
           }),
-          Layer.succeed(ContextRegistry, registry),
+          Layer.succeed(DurableContext, registry.backend),
           Layer.succeed(AgentConversations, history),
           ContextQueries.layer,
           NodeFileSystem.layer,
@@ -91,17 +112,12 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
     );
     const updated = {
       ...record,
-      messages: [
-        {
-          type: "assistant",
-          text: "Live HTTP and streaming RPC updates received",
-          references: [],
-          at,
-        },
-      ],
+      state: { ...record.state, summary: "Live HTTP and streaming RPC updates received" },
     };
     await Effect.runPromise(
-      registry.commit(updated, { expectedRevision: registry.get(updated.path)?.revision ?? 0 }),
+      Effect.scoped(
+        registry.commit(updated, { expectedRevision: registry.get(updated.path)?.revision ?? 0 }),
+      ),
     );
     await expect(
       page.getByText("Live HTTP and streaming RPC updates received", { exact: true }),

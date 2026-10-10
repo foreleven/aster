@@ -2,8 +2,8 @@ import { DurableContext } from "@aster/core";
 import { ContextQueries } from "@aster/core";
 // Tests inject internal completion and timer messages through untyped selections.
 import { ActorSystem } from "@aster/actor";
-import { ContextRegistry, contextSpawnOptions } from "@aster/core";
-import { makeContextRegistry } from "@aster/core/testing";
+import { contextSpawnOptions } from "@aster/core";
+import { makeTestContext } from "@aster/core/testing";
 import {
   LarkCliError,
   LarkConfig,
@@ -37,20 +37,28 @@ test("mail retries failed windows, waits for durable publication, and deduplicat
           const fetched = yield* Deferred.make<void>();
           const release = yield* Deferred.make<void>();
           const saved = yield* Deferred.make<void>();
-          const registry = yield* makeContextRegistry();
-          const originalCommit = registry.backend.commit;
+          const registry = yield* makeTestContext();
           const controlledRegistry: typeof registry = {
             ...registry,
             backend: {
               ...registry.backend,
-              commit: (update, options) =>
-                Effect.gen(function* () {
-                  if (update.path === "/lark/mail/me/one") yield* Deferred.await(release);
-                  const result = yield* originalCommit(update, options);
-                  if (update.path === "/lark/mail/me/one")
-                    yield* Deferred.succeed(saved, undefined);
-                  return result;
-                }),
+              open: (options) =>
+                registry.backend.open(options).pipe(
+                  Effect.map((owner) => ({
+                    ...owner,
+                    state: {
+                      ...owner.state,
+                      set: (state, commitOptions) =>
+                        Effect.gen(function* () {
+                          if (options.path === "/lark/mail/me/one") yield* Deferred.await(release);
+                          const result = yield* owner.state.set(state, commitOptions);
+                          if (options.path === "/lark/mail/me/one")
+                            yield* Deferred.succeed(saved, undefined);
+                          return result;
+                        }),
+                    },
+                  })),
+                ),
             },
           };
           let attempts = 0;
@@ -58,10 +66,7 @@ test("mail retries failed windows, waits for durable publication, and deduplicat
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
-              Layer.merge(
-                Layer.succeed(ContextRegistry, controlledRegistry),
-                Layer.succeed(DurableContext, controlledRegistry.backend),
-              ),
+              Layer.mergeAll(Layer.succeed(DurableContext, controlledRegistry.backend)),
               Layer.succeed(LarkConfig, {
                 description: "Mail",
                 mail: { mailbox: "me", description: "Mail", pollIntervalMs: 30_000 },
@@ -136,14 +141,11 @@ for (const failure of ["transport", "incomplete"] as const)
           yield* clock.adjust(midnight + 30 * 60_000);
           yield* Effect.gen(function* () {
             const windows = yield* Queue.unbounded<number>();
-            const registry = yield* makeContextRegistry();
+            const registry = yield* makeTestContext();
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
                 ContextQueries.layer,
-                Layer.merge(
-                  Layer.succeed(ContextRegistry, registry),
-                  Layer.succeed(DurableContext, registry.backend),
-                ),
+                Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
                 Layer.succeed(LarkConfig, {
                   description: "Mail",
                   mail: { mailbox: "me", description: "Mail", pollIntervalMs: 30_000 },
@@ -180,14 +182,11 @@ test("empty mail windows catch up immediately, then wait for the polling interva
         yield* clock.adjust(now);
         yield* Effect.gen(function* () {
           const windows = yield* Queue.unbounded<readonly [number, number]>();
-          const registry = yield* makeContextRegistry();
+          const registry = yield* makeTestContext();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
               ContextQueries.layer,
-              Layer.merge(
-                Layer.succeed(ContextRegistry, registry),
-                Layer.succeed(DurableContext, registry.backend),
-              ),
+              Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
               Layer.succeed(LarkConfig, {
                 description: "Mail",
                 mail: { mailbox: "me", description: "Mail", pollIntervalMs: 30_000 },
@@ -236,14 +235,11 @@ test("stopping a mailbox interrupts its active retrieval", async () => {
       Effect.gen(function* () {
         const entered = yield* Deferred.make<void>();
         let interrupted = false;
-        const registry = yield* makeContextRegistry();
+        const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
             ContextQueries.layer,
-            Layer.merge(
-              Layer.succeed(ContextRegistry, registry),
-              Layer.succeed(DurableContext, registry.backend),
-            ),
+            Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(LarkConfig, {
               description: "Mail",
               mail: { mailbox: "me", description: "Mail", pollIntervalMs: 30_000 },

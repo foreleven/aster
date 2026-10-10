@@ -1,36 +1,11 @@
 import type { CapturePolicy } from "@aster/core";
-import { Effect, Option, Schema } from "effect";
-import { AccountProfile } from "./account/model.js";
-import { MailboxProfile } from "./mail/model.js";
+import { Effect } from "effect";
 import { profileCapture } from "./shared/profile.js";
 
-export const larkCaptures: readonly CapturePolicy[] = [
-  {
-    matches: (path) => path === "/lark",
-    capture: (record) => {
-      const decoded = Schema.decodeUnknownOption(Schema.Struct({ account: AccountProfile }))(
-        record.state,
-      );
-      return Option.isSome(decoded)
-        ? {
-            sessionId: profileCapture(record, decoded.value.account),
-            records: Effect.succeed([record]),
-          }
-        : undefined;
-    },
-  },
-  {
-    matches: (path) => path === "/lark/mail",
-    capture: (record) => {
-      const decoded = Schema.decodeUnknownOption(Schema.Struct({ profile: MailboxProfile }))(
-        record.state,
-      );
-      return Option.isSome(decoded)
-        ? {
-            sessionId: profileCapture(record, decoded.value.profile),
-            records: Effect.succeed([record]),
-          }
-        : undefined;
-    },
-  },
-];
+export const larkCaptures: readonly CapturePolicy[] = ["/lark", "/lark/mail"].map((path) => ({
+  matches: (candidate) => candidate === path,
+  capture: (record) =>
+    record.text.trim()
+      ? { sessionId: profileCapture(record, record.text), records: Effect.succeed([record]) }
+      : undefined,
+}));

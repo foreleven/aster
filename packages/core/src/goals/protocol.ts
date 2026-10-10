@@ -1,4 +1,4 @@
-import { GetGoalDetails } from "./queries.js";
+import { GetGoalDetails, GetGoalSnapshot } from "./queries.js";
 import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand } from "@aster/actor";
 import { AgentError } from "@aster/agent";
@@ -51,12 +51,7 @@ export const GoalCommand = Schema.TaggedUnion({
 });
 export type GoalCommand = typeof GoalCommand.Type;
 /** Receipts retain identity and content equality without duplicating the accepted input. */
-export const GoalReceipt = Schema.Struct({
-  requestId: Schema.String,
-  payloadFingerprint: Schema.String.check(Schema.isPattern(/^[a-f0-9]{64}$/)),
-  receipt: CommandReceipt,
-});
-export type GoalReceipt = typeof GoalReceipt.Type;
+export { GoalReceipt } from "./receipt.js";
 /** Decode before hashing. Sort JSON object keys, preserve array order and omit absent fields. */
 export const goalRequestFingerprint = (request: GoalRequestData): string =>
   createHash("sha256")
@@ -84,7 +79,15 @@ export class AttachTask extends ActorCommand.Class<AttachTask>()("AttachTask", {
   payload: { taskPath: TaskPath },
   reply: GoalTaskReply,
 }) {}
-export const GoalCommands = [SubmitInput, End, RetryTurn, AttachTask, GetGoalDetails] as const;
+
+export const GoalCommands = [
+  GetGoalSnapshot,
+  SubmitInput,
+  End,
+  RetryTurn,
+  AttachTask,
+  GetGoalDetails,
+] as const;
 export const GoalInternal = Schema.TaggedUnion({
   RunNext: {},
   GateSettled: {
@@ -114,3 +117,5 @@ export const GoalInternal = Schema.TaggedUnion({
   },
 });
 export type GoalMailbox = MailboxOf<typeof GoalCommands, typeof GoalInternal>;
+
+export { GetGoalSnapshot } from "./queries.js";

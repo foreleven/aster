@@ -97,18 +97,28 @@ test("Task inspection excludes provider metadata and performs no execution", asy
           records: new Map([[record.snapshot.path, record]]),
           agents: {},
         });
-        const view = yield* inspectTask(env.registry, conversations, record.snapshot.path);
+        const view = yield* inspectTask(
+          env.registry,
+          conversations,
+          record.snapshot.path,
+          env.system,
+        );
         assert.equal(view.instructions, taskInput().task.instructions);
         assert.equal(view.result, "Original result");
         assert.doesNotMatch(JSON.stringify(view), /private-token|metadata|sessionId/);
         assert.equal(
-          (yield* inspectTask(env.registry, conversations, "/personal").pipe(Effect.flip)).kind,
+          (yield* inspectTask(env.registry, conversations, "/personal", env.system).pipe(
+            Effect.flip,
+          )).kind,
           "invalid-input",
         );
         assert.equal(
-          (yield* inspectTask(env.registry, conversations, `/tasks/${"0".repeat(64)}`).pipe(
-            Effect.flip,
-          )).kind,
+          (yield* inspectTask(
+            env.registry,
+            conversations,
+            `/tasks/${"0".repeat(64)}`,
+            env.system,
+          ).pipe(Effect.flip)).kind,
           "not-found",
         );
       }),

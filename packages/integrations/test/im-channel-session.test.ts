@@ -1,21 +1,19 @@
 import { ChatMessage } from "../src/lark/im/service/model.js";
-import type { TestContextRegistry } from "@aster/core/testing";
+import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
-import { makeTestContextRegistryWithBackend } from "@aster/core/testing";
+import { makeTestContextWithBackend } from "@aster/core/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
 import {
   ContextQueries,
-  ContextRegistry,
-  ContextSession,
   contextSpawnOptions,
   makeDurableContext,
   type StoredContext,
 } from "@aster/core";
 import { Clock, Deferred, Effect, Layer, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
-import { makeContextRegistry } from "@aster/core/testing";
+import { makeTestContext } from "@aster/core/testing";
 import { LarkConfig, parseLarkConfig } from "../src/lark/config.js";
 import { LarkImActor } from "../src/lark/im/channel-actor.js";
 import { ImSnapshot } from "../src/lark/im/channel/snapshot.js";
@@ -37,7 +35,7 @@ const message = {
 const summary = { text: "Summary", references: [] };
 const admission: AgentAdmission = { run: (_id, work) => work };
 const start = (
-  registry: TestContextRegistry,
+  registry: TestContext,
   client: Pick<LarkChatService["Service"], "searchMessages">,
   model: ChatSummarizer["Service"] = { summarize: () => Effect.succeed(summary) },
 ) =>
@@ -45,10 +43,7 @@ const start = (
     const system = yield* ActorSystem.make().pipe(
       ActorSystem.provide(
         ContextQueries.layer,
-        Layer.merge(
-          Layer.succeed(ContextRegistry, registry),
-          Layer.succeed(DurableContext, registry.backend),
-        ),
+        Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
         Layer.succeed(LarkConfig, parseLarkConfig({})),
         Layer.succeed(LarkChatService, {
           ...client,
@@ -63,7 +58,7 @@ const start = (
     yield* (yield* system.spawn("im", LarkImActor, contextSpawnOptions("/lark/im"))).awaitStarted;
     return system;
   });
-const channelState = (registry: TestContextRegistry) =>
+const channelState = (registry: TestContext) =>
   Schema.decodeUnknownSync(ImSnapshot)(registry.get("/lark/im")?.state);
 
 test("Channel never advances coverage before every Chat acknowledges durable ingress", async () => {
@@ -87,7 +82,7 @@ test("Channel never advances coverage before every Chat acknowledges durable ing
                 records.set(record.snapshot.path, structuredClone(record));
               }),
           });
-          const registry = makeTestContextRegistryWithBackend(backend);
+          const registry = makeTestContextWithBackend(backend, records);
           const changes = yield* registry.subscribe;
           yield* start(registry, {
             searchMessages: () =>
@@ -101,7 +96,7 @@ test("Channel never advances coverage before every Chat acknowledges durable ing
             Stream.filter(
               ({ record }) =>
                 record.path === "/lark/im" &&
-                Schema.decodeUnknownSync(ImSnapshot)(record.state).ready,
+                Schema.decodeUnknownSync(ImSnapshot)(registry.get(record.path)!.state).ready,
             ),
             Stream.runHead,
           );
@@ -121,10 +116,11 @@ test("failed cross-midnight retrieval does not flush; successful coverage flushe
         const clock = yield* TestClock.make();
         yield* clock.adjust(Date.parse("2026-10-09T15:50:00Z"));
         yield* Effect.gen(function* () {
-          const registry = yield* makeContextRegistry();
+          const registry = yield* makeTestContext();
           yield* Effect.scoped(
             Effect.gen(function* () {
-              yield* ContextSession.make({
+              yield* (yield* DurableContext).open({
+                serialize: (state) => JSON.stringify(state),
                 path: "/lark/im",
                 state: ImSnapshot,
                 message: Schema.Never,
@@ -134,11 +130,12 @@ test("failed cross-midnight retrieval does not flush; successful coverage flushe
                   messages: [],
                 },
               });
-              yield* ContextSession.make({
+              yield* (yield* DurableContext).open({
+                serialize: (state) => JSON.stringify(state),
                 path,
                 state: ChatSnapshot,
                 message: ChatMessage,
-                messageKey: (message) => message.id,
+                keyOf: (message) => message.id,
                 initial: {
                   state: {
                     chat,
@@ -150,10 +147,7 @@ test("failed cross-midnight retrieval does not flush; successful coverage flushe
                   messages: [message],
                 },
               });
-            }).pipe(
-              Effect.provideService(ContextRegistry, registry),
-              Effect.provideService(DurableContext, registry.backend),
-            ),
+            }).pipe(Effect.provideService(DurableContext, registry.backend)),
           );
           let polls = 0;
           let runs = 0;
@@ -163,7 +157,7 @@ test("failed cross-midnight retrieval does not flush; successful coverage flushe
               Stream.filter(
                 ({ record }) =>
                   record.path === "/lark/im" &&
-                  predicate(Schema.decodeUnknownSync(ImSnapshot)(record.state)),
+                  predicate(Schema.decodeUnknownSync(ImSnapshot)(registry.get(record.path)!.state)),
               ),
               Stream.runHead,
             );
@@ -200,7 +194,8 @@ test("failed cross-midnight retrieval does not flush; successful coverage flushe
             Stream.filter(
               ({ record }) =>
                 record.path === path &&
-                Schema.decodeUnknownSync(ChatSnapshot)(record.state).summary !== undefined,
+                Schema.decodeUnknownSync(ChatSnapshot)(registry.get(record.path)!.state).summary !==
+                  undefined,
             ),
             Stream.runHead,
           );
@@ -221,7 +216,7 @@ test("catch-up retries the failed window and waits fifteen minutes only after co
         const clock = yield* TestClock.make();
         yield* clock.adjust(Date.parse("2026-10-09T18:20:00Z"));
         yield* Effect.gen(function* () {
-          const registry = yield* makeContextRegistry();
+          const registry = yield* makeTestContext();
           const changes = yield* registry.subscribe;
           const windows: string[][] = [];
           yield* start(registry, {
@@ -237,7 +232,8 @@ test("catch-up retries the failed window and waits fifteen minutes only after co
             Stream.filter(
               ({ record }) =>
                 record.path === "/lark/im" &&
-                Schema.decodeUnknownSync(ImSnapshot)(record.state).lastError !== undefined,
+                Schema.decodeUnknownSync(ImSnapshot)(registry.get(record.path)!.state).lastError !==
+                  undefined,
             ),
             Stream.runHead,
           );
@@ -248,7 +244,7 @@ test("catch-up retries the failed window and waits fifteen minutes only after co
             Stream.filter(
               ({ record }) =>
                 record.path === "/lark/im" &&
-                Schema.decodeUnknownSync(ImSnapshot)(record.state).ready,
+                Schema.decodeUnknownSync(ImSnapshot)(registry.get(record.path)!.state).ready,
             ),
             Stream.runHead,
           );
@@ -262,7 +258,7 @@ test("catch-up retries the failed window and waits fifteen minutes only after co
             Stream.filter(
               ({ record }) =>
                 record.path === "/lark/im" &&
-                Schema.decodeUnknownSync(ImSnapshot)(record.state).through !==
+                Schema.decodeUnknownSync(ImSnapshot)(registry.get(record.path)!.state).through !==
                   windows[completed - 1]![1],
             ),
             Stream.runHead,
