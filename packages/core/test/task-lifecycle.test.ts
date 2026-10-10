@@ -25,6 +25,7 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
               submissions++;
               assert.match(task.instructions, /Read evidence/);
               assert.ok(task.instructions.includes(DEFAULT_EXECUTOR_PROMPT));
+              assert.ok(task.instructions.includes("Write natural-language output in zh-CN"));
               yield* Deferred.succeed(submitted, undefined);
               return { sessionId: "once" };
             }),

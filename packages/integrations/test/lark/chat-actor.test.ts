@@ -7,7 +7,7 @@ import { makeTestContext } from "@aster/core/testing";
 import { Clock, Deferred, Effect, Fiber, Layer, Queue, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import { LarkChatActor } from "../../src/lark/im/chat/actor.js";
-import { ChatState } from "../../src/lark/im/chat/state.js";
+import { ChatState, serializeChat } from "../../src/lark/im/chat/state.js";
 import { LarkSettings, larkSettings } from "../../src/lark/testing.js";
 import { ChatSummarizer, type ChatSummaryInput } from "../../src/lark/im/summary/summarizer.js";
 import { ChatSummaryGate } from "../../src/lark/im/summary/gate.js";
@@ -743,8 +743,10 @@ test("message-count overflow skips the gate and shrinking commits every successf
       );
       assert.equal(registry.get(path)?.messages.length, 0);
       assert.deepEqual(
-        registry.backend.journal().map((event) => JSON.parse(event.record.text).summary.text),
-        ["0,1", "0,1,2,3", "0,1,2,3,4"],
+        registry.backend.journal().map((event) => event.record.text),
+        ["0,1", "0,1,2,3", "0,1,2,3,4"].map((text) =>
+          serializeChat({ chat, summary: { text, references: [] } }),
+        ),
       );
     }),
   );

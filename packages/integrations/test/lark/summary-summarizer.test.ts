@@ -128,3 +128,44 @@ test("summary failures classify capacity and transient causes without retrying u
   assert.equal(chatSummaryError(invalid), invalid);
   assert.notEqual(chatSummaryError(invalid).kind, "transient");
 });
+
+import { ConfigProvider } from "effect";
+for (const language of [undefined, "en-US"]) {
+  test(`summary text uses output language configuration instead of prompt or evidence language: ${language ?? "default"}`, async () => {
+    const expected = language ?? "zh-CN";
+    const runner = AgentRunner.make((request) =>
+      Effect.sync(() => {
+        const system = request.messages.find((message) => message.role === "system");
+        assert.ok(
+          system && JSON.stringify(system).includes(`Write natural-language output in ${expected}`),
+        );
+        assert.ok(!JSON.stringify(system).includes("summary in English"));
+        return {
+          messages: [
+            {
+              role: "toolResult" as const,
+              toolCallId: "save",
+              toolName: "save_summary",
+              content: [],
+              details: { text: "Summary", references: [] },
+              isError: false,
+              timestamp: 0,
+            },
+          ],
+        };
+      }),
+    );
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const summarizer = yield* makeChatSummarizer("summary-model");
+        yield* summarizer.summarize(input);
+      }).pipe(
+        Effect.provideService(AgentRunner, runner),
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({ config: language ? { language } : {} }),
+        ),
+      ),
+    );
+  });
+}

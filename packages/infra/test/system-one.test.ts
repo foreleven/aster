@@ -298,3 +298,30 @@ test("resolved credentials work; missing or invalid settings fail before request
   assert.throws(() => makeSystemOneClient({ ...config, model: " " }), /model must be nonempty/);
   assert.throws(() => makeSystemOneClient({ ...config, url: "invalid" }), /url must be an HTTP/);
 });
+
+for (const language of [undefined, "en-US"]) {
+  test(`System One applies output language to natural-language explanations without translating choices: ${language ?? "default"}`, async () => {
+    const questions = { intent: choice("Choose the intent", { yes: "Confirm", no: "Reject" }) };
+    const client = makeSystemOneClient(
+      testConfig,
+      async (_url, init) => {
+        const body = JSON.parse(String(init?.body));
+        assert.ok(
+          body.questions.intent.instructions.includes(
+            `Write natural-language output in ${language ?? "zh-CN"}`,
+          ),
+        );
+        assert.deepEqual(body.questions.intent.criteria, { yes: "Confirm", no: "Reject" });
+        assert.equal(body.state, "Evidence");
+        return Response.json({
+          answers: { intent: { type: "choice", choice: "yes" } },
+          usage: { input_tokens: 0, output_tokens: 0 },
+        });
+      },
+      language,
+    );
+    const result = await Effect.runPromise(client.systemOne({ state: "Evidence", questions }));
+    assert.equal(result.answers.intent.choice, "yes");
+    assert.equal(questions.intent.instructions, "Choose the intent");
+  });
+}

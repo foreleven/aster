@@ -5,6 +5,7 @@ import { ApplicationError } from "../../operations.js";
 import { TaskDeliveryInput, type PreparedTask } from "../contracts.js";
 import { Context, Deferred, Effect, Layer, Option, Ref, Schedule, Schema, Semaphore } from "effect";
 import { GoalSettings } from "../../config/settings.js";
+import { outputLanguage, outputLanguageInstruction } from "../../config/language.js";
 import { CurrentActors } from "../../services/actors.js";
 import { sendApproval } from "../../approvals/actor.js";
 import {
@@ -25,8 +26,10 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
   const agents = yield* ExternalAgents;
   const harness = yield* DurableHarness;
   const settings = yield* GoalSettings;
+  const language = yield* outputLanguage;
+  const executorPrompt = (prompt: string) => `${prompt}\n\n${outputLanguageInstruction(language)}`;
   const actors = yield* CurrentActors;
-  const journal = yield* executionCheckpoint(path, DEFAULT_EXECUTOR_PROMPT);
+  const journal = yield* executionCheckpoint(path, executorPrompt(DEFAULT_EXECUTOR_PROMPT));
   const writer = yield* Semaphore.make(1);
   const internal = yield* Ref.make<HarnessConversation | undefined>(undefined);
   const changed = yield* Ref.make(yield* Deferred.make<void>());
@@ -359,7 +362,9 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
         let saved = yield* journal.read;
         if (saved.revision === 0) {
           yield* save({
-            prompt: agents[admission.agent]?.executorPrompt ?? DEFAULT_EXECUTOR_PROMPT,
+            prompt: executorPrompt(
+              agents[admission.agent]?.executorPrompt ?? DEFAULT_EXECUTOR_PROMPT,
+            ),
           });
           saved = yield* journal.read;
         }
@@ -483,6 +488,7 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
       ...invocation,
       path,
       model: settings.reasoning!.model,
+      language,
     });
     const result = yield* harness
       .withConversation(preparedConversation.options, (conversation) =>

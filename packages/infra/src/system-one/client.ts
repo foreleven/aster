@@ -1,5 +1,12 @@
 import { TypeSafeClient, type Questions } from "@typesafe-ai/sdk";
-import { DecisionError, SystemOneClient, secretConfig } from "@aster/core";
+import {
+  DecisionError,
+  SystemOneClient,
+  secretConfig,
+  outputLanguage,
+  outputLanguageInstruction,
+  DEFAULT_OUTPUT_LANGUAGE,
+} from "@aster/core";
 import { randomUUID } from "node:crypto";
 import { Clock, Config, ConfigProvider, Effect, Layer, Predicate, Redacted, Schema } from "effect";
 
@@ -28,6 +35,7 @@ const transportErrorCodes = (error: unknown, depth = 0): string[] => {
 export const makeSystemOneClient = (
   config: SystemOneConfig | undefined,
   fetcher: typeof fetch = fetch,
+  language = DEFAULT_OUTPUT_LANGUAGE,
 ): SystemOneClient => {
   if (!config)
     throw new Error("config.system-one is required when Signals, Goals or IM are configured");
@@ -115,7 +123,15 @@ export const makeSystemOneClient = (
               ...request,
               // The core contract deliberately hides the SDK's generic question union;
               // this is the single adapter boundary where the validated shapes meet.
-              questions: request.questions as Questions,
+              questions: Object.fromEntries(
+                Object.entries(request.questions).map(([name, question]) => [
+                  name,
+                  {
+                    ...question,
+                    instructions: `${question.instructions}\n\n${outputLanguageInstruction(language)}`,
+                  },
+                ]),
+              ) as Questions,
               state:
                 typeof request.state === "string" ? request.state : JSON.stringify(request.state),
             },
@@ -173,8 +189,9 @@ export const SystemOneClientLive = {
         };
       const provider = yield* ConfigProvider.ConfigProvider;
       const apiKey = yield* secretConfig(config.apiKey, provider);
+      const language = yield* outputLanguage;
       return yield* Effect.try(() =>
-        makeSystemOneClient({ ...config, apiKey: Redacted.value(apiKey) }),
+        makeSystemOneClient({ ...config, apiKey: Redacted.value(apiKey) }, fetch, language),
       );
     }),
   ),

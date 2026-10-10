@@ -2,6 +2,7 @@ export { secretConfig } from "@aster/agent";
 export * from "./approvals/actor.js";
 export * from "./config/schema.js";
 export * from "./config/settings.js";
+export * from "./config/language.js";
 export * from "./context/actor.js";
 export * from "./context/location.js";
 export * from "./context/errors.js";

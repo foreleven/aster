@@ -84,6 +84,7 @@ test("Task owns native steering coverage and commits one result for the accepted
         const harness = yield* harnessFor(conversations, (_model, context) => {
           const stream = createAssistantMessageEventStream();
           if (++calls === 1) {
+            assert.ok(JSON.stringify(context).includes("Write natural-language output in zh-CN"));
             const message = context.messages.findLast((message) => message.role === "user");
             assert.equal(typeof message?.content, "string");
             assert.ok(

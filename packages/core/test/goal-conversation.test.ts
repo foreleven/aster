@@ -1285,3 +1285,42 @@ test("Goal lifecycle pauses only owned Signals through its ActorContext", async 
     }),
   );
 });
+
+import { ConfigProvider } from "effect";
+for (const language of [undefined, "en-US"]) {
+  test(`Goal replies and relevance explanations use the configured output language: ${language ?? "default"}`, async () => {
+    await run(
+      Effect.gen(function* () {
+        const expected = language ?? "zh-CN";
+        const env = yield* setup(
+          (input) =>
+            Effect.sync(() => {
+              assert.ok(
+                input.instructions.includes(`Write natural-language output in ${expected}`),
+              );
+              return { messages: [] };
+            }),
+          {
+            gate: (input) =>
+              Effect.sync(() => {
+                assert.ok(
+                  JSON.stringify(input.messages).includes(
+                    `Write natural-language output in ${expected}`,
+                  ),
+                );
+                return relevant();
+              }),
+          },
+        );
+        yield* env.wait(() => env.state().inputs[0]?.status === "completed");
+        yield* submitContext(env, "language-context");
+        yield* env.wait(() => env.state().inputs[1]?.status === "completed");
+      }).pipe(
+        Effect.provideService(
+          ConfigProvider.ConfigProvider,
+          ConfigProvider.fromUnknown({ config: language ? { language } : {} }),
+        ),
+      ),
+    );
+  });
+}

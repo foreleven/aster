@@ -1,4 +1,6 @@
 config:
+  # Model output language; defaults to Simplified Chinese when omitted.
+  language: zh-CN
   # Optional root for Context files, Agent conversations and screening journals.
   # durable:
   #   root: /absolute/path/to/aster-data # default ~/.aster
