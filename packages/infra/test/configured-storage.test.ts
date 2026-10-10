@@ -1,7 +1,7 @@
 import { testLocalConfig } from "./configuration-fixtures.js";
 import { serializeFixtureState } from "@aster/core/testing";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -10,7 +10,6 @@ import { DurableContext, ExternalAgents, GoalScreeningStore } from "@aster/core"
 import { ConfiguredDurableInfrastructure } from "../src/storage/configured.js";
 import { FileGoalScreening } from "../src/storage/layers.js";
 import { StorageSettings } from "../src/storage/settings.js";
-import { makeFileContextStore } from "../src/storage/file-context-store.js";
 
 const setup = (t: { after: (cleanup: () => void) => void }, durable: unknown) => {
   const root = mkdtempSync(join(tmpdir(), "aster-storage-config-"));
@@ -29,7 +28,7 @@ const setup = (t: { after: (cleanup: () => void) => void }, durable: unknown) =>
   return { root, sources };
 };
 
-test("configured Local storage reopens Contexts and keeps journals under the same root", async (t) => {
+test("configured Session storage reopens Contexts and keeps journals under the same root", async (t) => {
   const { root, sources } = setup(t, {});
   const settings = await Effect.runPromise(
     Effect.scoped(StorageSettings.pipe(Effect.provide(sources))),
@@ -66,7 +65,8 @@ test("configured Local storage reopens Contexts and keeps journals under the sam
       }).pipe(Effect.provide(ConfiguredDurableInfrastructure.layer.pipe(Layer.provide(sources)))),
     ),
   );
-  assert.deepEqual(makeFileContextStore(settings.contextDirectory).loadAll(), []);
+  assert.equal(existsSync(join(settings.root, "context-sessions")), true);
+  assert.equal(existsSync(join(settings.root, "actors")), false);
   // Journal services resolve configuration independently but share the process lease root.
   const screening = await Effect.runPromise(
     Effect.scoped(

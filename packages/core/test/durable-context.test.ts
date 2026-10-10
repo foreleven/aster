@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect, Schema } from "effect";
-import { ContextCommitError, makeDurableContext, type StoredContext } from "@aster/core";
+import { ContextCommitError, makeDurableContext, type StoredContext } from "../src/index.js";
 const initial = {
   path: "/local",
   revision: 1,

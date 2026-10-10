@@ -5,7 +5,6 @@ export class StorageSettings extends Context.Service<
   StorageSettings,
   {
     readonly root: string;
-    readonly contextDirectory: string;
   }
 >()("infra/storage/Settings") {
   static readonly layer = Layer.effect(
@@ -22,7 +21,7 @@ export class StorageSettings extends Context.Service<
         configuredRoot === undefined
           ? path.join(homeDirectory, ".aster")
           : path.resolve(baseDir, configuredRoot);
-      return { root, contextDirectory: path.join(root, "actors") };
+      return { root };
     }),
   );
 }

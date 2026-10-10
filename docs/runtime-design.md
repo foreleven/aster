@@ -103,7 +103,7 @@ External execution follows the same boundary: core's `ExternalAgent` port expose
 
 Pi model execution belongs to `@aster/agent`. Goal conversations and internal Task workflows use DurableHarness; Goal relevance screening uses ordinary AgentRunner; the raw conversation driver remains private. ExternalAgent delegates to Codex or Doubao and does not register Pi as another executor.
 
-`ConfiguredDurableInfrastructure.layer` supplies Local Context storage alongside independently acquired external adapters. Context files live in `<config.durable.root>/actors`; Pi conversations and their persistence belong to the agent package. Infra has no Pi Context backend or cross-backend routing/migration layer.
+`ConfiguredDurableInfrastructure.layer` supplies native Context Session persistence alongside independently acquired external adapters. Context Documents live in `<config.durable.root>/context-sessions`; State, message family members, metadata and source events share native transactions. Core owns Context revisions and committed publication. Pi Agent conversations and their persistence belong to the agent package under `<config.durable.root>/conversations`. There is one Context persistence adapter and no cross-backend routing or migration layer.
 
 The process captures LocalConfig once before resolving and locking `config.durable.root`. The root lock holds an exclusive SQLite transaction on permanent `.actors-lock.sqlite`; `actors.pid` is diagnostic only and never grants ownership. That lock outlives runtime resources and covers Context storage, Agent conversations and screening logs.
 

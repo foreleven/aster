@@ -203,3 +203,80 @@ test("native uncertain commit recovers State, Messages and serialized text with 
     ),
   );
 });
+
+test("lost acknowledgement restores State, receipt, outbox, Messages and source evidence together after restart", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aster-context-handoff-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const options = {
+    path: "/handoff",
+    state: Schema.Struct({
+      summary: Schema.String,
+      receipts: Schema.Array(Schema.Struct({ requestId: Schema.String })),
+      outbox: Schema.Array(Schema.Struct({ requestId: Schema.String, status: Schema.String })),
+    }),
+    message: definition.message,
+    keyOf: definition.keyOf,
+    events: "state" as const,
+    serialize: (state: { summary: string }) => state.summary,
+    initial: { description: "Handoff", state: { summary: "Before", receipts: [], outbox: [] } },
+  };
+  const accepted = {
+    summary: "Accepted",
+    receipts: [{ requestId: "input" }],
+    outbox: [{ requestId: "delivery", status: "pending" }],
+  };
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const persistence = yield* makeContextSessionPersistence(join(root, "sessions"));
+        const durable = yield* makeDurableContext({
+          ...persistence,
+          save: (record, owner) =>
+            persistence.save(record, owner).pipe(
+              Effect.andThen(
+                record.snapshot.revision === 2
+                  ? Effect.fail(
+                      new ContextCommitError({
+                        path: options.path,
+                        cause: new Error("Lost acknowledgement"),
+                      }),
+                    )
+                  : Effect.void,
+              ),
+            ),
+        });
+        const context = yield* durable.open(options);
+        const result = yield* context
+          .commit(() => ({
+            state: accepted,
+            messages: { append: [{ id: "input", text: "Accepted input" }] },
+          }))
+          .pipe(Effect.result);
+        assert.equal(result._tag, "Failure");
+        assert.deepEqual((yield* context.snapshot).state, options.initial.state);
+        assert.equal(durable.journal().length, 0);
+      }),
+    ),
+  );
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const durable = yield* setup(root);
+        const context = yield* durable.open(options);
+        assert.equal((yield* context.snapshot).revision, 2);
+        assert.deepEqual(yield* context.state.get, accepted);
+        assert.deepEqual(yield* context.messages.list, [{ id: "input", text: "Accepted input" }]);
+        assert.equal(yield* context.serializeState, "Accepted");
+        const events = durable.journal();
+        assert.equal(events.length, 1);
+        assert.equal(events[0]?.record.revision, 2);
+        assert.equal(events[0]?.record.text, "Accepted");
+        // Reapplying the same accepted state at its recovered revision must not duplicate the handoff.
+        yield* context.state.set(accepted, { expectedRevision: 2 });
+        assert.equal((yield* context.snapshot).revision, 2);
+        assert.deepEqual(durable.journal(), events);
+        assert.deepEqual(yield* context.messages.list, [{ id: "input", text: "Accepted input" }]);
+      }),
+    ),
+  );
+});

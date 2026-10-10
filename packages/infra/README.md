@@ -5,7 +5,7 @@ Concrete infrastructure adapters for Aster. The local host imports `@aster/infra
 This package owns:
 
 - `LocalConfig.layer`: YAML and dotenv sources loaded through Effect FileSystem/Path, explicit host environment and home-directory inputs, Effect ConfigProvider, source locations and explicit child-process environment. Modules validate their own settings through this provider.
-- `makeFileContextStore`, the file persistence adapter and the actor-store process lock.
+- Native Pi Document Context persistence and the actor-store process lock.
 - The TypeSafe-compatible System One HTTP client, behind core's decision interface.
 - Infrastructure Layers (`ConfiguredDurableInfrastructure`, `FileGoalScreening`, `SystemOneClientLive`); Goal runtime assembly and reasoning belong to core.
 - Codex app-server execution, persistent thread/turn recovery, native approval replies and environment isolation.
@@ -25,7 +25,7 @@ Doubao native response supports local command allow/reject, native local `intera
 
 Execution factories return managed Effect adapters. `external-agent.ts` contains the Promise driver boundary: it maps transport failures to core's `ExternalAgentError`, forwards Fiber cancellation as an AbortSignal and performs no submission retry. Only infrastructure sees the additional `close(): Effect<void>` capability; `makeExternalAgents` acquires and releases adapters inside `ConfiguredDurableInfrastructure.layer`, after domain Actors stop. The host provides this Layer together with configuration/environment services. Codex JSON-RPC and Doubao CLI/native transports remain Promise implementations inside their adapters. Cancelling a local wait does not mean the external run was cancelled.
 
-`ConfiguredDurableInfrastructure.layer` selects core's `DurableContext`; `LocalDurableContext.fromStore` adapts the native file driver to core's persistence contract. The host selects this authoritative backend; domain Actors use DurableContext and never open files. File commits fsync both data and directory entries, validate pending/state files before recovery writes, and replay a complete pending record after partial append or rename failure. The existing synchronous driver is a native I/O boundary, not the domain commit API. One host process still holds the actor-store ownership lock for the entire runtime lifetime.
+`ConfiguredDurableInfrastructure.layer` supplies core's `DurableContext` through `makeContextSessionPersistence`. Core owns owner validation, revision CAS, recovery fencing and committed publication. The native adapter commits State, message family members, metadata and source events together, with fsync and validated recovery. Domain Actors use DurableContext and never open files. The actor-store process lock covers this authoritative backend for the entire runtime lifetime.
 
 ## Local Context storage
 

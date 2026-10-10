@@ -1,20 +1,16 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import {
-  mkdtempSync,
-  mkdirSync,
-  renameSync,
-  rmSync,
-  existsSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Effect, Schema } from "effect";
-import { type StoredContext } from "@aster/core";
-import { LocalDurableContext } from "../src/storage/local-durable.js";
-import { makeFileContextStore } from "../src/storage/file-context-store.js";
+import { makeDurableContext, type ContextEvent } from "@aster/core";
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import type { JsonValue } from "@earendil-works/chord";
+import { createSession, defineDoc } from "@earendil-works/pi-durable";
+import { openNodeJsonlStorage } from "@earendil-works/pi-durable/storage/jsonl/node";
+import { makeContextSessionPersistence } from "../src/storage/context-sessions.js";
+
 const definition = {
   path: "/source",
   state: Schema.Struct({ summary: Schema.String, credential: Schema.String }),
@@ -27,9 +23,11 @@ const definition = {
     messages: ["Evidence"],
   },
 };
-const assertHandoff = (record: StoredContext) => {
-  assert.equal(record.events.length, 1);
-  const event = record.events[0]!;
+const setup = (root: string) =>
+  makeContextSessionPersistence(root).pipe(Effect.flatMap(makeDurableContext));
+const assertHandoff = (events: readonly ContextEvent[]) => {
+  assert.equal(events.length, 1);
+  const event = events[0]!;
   assert.equal(event.record.path, definition.path);
   assert.equal(event.record.revision, 2);
   assert.equal(event.record.text, "Ready");
@@ -38,101 +36,79 @@ const assertHandoff = (record: StoredContext) => {
   assert.equal("messages" in event.record, false);
 };
 
-test("file pending recovery restores source State and frozen text after a native rename failure", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "aster-reaction-file-"));
+test("native storage retains frozen public evidence through message commits and restart", async (t) => {
+  const root = mkdtempSync(join(tmpdir(), "aster-reaction-session-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const store = makeFileContextStore(root);
-        const durable = yield* LocalDurableContext.fromStore(store);
-        const owner = yield* durable.open(definition);
-        const statePath = join(root, "source/state.json");
-        renameSync(statePath, `${statePath}.previous`);
-        mkdirSync(statePath);
-        assert.equal(
-          (yield* owner.state.update((state) => ({ ...state, summary: "Ready" })).pipe(Effect.flip))
-            ._tag,
-          "ContextCommitError",
-        );
-        assert.equal(durable.journal().length, 0);
-        assert.ok(existsSync(join(root, "source/.pending.json")));
-        rmSync(statePath, { recursive: true });
-        const recovered = yield* LocalDurableContext.fromStore(makeFileContextStore(root));
-        assertHandoff(makeFileContextStore(root).loadAll()[0]!);
-        const restored = yield* recovered.open(definition);
-        assert.equal((yield* restored.snapshot).revision, 2);
-        yield* restored.state.update((state) => state);
-        assert.equal((yield* restored.snapshot).revision, 2);
-      }),
-    ),
-  );
-});
-
-test("Local storage retains frozen text through later message commits and restart", async (t) => {
-  const root = mkdtempSync(join(tmpdir(), "aster-reaction-reopen-"));
-  t.after(() => rmSync(root, { recursive: true, force: true }));
-  let committed: StoredContext | undefined;
-  for (const restart of [false, true])
+  let committed: readonly ContextEvent[] = [];
+  for (const restart of [false, true]) {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
-          const store = makeFileContextStore(root);
-          const durable = yield* LocalDurableContext.fromStore(store);
+          const durable = yield* setup(root);
           const owner = yield* durable.open(definition);
           if (!restart) {
             yield* owner.state.update((state) => ({ ...state, summary: "Ready" }));
-            committed = store.loadAll()[0];
+            committed = durable.journal();
           } else {
-            assert.deepEqual(store.loadAll()[0], committed);
+            assert.deepEqual(durable.journal(), committed);
             yield* owner.messages.append(["new evidence"]);
             assert.equal((yield* owner.snapshot).revision, 3);
           }
-          assertHandoff(store.loadAll()[0]!);
-          assert.equal(durable.journal()[0]?.record.text, "Ready");
+          assertHandoff(durable.journal());
+          assert.equal((yield* owner.state.get).credential, "PRIVATE_TRANSPORT_TOKEN");
         }),
       ),
     );
+  }
 });
 
-test("corrupt pending source envelopes fail before rewriting committed files", async (t) => {
+// Deliberately inject invalid native document contents beneath the adapter's decoding boundary.
+const PersistedEvents = defineDoc<{ events: Record<string, JsonValue> }>({
+  kind: "aster.context.events",
+  version: 1,
+  scope: "session",
+  initial: () => ({ events: {} }),
+});
+
+test("corrupt native source evidence fails recovery without rewriting storage", async (t) => {
   const root = mkdtempSync(join(tmpdir(), "aster-reaction-corrupt-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  await Effect.runPromise(
+  const event = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const store = makeFileContextStore(root);
-        const durable = yield* LocalDurableContext.fromStore(store);
+        const durable = yield* setup(root);
         const owner = yield* durable.open(definition);
         yield* owner.state.update((state) => ({ ...state, summary: "Ready" }));
-        const record = store.loadAll()[0]!;
-        const event = record.events[0]!;
-        const statePath = join(root, "source/state.json"),
-          messagesPath = join(root, "source/messages.jsonl"),
-          pendingPath = join(root, "source/.pending.json");
-        const stateBefore = readFileSync(statePath, "utf8"),
-          messagesBefore = readFileSync(messagesPath, "utf8");
-        for (const events of [
-          [{ ...event, record: { ...event.record, path: "/other" } }],
-          [{ ...event, record: { ...event.record, revision: 4 } }],
-          [{ ...event, id: "forged" }],
-          [{ ...event, createdAt: "invalid" }],
-          [event, event],
-        ]) {
-          const pending = JSON.stringify({
-            snapshot: { ...record.snapshot, revision: 3, state: { summary: "Invalid overwrite" } },
-            events,
-          });
-          writeFileSync(pendingPath, pending);
-          const restored = yield* Effect.suspend(() =>
-            LocalDurableContext.fromStore(makeFileContextStore(root)),
-          ).pipe(Effect.exit);
-          assert.equal(restored._tag, "Failure");
-          assert.equal(readFileSync(statePath, "utf8"), stateBefore);
-          assert.equal(readFileSync(messagesPath, "utf8"), messagesBefore);
-          assert.equal(readFileSync(pendingPath, "utf8"), pending);
-        }
+        return durable.journal()[0]!;
       }),
     ),
   );
+  const log = readdirSync(root, { recursive: true, withFileTypes: true }).find(
+    (file) => file.isFile() && file.name === "main.jsonl",
+  )!;
+  const filePath = join(log.parentPath, log.name);
+  for (const events of [
+    [{ ...event, record: { ...event.record, path: "/other" } }],
+    [{ ...event, record: { ...event.record, revision: 4 } }],
+    [{ ...event, id: "forged" }],
+    [{ ...event, createdAt: "invalid" }],
+    [event, event],
+  ]) {
+    const session = createSession(
+      await openNodeJsonlStorage(log.parentPath, BACKGROUND_CONTEXT, { fsync: true }),
+    );
+    try {
+      await session.commit(async (tx) => {
+        const doc = await tx.doc(PersistedEvents);
+        doc.events = Object.fromEntries(events.map((value, index) => [String(index), value]));
+      }, BACKGROUND_CONTEXT);
+    } finally {
+      await session.close(BACKGROUND_CONTEXT);
+    }
+    const before = readFileSync(filePath, "utf8");
+    const result = await Effect.runPromise(Effect.scoped(setup(root)).pipe(Effect.result));
+    assert.equal(result._tag, "Failure");
+    if (result._tag === "Failure") assert.equal(result.failure._tag, "ContextRecoveryError");
+    assert.equal(readFileSync(filePath, "utf8"), before);
+  }
 });

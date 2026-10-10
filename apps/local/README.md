@@ -60,11 +60,11 @@ Codex uses app-server; busy follow-ups steer the current turn and completed work
 
 Workspace packages use `@aster/*`; the CLI is `pnpm aster` (or the `aster` binary), and the default configuration is `aster.config.yaml`. Signal/Signals remain domain terms, including the `signals` configuration key and `/signals` Context paths.
 
-Default storage and the ownership lock now live under `~/.aster`: `actors/`, `tasks/`, `context-sessions/`, and `memory/`. Memory `dataDir` supports `~/` paths; explicitly configured relative paths still resolve beside the config file. No automatic migration from the old storage directory is performed. Existing execution resume metadata retains its filename.
+Default storage and the ownership lock now live under `~/.aster`: `context-sessions/`, `conversations/`, `evaluations/`, `tasks/`, and `memory/`. Memory `dataDir` supports `~/` paths; explicitly configured relative paths still resolve beside the config file. No automatic migration from the old storage directory is performed. Existing execution resume metadata retains its filename.
 
 ### IM Sessions
 
-The single-account IM integration uses ContextSession with Pi Documents under the host's durable root. Each chat keeps a continuous Session containing its rolling summary, deduplication receipts and a separate keyed Document for pending messages. Retrieval coverage has explicit daily partitions; the Channel cursor and shared Agent admission timing have their own continuous Sessions.
+The single-account IM integration uses ContextSession with Pi Documents under the host's durable root. Each chat keeps a continuous Context owner containing its rolling summary and a Document family for pending messages. Retrieval coverage has explicit daily partitions; the Channel cursor and shared Agent admission timing have their own continuous Sessions.
 
 The rolling summary is exposed in the chat's public `state.summary` (`text` and `references`). Daily summaries and Markdown archives are not generated. Startup restores accepted pending evidence, including prior-day messages, but does not backfill missing historical retrieval intervals or migrate the old storage format. Receipt cleanup follows the durable retrieval cursor and preserves pending evidence and replay overlap.
 
