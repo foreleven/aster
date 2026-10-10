@@ -33,7 +33,7 @@ const integration = (
   name: string,
   phase: "source" | "consumer",
   stop: Effect.Effect<void>,
-  ready: Effect.Effect<void, Error> = Effect.void,
+  activate: Effect.Effect<void, Error> = Effect.void,
   harness?: DurableHarness["Service"],
 ) =>
   Layer.effectDiscard(
@@ -44,7 +44,7 @@ const integration = (
           name,
           phase,
           services: harness ? Context.make(DurableHarness, harness) : Context.empty(),
-          activate: () => Effect.succeed({ stop, ready }),
+          activate: () => activate.pipe(Effect.as({ stop })),
         }),
       );
     }),
@@ -113,22 +113,14 @@ test("runtime readiness includes the built-in Goal assistant and ordinary Goal c
   );
 });
 
-test("a readiness defect settles runtime.ready with its original cause", async () => {
-  const defect = new Error("source readiness defect");
+test("an activation defect preserves its original cause", async () => {
+  const defect = new Error("source activation defect");
   const live = AsterRuntime.layer({
     integrations: [integration("source", "source", Effect.void, Effect.die(defect))],
   }).pipe(Layer.provide(infrastructure()), Layer.provide(config));
-  await Effect.runPromise(
-    Effect.scoped(
-      Effect.gen(function* () {
-        const runtime = yield* AsterRuntime;
-        const exit = yield* Effect.exit(runtime.ready.pipe(Effect.timeout("200 millis")));
-        assert.ok(Exit.isFailure(exit));
-        assert.equal(Cause.squash(exit.cause), defect);
-        assert.equal((yield* runtime.inspect).phase, "failed");
-      }).pipe(Effect.provide(live)),
-    ),
-  );
+  const exit = await Effect.runPromiseExit(Effect.scoped(AsterRuntime.pipe(Effect.provide(live))));
+  assert.ok(Exit.isFailure(exit));
+  assert.equal(Cause.squash(exit.cause), defect);
 });
 
 test("shutdown attempts every phase even when multiple integration stops defect", async () => {
@@ -159,7 +151,7 @@ test("shutdown attempts every phase even when multiple integration stops defect"
 
 test("closing a runtime before readiness also settles later readiness callers", async () => {
   const live = AsterRuntime.layer({
-    integrations: [integration("pending", "source", Effect.void, Effect.never)],
+    integrations: [integration("pending", "source", Effect.void)],
   }).pipe(Layer.provide(infrastructure()), Layer.provide(config));
   const runtime = await Effect.runPromise(Effect.scoped(AsterRuntime.pipe(Effect.provide(live))));
   const exit = await Effect.runPromiseExit(runtime.ready.pipe(Effect.timeout("200 millis")));
@@ -168,7 +160,7 @@ test("closing a runtime before readiness also settles later readiness callers", 
 });
 
 for (const slug of ["personal", "project"]) {
-  test(`${slug} replies while integration readiness is pending`, async () => {
+  test(`${slug} replies while business work is pending`, async () => {
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {
@@ -179,7 +171,7 @@ for (const slug of ["personal", "project"]) {
                 "pending",
                 "source",
                 Effect.void,
-                Deferred.await(release),
+                Effect.void,
                 makeHarness(() =>
                   Effect.succeed({
                     messages: [
@@ -243,8 +235,8 @@ for (const slug of ["personal", "project"]) {
               ),
             );
             assert.equal(yield* Deferred.isDone(release), false);
-            assert.equal(readiness.pollUnsafe(), undefined);
-            assert.equal((yield* runtime.inspect).phase, "starting");
+            yield* Fiber.join(readiness);
+            assert.equal((yield* runtime.inspect).phase, "ready");
             yield* Deferred.succeed(release, undefined);
             yield* Fiber.join(readiness);
             assert.equal((yield* runtime.inspect).phase, "ready");
@@ -287,7 +279,7 @@ test("runtime becomes ready while a Goal restores; its mailbox resumes after res
                     name: "slow-goal-storage",
                     phase: "source",
                     services,
-                    activate: () => Effect.succeed({ ready: Effect.void, stop: Effect.void }),
+                    activate: () => Effect.succeed({ stop: Effect.void }),
                   }),
                 ),
               ),
@@ -330,7 +322,7 @@ test("a stopped core owner makes runtime health failed after readiness", async (
             Effect.gen(function* () {
               const memory = yield* system.select("/user/memory").resolve();
               yield* Deferred.succeed(stopMemory, system.stop(memory));
-              return { ready: Effect.void, stop: Effect.void };
+              return { stop: Effect.void };
             }),
         }),
       );

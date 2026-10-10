@@ -1,13 +1,12 @@
-import { validateConfig } from "@aster/core";
-import { Context, Effect, Equivalence, Layer, Ref, Schedule, Schema } from "effect";
-import { LarkConfig } from "../../config.js";
-import { ChatSummaryBatchConfig } from "../config.js";
-import { formatDate } from "../service/dates.js";
-import { type ChatWork, type SummaryCommit } from "../chat/snapshot.js";
+import { RuntimeConfigurationError } from "@aster/core";
+import { Effect, Equivalence, Ref, Schedule } from "effect";
+import { LarkSettings } from "../../settings.js";
+import { formatDate } from "../../dates.js";
+import { type ChatWork, type SummaryCommit } from "../chat/state.js";
 import { ChatSummaryGate } from "./gate.js";
-import { ImAgentQueue } from "./agent-queue.js";
+import { SummaryAdmission } from "./admission.js";
 import { ChatSummarizer, type ChatSummaryInput } from "./summarizer.js";
-import type { ChatSummaryError } from "../../shared/errors.js";
+import type { ChatSummaryError } from "./errors.js";
 
 const transientRetry = {
   schedule: Schedule.max([Schedule.spaced("30 seconds"), Schedule.recurs(3)]),
@@ -15,14 +14,14 @@ const transientRetry = {
 };
 
 /** One Behavior-scoped workflow owns assessment and model retries; all writes use the mailbox. */
-const makeChatSummaryWork = Effect.gen(function* () {
+export const makeChatSummaryWork = Effect.gen(function* () {
   const gate = yield* ChatSummaryGate;
-  const admission = yield* ImAgentQueue;
+  const admission = yield* SummaryAdmission;
   const summarizer = yield* ChatSummarizer;
-  const config = yield* LarkConfig;
-  const settings = yield* validateConfig("Lark IM summary batches", () =>
-    Schema.decodeUnknownSync(ChatSummaryBatchConfig)(config.im?.config?.summary ?? {}),
-  );
+  const config = yield* LarkSettings;
+  if (!config.im)
+    return yield* new RuntimeConfigurationError({ message: "Lark IM is not configured" });
+  const settings = config.im.config.summary;
   const deferred = yield* Ref.make<readonly string[] | undefined>(undefined);
   const sameIds = Equivalence.Array(Equivalence.strictEqual<string>());
   const run = Effect.fn("ChatSummaryWork.run")(function* (input: {
@@ -120,9 +119,3 @@ const makeChatSummaryWork = Effect.gen(function* () {
   });
   return { run };
 });
-export class ChatSummaryWork extends Context.Service<
-  ChatSummaryWork,
-  Effect.Success<typeof makeChatSummaryWork>
->()("lark/im/ChatSummaryWork") {
-  static readonly layer = Layer.effect(ChatSummaryWork, makeChatSummaryWork);
-}

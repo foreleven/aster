@@ -205,7 +205,6 @@ const acquireRuntime = Effect.gen(function* () {
   yield* (yield* system.spawn("system-one", SystemOneActor)).awaitStarted;
   running.initialization = yield* Effect.gen(function* () {
     yield* Deferred.succeed(signalActivation, undefined);
-    yield* Effect.forEach(handles, ({ handle }) => handle.ready, { concurrency: "unbounded" });
     if ((yield* Ref.get(diagnostics)).phase === "failed")
       return yield* new ApplicationError({
         kind: "unavailable",

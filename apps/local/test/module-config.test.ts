@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { Config, Effect } from "effect";
 import { signalSettings } from "@aster/core";
 import { Models } from "@aster/agent";
-import { LarkConfig } from "@aster/integrations";
+import { LarkSettings } from "@aster/integrations";
 import { LocalConfig, memorySettings } from "@aster/infra";
 
 test("environment overrides preserve dynamic keys, nested module settings and model array entries", async (t) => {
@@ -56,7 +56,7 @@ config:
             ["my-signal", "overridden"],
           ],
         );
-        assert.equal((yield* LarkConfig).im?.config?.pollIntervalMs, 5000);
+        assert.equal((yield* LarkSettings).im?.config?.pollIntervalMs, 5000);
         assert.equal((yield* memorySettings).dataDir, join(dir, "memory"));
         const models = yield* Models;
         const one = yield* models.resolve("one");
@@ -65,7 +65,7 @@ config:
         assert.equal((yield* models.resolve("two")).model.id, "second");
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(LarkConfig.layer, Models.configured).pipe(Layer.provideMerge(layer)),
+          Layer.mergeAll(LarkSettings.layer, Models.configured).pipe(Layer.provideMerge(layer)),
         ),
       ),
     ),

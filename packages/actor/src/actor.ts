@@ -155,7 +155,7 @@ export interface ActorContext<Command> {
   watch<Watched>(ref: ActorRef<Watched>): Effect.Effect<void>;
   child(name: string): Effect.Effect<ActorRef<unknown> | undefined>;
   children(): Effect.Effect<ReadonlyArray<ActorRef<unknown>>>;
-  receiveTimeout(duration: Duration.Input): Effect.Effect<void>;
+  receiveTimeout(duration: Duration.Input | undefined): Effect.Effect<void>;
   /** Supervised background work owned by this Behavior and an optional request scope. */
   fork(effect: Effect.Effect<void>, scope?: Scope.Scope): Effect.Effect<Fiber.Fiber<void>>;
   /** Behavior-scoped work: expected errors become commands; defects enter supervision. */

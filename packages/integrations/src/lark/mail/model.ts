@@ -1,12 +1,14 @@
 import { Schema } from "effect";
+import { LarkId } from "../paths.js";
+import { Timestamp } from "../dates.js";
 export const MailboxProfile = Schema.Struct({
   address: Schema.String,
   name: Schema.String,
 });
 export type MailboxProfile = typeof MailboxProfile.Type;
 export const EmailData = Schema.Struct({
-  messageId: Schema.String,
-  mailbox: Schema.String,
+  messageId: LarkId,
+  mailbox: LarkId,
   from: Schema.String,
   subject: Schema.String,
   bodyPlainText: Schema.String,
@@ -54,3 +56,12 @@ export const MailListPage = Schema.Struct({
   nextPageToken: Schema.NullOr(Schema.String),
 });
 export type MailListPage = typeof MailListPage.Type;
+
+export const MailboxState = Schema.Struct({
+  mailbox: LarkId,
+  profile: Schema.optional(MailboxProfile),
+  through: Schema.optional(Timestamp),
+});
+export type MailboxState = typeof MailboxState.Type;
+export const serializeMailbox = ({ profile }: Readonly<MailboxState>) =>
+  profile ? JSON.stringify(profile) : "";

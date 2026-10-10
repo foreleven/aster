@@ -881,3 +881,63 @@ const compileTimeSpawnChecks = Effect.scoped(
   }),
 );
 void compileTimeSpawnChecks;
+
+class IdleWork extends Context.Service<IdleWork, Deferred.Deferred<void>>()("test/IdleWork") {}
+const IdleControl = Schema.TaggedUnion({
+  Disable: { replyTo: ReplyTo<void>() },
+  Enable: { replyTo: ReplyTo<void>() },
+  Work: { replyTo: ReplyTo<void>() },
+  Ping: { replyTo: ReplyTo<void>() },
+});
+const ControlledIdle = Actor.define("test/ControlledIdle", {
+  commands: Object.values(IdleControl.cases),
+})(
+  Effect.gen(function* () {
+    const release = yield* IdleWork;
+    return {
+      started: (context) => context.receiveTimeout(100),
+      receive: (command, context) =>
+        Match.value(command).pipe(
+          Match.tag("Disable", ({ replyTo }) =>
+            context.receiveTimeout(undefined).pipe(Effect.andThen(replyTo.tell(undefined))),
+          ),
+          Match.tag("Enable", ({ replyTo }) =>
+            context.receiveTimeout(100).pipe(Effect.andThen(replyTo.tell(undefined))),
+          ),
+          Match.tag("Work", ({ replyTo }) =>
+            context.fork(Deferred.await(release)).pipe(Effect.andThen(replyTo.tell(undefined))),
+          ),
+          Match.tag("Ping", ({ replyTo }) => replyTo.tell(undefined)),
+          Match.exhaustive,
+        ),
+    };
+  }),
+);
+test("idle timeout can be disabled and does not stop outstanding Behavior work", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const clock = yield* TestClock.make();
+        const release = yield* Deferred.make<void>();
+        const system = yield* ActorSystem.make().pipe(
+          ActorSystem.provide(
+            Layer.mergeAll(Layer.succeed(Clock.Clock, clock), Layer.succeed(IdleWork, release)),
+          ),
+        );
+        const stopped = yield* Stream.runHead(
+          Stream.filter(system.events, (event) => event._tag === "ActorStopped"),
+        ).pipe(Effect.forkScoped);
+        const actor = yield* system.spawn("controlled", ControlledIdle);
+        yield* actor.ask<void>((replyTo) => ({ _tag: "Disable", replyTo }));
+        yield* clock.adjust(1000);
+        yield* actor.ask<void>((replyTo) => ({ _tag: "Work", replyTo }));
+        yield* actor.ask<void>((replyTo) => ({ _tag: "Enable", replyTo }));
+        yield* clock.adjust(1000);
+        yield* actor.ask<void>((replyTo) => ({ _tag: "Ping", replyTo }));
+        yield* Deferred.succeed(release, undefined);
+        yield* clock.adjust(100);
+        assert.equal((yield* Fiber.join(stopped).pipe(Effect.timeout("2 seconds")))._tag, "Some");
+      }),
+    ),
+  );
+});

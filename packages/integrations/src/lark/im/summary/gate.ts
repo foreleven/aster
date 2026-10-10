@@ -1,7 +1,7 @@
-import { publicChatMessage } from "../service/model.js";
-import { ChatSummaryError } from "../../shared/errors.js";
+import { publicChatMessage } from "../model.js";
+import { ChatSummaryError } from "./errors.js";
 import { Context, Effect, Layer } from "effect";
-import { choice, SystemOneClient } from "@aster/core";
+import { choice, SystemOneClient, RuntimeConfigurationError } from "@aster/core";
 import type { ChatSummaryInput } from "./summarizer.js";
 import { chatSummaryError } from "./errors.js";
 export class ChatSummaryGate extends Context.Service<
@@ -13,7 +13,12 @@ export class ChatSummaryGate extends Context.Service<
   static readonly layer = Layer.effect(
     ChatSummaryGate,
     Effect.gen(function* () {
-      return makeImSummaryGate(yield* SystemOneClient);
+      const client = yield* SystemOneClient;
+      if (client.configured === false)
+        return yield* new RuntimeConfigurationError({
+          message: "Lark IM requires config.system-one",
+        });
+      return makeImSummaryGate(client);
     }),
   );
 }

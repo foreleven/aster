@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { parseMailboxProfile, parseAccount, LarkConfig } from "@aster/integrations";
+import { LarkSettings } from "@aster/integrations";
 import { parseMemoryConfig, memorySettings } from "@aster/infra";
 import { LocalConfig } from "@aster/infra";
 import { Config, Effect, Schema } from "effect";
@@ -14,7 +14,7 @@ const settings = (file: string) =>
     Effect.scoped(
       Effect.gen(function* () {
         return {
-          lark: yield* LarkConfig.pipe(Effect.provide(LarkConfig.layer)),
+          lark: yield* LarkSettings.pipe(Effect.provide(LarkSettings.layer)),
           memory: yield* memorySettings,
           custom: yield* Config.schema(Schema.optional(Schema.String), [
             "contexts",
@@ -84,6 +84,7 @@ signals:
     const lark = config.lark;
     const memory = config.memory;
     assert.equal(lark.description, "My work account");
+    assert.ok(lark.mail);
     assert.equal(lark.mail.description, "My work mailbox");
     assert.equal(memory.dataDir, join(homedir(), ".aster/memory"));
     assert.equal(
@@ -115,7 +116,7 @@ test("module settings own children, defaults and validation", async () => {
     assert.equal(config.custom, "value");
     assert.deepEqual(config.signals, []);
     assert.equal(config.systemOne, undefined);
-    assert.equal(config.lark.mail.mailbox, "me");
+    assert.equal(config.lark.mail, undefined);
     assert.equal(config.memory.description, "My long-term memory");
     // The Lark module validates its own child configuration through the provider.
     await writeFile(
@@ -126,27 +127,6 @@ test("module settings own children, defaults and validation", async () => {
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
-});
-
-test("Lark profile parsers match actual CLI envelopes and select only public identity fields", () => {
-  assert.deepEqual(
-    parseMailboxProfile('{"ok":true,"data":{"primary_email_address":"test@example.com"}}'),
-    {
-      address: "test@example.com",
-      name: "",
-    },
-  );
-  assert.deepEqual(
-    parseAccount(
-      '{"ok":true,"data":{"user":{"name":"Test","open_id":"ou_test","access_token":"private"}}}',
-    ),
-    {
-      openId: "ou_test",
-      name: "Test",
-      email: "",
-      enterpriseEmail: "",
-    },
-  );
 });
 
 test("Agent processes receive none of the project service keys", () => {

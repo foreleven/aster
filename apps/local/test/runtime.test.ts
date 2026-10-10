@@ -38,12 +38,7 @@ const Source = ContextActor.define("test/Source", {
   }),
 );
 
-const sourceLayer = (
-  name: string,
-  events: string[],
-  ready: Effect.Effect<void, Error> = Effect.void,
-  fail = false,
-) =>
+const sourceLayer = (name: string, events: string[], fail = false) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
       const modules = yield* RuntimeIntegrations;
@@ -72,7 +67,6 @@ const sourceLayer = (
                 );
               const actor = yield* system.spawn(name, Source);
               return {
-                ready,
                 stop: system.stop(actor).pipe(
                   Effect.andThen(
                     Effect.sync(() => {
@@ -142,23 +136,20 @@ const config = ConfigProvider.layer(
   ConfigProvider.fromUnknown({ config: { agent: { model: "test" } } }),
 );
 
-test("runtime installs multiple sources, captures first changes, exposes API before readiness and releases services last", async () => {
+test("runtime installs multiple sources, captures first changes, exposes API after framework initialization and releases services last", async () => {
   const events: string[] = [];
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const ready = yield* Deferred.make<void>();
         const live = AsterRuntime.layer({
-          integrations: [
-            sourceLayer("one", events, Deferred.await(ready)),
-            sourceLayer("two", events),
-          ],
+          integrations: [sourceLayer("one", events), sourceLayer("two", events)],
         }).pipe(Layer.provide(infrastructure(events)), Layer.provide(config));
         yield* Effect.scoped(
           Effect.gen(function* () {
             const runtime = yield* AsterRuntime;
             assert.equal((yield* runtime.inspect) && events.includes("start:two"), true);
-            assert.equal((yield* runtime.inspect).phase, "starting");
+
             const pending = yield* runtime.ready.pipe(Effect.forkScoped);
             yield* Deferred.succeed(ready, undefined);
             yield* Fiber.join(pending);
@@ -182,7 +173,7 @@ test("runtime installs multiple sources, captures first changes, exposes API bef
 test("activation failure stops earlier integrations and releases the shared backend", async () => {
   const events: string[] = [];
   const live = AsterRuntime.layer({
-    integrations: [sourceLayer("one", events), sourceLayer("broken", events, Effect.void, true)],
+    integrations: [sourceLayer("one", events), sourceLayer("broken", events, true)],
   }).pipe(Layer.provide(infrastructure(events)), Layer.provide(config));
   await assert.rejects(
     Effect.runPromise(Effect.scoped(AsterRuntime.pipe(Effect.provide(live)))),
@@ -192,14 +183,14 @@ test("activation failure stops earlier integrations and releases the shared back
   assert.equal(events.at(-1), "memory:released");
 });
 
-test("cancelling while a source is not ready closes the runtime without waiting for readiness", async () => {
+test("cancelling a running source closes the runtime", async () => {
   const events: string[] = [];
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
         const acquired = yield* Deferred.make<void>();
         const live = AsterRuntime.layer({
-          integrations: [sourceLayer("pending", events, Effect.never)],
+          integrations: [sourceLayer("pending", events)],
         }).pipe(Layer.provide(infrastructure(events)), Layer.provide(config));
         const fiber = yield* Effect.gen(function* () {
           const runtime = yield* AsterRuntime;

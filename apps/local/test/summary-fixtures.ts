@@ -1,5 +1,9 @@
 import { Effect } from "effect";
-import { ChatSummaryError, type ChatSummaryInput, type ChatSummary } from "@aster/integrations";
+import {
+  ChatSummaryError,
+  type ChatSummaryInput,
+  type ChatSummary,
+} from "@aster/integrations/lark/testing";
 
 // Adapt existing asynchronous test doubles at the fixture boundary; production services stay Effect-native.
 const failure = (cause: unknown) =>

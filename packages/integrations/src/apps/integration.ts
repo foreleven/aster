@@ -29,10 +29,8 @@ const installation = Layer.effectDiscard(
         activate: (system) =>
           Effect.gen(function* () {
             const actor = yield* system.spawn("apps", AppsRootActor);
-            return {
-              ready: actor.ask<void>((replyTo) => ({ _tag: "Ready", replyTo })),
-              stop: system.stop(actor),
-            };
+            yield* actor.awaitStarted;
+            return { stop: system.stop(actor) };
           }),
       }),
     );

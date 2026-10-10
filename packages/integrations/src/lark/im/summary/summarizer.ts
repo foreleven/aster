@@ -1,12 +1,11 @@
-import { publicChatMessage } from "../service/model.js";
-import { ChatSummaryError } from "../../shared/errors.js";
+import { publicChatMessage } from "../model.js";
+import { ChatSummaryError } from "./errors.js";
 import { Models, Type } from "@aster/agent";
 import { AgentRunner } from "@aster/agent/agent";
-import { LarkConfig } from "../../config.js";
-import { validateConfig } from "@aster/core";
-import { ChatSummaryConfig } from "../config.js";
+import { RuntimeConfigurationError } from "@aster/core";
+import { LarkSettings } from "../../settings.js";
 import { Clock, Context, Effect, Layer, Schema } from "effect";
-import { ChatSummary, type ChatInfo, type ChatMessage } from "../service/model.js";
+import { ChatSummary, type ChatInfo, type ChatMessage } from "../model.js";
 import { chatSummaryError } from "./errors.js";
 
 export interface ChatSummaryInput {
@@ -24,16 +23,11 @@ export class ChatSummarizer extends Context.Service<
   static readonly layer = Layer.effect(
     ChatSummarizer,
     Effect.gen(function* () {
-      const config = yield* LarkConfig;
+      const config = yield* LarkSettings;
       const entry = config.im;
       if (entry === undefined)
-        return {
-          summarize: () =>
-            Effect.fail(new ChatSummaryError({ message: "Lark IM is not configured" })),
-        };
-      const settings = yield* validateConfig("Lark IM summary", () =>
-        Schema.decodeUnknownSync(ChatSummaryConfig)(entry.config?.summary ?? {}),
-      );
+        return yield* new RuntimeConfigurationError({ message: "Lark IM is not configured" });
+      const settings = entry.config.summary;
       const models = yield* Models;
       yield* models.resolve(settings.model);
       return yield* makeChatSummarizer(settings.model);

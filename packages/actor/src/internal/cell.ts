@@ -224,6 +224,10 @@ export class ActorCell {
       children: () => Effect.sync(() => [...cell.children.values()].map((child) => child.ref)),
       receiveTimeout: (duration) =>
         Effect.sync(() => {
+          if (duration === undefined) {
+            cell.receiveTimeoutMs = undefined;
+            return;
+          }
           const milliseconds = Duration.toMillis(duration);
           if (milliseconds <= 0) throw new Error("ReceiveTimeout must be positive");
           cell.receiveTimeoutMs = milliseconds;
@@ -367,7 +371,12 @@ export class ActorCell {
             break;
           }
           if (envelope === null) {
-            if (this.children.size === 0 && (yield* Queue.size(this.mailbox)) === 0) {
+            if (
+              this.receiveTimeoutMs !== undefined &&
+              this.pendingEffects === 0 &&
+              this.children.size === 0 &&
+              (yield* Queue.size(this.mailbox)) === 0
+            ) {
               yield* this.requestStop();
             }
             continue;

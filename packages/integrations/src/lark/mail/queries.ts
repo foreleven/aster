@@ -1,12 +1,9 @@
-import { ContextCommand, ContextQueryError } from "@aster/core";
-import { Schema } from "effect";
-import { MailListArgs, MailListPage, MailboxProfile, EmailData } from "./model.js";
-
-const ProviderError = Schema.TaggedUnion({
-  LarkCliError: { message: Schema.String },
-  LarkResponseError: { message: Schema.String, kind: Schema.optional(Schema.String) },
-});
-const MailQueryError = Schema.Union([ContextQueryError, ProviderError]);
+import { ContextCommand, ContextQueryError, DurableContext } from "@aster/core";
+import { Effect, Schema } from "effect";
+import { MailListArgs, MailListPage, MailboxProfile, EmailData, MailboxState } from "./model.js";
+import { LarkMailClient } from "./client.js";
+import { queryError } from "../errors.js";
+import { emailPath, LarkId } from "../paths.js";
 
 export class MailProfile extends ContextCommand.Class<MailProfile>()("profile", {
   description: "Read the Mailbox Actor's retained public identity.",
@@ -25,13 +22,53 @@ export class ListMail extends ContextCommand.Class<ListMail>()("list", {
     ...MailListPage.fields,
     coverage: Schema.Struct({ source: Schema.Literal("provider"), complete: Schema.Boolean }),
   }),
-  error: ProviderError,
+  error: ContextQueryError,
 }) {}
 export class ReadMail extends ContextCommand.Class<ReadMail>()("read", {
   description:
-    "Read one email by messageId, using its Message Actor when retained and the provider otherwise.",
-  payload: { messageId: Schema.NonEmptyString.check(Schema.isPattern(/^[^/]+$/)) },
+    "Read one email by messageId, from committed local state, falling back to the provider when absent.",
+  payload: { messageId: LarkId },
   success: EmailData,
-  error: MailQueryError,
+  error: ContextQueryError,
 }) {}
 export const LarkMailCommands = [MailProfile, ListMail, ReadMail] as const;
+
+export const readMailboxProfile = Effect.fn("LarkMail.readProfile")(function* () {
+  const state = yield* (yield* DurableContext)
+    .readState("/lark/mail", MailboxState)
+    .pipe(Effect.catchTag("ContextValidationError", (error) => Effect.fail(queryError(error))));
+  if (!state.profile)
+    return yield* new ContextQueryError({
+      kind: "unavailable",
+      message: "Mailbox profile is not available",
+    });
+  return state.profile;
+});
+export const readEmail = Effect.fn("LarkMail.readEmail")(function* (
+  mailbox: string,
+  messageId: string,
+) {
+  const registry = yield* DurableContext;
+  const path = emailPath(mailbox, messageId);
+  if (registry.get(path)) {
+    const email = yield* registry
+      .readState(path, EmailData)
+      .pipe(Effect.catchTag("ContextValidationError", (error) => Effect.fail(queryError(error))));
+    if (email.mailbox !== mailbox || email.messageId !== messageId)
+      return yield* new ContextQueryError({
+        kind: "failed",
+        message: "Retained email identity mismatch",
+      });
+    return email;
+  }
+  const emails = yield* (yield* LarkMailClient)
+    .getMessages(mailbox, [messageId])
+    .pipe(Effect.mapError(queryError));
+  const email = emails.find((email) => email.mailbox === mailbox && email.messageId === messageId);
+  if (!email)
+    return yield* new ContextQueryError({
+      kind: "unavailable",
+      message: "Email evidence unavailable",
+    });
+  return email;
+});

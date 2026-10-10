@@ -19,17 +19,17 @@ The current reader-visible textual representation of committed Context State. Sy
 **Chat Summary**:
 The current condensed understanding of a chat, carried forward from its previous summary and newly observed messages and exposed as part of its Context State. It retains relevant progress, decisions, blockers, pending work, and source references for deciding which Goals concern the conversation.
 
+**Observed Chat Directory**:
+The chats already observed by Aster and retained as local information. It does not enumerate every conversation available from Lark.
+
 **Pending Chat Messages**:
-Observed chat messages that have not yet been incorporated into a durably saved Chat Summary. Messages are appended as immutable observations; a later source change is a new observation rather than an update to an existing Message.
+Observed chat messages that have not yet been incorporated into a durably saved Chat Summary. Messages remain immutable while retained. An incoming source identity already retained is ignored; once removed after summarization, that identity may be observed again as new pending information.
 
 **Chat Summary Request**:
 A request to refresh one chat's summary from its accumulated Pending Chat Messages. Its message coverage is determined when an IM Agent Permit is granted, so messages observed while awaiting admission can join the same summary.
 
-**Daily IM Retrieval Progress**:
-The record of message retrieval coverage for a particular day, including unfinished coverage that may be retrieved on demand. Retrieval progress is distinct from completion of chat summarization.
-
 **IM Retrieval Watermark (`through`)**:
-The end of a retrieval interval whose fetched messages have been durably retained locally. It establishes retrieval coverage, not completion of daily or rolling summaries.
+The endpoint of a completed retrieval interval whose fetched messages have been durably retained locally. It does not imply that all earlier remote history was imported or that the messages have been summarized.
 
 **Daily Chat Summary**:
 A condensed record of a group or direct conversation’s discussions, decisions, and pending work based on messages from one calendar day in Beijing time. It is distinct from the Chat Summary, which carries the conversation's relevant understanding across days.
@@ -45,6 +45,18 @@ Information retained for later recall across observations and Agent sessions, as
 
 **Context Implementation**:
 The Actor code that owns one Context and defines its State and Message schemas, State serialization, Commands, behavior, and business interfaces. Root implementations are registered in code, create their own children, and consume their own optional configuration subtrees.
+
+**Lark CLI Profile**:
+The credential selection used to connect to Lark. It selects the connection and is distinct from the connected account's public identity.
+
+**Lark Account Profile**:
+The retained public identity of the connected Lark user, including identifying and contact information.
+
+**Lark Mailbox Profile**:
+The retained public identity of a Lark mailbox, including its address and display name.
+
+**Integration Capability**:
+An independently enabled part of a connected service, such as Lark IM or Lark Mail. Enabling a capability makes its observations and queries available; an unconfigured capability remains inactive.
 
 **Provider**:
 A shared integration implementation that can supply one or more Context implementations with external capabilities and resources. For example, a Lark Provider can supply separate IM and Mail Channel implementations.
@@ -76,7 +88,7 @@ A Context representing one email in one mailbox, identified by that mailbox's em
 The default listing of emails for the current calendar day in a mailbox's time zone. Leaving this listing does not remove an email retained as evidence for assistant work.
 
 **Mail Retrieval Watermark (`through`)**:
-The end of the interval covered by automatic mail retrieval, whose observed emails have been durably retained. It describes retrieval coverage, not completion of assistant work, and is independent of on-demand historical queries.
+The endpoint of a completed automatic retrieval interval whose observed emails have been durably retained. It is independent of on-demand historical queries and does not imply complete earlier history or completion of assistant work.
 
 **Late-arriving Email**:
 An email newly appearing in a connected mailbox whose date precedes the mailbox's completed retrieval interval. It is distinct from historical mail already present when the mailbox was first connected.

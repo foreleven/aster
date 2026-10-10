@@ -8,12 +8,17 @@
       "aster-source": "./src/index.ts",
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./lark/testing": {
+      "aster-source": "./src/lark/testing.ts",
+      "types": "./dist/lark/testing.d.ts",
+      "default": "./dist/lark/testing.js"
     }
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js"
+    "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js .test-dist/test/lark/*.test.js"
   },
   "dependencies": {
     "@aster/actor": "workspace:*",

@@ -9,7 +9,7 @@ Status: implemented. See [ADR 0040](adr/0040-compose-aster-runtime-with-effect-l
 | local                   | CLI arguments, configuration locations, adapter selection, process signals, HTTP/RPC and static assets                 |
 | core runtime            | shared Layer graph, domain roots, integration installation/activation, subscriptions, readiness coordination, shutdown |
 | core domain modules     | Context reactions, Signal eligibility, Goal operations/history, internal reasoning and Task delivery                   |
-| integrations            | private settings and clients, root/child Actors, initial readiness and cleanup                                         |
+| integrations            | private settings and clients, root/child Actors, business scheduling/retries and cleanup                               |
 | infrastructure adapters | file stores, model and decision transport, memory backend and external executors                                       |
 | ActorSystem             | generic typed Actors, mailboxes, supervision and scoped Actor services                                                 |
 
@@ -119,7 +119,7 @@ Sources register first; Signal and Task root registration precede Goal registrat
 
 Supervision retries child failures independently. If a child finally terminates, `watch` delivers `Terminated` to the root, which logs its path and cause. Later requests to that missing child are rejected. The root does not create an unbounded replacement loop or fail healthy siblings.
 
-Runtime owns a transient `Deferred<void>` Signal activation gate passed through Actor spawn metadata. It opens after receiver registration and survives supervised root and child restarts. Each Goal wakes its mailbox with `RunNext` immediately after its own state restoration, including after restart. Goal input processing never waits for integration readiness. `runtime.ready` still waits for all integration readiness handles, without waiting for Goal restoration or model results. Root startup failures propagate through `awaitStarted`; child failures follow supervision and watch.
+Runtime owns a transient `Deferred<void>` Signal activation gate passed through Actor spawn metadata. It opens after receiver registration and survives supervised root and child restarts. Each Goal wakes its mailbox with `RunNext` immediately after its own state restoration, including after restart. Goal input processing never waits for integration readiness. `runtime.ready` reports framework initialization without waiting for integration business catch-up, Goal restoration or model results. Root startup failures propagate through `awaitStarted`; child failures follow supervision and watch.
 
 ## Context consumer composition
 

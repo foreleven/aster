@@ -58,7 +58,7 @@ The domain owns generation checks and in-flight batch identity. IM uses source m
 
 There is no generic view policy, projection metadata or second registry service. Generic RPCs, model context evidence and Memory read text. Goal, Task, Signal and approval business APIs expose explicit schemas and query their owning Actors. Private provider handles and native conversation frames remain outside their public business responses.
 
-Internal domain coordination uses `readState(path, schema)` to decode committed state without waiting for another Actor's startup or mailbox. This prevents cyclic startup and cross-mailbox waits during admission and receipt reconciliation. It is read-only, requires an explicit schema, is not exposed by generic transport APIs, and does not grant another domain a writer. Owners still perform mutations through their handle or Actor-local state service.
+Internal domain coordination uses `readState(path, schema)` to decode committed state without waiting for another Actor's startup or mailbox. This prevents cyclic startup and cross-mailbox waits during admission and receipt reconciliation. It is read-only, requires an explicit schema, is not exposed by generic transport APIs, and does not grant another domain a writer. `readOwnerSnapshot(path, { state, message })` additionally reads one coherent detached committed State/Messages revision for internal recovery. Missing records return undefined; invalid retained data fails validation. Neither read acquires a writer lease, publishes changes or activates an Actor. Business query handlers select their explicit response fields. Owners still perform mutations through their handle or Actor-local state service.
 
 ## Durability and lifecycle
 

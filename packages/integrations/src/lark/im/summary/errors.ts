@@ -1,5 +1,9 @@
-import { Match, Predicate } from "effect";
-import { ChatSummaryError } from "../../shared/errors.js";
+import { Data, Match, Predicate } from "effect";
+export class ChatSummaryError extends Data.TaggedError("ChatSummaryError")<{
+  readonly message: string;
+  readonly cause?: unknown;
+  readonly kind?: "capacity" | "transient" | "permanent";
+}> {}
 
 /** Provider boundaries expose inconsistent diagnostics; unknown failures stay non-retryable. */
 export const chatSummaryError = (cause: unknown): ChatSummaryError => {

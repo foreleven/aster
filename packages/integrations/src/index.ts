@@ -8,5 +8,3 @@ export * from "./mail/integration.js";
 export * from "./apps/integration.js";
 export * from "./apps/config.js";
 export * from "./apps/client.js";
-
-export { larkCaptures } from "./lark/context-policies.js";

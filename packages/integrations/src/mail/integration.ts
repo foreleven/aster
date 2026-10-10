@@ -1,4 +1,4 @@
-import { Context, Deferred, Effect, Fiber, Layer, Schema, Stream } from "effect";
+import { Context, Effect, Layer } from "effect";
 import {
   ContextQueries,
   DurableContext,
@@ -8,7 +8,6 @@ import {
 import { MailSettings } from "./config.js";
 import { MailFetcher, mailFetcherLayer } from "./client.js";
 import { MailRootActor } from "./actors.js";
-import { mailboxPath } from "./contexts.js";
 
 const services = mailFetcherLayer().pipe(Layer.provideMerge(MailSettings.layer));
 
@@ -16,7 +15,6 @@ const services = mailFetcherLayer().pipe(Layer.provideMerge(MailSettings.layer))
 const installation = Layer.effectDiscard(
   Effect.gen(function* () {
     const settings = yield* MailSettings;
-    const registry = yield* DurableContext;
     if (settings.mailboxes.length === 0) return;
     const modules = yield* RuntimeIntegrations;
     const dependencies = Context.pick(
@@ -32,28 +30,9 @@ const installation = Layer.effectDiscard(
         services: dependencies,
         activate: (system) =>
           Effect.gen(function* () {
-            const ready = yield* Deferred.make<void>();
-            const pending = new Set(settings.mailboxes.map((mailbox) => mailboxPath(mailbox.id)));
-            // Only this activation's commits count; a persisted ready flag cannot satisfy startup.
-            const changes = yield* registry.subscribe;
-            const observer = yield* Stream.runForEach(changes, (change) =>
-              Effect.gen(function* () {
-                if (!pending.has(change.record.path)) return;
-                const state = yield* registry.readState(
-                  change.record.path,
-                  Schema.Struct({ status: Schema.String }),
-                );
-                if (state.status === "ready") {
-                  pending.delete(change.record.path);
-                  if (pending.size === 0) yield* Deferred.succeed(ready, undefined);
-                }
-              }).pipe(Effect.orDie),
-            ).pipe(Effect.forkScoped);
             const actor = yield* system.spawn("mail", MailRootActor);
-            return {
-              ready: Deferred.await(ready),
-              stop: system.stop(actor).pipe(Effect.ensuring(Fiber.interrupt(observer))),
-            };
+            yield* actor.awaitStarted;
+            return { stop: system.stop(actor) };
           }),
       }),
     );

@@ -1,4 +1,4 @@
-import { Command as ActorCommand, CommandProcessor, type ActorRef } from "@aster/actor";
+import { CommandProcessor } from "@aster/actor";
 import { ContextActor, contextPath, DurableContext, spawnContextChild } from "@aster/core";
 import { Effect, Match, Schema } from "effect";
 import { OpenCli } from "./client.js";
@@ -6,14 +6,9 @@ import { appCommands, queryArgv } from "./commands.js";
 import { AppsSettings } from "./config.js";
 import { AppsState, AppState } from "./contexts.js";
 
-export class Ready extends ActorCommand.Class<Ready>()("Ready", {
-  payload: {},
-  reply: Schema.Void,
-}) {}
-
 const AppActor = (appName: import("./commands.js").AppName) =>
   ContextActor.define("apps/AppActor", {
-    commands: [Ready, ...appCommands[appName]],
+    commands: appCommands[appName],
   })((owner) =>
     Effect.gen(function* () {
       const settings = yield* AppsSettings;
@@ -39,7 +34,6 @@ const AppActor = (appName: import("./commands.js").AppName) =>
       return {
         receive: (command, actor) =>
           Match.value(command).pipe(
-            Match.tag("Ready", ({ replyTo }) => replyTo.tell(undefined)),
             Match.orElse((request) =>
               processor.submit(
                 request,
@@ -84,7 +78,7 @@ const AppActor = (appName: import("./commands.js").AppName) =>
   );
 
 export const AppsRootActor = ContextActor.define("apps/RootActor", {
-  commands: [Ready],
+  commands: [],
 })(
   Effect.gen(function* () {
     const settings = yield* AppsSettings;
@@ -106,27 +100,17 @@ export const AppsRootActor = ContextActor.define("apps/RootActor", {
         { ...{ mode: "bootstrap" }, description: settings.description },
       )
       .pipe(Effect.orDie);
-    const children: ActorRef<typeof Ready.Type>[] = [];
     return {
       started: (actor) =>
         Effect.gen(function* () {
           for (const app of settings.apps) {
             const existing = yield* actor.child(app.name);
-            children.push(
-              (existing as ActorRef<typeof Ready.Type> | undefined) ??
-                (yield* spawnContextChild(actor, app.name, AppActor(app.name))),
-            );
+            const child =
+              existing ?? (yield* spawnContextChild(actor, app.name, AppActor(app.name)));
+            yield* child.awaitStarted;
           }
         }),
-      receive: ({ replyTo }) =>
-        Effect.gen(function* () {
-          yield* Effect.forEach(
-            children,
-            (child) => child.ask<void>((replyTo) => ({ _tag: "Ready", replyTo })),
-            { discard: true },
-          ).pipe(Effect.orDie);
-          yield* replyTo.tell(undefined);
-        }),
+      receive: () => Effect.void,
     };
   }),
 );

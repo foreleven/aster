@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Effect } from "effect";
 import { makeTestContext } from "@aster/core/testing";
-import { makeImSummaryGate } from "@aster/integrations";
 
 const secret = "PRIVATE_LARK_SENTINEL";
 const message = {
@@ -57,23 +56,4 @@ test("dormant Lark Contexts read committed text without loading integration defi
       }),
     ),
   );
-});
-
-test("summary admission sends readable sender identity without opaque provider fields", async () => {
-  let input = "";
-  const gate = makeImSummaryGate({
-    systemOne: (request) =>
-      Effect.sync(() => {
-        input = typeof request.state === "string" ? request.state : JSON.stringify(request.state);
-        return { answers: { summarize: { type: "choice", choice: "yes" } } };
-      }),
-  });
-  assert.equal(
-    await Effect.runPromise(
-      Effect.scoped(gate.needed({ path: "/lark/im/chats/chat", chat, messages: [message] })),
-    ),
-    true,
-  );
-  assert.equal(input.includes(secret), false);
-  assert.ok(input.includes("Alice") && input.includes("Release ready"));
 });

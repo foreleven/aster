@@ -2,9 +2,9 @@ import { serializeFixtureState } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { Schema } from "effect";
 import { TaskSnapshot } from "@aster/core";
-import { AccountProfile } from "@aster/integrations";
-import { MailboxProfile } from "@aster/integrations";
-import { EmailData } from "@aster/integrations";
+import { AccountProfile } from "@aster/integrations/lark/testing";
+import { MailboxProfile } from "@aster/integrations/lark/testing";
+import { EmailData } from "@aster/integrations/lark/testing";
 import {
   ApprovalQueueActor,
   ContextCaptures,
@@ -15,7 +15,7 @@ import {
   type ContextCapture as MemoryCapture,
 } from "@aster/core";
 import { makeTestContext, taskCapture } from "@aster/core/testing";
-import { larkCaptures } from "@aster/integrations";
+import { larkCaptures } from "@aster/integrations/lark/testing";
 import { testConversations } from "./conversation-fixtures.js";
 
 import { ActorSystem } from "@aster/actor";
@@ -62,7 +62,7 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
         const registry = yield* makeTestContext();
         const capturesPolicy = yield* ContextCaptures;
         const conversations = testConversations();
-        yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
+        yield* capturesPolicy.register([...larkCaptures(true), taskCapture(conversations)]);
 
         yield* registry.register("/lark", {
           state: Schema.Struct({ account: Schema.optional(AccountProfile) }),
@@ -215,7 +215,7 @@ test("discovered account and mailbox identities use separate sessions; no captur
         const registry = yield* makeTestContext();
         const capturesPolicy = yield* ContextCaptures;
         const conversations = testConversations();
-        yield* capturesPolicy.register([...larkCaptures, taskCapture(conversations)]);
+        yield* capturesPolicy.register([...larkCaptures(true), taskCapture(conversations)]);
 
         yield* registry.register("/lark", {
           state: Schema.Struct({ account: Schema.optional(AccountProfile) }),

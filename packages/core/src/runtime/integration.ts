@@ -3,8 +3,6 @@ import type { ActorSystem } from "@aster/actor";
 import { Context, Effect, Layer, type Scope } from "effect";
 
 export interface IntegrationHandle {
-  /** Completes once this source has caught up. It must not depend on a future subscription. */
-  readonly ready: Effect.Effect<void, Error>;
   /** Stop producing new changes; consumers and infrastructure are still alive. */
   readonly stop: Effect.Effect<void>;
 }

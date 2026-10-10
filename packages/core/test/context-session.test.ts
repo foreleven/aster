@@ -180,3 +180,54 @@ test("nullable messages remain present until removed", async () => {
     ),
   );
 });
+
+test("committed owner reads are detached, schema checked and independent of writer ownership", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        let saves = 0;
+        const durable = yield* makeDurableContext({
+          load: Effect.succeed([]),
+          save: () =>
+            Effect.sync(() => {
+              saves++;
+            }),
+        });
+        assert.equal(
+          yield* durable.readOwnerSnapshot(definition.path, {
+            state: definition.state,
+            message: definition.message,
+          }),
+          undefined,
+        );
+        const owner = yield* durable.open(definition);
+        yield* owner.commit(() => ({
+          state: { count: 7 },
+          messages: { append: [{ id: "m", text: "committed" }] },
+        }));
+        const before = saves;
+        const read = yield* durable.readOwnerSnapshot(definition.path, {
+          state: definition.state,
+          message: definition.message,
+        });
+        assert.deepEqual(read, yield* owner.snapshot);
+        Object.assign(read!.state, { count: 99 });
+        assert.equal(
+          (yield* durable.readOwnerSnapshot(definition.path, {
+            state: definition.state,
+            message: definition.message,
+          }))?.state.count,
+          7,
+        );
+        const invalid = yield* durable
+          .readOwnerSnapshot(definition.path, {
+            state: Schema.Struct({ missing: Schema.Boolean }),
+            message: definition.message,
+          })
+          .pipe(Effect.flip);
+        assert.equal(invalid._tag, "ContextValidationError");
+        assert.equal(saves, before);
+      }),
+    ),
+  );
+});

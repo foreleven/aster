@@ -97,6 +97,14 @@ export class DurableContext extends Context.Service<
       path: string,
       schema: Schema.ConstraintDecoder<S>,
     ) => Effect.Effect<S, ContextValidationError>;
+    /** Detached committed revision; does not acquire or activate a writer. */
+    readonly readOwnerSnapshot: <S extends object, M>(
+      path: string,
+      schemas: {
+        readonly state: Schema.ConstraintDecoder<S>;
+        readonly message: Schema.ConstraintDecoder<M>;
+      },
+    ) => Effect.Effect<ContextOwnerSnapshot<S, M> | undefined, ContextValidationError>;
     readonly snapshot: () => Readonly<Record<string, ContextText>>;
     readonly directory: () => readonly ContextEntry[];
     readonly journal: () => readonly ContextEvent[];
@@ -549,6 +557,17 @@ export const makeDurableContext = Effect.fn("DurableContext.make")(function* (
           Effect.mapError((cause) => new ContextValidationError({ path, cause })),
         ),
       ),
+    readOwnerSnapshot: Effect.fn("DurableContext.readOwnerSnapshot")(function* (path, schemas) {
+      const stored = structuredClone(records.get(path)?.snapshot);
+      if (!stored) return undefined;
+      const state = yield* Schema.decodeUnknownEffect(schemas.state)(stored.state).pipe(
+        Effect.mapError((cause) => new ContextValidationError({ path, cause })),
+      );
+      const messages = yield* Schema.decodeUnknownEffect(Schema.Array(schemas.message))(
+        stored.messages,
+      ).pipe(Effect.mapError((cause) => new ContextValidationError({ path, cause })));
+      return { path, state, messages, revision: stored.revision, description: stored.description };
+    }),
     snapshot: () =>
       Object.fromEntries([...records].map(([path, stored]) => [path, textOf(stored.snapshot)])),
     directory: () =>

@@ -1,11 +1,10 @@
-import { LarkCliError } from "../shared/errors.js";
-import { Context, Data, DateTime, Effect, Option, Schema, Stream } from "effect";
-import { runLarkCli } from "../shared/cli.js";
-import { parseCliOutput } from "../shared/response.js";
+import { LarkId } from "../paths.js";
+import { LarkCliError } from "../errors.js";
+import { Context, Data, DateTime, Effect, Layer, Option, Schema, Stream } from "effect";
+import { decodeCliOutput, LarkCli } from "../cli.js";
 import { MailListArgs, type MailListPage, type EmailData, type MailboxProfile } from "./model.js";
-import { parseMessages, parseMailboxProfile } from "./parser.js";
-export class LarkMailCli extends Context.Service<
-  LarkMailCli,
+export class LarkMailClient extends Context.Service<
+  LarkMailClient,
   {
     readonly getMailboxProfile: (
       mailbox: string,
@@ -24,7 +23,12 @@ export class LarkMailCli extends Context.Service<
       ids: ReadonlyArray<string>,
     ) => Effect.Effect<ReadonlyArray<EmailData>, LarkCliError | LarkResponseError>;
   }
->()("lark/MailCli") {}
+>()("lark/MailClient") {
+  static readonly layer = Layer.effect(
+    LarkMailClient,
+    Effect.map(LarkCli, (cli) => makeMailClient(cli.run)),
+  );
+}
 
 export class LarkResponseError extends Data.TaggedError("LarkResponseError")<{
   readonly cause: unknown;
@@ -34,13 +38,50 @@ export class LarkResponseError extends Data.TaggedError("LarkResponseError")<{
     return `Invalid Lark mail response: ${String(this.cause)}`;
   }
 }
-const decode =
-  <A>(parse: (stdout: string) => A) =>
-  (stdout: string) =>
-    Effect.try({ try: () => parse(stdout), catch: (cause) => new LarkResponseError({ cause }) });
+const decodeResponse = <A>(schema: Schema.ConstraintDecoder<A>, stdout: string) =>
+  decodeCliOutput(stdout).pipe(
+    Effect.mapError((cause) => new LarkResponseError({ cause })),
+    Effect.flatMap(Schema.decodeUnknownEffect(schema)),
+    Effect.catchTag("SchemaError", (cause) => Effect.fail(new LarkResponseError({ cause }))),
+  );
+const RawProfile = Schema.Struct({
+  primary_email_address: Schema.optional(Schema.NonEmptyString),
+  mail_address: Schema.optional(Schema.NonEmptyString),
+  email: Schema.optional(Schema.NonEmptyString),
+  name: Schema.optional(Schema.String),
+  display_name: Schema.optional(Schema.String),
+});
+const ProfileResponse = Schema.Union([
+  Schema.Struct({ profile: RawProfile }),
+  Schema.Struct({ user_mailbox: RawProfile }),
+  RawProfile,
+]);
+const MessagesResponse = Schema.Struct({
+  messages: Schema.Array(
+    Schema.Struct({
+      message_id: LarkId,
+      head_from: Schema.Struct({
+        name: Schema.optional(Schema.String),
+        mail_address: Schema.String,
+      }),
+      subject: Schema.String,
+      body_plain_text: Schema.String,
+      attachments: Schema.optional(
+        Schema.Array(
+          Schema.Struct({
+            id: Schema.String,
+            filename: Schema.String,
+            content_type: Schema.String,
+            is_inline: Schema.Boolean,
+          }),
+        ),
+      ),
+    }),
+  ),
+});
 
 const MailPage = Schema.Struct({
-  messages: Schema.Array(Schema.Struct({ message_id: Schema.NonEmptyString })),
+  messages: Schema.Array(Schema.Struct({ message_id: LarkId })),
   has_more: Schema.Boolean,
   page_token: Schema.optional(Schema.String),
 });
@@ -52,7 +93,7 @@ type MailRun = (args: ReadonlyArray<string>) => Effect.Effect<string, LarkCliErr
 const formatMailTime = (seconds: number): string =>
   DateTime.formatIso(DateTime.makeUnsafe(seconds * 1000)).replace(".000Z", "+00:00");
 
-export const makeMailClient = (run: MailRun): LarkMailCli["Service"] => {
+export const makeMailClient = (run: MailRun): LarkMailClient["Service"] => {
   return {
     getMailboxProfile: (mailbox: string) =>
       run([
@@ -63,7 +104,21 @@ export const makeMailClient = (run: MailRun): LarkMailCli["Service"] => {
         "user",
         "--params",
         JSON.stringify({ user_mailbox_id: mailbox }),
-      ]).pipe(Effect.flatMap(decode(parseMailboxProfile))),
+      ]).pipe(
+        Effect.flatMap((stdout) => decodeResponse(ProfileResponse, stdout)),
+        Effect.flatMap((response) => {
+          const profile =
+            "profile" in response
+              ? response.profile
+              : "user_mailbox" in response
+                ? response.user_mailbox
+                : response;
+          const address = profile.primary_email_address ?? profile.mail_address ?? profile.email;
+          return address
+            ? Effect.succeed({ address, name: profile.name ?? profile.display_name ?? "" })
+            : Effect.fail(new LarkResponseError({ cause: "Missing mailbox address" }));
+        }),
+      ),
     listMessages: Effect.fn("LarkMail.listMessages")(function* (mailbox, input) {
       const args = yield* Schema.decodeUnknownEffect(MailListArgs)(input).pipe(
         Effect.mapError((cause) => new LarkResponseError({ kind: "invalid-input", cause })),
@@ -120,23 +175,22 @@ export const makeMailClient = (run: MailRun): LarkMailCli["Service"] => {
         ...(args.query ? ["--query", args.query] : []),
         ...(args.pageToken ? ["--page-token", args.pageToken] : []),
       ]);
-      const page = yield* decode((stdout) =>
-        Schema.decodeUnknownSync(
-          Schema.Struct({
-            messages: Schema.Array(
-              Schema.Struct({
-                message_id: Schema.NonEmptyString,
-                date: Schema.optional(Schema.String),
-                from: Schema.String,
-                subject: Schema.String,
-                labels: Schema.optional(Schema.String),
-              }),
-            ),
-            has_more: Schema.Boolean,
-            page_token: Schema.optional(Schema.String),
-          }),
-        )(parseCliOutput(stdout)),
-      )(stdout);
+      const page = yield* decodeResponse(
+        Schema.Struct({
+          messages: Schema.Array(
+            Schema.Struct({
+              message_id: LarkId,
+              date: Schema.optional(Schema.String),
+              from: Schema.String,
+              subject: Schema.String,
+              labels: Schema.optional(Schema.String),
+            }),
+          ),
+          has_more: Schema.Boolean,
+          page_token: Schema.optional(Schema.String),
+        }),
+        stdout,
+      );
       if (page.has_more && (!page.page_token || page.page_token === args.pageToken))
         return yield* new LarkResponseError({ cause: "Missing or repeated mail pagination token" });
       return {
@@ -176,10 +230,7 @@ export const makeMailClient = (run: MailRun): LarkMailCli["Service"] => {
             "json",
             ...(token === undefined ? [] : ["--page-token", token]),
           ]);
-          const data = yield* decode(parseCliOutput)(stdout);
-          const page = yield* Schema.decodeUnknownEffect(MailPage)(data).pipe(
-            Effect.mapError((cause) => new LarkResponseError({ cause })),
-          );
+          const page = yield* decodeResponse(MailPage, stdout);
           if (!page.has_more)
             return [
               page.messages.map((message) => message.message_id),
@@ -211,14 +262,25 @@ export const makeMailClient = (run: MailRun): LarkMailCli["Service"] => {
             "--html=false",
             "--format",
             "json",
-          ]).pipe(Effect.flatMap(decode((stdout) => parseMessages(stdout, mailbox)))),
+          ]).pipe(
+            Effect.flatMap((stdout) => decodeResponse(MessagesResponse, stdout)),
+            Effect.map(({ messages }) =>
+              messages.map((message) => ({
+                messageId: message.message_id,
+                mailbox,
+                from: [message.head_from.name, message.head_from.mail_address]
+                  .filter(Boolean)
+                  .join(" "),
+                subject: message.subject,
+                bodyPlainText: message.body_plain_text,
+                attachments: (message.attachments ?? []).map((a) => ({
+                  id: a.id,
+                  filename: a.filename,
+                  contentType: a.content_type,
+                  isInline: a.is_inline,
+                })),
+              })),
+            ),
+          ),
   };
 };
-
-export const liveCli = (profile?: string) =>
-  makeMailClient((args) =>
-    Effect.tryPromise({
-      try: (signal) => runLarkCli(args, profile, signal),
-      catch: (cause) => new LarkCliError({ cause, message: `lark-cli failed: ${String(cause)}` }),
-    }),
-  );

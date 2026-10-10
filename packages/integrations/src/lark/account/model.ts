@@ -6,3 +6,8 @@ export const AccountProfile = Schema.Struct({
   enterpriseEmail: Schema.String,
 });
 export type AccountProfile = typeof AccountProfile.Type;
+
+export const AccountState = Schema.Struct({ account: Schema.optional(AccountProfile) });
+export type AccountState = typeof AccountState.Type;
+export const serializeAccount = ({ account }: Readonly<AccountState>) =>
+  account ? JSON.stringify(account) : "";

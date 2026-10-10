@@ -24,7 +24,7 @@ The core package maps domain Context paths to actor paths and defines concrete A
 - Each actor processes one mailbox message at a time; separate actors execute concurrently.
 - Actor behavior must handle expected domain errors itself. Only defects, lifecycle failures, and persistence infrastructure failures enter supervision.
 - The default supervision direction is one-for-one restart with backoff and a restart limit. A parent may select a different strategy for a child when spawning it.
-- An actor implementation may enable `ReceiveTimeout` in code. Timeout-based stop requires no message in progress, an empty mailbox, and no active child.
+- An actor implementation may enable `ReceiveTimeout` in code. Timeout-based stop requires no message in progress, an empty mailbox, no outstanding Behavior effects, and no active child.
 - Actor handlers may await work inline when blocking the mailbox is intentional. Concurrent read requests use a scoped CommandProcessor; asynchronous state transitions return through pipeToSelf.
 - Persistence follows Akka's separation: incoming commands are transient, while events and snapshots are durable. Reliable delivery is opt-in per scenario.
 
@@ -195,7 +195,7 @@ Supervision and DeathWatch remain distinct. Spawning automatically places a chil
 
 When a child exceeds its restart limit and finally stops, its watchers receive the same `Terminated` Signal used for an ordinary stop, with a failure cause attached. The runtime does not introduce a separate `ChildFailed` business protocol.
 
-An Actor implementation opts into `ReceiveTimeout` through its `ActorContext`, for example `context.receiveTimeout(30_000)`. The timer starts after recovery and `started()` complete. Processing any Command or Runtime Signal resets it. A timeout can stop the Actor only when no handler is running, the in-memory Mailbox is empty, and there are no active children; otherwise the runtime defers the stop and continues normal processing. Timeout shutdown uses the ordinary Scope-closing lifecycle and does not inject a business Command.
+An Actor implementation opts into `ReceiveTimeout` through its `ActorContext`, for example `context.receiveTimeout(30_000)`. `context.receiveTimeout(undefined)` disables the timeout; a later positive duration enables it again. The timer starts after recovery and `started()` complete. Processing any Command or Runtime Signal resets it. A timeout can stop the Actor only when no handler is running, the in-memory Mailbox is empty, no Behavior effects are outstanding, and there are no active children; otherwise the runtime defers the stop and continues normal processing. Timeout shutdown uses the ordinary Scope-closing lifecycle and does not inject a business Command.
 
 `context.stop(childRef)` uses Akka-style stopping. The ActorCell is marked stopping and its Queue is shut down, so queued Commands are not drained and are routed to `DeadLetters`; the currently running handler is allowed to complete rather than being interrupted immediately. The runtime then recursively stops active descendants, closes the child's instance and cell Scopes, runs finalizers, and publishes `Terminated` to registered watchers. Stopping is asynchronous and is not a synchronous completion confirmation. A stopping child continues to occupy its name until termination. The initial API has no graceful mailbox-drain operation.
 

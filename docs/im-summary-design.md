@@ -12,7 +12,7 @@ Acceptance normalizes messages to the public evidence schema before saving. An I
 
 The owner serializer exposes chat identity and rolling summary as text; pending messages remain owner-only. Chat name and purpose contribute to its description. Flush obligations and execution details stay private. Goal relevance receives the serialized text and description; pending-message changes alone do not initiate screening.
 
-The Channel cursor/readiness and shared Agent admission timing use separate continuous Sessions. Retrieval coverage uses date-qualified daily Sessions in the current business timezone. Daily directories record retrieval coverage; they do not require daily summaries or Markdown archives.
+The Channel retains one `through` checkpoint. Operational flags and shared admission timing are transient. There are no daily retrieval or admission Contexts.
 
 ## Retrieval and replay
 
@@ -26,10 +26,10 @@ Startup resumes accepted pending messages, including prior-day evidence, without
 
 ## Summary lifecycle
 
-A Chat owns one in-flight workflow and remembers whether evidence or a flush arrived during it. It has no local summary queue or additional batching timer. `ChatState` exposes evidence, flush and atomic result operations; it does not return scheduling variants. One Behavior-scoped `ChatSummaryWork` owns assessment, shared admission, bounded batching and retries.
+A Chat owns one in-flight workflow and remembers whether evidence or a flush arrived during it. It has no local summary queue or additional batching timer. `chat/state.ts` defines pure transition plans; the Actor owns its ContextHandle and all commits. One Behavior-owned workflow owns assessment, shared admission, bounded batching and retries.
 
-1. Read the accumulated evidence through the owning mailbox. Within `summary.maxMessages`, System One judges whether it warrants an update. Cache an explicit defer as a message ID list only in this Behavior; an unchanged list is not judged again until new evidence arrives. Exceeding the configured message limit, a flush, or a recognized gate input-capacity failure requests summarization directly.
-2. Request shared Agent admission once. After admission, an acknowledged `GetSummaryMessages` returns the latest accumulated snapshot, including queued arrivals. This read does not write another summary decision or checkpoint.
+1. Read a detached snapshot from the bound ContextHandle. Within `summary.maxMessages`, System One judges whether it warrants an update. Cache an explicit defer as a message ID list only in this Behavior; an unchanged list is not judged again until new evidence arrives. Exceeding the configured message limit, a flush, or a recognized gate input-capacity failure requests summarization directly.
+2. Request shared Agent admission once. After admission, read the latest committed snapshot from the bound ContextHandle, including queued arrivals. This read does not write another summary decision or checkpoint.
 3. Select all messages when within the limit, otherwise take the oldest chronological batch. AgentRunner updates the rolling summary using Lark's prompt, validated source references and required `save_summary` result tool. Model execution runs outside storage transactions.
 4. Send `ApplySummary` to the mailbox and await its acknowledgement. The mailbox checks the Behavior generation, then atomically installs the summary and removes the selected message IDs. New arrivals remain pending. An unchanged summary retires covered messages without another source event.
 5. Each remaining batch obtains a separate shared admission. Completed batches remain durable if a later batch fails or the Behavior stops. Once the admitted backlog's obligation is covered, later arrivals and replays of removed messages return to ordinary assessment. A failed cycle waits for new evidence or a subsequent flush; duplicate ingress does not restart it.
@@ -49,11 +49,11 @@ Shared capacity is released before waiting or reducing a batch. Retry deadlines,
 
 ## Shared admission and cancellation
 
-`ImAgentQueue.layer` is acquired once by the Lark integration. Its Effect FIFO Queue and fixed worker pool default to two concurrent summary runs and ten seconds between starts across all chats. A `SynchronizedRef` serializes dequeue and start-time persistence; workers remain occupied until their admitted calls complete. Gate assessment runs before admission and has no added IM-wide concurrency limit.
+`SummaryAdmission.layer` is acquired once by the Lark integration. Its Effect FIFO Queue and fixed worker pool default to two concurrent summary runs and ten seconds between starts across all chats. A `SynchronizedRef` serializes dequeue and memory-only start timing; workers remain occupied until their admitted calls complete. Gate assessment runs before admission and has no added IM-wide concurrency limit.
 
-Each chat has at most one admission request. Deferred signals grant admission and release its worker. Model execution runs in a service-owned fiber with the caller's Effect Context; interruption of either owner cancels it. Cancelled queued requests are skipped; cancellation during start-spacing wait releases the wait. Typed failures and defects reach the requesting Actor without retiring a shared worker. The last start is persisted before execution. Restart preserves spacing and rebuilds queue positions.
+Each chat has at most one admission request. Deferred signals grant admission and release its worker. Model execution runs in a service-owned fiber with the caller's Effect Context; interruption of either owner cancels it. Cancelled queued requests are skipped; cancellation during start-spacing wait releases the wait. Typed failures and defects reach the requesting Actor without retiring a shared worker. The last start exists only in memory. Restart begins with fresh spacing and queue positions.
 
-Behavior closure cancels admission, model work and retry waits. Generation checks reject retired input reads, summary commits and completion messages. Chat Actors remain alive while IM runs. A model result lost before commit may require fresh execution: DurableContext provides data transactions, not Harness execution recovery.
+Behavior closure cancels admission, model work and retry waits. Generation checks reject retired summary commits and completion messages. Chat Actors remain alive while pending evidence or workflow tasks exist, then passivate after five idle minutes. Completed records remain readable without activating a writer. A model result lost before commit may require fresh execution: DurableContext provides data transactions, not Harness execution recovery.
 
 There is no daily-then-rolling pipeline, daily-output checkpoint, prepared multi-store commit or Markdown write. A future daily summary would be a separate business result. Pi checkpoints reclaim current-only Document sidecars; main commit logs and source-event journals retain their independent policies.
 

@@ -53,7 +53,6 @@ const launch = Effect.fnUntraced(function* (
       ActorSystem.provide(Layer.succeedContext(modules.installed()[0]!.services)),
     );
     const handle = yield* modules.installed()[0]!.activate(system);
-    yield* handle.ready;
     return {
       system,
       handle,

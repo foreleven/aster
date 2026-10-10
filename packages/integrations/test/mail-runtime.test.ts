@@ -172,7 +172,7 @@ test("mail publishes its tree before retrieval and acknowledges persistence befo
             ),
           );
           const readyObserved = yield* Deferred.make<void>();
-          yield* handle.ready.pipe(
+          yield* waitForMail(registry).pipe(
             Effect.andThen(Deferred.succeed(readyObserved, undefined)),
             Effect.forkScoped,
           );
@@ -196,7 +196,7 @@ test("mail publishes its tree before retrieval and acknowledges persistence befo
             "syncing",
           );
           yield* Deferred.succeed(releaseSave, undefined);
-          yield* handle.ready;
+          yield* waitForMail(registry);
           yield* Queue.take(completed);
           const saved = registry.get(mailMessagePath(email))!;
           assert.equal(saved.revision, 1);
@@ -276,7 +276,7 @@ test("mail retries retrieval errors, isolates mailboxes, and interrupts active p
             /ECONNRESET/,
           );
           yield* clock.adjust(1_000);
-          yield* handle.ready;
+          yield* waitForMail(registry);
           yield* Queue.take(completed);
           yield* Queue.take(completed);
           assert.match(JSON.stringify(logs), /mail.poll.recovered/);
@@ -329,7 +329,7 @@ test("mail restart preserves email revisions and waits for a fresh initial poll"
           if (run === 1)
             assert.equal(registry.backend.get(mailMessagePath(email))?.text, JSON.stringify(email));
           yield* Deferred.succeed(release, undefined);
-          yield* handle.ready;
+          yield* waitForMail(registry);
           assert.equal(registry.get(mailMessagePath(email))?.revision, 1);
           yield* handle.stop;
         }),
@@ -437,7 +437,7 @@ test("mail recovery keeps its baseline, covers missed days, and indexes only tod
                 }),
             };
             const { handle } = yield* install(registry, fetcher);
-            yield* handle.ready;
+            yield* waitForMail(registry);
             const state = Schema.decodeUnknownSync(MailboxState)(
               registry.get(mailboxPath("work"))!.state,
             );
@@ -486,7 +486,7 @@ test("mail historical queries leave discovery, cursor, Contexts and source event
               return historical;
             }),
         });
-        yield* handle.ready;
+        yield* waitForMail(registry);
         const before = registry.snapshot();
         const result = yield* queries.query({
           path: mailboxPath("work"),
@@ -559,7 +559,7 @@ test("mail rotates the default index while retrieval is blocked across midnight"
           yield* clock.adjust(20_000);
           yield* Deferred.await(rotated);
           yield* Deferred.succeed(release, undefined);
-          yield* handle.ready;
+          yield* waitForMail(registry);
           assert.deepEqual(
             Schema.decodeUnknownSync(MailboxState)(registry.get(mailboxPath("work"))!.state).today,
             { date: "2026-10-08", emails: [] },
@@ -627,7 +627,7 @@ test("mail failure and restart retain the initial population and retrieval bound
               );
               assert.equal(state.through, undefined);
               assert.equal(state.startedAt, "2026-10-07T12:00:00.000+08:00");
-            } else yield* handle.ready;
+            } else yield* waitForMail(registry);
             yield* handle.stop;
           }).pipe(Effect.provideService(Clock.Clock, clock));
         }),
@@ -668,3 +668,20 @@ test("mail queries share the polling connection permit and owner shutdown releas
     ).pipe(Effect.timeout("10 seconds")),
   );
 });
+
+const waitForMail = (registry: TestContext) =>
+  Effect.forEach(
+    registry.backend.directory().filter(({ path }) => /^\/mail\/[^/]+$/.test(path)),
+    ({ path }) =>
+      registry.backend.watch(path).pipe(
+        Stream.filterEffect(() =>
+          registry.backend.readState(path, MailboxState).pipe(
+            Effect.map((state) => state.status === "ready"),
+            Effect.orDie,
+          ),
+        ),
+        Stream.take(1),
+        Stream.runDrain,
+      ),
+    { discard: true },
+  );

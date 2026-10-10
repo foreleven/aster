@@ -328,8 +328,10 @@ export const MailRootActor = ContextActor.define("mail/RootActor", {
         Effect.gen(function* () {
           for (const mailbox of settings.mailboxes) {
             const name = mailSegment(mailbox.id);
-            if (!(yield* context.child(childActorName(name))))
-              yield* spawnContextChild(context, name, MailboxActor);
+            const child =
+              (yield* context.child(childActorName(name))) ??
+              (yield* spawnContextChild(context, name, MailboxActor));
+            yield* child.awaitStarted;
           }
         }),
       receive: () => Effect.void,
