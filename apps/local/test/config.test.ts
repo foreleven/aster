@@ -1,13 +1,13 @@
+import { testLocalConfig } from "./configuration-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { LarkSettings } from "@aster/integrations";
-import { parseMemoryConfig, memorySettings } from "@aster/infra";
-import { LocalConfig } from "@aster/infra";
-import { Config, Effect, Schema } from "effect";
-import { signalSettings } from "@aster/core";
+import { decodeMemorySettings, ConfigLocation, MemorySettings } from "@aster/infra";
+import { Config, Effect, Path, Redacted, Schema } from "effect";
+import { SignalDefinitions } from "@aster/core";
 
 const settings = (file: string) =>
   Effect.runPromise(
@@ -15,7 +15,7 @@ const settings = (file: string) =>
       Effect.gen(function* () {
         return {
           lark: yield* LarkSettings.pipe(Effect.provide(LarkSettings.layer)),
-          memory: yield* memorySettings,
+          memory: yield* MemorySettings.pipe(Effect.provide(MemorySettings.layer)),
           custom: yield* Config.schema(Schema.optional(Schema.String), [
             "contexts",
             "/custom",
@@ -29,11 +29,11 @@ const settings = (file: string) =>
             ),
             ["config", "system-one"],
           ),
-          signals: yield* signalSettings,
+          signals: yield* SignalDefinitions.pipe(Effect.provide(SignalDefinitions.layer)),
         };
       }).pipe(
         Effect.provide(
-          LocalConfig.layer({
+          testLocalConfig({
             configPath: file,
             envPath: `${file}.env`,
             projectRoot: "/tmp",
@@ -88,11 +88,31 @@ signals:
     assert.equal(lark.mail.description, "My work mailbox");
     assert.equal(memory.dataDir, join(homedir(), ".aster/memory"));
     assert.equal(
-      parseMemoryConfig({ config: { dataDir: "~/.aster/memory" } }, dir).dataDir,
+      Effect.runSync(
+        decodeMemorySettings({ config: { dataDir: "~/.aster/memory" } }).pipe(
+          Effect.provide(Path.layer),
+          Effect.provideService(ConfigLocation, {
+            baseDir: dir,
+            projectRoot: dir,
+            envPath: join(dir, ".env"),
+            homeDirectory: homedir(),
+          }),
+        ),
+      ).dataDir,
       join(homedir(), ".aster/memory"),
     );
     assert.equal(
-      parseMemoryConfig({ config: { dataDir: "custom/memory" } }, dir).dataDir,
+      Effect.runSync(
+        decodeMemorySettings({ config: { dataDir: "custom/memory" } }).pipe(
+          Effect.provide(Path.layer),
+          Effect.provideService(ConfigLocation, {
+            baseDir: dir,
+            projectRoot: dir,
+            envPath: join(dir, ".env"),
+            homeDirectory: homedir(),
+          }),
+        ),
+      ).dataDir,
       join(dir, "custom/memory"),
     );
     assert.equal(memory.autoCompress, false);
@@ -132,14 +152,14 @@ test("module settings own children, defaults and validation", async () => {
 test("Agent processes receive none of the project service keys", () => {
   const env = agentEnvironment({
     privateKeys: ["PROJECT_SECRET"],
-    values: {
+    values: Redacted.make({
       PROJECT_SECRET: "private",
       ASTER_HTTP_PORT: "3000",
       TYPESAFE_API_KEY: "test",
       LAYA_API_KEY: "test",
       AGENTMEMORY_SECRET: "test",
       PATH: "/bin",
-    },
+    }),
   });
   assert.equal(env.PROJECT_SECRET, undefined);
   assert.equal(env.ASTER_HTTP_PORT, undefined);

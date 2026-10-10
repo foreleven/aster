@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { SignalSnapshot } from "../src/signals/state/snapshot.js";
 import type { FrozenReaction } from "../src/reactions/state.js";
@@ -140,6 +141,7 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
   const layers = Layer.mergeAll(
     Layer.succeed(DurableContext, registry.backend),
     Layer.succeed(GoalSettings, {
+      reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
       definitions: ["owned", "other", "done"].map((slug) => ({ slug, description: slug })),
     }),
     reasoningConfig,
@@ -174,6 +176,7 @@ test("Context reactions coordinate multiple Signals and Goals without integratio
         });
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            testSettings,
             Layer.succeed(DurableContext, registry.backend),
             Layer.succeed(ReactionPolicy, {
               ...policy,

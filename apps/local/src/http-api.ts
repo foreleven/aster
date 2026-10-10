@@ -1,4 +1,5 @@
-import { Config, Context, Effect, FileSystem, Layer, Scope } from "effect";
+import { ConfigLocation } from "@aster/infra";
+import { Context, Effect, FileSystem, Layer, Scope } from "effect";
 import { NodeFileSystem, NodeHttpServer } from "@effect/platform-node";
 import { HttpRouter } from "effect/http";
 import { NetAddress } from "effect/net";
@@ -7,10 +8,11 @@ import * as ApiServer from "@aster/api/server";
 import { AgentConversations } from "@aster/agent/harness";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
-import { AsterRuntime, ConfigLocation, DurableContext, ContextQueries } from "@aster/core";
+import { AsterRuntime, DurableContext, ContextQueries } from "@aster/core";
 import { withHttpPolicy } from "./http-policy.js";
 import { staticAssets } from "./static-assets.js";
 import { sourceAssets } from "./source-assets.js";
+import { httpSettings } from "./settings.js";
 
 interface BoundHttpApi {
   readonly url: string;
@@ -75,10 +77,7 @@ export class LocalHttpApi extends Context.Service<LocalHttpApi, { readonly url: 
       LocalHttpApi,
       Effect.gen(function* () {
         const { projectRoot } = yield* ConfigLocation;
-        const port = yield* Config.Port("port").pipe(
-          Config.withDefault(4317),
-          Config.nested("http"),
-        );
+        const { port } = yield* httpSettings;
         return yield* makeHttpApi({
           port,
           webDir: resolve(projectRoot, "apps/web/dist"),

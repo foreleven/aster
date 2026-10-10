@@ -37,3 +37,12 @@ export const GoalInputPayload = Schema.TaggedUnion({
   GoalStarted: {},
 });
 export type GoalInputPayload = typeof GoalInputPayload.Type;
+
+export const GoalTitle = Schema.String.check(Schema.isPattern(/\S/));
+
+export const GoalDefinition = Schema.Struct({
+  slug: Schema.String,
+  title: Schema.optional(GoalTitle),
+  description: Schema.NonEmptyString,
+});
+export type GoalDefinition = typeof GoalDefinition.Type;

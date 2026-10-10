@@ -9,7 +9,7 @@ import { type ContextText } from "../context/contracts.js";
 import { Clock, Context, Effect, Match, Schema } from "effect";
 import { choice, type SystemOneClient } from "../services/system-one.js";
 import { SignalSnapshot, signalEnabled } from "../signals/state/snapshot.js";
-import type { GoalDefinition } from "../config/schema.js";
+import type { GoalDefinition } from "../goals/contracts.js";
 import { matchGoal, goalTitleText, type GoalScreeningStore } from "../goals/screening/decision.js";
 
 import { makeGoalIntent } from "../goals/screening/intent.js";

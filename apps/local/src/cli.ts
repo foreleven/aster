@@ -1,11 +1,12 @@
 #!/usr/bin/env node
+import { localConfiguration } from "./configuration.js";
 import { MemoryRecallError } from "@aster/core";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { Effect } from "effect";
-import { LocalConfig, openMemoryReader, configuredMemoryReader } from "@aster/infra";
+import { openMemoryReader, configuredMemoryReader } from "@aster/infra";
 import { startApplication } from "./application.js";
 
 const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
@@ -41,15 +42,7 @@ const recallMemory = async (command: "search" | "expand", args: string[]) => {
   const configPath = values.config ?? defaultConfigPath;
   const reader = process.env.SIGNALS_MEMORY_CONNECTION
     ? openMemoryReader(process.env.SIGNALS_MEMORY_CONNECTION)
-    : configuredMemoryReader.pipe(
-        Effect.provide(
-          LocalConfig.layer({
-            configPath,
-            projectRoot,
-            envPath: resolve(projectRoot, ".env"),
-          }),
-        ),
-      );
+    : configuredMemoryReader.pipe(Effect.provide(localConfiguration(projectRoot, configPath)));
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {

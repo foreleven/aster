@@ -2,7 +2,7 @@ import { CurrentContextPath } from "../context/location.js";
 import { DurableContext } from "../context/store.js";
 import { Command as ActorCommand, CommandProcessor, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
-import { GoalSettings } from "../config/settings.js";
+import { GoalSettings } from "./settings.js";
 import { ContextActor } from "../context/actor.js";
 import { ApplicationError } from "../operations.js";
 import { GoalActor } from "./actor.js";

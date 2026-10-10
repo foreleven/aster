@@ -1,3 +1,4 @@
+import { Redacted } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Clock, Deferred, Effect, Fiber, Sink, Stream } from "effect";
@@ -45,7 +46,7 @@ const run = (spawner: ChildProcessSpawner.ChildProcessSpawner["Service"]) =>
     Effect.provide(LarkCli.layer),
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Effect.provideService(ProcessEnvironment, {
-      values: { PATH: "/bin", PRIVATE: "secret" },
+      values: Redacted.make({ PATH: "/bin", PRIVATE: "secret" }),
       privateKeys: ["PRIVATE"],
     }),
     Effect.provideService(LarkSettings, { description: "Account", profile: "work" }),

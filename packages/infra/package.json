@@ -22,10 +22,12 @@
     "@earendil-works/chord": "1.1.0",
     "@earendil-works/pi-durable": "1.1.0",
     "@typesafe-ai/sdk": "^0.6.0",
+    "dotenv": "18.0.6",
     "effect": "4.0.0",
     "yaml": "2.8.3"
   },
   "devDependencies": {
+    "@effect/platform-node": "4.0.0",
     "@aster/actor": "workspace:*"
   }
 }

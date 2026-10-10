@@ -1,8 +1,9 @@
+import { ReactionSettings } from "./settings.js";
 import { GetProcessing } from "./queries.js";
 import { publicJson } from "../json.js";
 import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand, type ActorContext } from "@aster/actor";
-import { Config, Context, Effect, Layer, Match, Schema, Stream } from "effect";
+import { Context, Effect, Layer, Match, Schema, Stream } from "effect";
 import { randomUUID } from "node:crypto";
 import { ContextActor } from "../context/actor.js";
 import { ContextEvent } from "../context/model.js";
@@ -56,17 +57,7 @@ export const SystemOneActor = ContextActor.define("context/SystemOneActor", {
     const state = Context.get(services, ReactionState);
     const policy = yield* ReactionPolicy;
     const durable = yield* DurableContext;
-    const limit = Schema.Int.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(32));
-    const matchConcurrency = yield* Config.schema(limit, [
-      "config",
-      "reactions",
-      "matchConcurrency",
-    ]).pipe(Config.withDefault(4));
-    const deliveryConcurrency = yield* Config.schema(limit, [
-      "config",
-      "reactions",
-      "deliveryConcurrency",
-    ]).pipe(Config.withDefault(4));
+    const { matchConcurrency, deliveryConcurrency } = yield* ReactionSettings;
     let planning: string | undefined;
     // Mailbox-owned slots, including retry cooldowns. A slow receiver never blocks matching.
     const delivering = new Map<string, { generation: string; target: string }>();

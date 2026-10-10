@@ -4,7 +4,7 @@ import { ContextActor, contextPath, DurableContext, spawnContextChild } from "@a
 import { Effect, Match, Schema } from "effect";
 import { OpenCli } from "./client.js";
 import { appCommands, queryArgv } from "./commands.js";
-import { AppsSettings } from "./config.js";
+import { AppsSettings } from "./settings.js";
 import { AppsState, AppState } from "./contexts.js";
 
 const AppActor = (appName: import("./commands.js").AppName) =>

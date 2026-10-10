@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { goalBusinessState } from "../src/goals/view.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
@@ -113,6 +114,7 @@ test("Goal startup refreshes the entire definition without losing work", async (
           });
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              testSettings,
               ContextQueries.layer,
               Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
 

@@ -1,32 +1,21 @@
 import { makeMemoryBackend } from "./backend.js";
-import {
-  ConfigLocation,
-  ProcessEnvironment,
-  MemoryBackend,
-  secretConfig,
-  validateConfig,
-} from "@aster/core";
-import { Config, ConfigProvider, Effect, Layer, Redacted } from "effect";
+import { ProcessEnvironment, MemoryBackend } from "@aster/core";
+import { secretConfig } from "../config/credentials.js";
+import { ConfigLocation } from "../config/location.js";
+import { ConfigProvider, Effect, Layer, Redacted } from "effect";
 import { writeFile, rm } from "node:fs/promises";
 import { join } from "node:path";
-import { MemoryEntry, parseMemoryConfig } from "./config.js";
+import { MemorySettings } from "./settings.js";
 import { managedMemory } from "./runtime.js";
 import { openMemoryReader } from "./reader.js";
-export * from "./config.js";
+export * from "./settings.js";
 export * from "./client.js";
 export * from "./runtime.js";
 export * from "./reader.js";
 
-export const memorySettings = Effect.gen(function* () {
-  const location = yield* ConfigLocation;
-  const entry = yield* Config.schema(MemoryEntry, ["contexts", "/memory"]).pipe(
-    Config.withDefault({}),
-  );
-  return yield* validateConfig("Memory", () => parseMemoryConfig(entry, location.baseDir));
-});
-
-export const configuredMemoryReader = memorySettings.pipe(
+export const configuredMemoryReader = MemorySettings.pipe(
   Effect.flatMap((settings) => openMemoryReader(join(settings.dataDir, "connection.json"))),
+  Effect.provide(MemorySettings.layer),
 );
 
 /** Infrastructure Layer: owns the daemon and its connection file. */
@@ -34,9 +23,9 @@ export const AgentMemoryBackend = {
   layer: Layer.effect(
     MemoryBackend,
     Effect.gen(function* () {
-      const config = yield* memorySettings;
+      const config = yield* MemorySettings;
       const location = yield* ConfigLocation;
-      const environment = { ...(yield* ProcessEnvironment).values };
+      const environment = { ...Redacted.value((yield* ProcessEnvironment).values) };
       const provider = yield* ConfigProvider.ConfigProvider;
       for (const name of [config.llm?.apiKeyEnv, config.embedding?.apiKeyEnv]) {
         if (name) environment[name] = Redacted.value(yield* secretConfig(`\${${name}}`, provider));
@@ -55,7 +44,7 @@ export const AgentMemoryBackend = {
         ...(config.llm ? { llm: { provider: config.llm.provider, model: config.llm.model } } : {}),
       });
     }),
-  ),
+  ).pipe(Layer.provide(MemorySettings.layer)),
 };
 
 export * from "./errors.js";

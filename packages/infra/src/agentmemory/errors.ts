@@ -11,3 +11,7 @@ export class MemoryConnectionError extends Data.TaggedError("MemoryConnectionErr
 }> {}
 
 export { MemoryRecallError, MemoryCaptureError } from "@aster/core";
+
+export class MemoryConfigurationError extends Data.TaggedError("MemoryConfigurationError")<{
+  readonly message: string;
+}> {}

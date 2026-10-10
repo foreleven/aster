@@ -1,4 +1,4 @@
-import { Config, ConfigProvider, Effect, Schema } from "effect";
+import { Config, ConfigProvider, Context, Effect, Layer, Schema } from "effect";
 
 export interface ConfiguredContext {
   readonly path: string;
@@ -6,7 +6,7 @@ export interface ConfiguredContext {
 }
 
 /** Read only explicit Context metadata; never traverse module config or credentials. */
-export const configuredContexts = Effect.gen(function* () {
+const configuredContexts = Effect.gen(function* () {
   const provider = yield* ConfigProvider.ConfigProvider;
   const collect = Effect.fnUntraced(function* (
     location: readonly string[],
@@ -40,3 +40,10 @@ export const configuredContexts = Effect.gen(function* () {
   });
   return yield* collect(["contexts"], "");
 });
+
+export class ContextDirectory extends Context.Service<
+  ContextDirectory,
+  readonly ConfiguredContext[]
+>()("core/config/ContextDirectory") {
+  static readonly layer = Layer.effect(ContextDirectory, configuredContexts);
+}

@@ -6,7 +6,7 @@ import { isDeepStrictEqual } from "node:util";
 import { DurableContext } from "../context/store.js";
 import type { ContextEvent } from "../context/model.js";
 import { reactionTargets, type ReactionFailure } from "./policy.js";
-import { GoalSettings } from "../config/settings.js";
+import { GoalSettings } from "../goals/settings.js";
 import {
   ReactionSnapshot,
   deliveriesOf,

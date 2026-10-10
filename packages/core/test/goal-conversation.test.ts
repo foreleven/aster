@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { testApprovalEntries } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
@@ -59,6 +60,7 @@ const setup = Effect.fnUntraced(function* (
   const conversations = options.history ?? testConversations();
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
+      testSettings,
       Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
       Layer.succeed(ContextQueries, queries),
 
@@ -67,7 +69,7 @@ const setup = Effect.fnUntraced(function* (
         definitions: options.goals ?? [
           { slug: "project", description: "Improve project reliability" },
         ],
-        reasoning: { model: "test" },
+        reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
       }),
       Layer.succeed(AgentConversations, conversations),
       Layer.succeed(SignalDefinitions, options.signals ?? []),

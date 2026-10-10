@@ -1,4 +1,4 @@
-import { secretConfig } from "@aster/core";
+import { secretConfig } from "../config/credentials.js";
 import { ConfigProvider, Effect, Redacted } from "effect";
 
 /** Endpoint references opt in explicitly; prompt/configuration strings remain literal. */

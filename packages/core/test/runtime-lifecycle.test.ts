@@ -1,3 +1,4 @@
+import { Redacted } from "effect";
 import { readGoalState } from "../src/goals/queries.js";
 import { makeHarness } from "./harness-fixtures.js";
 import { submitGoal } from "./goal-command-fixtures.js";
@@ -63,7 +64,7 @@ const infrastructure = (drain = Effect.void, decisionsConfigured = false) =>
         provider: "openai",
         model: "test",
         url: "http://unused.invalid",
-        apiKey: "test",
+        apiKey: Redacted.make("test"),
       },
     ]),
     Layer.succeed(SystemOneClient, {

@@ -1,13 +1,14 @@
+import { testLocalConfig } from "./configuration-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config, Effect } from "effect";
-import { signalSettings } from "@aster/core";
+import { SignalDefinitions } from "@aster/core";
 import { Models } from "@aster/agent";
 import { LarkSettings } from "@aster/integrations";
-import { LocalConfig, memorySettings } from "@aster/infra";
+import { ConfiguredModels, MemorySettings } from "@aster/infra";
 
 test("environment overrides preserve dynamic keys, nested module settings and model array entries", async (t) => {
   const dir = await mkdtemp(join(tmpdir(), "aster-structured-config-"));
@@ -31,7 +32,7 @@ config:
     - {name: two, provider: openai, model: second, url: 'http://unused.invalid', apiKey: literal}
 `,
   );
-  const layer = LocalConfig.layer({
+  const layer = testLocalConfig({
     configPath,
     envPath,
     projectRoot: dir,
@@ -48,7 +49,7 @@ config:
     Effect.scoped(
       Effect.gen(function* () {
         assert.deepEqual(
-          (yield* signalSettings)
+          (yield* SignalDefinitions.pipe(Effect.provide(SignalDefinitions.layer)))
             .map((s) => [s.slug, s.task._tag === "Goal" ? s.task.text : ""])
             .sort(),
           [
@@ -57,7 +58,10 @@ config:
           ],
         );
         assert.equal((yield* LarkSettings).im?.config?.pollIntervalMs, 5000);
-        assert.equal((yield* memorySettings).dataDir, join(dir, "memory"));
+        assert.equal(
+          (yield* MemorySettings.pipe(Effect.provide(MemorySettings.layer))).dataDir,
+          join(dir, "memory"),
+        );
         const models = yield* Models;
         const one = yield* models.resolve("one");
         assert.equal(one.model.id, "replacement");
@@ -65,7 +69,9 @@ config:
         assert.equal((yield* models.resolve("two")).model.id, "second");
       }).pipe(
         Effect.provide(
-          Layer.mergeAll(LarkSettings.layer, Models.configured).pipe(Layer.provideMerge(layer)),
+          Layer.mergeAll(LarkSettings.layer, ConfiguredModels.layer).pipe(
+            Layer.provideMerge(layer),
+          ),
         ),
       ),
     ),

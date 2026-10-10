@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import type { HarnessCall } from "./harness-fixtures.js";
 import { makeHarness } from "./harness-fixtures.js";
 import { DurableHarness, AgentConversations } from "@aster/agent/harness";
@@ -79,12 +80,13 @@ export interface GoalScenario {
 export const goalWorkflowLayer = (scenario: GoalScenario) =>
   Layer.mergeAll(
     emptyRecall,
+    testSettings,
     Layer.succeed(GoalSettings, {
       definitions: scenario.definitions,
       reasoning: {
         model: "test",
-        contextTokens: scenario.contextTokens,
-        reserveTokens: scenario.reserveTokens,
+        contextTokens: scenario.contextTokens ?? 200000,
+        reserveTokens: scenario.reserveTokens ?? 8192,
       },
     }),
     Layer.succeed(AgentConversations, scenario.history ?? testConversations()),

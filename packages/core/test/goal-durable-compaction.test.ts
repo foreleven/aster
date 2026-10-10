@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { DurableContext } from "@aster/core";
 import { Schema } from "effect";
 import { GoalSnapshot } from "@aster/core";
@@ -116,7 +117,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
       }),
     ).pipe(
       Effect.provide([
-        GoalAgent.layer,
+        GoalAgent.layer.pipe(Layer.provide(testSettings)),
         GoalState.layer("/goals/test", {
           slug: "test",
           description: "Coordinate the project and its ongoing tasks. ".repeat(50),
@@ -128,7 +129,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
       Effect.provideService(DurableContext, registry.backend),
       Effect.provideService(GoalSettings, {
         definitions: [],
-        reasoning: { model: "test", contextTokens: 48000 },
+        reasoning: { model: "test", contextTokens: 48000, reserveTokens: 8192 },
       }),
       Effect.provideService(ExternalAgents, {}),
     );

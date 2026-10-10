@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { ConversationError } from "@aster/agent/harness";
@@ -72,6 +73,7 @@ for (const fault of ["pi-ack", "actor-ack"] as const) {
             });
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
+                testSettings,
                 ContextQueries.layer,
                 Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
                 Layer.succeed(ExternalAgents, {}),
@@ -190,6 +192,7 @@ test("a Context intent remains admissible after user input advances the Goal rev
         const history = testConversations();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            testSettings,
             ContextQueries.layer,
             Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(ExternalAgents, {}),

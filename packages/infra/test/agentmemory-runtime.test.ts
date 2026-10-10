@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Fiber } from "effect";
 import { managedMemory } from "../src/agentmemory/runtime.js";
-import { parseMemoryConfig } from "../src/agentmemory/config.js";
+import { testMemorySettings } from "./configuration-fixtures.js";
 
-const config = parseMemoryConfig(undefined, "/unused");
+const config = Effect.runSync(testMemorySettings(undefined, "/unused"));
 
 test("interrupted memory startup joins launch and cleanup before releasing its outer owner", async () => {
   await Effect.runPromise(

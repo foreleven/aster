@@ -1,3 +1,4 @@
+import { Redacted } from "effect";
 import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import assert from "node:assert/strict";
@@ -28,7 +29,7 @@ import {
 import { TestClock } from "effect/testing";
 import { ChildProcessSpawner } from "effect/process";
 import { AppsIntegration } from "../src/apps/integration.js";
-import { AppsSettings, type AppsConfiguration } from "../src/apps/config.js";
+import { AppsSettings, type AppsConfiguration } from "../src/apps/settings.js";
 import { AppState } from "../src/apps/contexts.js";
 import { OpenCli } from "../src/apps/client.js";
 import { appCommands, queryArgv } from "../src/apps/commands.js";
@@ -325,7 +326,12 @@ const cliRun = (
     Effect.provide(OpenCli.layer),
     Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     Effect.provideService(ProcessEnvironment, {
-      values: { PATH: "/bin", HOME: "/tmp", PRIVATE: "secret", MINIMAX_API_KEY: "secret" },
+      values: Redacted.make({
+        PATH: "/bin",
+        HOME: "/tmp",
+        PRIVATE: "secret",
+        MINIMAX_API_KEY: "secret",
+      }),
       privateKeys: ["PRIVATE"],
     }),
   );

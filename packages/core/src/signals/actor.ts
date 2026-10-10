@@ -1,15 +1,11 @@
+import { SignalDefinitions } from "./settings.js";
 import { CurrentActors } from "../services/actors.js";
 import { type ActorContext } from "@aster/actor";
 import { Clock, Context, Deferred, Effect, Fiber, Layer, Match, Ref, Scope } from "effect";
 import { ContextActor, contextPath } from "../context/actor.js";
 import { DurableContext } from "../context/store.js";
 import { deliverTask, taskDeliveryReceipt } from "../tasks/delivery.js";
-import {
-  type SignalCommand,
-  SignalCommands,
-  SignalDefinitions,
-  SignalInternal,
-} from "./protocol.js";
+import { type SignalCommand, SignalCommands, SignalInternal } from "./protocol.js";
 import { SignalState } from "./state/model.js";
 
 type Owner = ActorContext<SignalCommand>;

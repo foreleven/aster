@@ -1,81 +1,33 @@
-import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
-import { parseEnv } from "node:util";
-import { parse } from "yaml";
-import { ConfigProvider, Effect, Layer } from "effect";
-import { ConfigLocation, ProcessEnvironment } from "@aster/core";
+import { ConfigProvider, Effect, Layer, Path, Redacted } from "effect";
+import { ProcessEnvironment } from "@aster/core";
+import { ConfigLocation } from "./location.js";
+import { overlay } from "./overlay.js";
+import { decodeDotEnv, decodeYaml, readSource } from "./sources.js";
 
-// Env trie keys cannot reconstruct camelCase, slugs or slash-prefixed keys.
-// Preserve structural names from YAML/overrides while looking up env leaves by path.
-const overlay = (
-  primary: ConfigProvider.ConfigProvider,
-  fallback: ConfigProvider.ConfigProvider,
-  enumerate = true,
-) =>
-  ConfigProvider.make((path) =>
-    Effect.gen(function* () {
-      const first = yield* primary.load(path);
-      if (!first) return yield* fallback.load(path);
-      if (first.value !== undefined) return first;
-      const second = yield* fallback.load(path);
-      if (first._tag === "Record")
-        return ConfigProvider.makeRecord(
-          new Set([
-            ...(enumerate ? first.keys : []),
-            ...(second?._tag === "Record" ? second.keys : []),
-          ]),
-        );
-      if (!enumerate && first._tag === "Array" && second?._tag === "Array")
-        return ConfigProvider.makeArray(Math.max(first.length, second.length));
-      return first;
-    }),
-  );
-
-const read = (path: string, optional = false) =>
-  Effect.tryPromise({
-    try: async () => {
-      try {
-        return await readFile(path, "utf8");
-      } catch (cause) {
-        if (optional && (cause as NodeJS.ErrnoException).code === "ENOENT") return "";
-        throw cause;
-      }
-    },
-    catch: (cause) =>
-      new ConfigProvider.SourceError({ message: `Cannot read configuration: ${path}`, cause }),
-  });
-
-/** Snapshot all sources once. Neither acquisition nor lookup mutates process.env. */
+/** Snapshot all sources once. Lookup never reads files or the live process environment. */
 export const LocalConfig = {
   layer: (options: {
     readonly configPath: string;
     readonly envPath: string;
     readonly projectRoot: string;
+    readonly homeDirectory: string;
+    readonly environment: Readonly<Record<string, string | undefined>>;
     readonly overrides?: unknown;
-    readonly environment?: NodeJS.ProcessEnv;
   }) =>
     Layer.unwrap(
       Effect.gen(function* () {
-        const configPath = resolve(options.configPath);
+        const path = yield* Path.Path;
+        const configPath = path.resolve(options.configPath);
+        const envPath = path.resolve(options.envPath);
         const source = Object.fromEntries(
-          Object.entries(options.environment ?? process.env).filter(
-            (entry): entry is [string, string] => entry[1] !== undefined,
-          ),
+          Object.entries(options.environment).filter(([, value]) => value !== undefined),
         );
-        const yamlText = yield* read(configPath);
-        const envText = yield* read(options.envPath, true);
-        const parsed = yield* Effect.try({
-          try: () => {
-            const value: unknown = parse(yamlText);
-            if (value !== null && (typeof value !== "object" || Array.isArray(value)))
-              throw new Error("Expected a mapping");
-            return value ?? {};
-          },
-          catch: () => new ConfigProvider.SourceError({ message: `Invalid YAML: ${configPath}` }),
-        });
-        const dotenv = parseEnv(envText);
+        const yamlText = yield* readSource(configPath);
+        const envText = yield* readSource(envPath, true);
+        const parsed = yield* decodeYaml(yamlText, configPath);
+        const dotenv = decodeDotEnv(envText);
         const flags = { preserveEmptyStrings: true };
-        const environment = ConfigProvider.fromEnv({ env: source, ...flags });
+        const environment = ConfigProvider.fromEnvRecord(source, flags);
         const envFile = ConfigProvider.fromEnvRecord(dotenv, flags);
         const application = (provider: ConfigProvider.ConfigProvider) =>
           provider.pipe(ConfigProvider.nested("ASTER"), ConfigProvider.constantCase);
@@ -94,12 +46,13 @@ export const LocalConfig = {
         return Layer.mergeAll(
           ConfigProvider.layer(provider),
           Layer.succeed(ConfigLocation, {
-            baseDir: dirname(configPath),
-            projectRoot: resolve(options.projectRoot),
-            envPath: resolve(options.envPath),
+            baseDir: path.dirname(configPath),
+            projectRoot: path.resolve(options.projectRoot),
+            envPath,
+            homeDirectory: path.resolve(options.homeDirectory),
           }),
           Layer.succeed(ProcessEnvironment, {
-            values: { ...dotenv, ...source },
+            values: Redacted.make({ ...dotenv, ...source }),
             privateKeys: Object.keys(dotenv),
           }),
         );

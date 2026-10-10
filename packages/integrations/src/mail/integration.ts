@@ -5,7 +5,7 @@ import {
   RuntimeIntegrations,
   defineIntegration,
 } from "@aster/core";
-import { MailSettings } from "./config.js";
+import { MailSettings } from "./settings.js";
 import { MailFetcher, mailFetcherLayer } from "./client.js";
 import { MailRootActor } from "./actors.js";
 

@@ -70,7 +70,7 @@ goals/
 
 `agent.ts` owns both model invocations: the primary conversation and the read-only Context gate. Their prompts, response logs and input-message rendering stay together. The second gate's `submit_context_relevance` result tool is private to this module. `screening/` owns the earlier System One decision and frozen delivery; this is distinct from the Agent's second gate.
 
-`protocol.ts` contains public requests and internal result/scheduling messages. Callers import contracts from it and root registration from `root.ts`; `actor.ts` does not forward either module. The package entrypoint exposes public capabilities directly from their defining modules, without compatibility barrels or duplicate exports. The built-in personal Goal is a configuration default beside GoalSettings in `config/settings.ts`.
+`protocol.ts` contains public requests and internal result/scheduling messages. Callers import contracts from it and root registration from `root.ts`; `actor.ts` does not forward either module. The package entrypoint exposes public capabilities directly from their defining modules, without compatibility barrels or duplicate exports. The built-in personal Goal is a configuration default beside GoalSettings in `goals/settings.ts`.
 
 `view.ts` groups the public Context projection and the Pi-backed conversation timeline. Shared tools remain in `../tools/`: local Goal tools resolve GoalState, while cross-Actor operations use CurrentActors. Native transcript persistence and SDK callback retirement remain in `@aster/agent`.
 

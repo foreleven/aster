@@ -1,3 +1,4 @@
+import { testLocalConfig } from "./configuration-fixtures.js";
 import assert from "node:assert/strict";
 import { mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -5,7 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Effect, Layer } from "effect";
 import { AgentConversations } from "@aster/agent/harness";
-import { LocalConfig, storageSettings, withActorStoreLock } from "@aster/infra";
+import { StorageSettings, withActorStoreLock } from "@aster/infra";
 import { localConversationsLayer } from "../src/services.js";
 
 test("conversations resolve beside config under the locked root and reopen without Pi leases", async (t) => {
@@ -13,14 +14,14 @@ test("conversations resolve beside config under the locked root and reopen witho
   t.after(() => rm(directory, { recursive: true, force: true }));
   const configPath = join(directory, "config.yaml");
   await writeFile(configPath, JSON.stringify({ config: { durable: { root: "data" } } }));
-  const sources = LocalConfig.layer({
+  const sources = testLocalConfig({
     configPath,
     projectRoot: "/unused-project",
     envPath: join(directory, ".env"),
     environment: {},
   });
   const root = (
-    await Effect.runPromise(Effect.scoped(storageSettings.pipe(Effect.provide(sources))))
+    await Effect.runPromise(Effect.scoped(StorageSettings.pipe(Effect.provide(sources))))
   ).root;
   assert.equal(root, join(directory, "data"));
   const conversations = localConversationsLayer.pipe(Layer.provide(sources));

@@ -19,7 +19,7 @@ export interface ChatWork extends ChatState {
 }
 type Snapshot = ContextOwnerSnapshot<ChatState, ChatMessage>;
 export const serializeChat = ({ chat, summary }: Readonly<ChatState>) =>
-  JSON.stringify({ chat, summary });
+  `## Chat: ${chat.name}\n\n\n${summary?.text ?? "No content"}`;
 
 /** Storage retains append order; model batches use event time without modifying storage. */
 export const chatWork = ({ state, messages }: Snapshot): ChatWork => ({

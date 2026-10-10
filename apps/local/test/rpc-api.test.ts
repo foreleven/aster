@@ -1,3 +1,4 @@
+import { LanguageSettings, ContextDirectory } from "@aster/core";
 import { serializeFixtureState } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { GoalSnapshot } from "@aster/core";
@@ -49,11 +50,13 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
         const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            LanguageSettings.layer,
+            ContextDirectory.layer,
             ContextQueries.layer,
             Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(GoalSettings, {
               definitions: [{ slug: "personal", description: "Assistant" }],
-              reasoning: { model: "test" },
+              reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
             }),
             Layer.succeed(AgentConversations, conversations),
 

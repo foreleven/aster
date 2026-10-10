@@ -50,7 +50,7 @@ import { Clock, Deferred, Logger, Queue, Redacted, Schema, Stream } from "effect
 import { TestClock } from "effect/testing";
 import { type StoredContext } from "@aster/core";
 import { MailFetcher } from "../src/mail/client.js";
-import { MailSettings } from "../src/mail/config.js";
+import { MailSettings } from "../src/mail/settings.js";
 import { MailFetchError } from "../src/mail/errors.js";
 import { mailboxPath, mailMessagePath } from "../src/mail/contexts.js";
 import { MailboxSnapshot as MailboxState } from "../src/mail/state/snapshot.js";

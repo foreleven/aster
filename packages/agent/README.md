@@ -7,7 +7,7 @@ The package exposes two independent Effect capabilities:
 | `@aster/agent/agent`   | `AgentRunner.run`, `Agent.make`   | Supplied transcript → generated messages       | Models                     |
 | `@aster/agent/harness` | `DurableHarness.withConversation` | Native submission → persisted assistant answer | Models, AgentConversations |
 
-Ordinary execution creates a fresh Pi Agent per invocation. Durable execution retains one Harness root per owner path, such as `/goals/personal` or `/tasks/<id>`. The package root exports shared tools, errors, message types and model configuration. Business prompts, input identities and evidence formatting belong to callers.
+Ordinary execution creates a fresh Pi Agent per invocation. Durable execution retains one Harness root per owner path, such as `/goals/personal` or `/tasks/<id>`. The package root exports shared tools, errors, message types and resolved model registration contracts. Business prompts, input identities and evidence formatting belong to callers.
 
 ## Durable conversation API
 
@@ -54,7 +54,7 @@ Goal submits its persisted input ID and uses the native answer to finish its bus
 
 ## Models and ordinary execution
 
-Models supports MiniMax, Anthropic and OpenAI chat-completions providers. `Models.configured` reads typed `config.models` through Effect ConfigProvider. `Models.layer(entries)` supports explicit composition and tests. Credential references resolve through the captured provider's secrets namespace only when a model is selected, and remain redacted until the SDK boundary.
+Models supports MiniMax, Anthropic and OpenAI chat-completions providers. `Models.layer(entries)` receives explicit model registrations with Redacted credentials and supports production composition and tests. The package does not read application configuration or interpret credential references. Infrastructure supplies `ConfiguredModels.layer` to load `config.models` and resolve references at acquisition. Credentials remain redacted until the SDK boundary.
 
 Ordinary Agent execution retains native message/tool types and supports one bounded result-tool correction. Terminal provider errors become typed AgentError failures with generated messages. Interruption aborts the ordinary Pi Agent and waits for it to become idle. `onResponse` observes model responses before their tool round; it is diagnostic, not a persistence acknowledgement.
 

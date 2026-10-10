@@ -1,3 +1,4 @@
+import { ContextDirectory, LanguageSettings } from "../src/index.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { observeContextWrites } from "../src/testing/context.js";
 import type { TestContext } from "@aster/core/testing";
@@ -347,7 +348,10 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
           },
         };
         const agent = yield* GoalAgent.pipe(
-          Effect.provide(GoalAgent.layer),
+          Effect.provide(GoalAgent.layer.pipe(Layer.provide(LanguageSettings.layer))),
+          Effect.provideService(ContextDirectory, [
+            { path: "/apps/xiaohongshu", description: "Search travel notes and comments" },
+          ]),
           Effect.provideService(
             AgentRunner,
             AgentRunner.make(() => Effect.die("Unexpected screening")),
@@ -357,10 +361,7 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
           Effect.provideService(CurrentActors, testActors(registry)),
           Effect.provideService(GoalSettings, {
             definitions: [definition],
-            reasoning: { model: "test" },
-            contexts: [
-              { path: "/apps/xiaohongshu", description: "Search travel notes and comments" },
-            ],
+            reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
           }),
           Effect.provideService(MemoryRecall, {
             search: () => Effect.succeed([]),

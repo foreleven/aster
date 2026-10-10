@@ -13,3 +13,7 @@ export * from "./agentmemory/index.js";
 
 export * from "./storage/local-durable.js";
 export * from "./storage/settings.js";
+
+export * from "./config/location.js";
+
+export { ConfiguredModels } from "./config/models.js";

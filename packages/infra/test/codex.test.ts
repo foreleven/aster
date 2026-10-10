@@ -1,3 +1,4 @@
+import { Redacted } from "effect";
 import { Effect } from "effect";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -41,7 +42,10 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   );
   process.env.TEST_INTEGRATION_TOKEN = "test-only";
   const agent = makeCodexAgent(
-    agentEnvironment({ values: process.env, privateKeys: ["TEST_INTEGRATION_TOKEN"] }),
+    agentEnvironment({
+      values: Redacted.make({ ...process.env }),
+      privateKeys: ["TEST_INTEGRATION_TOKEN"],
+    }),
     executable,
     join(dir, "tasks"),
   );
@@ -66,7 +70,10 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     });
     await Effect.runPromise(Effect.scoped(agent.close()));
     restored = makeCodexAgent(
-      agentEnvironment({ values: process.env, privateKeys: ["TEST_INTEGRATION_TOKEN"] }),
+      agentEnvironment({
+        values: Redacted.make({ ...process.env }),
+        privateKeys: ["TEST_INTEGRATION_TOKEN"],
+      }),
       executable,
       join(dir, "tasks"),
     );

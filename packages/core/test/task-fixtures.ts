@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { Actor, ActorSystem } from "@aster/actor";
@@ -112,9 +113,13 @@ export const taskFixture = Effect.fnUntraced(function* (
   const conversations = options.conversations ?? testConversations();
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
+      testSettings,
       Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
       Layer.succeed(AgentConversations, conversations),
-      Layer.succeed(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
+      Layer.succeed(GoalSettings, {
+        definitions: [],
+        reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
+      }),
       Layer.succeed(
         DurableHarness,
         options.harness ?? makeHarness(() => Effect.die("Unexpected internal execution")),

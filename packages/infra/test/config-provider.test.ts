@@ -1,11 +1,14 @@
+import { secretConfig } from "../src/config/credentials.js";
+import { ConfigLocation } from "../src/index.js";
+import { testLocalConfig } from "./configuration-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config, ConfigProvider, Effect, Layer, Redacted, Schema } from "effect";
-import { ConfigLocation, GoalSettings, secretConfig, signalSettings } from "@aster/core";
-import { LocalConfig, SystemOneClientLive } from "../src/index.js";
+import { GoalSettings, SignalDefinitions } from "@aster/core";
+import { SystemOneClientLive } from "../src/index.js";
 import { SystemOneClient } from "@aster/core";
 
 test("local provider precedence, exact credentials and config-relative locations do not mutate process.env", async (t) => {
@@ -25,7 +28,7 @@ test("local provider precedence, exact credentials and config-relative locations
     [{ ASTER_HTTP_PORT: "4319" }, {}, 4319],
     [{ ASTER_HTTP_PORT: "4319" }, { http: { port: 4320 } }, 4320],
   ] as const) {
-    const layer = LocalConfig.layer({
+    const layer = testLocalConfig({
       configPath,
       envPath,
       projectRoot: dir,
@@ -37,11 +40,14 @@ test("local provider precedence, exact credentials and config-relative locations
         Effect.gen(function* () {
           assert.equal(yield* port, expected);
           assert.equal((yield* ConfigLocation).baseDir, dir);
-          assert.deepEqual((yield* signalSettings)[0]!.task, {
-            _tag: "Goal",
-            target: "/goals/personal",
-            text: "Keep ${UNEXPANDED}",
-          });
+          assert.deepEqual(
+            (yield* SignalDefinitions.pipe(Effect.provide(SignalDefinitions.layer)))[0]!.task,
+            {
+              _tag: "Goal",
+              target: "/goals/personal",
+              text: "Keep ${UNEXPANDED}",
+            },
+          );
           const provider = yield* ConfigProvider.ConfigProvider;
           const secret = yield* secretConfig("${TEST_SECRET}", provider);
           assert.equal(String(secret), "<redacted>");
@@ -72,7 +78,7 @@ test("local provider precedence, exact credentials and config-relative locations
         Effect.scoped(
           port.pipe(
             Effect.provide(
-              LocalConfig.layer({
+              testLocalConfig({
                 configPath,
                 envPath,
                 projectRoot: dir,
@@ -90,7 +96,7 @@ test("local provider precedence, exact credentials and config-relative locations
       Effect.scoped(
         port.pipe(
           Effect.provide(
-            LocalConfig.layer({ configPath, envPath, projectRoot: dir, environment: {} }),
+            testLocalConfig({ configPath, envPath, projectRoot: dir, environment: {} }),
           ),
         ),
       ),
@@ -103,7 +109,7 @@ test("local provider precedence, exact credentials and config-relative locations
       Effect.scoped(
         port.pipe(
           Effect.provide(
-            LocalConfig.layer({ configPath, envPath, projectRoot: dir, environment: {} }),
+            testLocalConfig({ configPath, envPath, projectRoot: dir, environment: {} }),
           ),
         ),
       ),
@@ -137,6 +143,7 @@ test("module settings read structured provider values and disabled decisions nee
                   baseDir: "/tmp",
                   projectRoot: "/tmp",
                   envPath: "/tmp/.env",
+                  homeDirectory: "/tmp",
                 }),
               ),
             ),
@@ -160,7 +167,7 @@ test("executor environments use captured private keys even after dotenv changes"
     Effect.scoped(
       ProcessEnvironment.pipe(
         Effect.provide(
-          LocalConfig.layer({
+          testLocalConfig({
             configPath,
             envPath,
             projectRoot: dir,

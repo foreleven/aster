@@ -1,4 +1,5 @@
-import { Schema } from "effect";
+import { Task } from "../tasks/contracts.js";
+import { Cron, Result, Schema } from "effect";
 export const SignalTime = Schema.String.check(
   Schema.isPattern(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/),
   Schema.makeFilter((value) => Number.isFinite(Date.parse(value)), {
@@ -11,7 +12,11 @@ export const SignalSchedule = Schema.Union([
     type: Schema.Literal("cron"),
     expression: Schema.String,
     timeZone: Schema.String,
-  }),
+  }).check(
+    Schema.makeFilter((value) => Result.isSuccess(Cron.parse(value.expression, value.timeZone)), {
+      expected: "A valid cron expression and timezone",
+    }),
+  ),
 ]);
 export type SignalSchedule = typeof SignalSchedule.Type;
 export const SignalTrigger = Schema.TaggedUnion({
@@ -19,3 +24,7 @@ export const SignalTrigger = Schema.TaggedUnion({
   Schedule: { schedule: SignalSchedule },
 });
 export type SignalTrigger = typeof SignalTrigger.Type;
+
+export const SignalEntry = Schema.Struct({ trigger: SignalTrigger, task: Task });
+export const SignalDefinition = Schema.Struct({ slug: Schema.String, ...SignalEntry.fields });
+export type SignalDefinition = typeof SignalDefinition.Type;

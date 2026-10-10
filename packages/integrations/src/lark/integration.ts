@@ -5,6 +5,7 @@ import {
   DurableContext,
   defineIntegration,
   RuntimeIntegrations,
+  LanguageSettings,
 } from "@aster/core";
 import { Context, Effect, Layer } from "effect";
 import { LarkAccountClient } from "./account/client.js";
@@ -29,7 +30,7 @@ const services = Layer.unwrap(
       settings.im
         ? Layer.mergeAll(
             LarkImClient.layer,
-            ChatSummarizer.layer,
+            ChatSummarizer.layer.pipe(Layer.provide(LanguageSettings.layer)),
             ChatSummaryGate.layer,
             SummaryAdmission.layer,
           )

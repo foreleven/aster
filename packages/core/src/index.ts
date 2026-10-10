@@ -1,7 +1,10 @@
-export { secretConfig } from "@aster/agent";
 export * from "./approvals/actor.js";
-export * from "./config/schema.js";
-export * from "./config/settings.js";
+export { GoalDefinition, GoalTitle } from "./goals/contracts.js";
+export { SignalDefinition, SignalEntry, SignalSchedule } from "./signals/contracts.js";
+export * from "./goals/settings.js";
+export * from "./signals/settings.js";
+export * from "./reactions/settings.js";
+export * from "./config/context-directory.js";
 export * from "./config/language.js";
 export * from "./context/actor.js";
 export * from "./context/location.js";
@@ -54,3 +57,5 @@ export { readActor } from "./services/domain-reads.js";
 export { SignalRecord, GetSignal } from "./signals/queries.js";
 export { goalBusinessState } from "./goals/view.js";
 export { ContextText } from "./context/contracts.js";
+
+export * from "./process/environment.js";

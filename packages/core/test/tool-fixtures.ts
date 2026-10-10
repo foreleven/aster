@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { DurableContext } from "@aster/core";
 import { makeHarness } from "./harness-fixtures.js";
 import { DurableHarness, AgentConversations } from "@aster/agent/harness";
@@ -9,7 +10,7 @@ import { ContextsActor } from "../src/context/queries/actor.js";
 import { MemoryActor } from "../src/memory/actor.js";
 import { MemoryBackend, type MemoryRecall } from "../src/memory/contracts.js";
 import { ContextCaptures } from "../src/memory/capture.js";
-import { GoalSettings } from "../src/config/settings.js";
+import { GoalSettings } from "../src/goals/settings.js";
 import { ExternalAgents } from "../src/tasks/execution/contracts.js";
 import { GoalsRootActor } from "../src/goals/root.js";
 import { makeTestContext } from "../src/testing/context.js";
@@ -30,6 +31,7 @@ export const toolSystem = Effect.fnUntraced(function* (
     options.queries ?? (yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer)));
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
+      testSettings,
       Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
       Layer.succeed(AgentConversations, messages),
       Layer.succeed(ContextQueries, queries),
@@ -46,7 +48,7 @@ export const toolSystem = Effect.fnUntraced(function* (
       }),
       Layer.succeed(GoalSettings, {
         definitions: options.goals ?? [],
-        reasoning: { model: "test" },
+        reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
       }),
       Layer.succeed(ExternalAgents, {}),
 

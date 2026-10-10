@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
@@ -31,11 +32,15 @@ const taskSystem = (
 ) =>
   ActorSystem.make().pipe(
     ActorSystem.provide(
+      testSettings,
       ContextQueries.layer,
       Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
       Layer.succeed(AgentConversations, history),
       Layer.succeed(ExternalAgents, {}),
-      Layer.succeed(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
+      Layer.succeed(GoalSettings, {
+        definitions: [],
+        reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
+      }),
       Layer.succeed(
         DurableHarness,
         makeHarness(() => Effect.die("Completed Task must not execute again")),
@@ -77,6 +82,7 @@ for (const fails of [false, true]) {
             clock,
           ).pipe(
             ActorSystem.provide(
+              testSettings,
               ContextQueries.layer,
               Logger.layer([
                 Logger.make<unknown, void>(({ message }) => {

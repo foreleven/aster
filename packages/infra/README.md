@@ -4,14 +4,14 @@ Concrete infrastructure adapters for Aster. The local host imports `@aster/infra
 
 This package owns:
 
-- `LocalConfig.layer`: captured YAML, dotenv and process sources, Effect ConfigProvider, source locations and explicit child-process environment. Modules validate their own settings through this provider.
+- `LocalConfig.layer`: YAML and dotenv sources loaded through Effect FileSystem/Path, explicit host environment and home-directory inputs, Effect ConfigProvider, source locations and explicit child-process environment. Modules validate their own settings through this provider.
 - `makeFileContextStore`, the file persistence adapter and the actor-store process lock.
 - The TypeSafe-compatible System One HTTP client, behind core's decision interface.
 - Infrastructure Layers (`ConfiguredDurableInfrastructure`, `FileGoalScreening`, `SystemOneClientLive`); Goal runtime assembly and reasoning belong to core.
 - Codex app-server execution, persistent thread/turn recovery, native approval replies and environment isolation.
 - Doubao session/run status and waiting via CLI, native pending-control replies, and executor capability descriptions.
 
-The agentmemory adapter lives in `agentmemory/` and provides core’s `MemoryBackend`. Core owns its Memory Actor, durable capture queue, retries, and runtime assembly. Lark and generic mail belong to `@aster/integrations`; Models is imported directly from `@aster/agent`.
+The agentmemory adapter lives in `agentmemory/` and provides core’s `MemoryBackend`. Core owns its Memory Actor, durable capture queue, retries, and runtime assembly. Lark and generic mail belong to `@aster/integrations`; `ConfiguredModels.layer` loads model settings and resolves credentials before supplying `Models.layer` from `@aster/agent`. The shared credential resolver is private to `config/`.
 
 External adapters receive explicit child environments filtered once from captured values and private key names. Dotenv/service keys and `ASTER_*` variables are removed without rereading files. Doubao CLI and native response use the same captured endpoint. Internal reasoning no longer uses Codex CLI or an app CLI path. Captures, reasoning, extraction and delegation are injected into core through typed callbacks/interfaces; no core module reaches into this package's compiled output.
 
@@ -32,3 +32,5 @@ Execution factories return managed Effect adapters. `external-agent.ts` contains
 `ConfiguredDurableInfrastructure.layer` supplies native Context document persistence and the Codex/Doubao external adapters. `config.durable.root` defaults to `~/.aster`; relative paths resolve beside the configuration file. Context documents live in `context-sessions/`; screening journals remain in `evaluations/`. Pi execution and durable Agent conversations belong to `@aster/agent`; infra also supplies Pi Document persistence for ContextHandle owners under `context-sessions/`. All configured Context owners use native Pi Documents; no Local fallback or historical import path remains.
 
 The root store lock uses a SQLite exclusive transaction on permanent `.actors-lock.sqlite`. `actors.pid` is diagnostic only. Startup never unlinks a lock to recover ownership; process death releases it. Keep the root lock through adapter cleanup, including interrupted memory startup, before allowing another writer. The host uses `withActorStoreLock` to retain ownership until process exit if runtime shutdown ends with a defect. Contexts, Agent conversations and screening journals share this resolved root.
+
+See [configuration design](../../docs/configuration-design.md) for source composition and module Settings ownership.

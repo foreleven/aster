@@ -1,8 +1,8 @@
 import { GetSignal } from "./queries.js";
 import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand, ReplyTo } from "@aster/actor";
-import { Context, Schema } from "effect";
-import { SignalDefinition } from "../config/schema.js";
+import { Schema } from "effect";
+import { SignalDefinition } from "./contracts.js";
 import { ContextText } from "../context/contracts.js";
 import { GoalPath } from "../goals/contracts.js";
 import { ApplicationError, CommandReceipt } from "../operations.js";
@@ -51,10 +51,6 @@ export const SignalChangeInput = Schema.Struct({
 );
 export type SignalChangeInput = typeof SignalChangeInput.Type;
 
-export class SignalDefinitions extends Context.Service<
-  SignalDefinitions,
-  readonly SignalDefinition[]
->()("signals/Definitions") {}
 export const SignalCommandReply = Schema.TaggedUnion({
   Accepted: { receipt: CommandReceipt },
   Rejected: { error: Schema.instanceOf(ApplicationError) },

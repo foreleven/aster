@@ -1,3 +1,4 @@
+import { SignalDefinitions } from "../signals/settings.js";
 import { MemoryActor } from "../memory/actor.js";
 import { ActorSystem, type ActorSystemEvent } from "@aster/actor";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
@@ -17,7 +18,6 @@ import { AgentRunner } from "@aster/agent/agent";
 import {
   Cause,
   Clock,
-  ConfigProvider,
   Context,
   Deferred,
   Effect,
@@ -29,10 +29,12 @@ import {
   Scope,
   Stream,
 } from "effect";
-import { GoalSettings, signalSettings } from "../config/settings.js";
+import { GoalSettings } from "../goals/settings.js";
+import { LanguageSettings } from "../config/language.js";
+import { ContextDirectory } from "../config/context-directory.js";
+import { ReactionSettings } from "../reactions/settings.js";
 import { MemoryBackend } from "../memory/contracts.js";
 import { SystemOneClient } from "../services/system-one.js";
-import { SignalDefinitions } from "../signals/protocol.js";
 import { SignalRootActor } from "../signals/root.js";
 
 import { ApprovalQueueActor } from "../approvals/actor.js";
@@ -54,6 +56,9 @@ type ActorServices =
   | ContextQueries
   | AgentConversations
   | GoalSettings
+  | LanguageSettings
+  | ContextDirectory
+  | ReactionSettings
   | DurableContext
   | SignalDefinitions
   | SystemOneClient
@@ -87,6 +92,9 @@ const acquireRuntime = Effect.gen(function* () {
     ContextQueries,
     AgentConversations,
     GoalSettings,
+    LanguageSettings,
+    ContextDirectory,
+    ReactionSettings,
     SignalDefinitions,
     SystemOneClient,
     ExternalAgents,
@@ -100,7 +108,6 @@ const acquireRuntime = Effect.gen(function* () {
     .pipe(
       Context.omit(Scope.Scope),
       Context.add(Clock.Clock, yield* Clock.Clock),
-      Context.add(ConfigProvider.ConfigProvider, yield* ConfigProvider.ConfigProvider),
       Context.add(ReactionPolicy, reactionPolicy),
       Context.add(GoalSettings, settings),
     );
@@ -253,8 +260,11 @@ export class AsterRuntime extends Context.Service<
       ContextCaptures.layer,
       ContextQueries.layer,
       GoalSettings.layer,
+      LanguageSettings.layer,
+      ContextDirectory.layer,
+      ReactionSettings.layer,
       RuntimeIntegrations.layer,
-      Layer.effect(SignalDefinitions, signalSettings),
+      SignalDefinitions.layer,
     );
     // Registration captures integration services; acquireRuntime activates their Actors.
     const registerIntegrations = Layer.mergeAll(Layer.empty, ...options.integrations);

@@ -16,7 +16,7 @@ import { dirname, join } from "node:path";
 import { createServer } from "node:net";
 import { parse, stringify } from "yaml";
 import { Effect } from "effect";
-import { memoryEnvironment, type MemoryConfig } from "./config.js";
+import { memoryEnvironment, type MemorySettingsValue } from "./settings.js";
 import { makeMemoryClient, type MemoryClient, type MemoryConnection } from "./client.js";
 
 const require = createRequire(import.meta.url);
@@ -52,7 +52,11 @@ const checkPort = (port: number) =>
   });
 
 /** The published CLI has global PID files, so serialize ownership without adopting another daemon. */
-const createMemoryRuntime = (config: MemoryConfig, cwd: string, source: NodeJS.ProcessEnv) => {
+const createMemoryRuntime = (
+  config: MemorySettingsValue,
+  cwd: string,
+  source: NodeJS.ProcessEnv,
+) => {
   const upstreamDir = join(homedir(), ".agentmemory");
   mkdirSync(upstreamDir, { recursive: true });
   const lockPath = join(upstreamDir, "signals-managed.pid");
@@ -119,7 +123,7 @@ const createMemoryRuntime = (config: MemoryConfig, cwd: string, source: NodeJS.P
     for (const port of [config.port, config.port + 1, config.port + 2, config.port + 46023])
       await checkPort(port);
     signal?.throwIfAborted();
-    const environment = memoryEnvironment(config, source);
+    const environment = source;
     const secret = randomBytes(32).toString("hex");
     const connection: MemoryConnection = {
       url: `http://127.0.0.1:${config.port}`,
@@ -216,7 +220,7 @@ const createMemoryRuntime = (config: MemoryConfig, cwd: string, source: NodeJS.P
 /** The resource exists before readiness. Interrupting readiness aborts and joins
  * the native launch before the Scope stops it and releases the outer store lock. */
 export const managedMemory = Effect.fn("AgentMemory.acquire")(function* (
-  config: MemoryConfig,
+  config: MemorySettingsValue,
   cwd: string,
   environment: NodeJS.ProcessEnv,
   create: typeof createMemoryRuntime = createMemoryRuntime,
@@ -226,8 +230,9 @@ export const managedMemory = Effect.fn("AgentMemory.acquire")(function* (
       cause,
       message: cause instanceof Error ? cause.message : String(cause),
     });
+  const resolvedEnvironment = yield* memoryEnvironment(config, environment);
   const runtime = yield* Effect.acquireRelease(
-    Effect.try({ try: () => create(config, cwd, environment), catch: failure }),
+    Effect.try({ try: () => create(config, cwd, resolvedEnvironment), catch: failure }),
     (runtime) => Effect.promise(runtime.stop),
   );
   return yield* Effect.callback<Awaited<ReturnType<typeof runtime.start>>, MemoryStartupError>(

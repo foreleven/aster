@@ -1,5 +1,5 @@
 import { score, DecisionError, type SystemOneClient } from "../../services/system-one.js";
-import type { GoalDefinition } from "../../config/schema.js";
+import type { GoalDefinition } from "../../goals/contracts.js";
 import { ContextText, type ContextText as ContextRecord } from "../../context/contracts.js";
 import { Clock, Context, Effect, Match, Schema } from "effect";
 import { createHash } from "node:crypto";

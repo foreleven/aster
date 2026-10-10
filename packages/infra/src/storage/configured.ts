@@ -3,13 +3,13 @@ import { DurableContext, ExternalAgents, makeDurableContext } from "@aster/core"
 import { makeContextSessionPersistence } from "./context-sessions.js";
 import { join } from "node:path";
 import { makeExternalAgents } from "../agents.js";
-import { storageSettings } from "./settings.js";
+import { StorageSettings } from "./settings.js";
 
 /** The host supplies native Context document persistence and external execution adapters. */
 export const ConfiguredDurableInfrastructure = {
   layer: Layer.effectContext(
     Effect.gen(function* () {
-      const settings = yield* storageSettings;
+      const settings = yield* StorageSettings;
       const contexts = yield* makeContextSessionPersistence(
         join(settings.root, "context-sessions"),
       ).pipe(Effect.flatMap(makeDurableContext));

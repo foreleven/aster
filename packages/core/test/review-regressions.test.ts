@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { testApprovalEntries } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
@@ -47,6 +48,7 @@ test("Goal command waits for durable input and history; stopped roots fail inste
         };
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            testSettings,
             ContextQueries.layer,
             Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
 
@@ -115,6 +117,7 @@ test("invalid option stays pending and can be corrected without losing the origi
         const registry = yield* makeTestContext();
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            testSettings,
             ContextQueries.layer,
             Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
           ),
@@ -190,6 +193,7 @@ test("malformed Signal delivery state stops before recovery writes or execution"
         });
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            testSettings,
             ContextQueries.layer,
             Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
 

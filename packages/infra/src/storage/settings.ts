@@ -1,16 +1,28 @@
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { Config, Effect, Schema } from "effect";
-import { ConfigLocation } from "@aster/core";
+import { Config, Context, Effect, Layer, Path, Schema } from "effect";
+import { ConfigLocation } from "../config/location.js";
 
-/** Context files, conversations and screening journals share the host's locked storage root. */
-export const storageSettings = Effect.gen(function* () {
-  const { baseDir } = yield* ConfigLocation;
-  const configuredRoot = yield* Config.schema(Schema.optional(Schema.NonEmptyString), [
-    "config",
-    "durable",
-    "root",
-  ]);
-  const root = configuredRoot ? resolve(baseDir, configuredRoot) : join(homedir(), ".aster");
-  return { root, contextDirectory: join(root, "actors") };
-});
+export class StorageSettings extends Context.Service<
+  StorageSettings,
+  {
+    readonly root: string;
+    readonly contextDirectory: string;
+  }
+>()("infra/storage/Settings") {
+  static readonly layer = Layer.effect(
+    StorageSettings,
+    Effect.gen(function* () {
+      const path = yield* Path.Path;
+      const { baseDir, homeDirectory } = yield* ConfigLocation;
+      const configuredRoot = yield* Config.schema(Schema.optional(Schema.NonEmptyString), [
+        "config",
+        "durable",
+        "root",
+      ]);
+      const root =
+        configuredRoot === undefined
+          ? path.join(homeDirectory, ".aster")
+          : path.resolve(baseDir, configuredRoot);
+      return { root, contextDirectory: path.join(root, "actors") };
+    }),
+  );
+}

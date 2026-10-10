@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from "node:util";
 import { ApplicationError } from "../../operations.js";
 import { Clock, Context, Cron, Effect, Layer, Match, Schema } from "effect";
 import { DurableContext } from "../../context/store.js";
-import { type SignalDefinition, validateSignalTime } from "../../config/schema.js";
+import { SignalTrigger, type SignalDefinition } from "../contracts.js";
 import { SignalChangeInput, SignalReactionInput } from "../protocol.js";
 import { type SignalSnapshot } from "./snapshot.js";
 import { makeSignalStore } from "./store.js";
@@ -55,13 +55,11 @@ const makeState = Effect.fn("SignalState.make")(function* (
     return state;
   });
   const timing = (trigger: SignalSnapshot["trigger"]) =>
-    Effect.try({
-      try: () => {
-        if (trigger._tag === "Schedule") validateSignalTime(trigger);
-      },
-      catch: () =>
-        new ApplicationError({ kind: "invalid-input", message: "Invalid Signal timing" }),
-    });
+    Schema.decodeUnknownEffect(SignalTrigger)(trigger).pipe(
+      Effect.mapError(
+        () => new ApplicationError({ kind: "invalid-input", message: "Invalid Signal timing" }),
+      ),
+    );
   const setStatus = Effect.fnUntraced(function* (status: SignalSnapshot["status"]) {
     const state = yield* snapshot;
     if (!state || state.status === status || state.status === "deleted") return;

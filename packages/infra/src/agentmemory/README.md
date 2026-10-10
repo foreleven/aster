@@ -2,8 +2,8 @@
 
 This package owns the pinned upstream CLI lifecycle, config/environment translation, REST observation protocol, durable source provenance, and the implementation of core’s `MemoryBackend`. It has no Lark or Signal detection dependencies.
 
-- `parseMemoryConfig` validates the `/memory` YAML entry and resolves its data directory.
-- `memorySettings` reads the typed `/memory` Config declaration with config-relative path resolution.
+- `MemorySettings.layer` reads and validates the `/memory` Config declaration once, applies defaults and resolves paths through Effect Path and captured locations.
+- `decodeMemorySettings` decodes explicit input through the same Schema and path normalization for focused tests. Present LLM and embedding entries must be complete.
 - `AgentMemoryBackend.layer` provides `MemoryBackend`, owns the daemon/connection file and resolves credentials through the captured ConfigProvider.
 - Core's Memory Actor owns its Context subscription and capture queue. Agent recall tools ask MemoryActor, which uses the backend recall capability. `AsterRuntime` activates it before Task restoration; the host supplies only `AgentMemoryBackend.layer`.
 - `managedMemory` owns worker/engine cleanup before waiting for health. Cancellation aborts and joins startup before stopping the runtime and releasing the outer store lock. Native startup and stop are an injectable boundary for local lifecycle tests.

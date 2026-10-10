@@ -4,8 +4,8 @@ import { answerText } from "../../services/agent-input.js";
 import { ApplicationError } from "../../operations.js";
 import { TaskDeliveryInput, type PreparedTask } from "../contracts.js";
 import { Context, Deferred, Effect, Layer, Option, Ref, Schedule, Schema, Semaphore } from "effect";
-import { GoalSettings } from "../../config/settings.js";
-import { outputLanguage, outputLanguageInstruction } from "../../config/language.js";
+import { GoalSettings } from "../../goals/settings.js";
+import { LanguageSettings, outputLanguageInstruction } from "../../config/language.js";
 import { CurrentActors } from "../../services/actors.js";
 import { sendApproval } from "../../approvals/actor.js";
 import {
@@ -26,7 +26,7 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
   const agents = yield* ExternalAgents;
   const harness = yield* DurableHarness;
   const settings = yield* GoalSettings;
-  const language = yield* outputLanguage;
+  const { outputLanguage: language } = yield* LanguageSettings;
   const executorPrompt = (prompt: string) => `${prompt}\n\n${outputLanguageInstruction(language)}`;
   const actors = yield* CurrentActors;
   const journal = yield* executionCheckpoint(path, executorPrompt(DEFAULT_EXECUTOR_PROMPT));
@@ -487,7 +487,7 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
     const preparedConversation = taskConversation({
       ...invocation,
       path,
-      model: settings.reasoning!.model,
+      model: settings.reasoning.model,
       language,
     });
     const result = yield* harness

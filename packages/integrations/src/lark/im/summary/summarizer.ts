@@ -2,9 +2,13 @@ import { publicChatMessage } from "../model.js";
 import { ChatSummaryError } from "./errors.js";
 import { Models, Type } from "@aster/agent";
 import { AgentRunner } from "@aster/agent/agent";
-import { RuntimeConfigurationError, outputLanguage, outputLanguageInstruction } from "@aster/core";
+import {
+  RuntimeConfigurationError,
+  LanguageSettings,
+  outputLanguageInstruction,
+} from "@aster/core";
 import { LarkSettings } from "../../settings.js";
-import { Clock, Config, Context, Effect, Layer, Schema } from "effect";
+import { Clock, Context, Effect, Layer, Schema } from "effect";
 import { ChatSummary, type ChatInfo, type ChatMessage } from "../model.js";
 import { chatSummaryError } from "./errors.js";
 
@@ -38,10 +42,10 @@ export class ChatSummarizer extends Context.Service<
 /** Summary prompts, tools and validation are owned by the Lark integration. */
 export const makeChatSummarizer = (
   name: string,
-): Effect.Effect<ChatSummarizer["Service"], Config.ConfigError, AgentRunner> =>
+): Effect.Effect<ChatSummarizer["Service"], never, AgentRunner | LanguageSettings> =>
   Effect.gen(function* () {
     const runner = yield* AgentRunner;
-    const language = yield* outputLanguage;
+    const { outputLanguage: language } = yield* LanguageSettings;
     return {
       summarize: Effect.fn("ChatSummarizer.summarize")(
         function* (input) {

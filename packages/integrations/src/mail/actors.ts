@@ -10,7 +10,7 @@ import {
 import { DateTime, Effect, Match, Schema, Semaphore } from "effect";
 import { randomUUID } from "node:crypto";
 import { MailFetcher } from "./client.js";
-import { MailSettings } from "./config.js";
+import { MailSettings } from "./settings.js";
 import { MailRootState, mailMessagePath, mailSegment, mailboxPath } from "./contexts.js";
 import { mailDay } from "./dates.js";
 import { MailFetchError, mailFailureDetails, type MailFailureDetails } from "./errors.js";
@@ -107,7 +107,7 @@ const MailboxActor = ContextActor.define("mail/MailboxActor", {
     let busy = false;
     let failures = 0;
     let synced = false;
-    const interval = settings.pollIntervalMs ?? 30_000;
+    const interval = settings.pollIntervalMs;
     const failed = Effect.fnUntraced(function* (details: MailFailureDetails) {
       busy = false;
       failures++;
@@ -316,7 +316,7 @@ export const MailRootActor = ContextActor.define("mail/RootActor", {
         message: Schema.Never,
         serialize: (state) => JSON.stringify(state),
         initial: {
-          description: settings.description ?? "Connected mailboxes",
+          description: settings.description,
           state: { mailboxes: settings.mailboxes.map((mailbox) => mailboxPath(mailbox.id)) },
         },
       })

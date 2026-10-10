@@ -1,3 +1,4 @@
+import { LanguageSettings } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AgentRunner } from "@aster/agent/agent";
@@ -70,7 +71,9 @@ test("summary Agent uses Effect tools, validates evidence and retires callbacks"
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const summarizer = yield* makeChatSummarizer("summary-model");
+        const summarizer = yield* makeChatSummarizer("summary-model").pipe(
+          Effect.provide(LanguageSettings.layer),
+        );
         return yield* summarizer.summarize(input);
       }).pipe(Effect.provideService(AgentRunner, runner)),
     ),
@@ -83,7 +86,9 @@ test("missing summary results remain typed failures", async () => {
   const result = await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const summarizer = yield* makeChatSummarizer("summary-model");
+        const summarizer = yield* makeChatSummarizer("summary-model").pipe(
+          Effect.provide(LanguageSettings.layer),
+        );
         return yield* summarizer.summarize(input).pipe(Effect.result);
       }).pipe(
         Effect.provideService(
@@ -157,7 +162,9 @@ for (const language of [undefined, "en-US"]) {
     );
     await Effect.runPromise(
       Effect.gen(function* () {
-        const summarizer = yield* makeChatSummarizer("summary-model");
+        const summarizer = yield* makeChatSummarizer("summary-model").pipe(
+          Effect.provide(LanguageSettings.layer),
+        );
         yield* summarizer.summarize(input);
       }).pipe(
         Effect.provideService(AgentRunner, runner),

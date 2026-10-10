@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
 import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema } from "effect";
@@ -34,6 +35,7 @@ for (const fails of [false, true]) {
           const registry = yield* makeTestContext();
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              testSettings,
               ContextQueries.layer,
               Layer.succeed(Clock.Clock, clock),
               Logger.layer([

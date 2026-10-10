@@ -1,3 +1,4 @@
+import { testLocalConfig } from "./configuration-fixtures.js";
 import { serializeFixtureState } from "@aster/core/testing";
 import assert from "node:assert/strict";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -6,10 +7,9 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { Effect, Schema, Layer } from "effect";
 import { DurableContext, ExternalAgents, GoalScreeningStore } from "@aster/core";
-import { LocalConfig } from "../src/config/provider.js";
 import { ConfiguredDurableInfrastructure } from "../src/storage/configured.js";
 import { FileGoalScreening } from "../src/storage/layers.js";
-import { storageSettings } from "../src/storage/settings.js";
+import { StorageSettings } from "../src/storage/settings.js";
 import { makeFileContextStore } from "../src/storage/file-context-store.js";
 
 const setup = (t: { after: (cleanup: () => void) => void }, durable: unknown) => {
@@ -20,7 +20,7 @@ const setup = (t: { after: (cleanup: () => void) => void }, durable: unknown) =>
     configPath,
     JSON.stringify({ config: { durable: { root: "data", ...Object(durable) } } }),
   );
-  const sources = LocalConfig.layer({
+  const sources = testLocalConfig({
     configPath,
     projectRoot: "/unused-project",
     envPath: join(root, ".env"),
@@ -32,7 +32,7 @@ const setup = (t: { after: (cleanup: () => void) => void }, durable: unknown) =>
 test("configured Local storage reopens Contexts and keeps journals under the same root", async (t) => {
   const { root, sources } = setup(t, {});
   const settings = await Effect.runPromise(
-    Effect.scoped(storageSettings.pipe(Effect.provide(sources))),
+    Effect.scoped(StorageSettings.pipe(Effect.provide(sources))),
   );
   assert.equal(settings.root, join(root, "data"));
   const record = {
@@ -137,6 +137,6 @@ test("configured storage reopens native Contexts without rewriting unchanged own
 test("empty storage root is rejected", async (t) => {
   const { sources } = setup(t, { root: "" });
   await assert.rejects(
-    Effect.runPromise(Effect.scoped(storageSettings.pipe(Effect.provide(sources)))),
+    Effect.runPromise(Effect.scoped(StorageSettings.pipe(Effect.provide(sources)))),
   );
 });

@@ -1,5 +1,5 @@
 import { GoalReceipt } from "../receipt.js";
-import { GoalDefinition } from "../../config/schema.js";
+import { GoalDefinition } from "../../goals/contracts.js";
 import { RemainingAgentTurns, TaskPath } from "../../tasks/contracts.js";
 import { GoalInputPayload } from "../contracts.js";
 

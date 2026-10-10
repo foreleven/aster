@@ -1,4 +1,4 @@
-import { Context, Effect, Layer, Schema, Semaphore, Stream } from "effect";
+import { Context, Effect, Layer, Redacted, Schema, Semaphore, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { ContextQueryError, ProcessEnvironment } from "@aster/core";
 import { openCliFailure } from "./errors.js";
@@ -18,13 +18,16 @@ export class OpenCli extends Context.Service<
     Effect.gen(function* () {
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const source = yield* ProcessEnvironment;
-      const privateValues = Object.entries(source.values)
+      const privateValues = Object.entries(Redacted.value(source.values))
         .filter(
           ([key]) =>
             source.privateKeys.includes(key) || /(?:API_KEY|SECRET|PASSWORD|TOKEN)$/.test(key),
         )
         .flatMap(([, value]) => (value ? [value] : []));
-      const env: NodeJS.ProcessEnv = { ...source.values, NO_COLOR: "1" };
+      const env: Record<string, string | undefined> = {
+        ...Redacted.value(source.values),
+        NO_COLOR: "1",
+      };
       for (const key of Object.keys(env)) {
         if (
           source.privateKeys.includes(key) ||

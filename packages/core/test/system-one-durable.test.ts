@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { ActorSystem } from "@aster/actor";
 import { ConfigProvider, Deferred, Effect, Layer, Schema, Stream } from "effect";
@@ -82,7 +83,10 @@ const candidateDefinition = {
 const layerFor = (registry: TestContext, policy: ReactionPolicy["Service"], slugs = ["review"]) =>
   Layer.mergeAll(
     Layer.succeed(DurableContext, registry.backend),
-    Layer.succeed(GoalSettings, { definitions: [] }),
+    Layer.succeed(GoalSettings, {
+      definitions: [],
+      reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
+    }),
     Layer.succeed(ReactionPolicy, policy),
     Layer.effectDiscard(
       Effect.forEach(slugs, (slug) =>
@@ -139,6 +143,7 @@ test("System One coalesces retained queued versions without source Actors or liv
           const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              testSettings,
               layerFor(registry, {
                 plan: (work) =>
                   Effect.sync(() => {
@@ -208,6 +213,7 @@ test("a persisted decision survives lost commit acknowledgement without re-scree
         const changes = yield* registry.subscribe;
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            testSettings,
             layerFor(registry, {
               plan: (work) =>
                 Effect.sync(() => {
@@ -262,6 +268,7 @@ test("lost receiver acknowledgement replays the frozen decision after restart wi
           const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              testSettings,
               layerFor(registry, {
                 plan: (work) =>
                   Effect.sync(() => {
@@ -323,6 +330,7 @@ test("interrupted planning reuses its admitted source and catalogue despite late
           const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              testSettings,
               layerFor(registry, {
                 plan: (work) =>
                   Effect.gen(function* () {
@@ -462,6 +470,7 @@ test("interrupted delivery attempts stay bounded across restarts and explicit re
           const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              testSettings,
               layerFor(registry, {
                 plan: (work) => Effect.succeed([matched(proposed(work))]),
                 deliver: (command) =>
@@ -542,6 +551,7 @@ test("operator retry of failed screening retains frozen evidence and cannot resc
         const admitted: FrozenReaction[] = [];
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            testSettings,
             layerFor(registry, {
               plan: (work) =>
                 Effect.suspend(() => {
@@ -715,8 +725,10 @@ for (const retryMatched of [true, false])
             });
             const system = yield* ActorSystem.make().pipe(
               ActorSystem.provide(
+                testSettings,
                 Layer.succeed(DurableContext, registry.backend),
                 Layer.succeed(GoalSettings, {
+                  reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
                   definitions: ["healthy", "broken", "ignored"].map((slug) => ({
                     slug,
                     description: slug,
@@ -819,6 +831,7 @@ test("live coalescing retains in-flight work and the latest queued revision acro
           const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              testSettings,
               layerFor(registry, {
                 plan: (work) =>
                   Effect.gen(function* () {
@@ -900,6 +913,7 @@ test("slow delivery does not block matching or other targets and delivery concur
         const changes = yield* registry.subscribe;
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            testSettings,
             layerFor(
               registry,
               {
@@ -989,6 +1003,7 @@ test("completed history is bounded and source watermarks prevent replay after pr
           const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              testSettings,
               layerFor(registry, {
                 plan: (work) =>
                   Effect.sync(() => {
@@ -1051,6 +1066,7 @@ test("delivery receipts remain visible during matching retry and survive interru
           const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
             ActorSystem.provide(
+              testSettings,
               layerFor(
                 registry,
                 {
@@ -1177,7 +1193,7 @@ test("an event without eligible targets completes and is not reconsidered on res
           });
           const changes = yield* registry.subscribe;
           const system = yield* ActorSystem.make().pipe(
-            ActorSystem.provide(layerFor(registry, policy, [])),
+            ActorSystem.provide(testSettings, layerFor(registry, policy, [])),
           );
           yield* (yield* system.spawn("system-one", SystemOneActor)).awaitStarted;
           if (!completed(registry.backend.get("/system-one")!))

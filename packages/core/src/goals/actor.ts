@@ -3,7 +3,7 @@ import { goalQueryData } from "./view.js";
 import { Command, type ActorContext, type ActorRef } from "@aster/actor";
 import { Context, Deferred, Effect, Layer, Match, Ref, Result, Schema } from "effect";
 import { randomUUID } from "node:crypto";
-import { GoalSettings } from "../config/settings.js";
+import { GoalSettings } from "./settings.js";
 import { ContextActor, contextPath } from "../context/actor.js";
 import { DurableContext } from "../context/store.js";
 import { CurrentActors } from "../services/actors.js";

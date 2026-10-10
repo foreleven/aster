@@ -6,7 +6,7 @@ import type { GoalSnapshot, StoredGoalInput } from "./snapshot.js";
 import { goalInputs } from "./inputs.js";
 import { goalAdmission } from "./admission.js";
 import { DurableContext } from "../../context/store.js";
-import type { GoalDefinition } from "../../config/schema.js";
+import type { GoalDefinition } from "../../goals/contracts.js";
 import { Context, Effect, Layer, Match, Ref, Result, Schema, Semaphore } from "effect";
 import { ApplicationError } from "../../operations.js";
 import { TaskPath } from "../../tasks/contracts.js";

@@ -8,7 +8,7 @@ import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } f
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type SignalDefinition } from "../src/config/schema.js";
+import { type SignalDefinition } from "../src/signals/contracts.js";
 import { SignalSnapshot, SignalTime } from "../src/index.js";
 import { ApplicationError } from "../src/operations.js";
 import { type SignalChangeInput } from "../src/signals/protocol.js";

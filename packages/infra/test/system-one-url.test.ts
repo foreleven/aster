@@ -1,3 +1,4 @@
+import { testLocalConfig } from "./configuration-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
@@ -5,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigProvider, Effect, Layer, Logger, Redacted } from "effect";
 import { choice, SystemOneClient } from "@aster/core";
-import { LocalConfig, makeSystemOneClient, SystemOneClientLive } from "../src/index.js";
+import { makeSystemOneClient, SystemOneClientLive } from "../src/index.js";
 import { resolveSystemOneUrl } from "../src/system-one/url.js";
 
 const config = { model: "test", apiKey: "test-bearer-key" };
@@ -68,7 +69,7 @@ test("System One Layer expands captured environment/.env URL references with pro
   await writeFile(envPath, "AK=dotenv-token\n");
   const before = { ...process.env };
   for (const environment of [{}, { AK: "captured-process-token" }]) {
-    const source = LocalConfig.layer({ configPath, envPath, projectRoot: dir, environment });
+    const source = testLocalConfig({ configPath, envPath, projectRoot: dir, environment });
     await Effect.runPromise(
       Effect.scoped(
         Effect.gen(function* () {

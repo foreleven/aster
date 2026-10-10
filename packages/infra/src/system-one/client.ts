@@ -1,22 +1,16 @@
+import { readSystemOneSettings } from "./settings.js";
 import { TypeSafeClient, type Questions } from "@typesafe-ai/sdk";
 import {
   DecisionError,
   SystemOneClient,
-  secretConfig,
-  outputLanguage,
+  LanguageSettings,
   outputLanguageInstruction,
   DEFAULT_OUTPUT_LANGUAGE,
 } from "@aster/core";
 import { randomUUID } from "node:crypto";
-import { Clock, Config, ConfigProvider, Effect, Layer, Predicate, Redacted, Schema } from "effect";
-import { resolveSystemOneUrl } from "./url.js";
+import { Clock, Effect, Layer, Predicate, Redacted } from "effect";
 
-const SystemOneConfig = Schema.Struct({
-  url: Schema.String,
-  model: Schema.String,
-  apiKey: Schema.optional(Schema.String),
-});
-type SystemOneConfig = typeof SystemOneConfig.Type;
+import type { SystemOneConfig } from "./settings.js";
 
 /** Only transport codes cross this boundary; nested error objects may contain request data. */
 const transportErrorCodes = (error: unknown, depth = 0): string[] => {
@@ -200,32 +194,25 @@ export const SystemOneClientLive = {
   layer: Layer.effect(
     SystemOneClient,
     Effect.gen(function* () {
-      const config = yield* Config.schema(Schema.optional(SystemOneConfig), [
-        "config",
-        "system-one",
-      ]);
+      const config = yield* readSystemOneSettings;
       if (!config)
         return {
           configured: false,
           systemOne: () =>
             Effect.fail(new DecisionError({ message: "System One is not configured" })),
         };
-      const provider = yield* ConfigProvider.ConfigProvider;
-      const url = yield* resolveSystemOneUrl(config.url, provider);
-      const apiKey =
-        config.apiKey === undefined ? undefined : yield* secretConfig(config.apiKey, provider);
-      const language = yield* outputLanguage;
+      const { outputLanguage: language } = yield* LanguageSettings;
       return yield* Effect.try(() =>
         makeSystemOneClient(
           {
             ...config,
-            url: Redacted.value(url),
-            apiKey: apiKey === undefined ? undefined : Redacted.value(apiKey),
+            url: Redacted.value(config.url),
+            apiKey: config.apiKey === undefined ? undefined : Redacted.value(config.apiKey),
           },
           fetch,
           language,
         ),
       );
     }),
-  ),
+  ).pipe(Layer.provide(LanguageSettings.layer)),
 };

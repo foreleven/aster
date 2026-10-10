@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ConfigProvider, Effect, Layer } from "effect";
-import { GoalSettings } from "../src/config/settings.js";
+import { ContextDirectory } from "../src/config/context-directory.js";
 
 const settings = (contexts?: unknown) =>
-  GoalSettings.pipe(
+  ContextDirectory.pipe(
     Effect.provide(
-      GoalSettings.layer.pipe(
+      ContextDirectory.layer.pipe(
         Layer.provide(
           ConfigProvider.layer(
             ConfigProvider.fromUnknown(
@@ -19,7 +19,7 @@ const settings = (contexts?: unknown) =>
     ),
   );
 
-test("Goal settings retain only explicit Context paths and descriptions across both child layouts", async () => {
+test("Context directory retains only explicit Context paths and descriptions across both child layouts", async () => {
   const result = await Effect.runPromise(
     Effect.scoped(
       settings({
@@ -39,7 +39,7 @@ test("Goal settings retain only explicit Context paths and descriptions across b
       }),
     ),
   );
-  assert.deepEqual(result.contexts, [
+  assert.deepEqual(result, [
     { path: "/apps", description: "Travel sources" },
     { path: "/apps/xiaohongshu", description: "Search travel notes and comments" },
     { path: "/lark", description: "Work account" },
@@ -49,8 +49,8 @@ test("Goal settings retain only explicit Context paths and descriptions across b
   assert.doesNotMatch(JSON.stringify(result), /private-|hidden|password|token/);
 });
 
-test("missing Context configuration produces an empty Goal directory", async () => {
-  assert.deepEqual((await Effect.runPromise(Effect.scoped(settings()))).contexts, []);
+test("missing Context configuration produces an empty directory", async () => {
+  assert.deepEqual(await Effect.runPromise(Effect.scoped(settings())), []);
 });
 
 test("invalid Context metadata fails settings acquisition instead of reaching the prompt", async () => {

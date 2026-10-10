@@ -1,5 +1,5 @@
 import { ProcessEnvironment } from "@aster/core";
-import { Context, Effect, Layer, Schema, Stream } from "effect";
+import { Context, Effect, Layer, Redacted, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/process";
 import { LarkCliError } from "./errors.js";
 import { LarkSettings } from "./settings.js";
@@ -17,8 +17,8 @@ export class LarkCli extends Context.Service<
       const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
       const environment = yield* ProcessEnvironment;
       const settings = yield* LarkSettings;
-      const env: NodeJS.ProcessEnv = {
-        ...environment.values,
+      const env: Record<string, string | undefined> = {
+        ...Redacted.value(environment.values),
         LARKSUITE_CLI_NO_UPDATE_NOTIFIER: "1",
         LARKSUITE_CLI_NO_SKILLS_NOTIFIER: "1",
       };

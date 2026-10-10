@@ -21,24 +21,30 @@ External Layers supply storage, Models, SystemOneClient, memory backend and exte
 
 Integration Layers acquire dependencies and return runtime-managed installation capabilities. Multiple modules must coexist without overwriting a shared service tag. The runtime uses one graph/memoization scope and passes acquired services into Actors without acquiring duplicate clients or copying Scope. Integration metadata is not a second configuration-driven dependency injection system.
 
-`AsterRuntime.layer` composes `contextServices`, `AgentRunner.layer`, `DurableHarness.layer` and integration registration. `AgentConversations` owns scoped Pi writers for Goal and Task messages. `DurableHarness` owns retained invocation callbacks and serializes execution per conversation while short message admission remains responsive. `GoalActor` uses its ActorContext to ask the Signal root to pause owned Signals; tools use the current ActorSystem to manage Signal definitions. No bound command port or Goal-specific forwarding Service is required. Task delivery routes typed messages to Goal or Task Actors. Only `acquireRuntime` creates root Actors and activates integrations. It captures ConfigProvider and shared capabilities for Actors without copying an ambient Scope; model execution begins only when work invokes the runner.
+`AsterRuntime.layer` composes `contextServices`, `AgentRunner.layer`, `DurableHarness.layer` and integration registration. `AgentConversations` owns scoped Pi writers for Goal and Task messages. `DurableHarness` owns retained invocation callbacks and serializes execution per conversation while short message admission remains responsive. `GoalActor` uses its ActorContext to ask the Signal root to pause owned Signals; tools use the current ActorSystem to manage Signal definitions. No bound command port or Goal-specific forwarding Service is required. Task delivery routes typed messages to Goal or Task Actors. Only `acquireRuntime` creates root Actors and activates integrations. It captures resolved Settings and shared capabilities for Actors without copying an ambient Scope; model execution begins only when work invokes the runner.
 
 The local composition is intentionally small:
 
 ```ts
+const Sources = StorageSettings.layer.pipe(
+  Layer.provideMerge(
+    LocalConfig.layer({ configPath, envPath, projectRoot, homeDirectory, environment }).pipe(
+      Layer.provideMerge(NodeServices.layer),
+    ),
+  ),
+);
 const RuntimeLive = AsterRuntime.layer({
   integrations: [LarkIntegration.layer, MailIntegration.layer, AppsIntegration.layer],
 }).pipe(
   Layer.provide(
     Layer.mergeAll(
       ConfiguredDurableInfrastructure.layer,
-      Models.configured,
+      ConfiguredModels.layer,
       SystemOneClientLive.layer,
       AgentMemoryBackend.layer,
-      NodeServices.layer,
     ),
   ),
-  Layer.provide(LocalConfig.layer({ configPath, envPath, projectRoot })),
+  Layer.provide(Sources),
 );
 ```
 
@@ -46,7 +52,7 @@ const RuntimeLive = AsterRuntime.layer({
 | -------------------------------------------------- | ------------------------------------- | ------------------------------------------------------------ |
 | ConfigProvider, ConfigLocation, ProcessEnvironment | LocalConfig.layer                     | Module Config declarations and adapters                      |
 | DurableContext                                     | ConfiguredDurableInfrastructure.layer | Scoped domain owner handles and text readers                 |
-| Models                                             | Models.configured                     | Internal Agent, Goal reasoner, Lark summarizer               |
+| Models                                             | ConfiguredModels.layer                | Internal Agent, Goal reasoner, Lark summarizer               |
 | SystemOneClient                                    | SystemOneClientLive.layer             | Signal/Goal policies and Lark summary gate                   |
 | MemoryBackend                                      | AgentMemoryBackend.layer              | Core starts the Memory Actor with backend recall and capture |
 | ExternalAgents                                     | ConfiguredDurableInfrastructure.layer | Task confirmation and execution                              |
@@ -65,7 +71,7 @@ Goal reasoning, compaction and tool/transcript callbacks return Effects. Evaluat
 
 ## Configuration
 
-Use the installed Effect version, currently `4.0.0`, and the [v4 configuration guide](https://effect.website/docs/v4/configuration). Config describes decoding, ConfigProvider supplies values, and module Settings Services retain the resolved result. Do not retain a globally parsed application configuration as a service locator.
+Follow [configuration design](configuration-design.md) for source loading, module definitions and consumption. Use the installed Effect version, currently `4.0.0`, and the [v4 configuration guide](https://effect.website/docs/v4/configuration). Config describes decoding, ConfigProvider supplies values, and module Settings Services retain the resolved result. Do not retain a globally parsed application configuration as a service locator.
 
 Precedence: explicit configuration overrides > `ASTER_*` process values > `.env` application values > YAML > module defaults. Provider fallback handles absent paths only; validation errors must not fall back. Structural overlays merge YAML/override record keys, while environment trie keys never rename or truncate those records. Environment values override declared dynamic entries; new Signal/Goal keys must be declared in YAML or structured overrides. Numeric model indices can override array entries. Missing optional `.env` is allowed, but read errors and malformed YAML are not hidden. `preserveEmptyStrings: true` lets field schemas distinguish invalid explicit emptiness from absence.
 

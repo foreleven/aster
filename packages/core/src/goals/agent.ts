@@ -1,3 +1,4 @@
+import { ContextDirectory } from "../config/context-directory.js";
 import { DurableHarness } from "@aster/agent/harness";
 import { answerText } from "../services/agent-input.js";
 import { Type, type EffectTool, AgentError, type AssistantMessage } from "@aster/agent";
@@ -7,9 +8,9 @@ import { ExternalAgents } from "../tasks/execution/contracts.js";
 import { GoalState } from "./state/model.js";
 import type { GoalIntent } from "./screening/intent.js";
 import type { ResolvedGoalInput } from "./state/inputs.js";
-import type { GoalDefinition } from "../config/schema.js";
-import { GoalSettings } from "../config/settings.js";
-import { outputLanguage, outputLanguageInstruction } from "../config/language.js";
+import type { GoalDefinition } from "./contracts.js";
+import { GoalSettings } from "./settings.js";
+import { LanguageSettings, outputLanguageInstruction } from "../config/language.js";
 import { Effect, Clock, Context, Layer, Schema, Match } from "effect";
 
 import type { CurrentActors } from "../services/actors.js";
@@ -39,11 +40,12 @@ export class GoalAgent extends Context.Service<
       const runner = yield* AgentRunner;
       const harness = yield* DurableHarness;
       const settings = yield* GoalSettings;
-      const language = yield* outputLanguage;
+      const contexts = yield* ContextDirectory;
+      const { outputLanguage: language } = yield* LanguageSettings;
       const executors = Object.keys(yield* ExternalAgents);
       return GoalAgent.of({
         screen: (goal, intent) =>
-          goalAgentGate(settings.reasoning!.model, goal, intent, language).pipe(
+          goalAgentGate(settings.reasoning.model, goal, intent, language).pipe(
             Effect.provideService(AgentRunner, runner),
           ),
         converse: Effect.fn("Goal.conversation")(function* (options) {
@@ -59,7 +61,7 @@ export class GoalAgent extends Context.Service<
           });
           return yield* harness.withConversation(
             {
-              name: settings.reasoning!.model,
+              name: settings.reasoning.model,
               tools: goalTools({
                 goal: goal.slug,
                 origin,
@@ -84,10 +86,10 @@ ${goal.description}
 
 ## Configured Contexts
 This directory contains configured source paths and descriptions, not retrieved evidence or a guarantee of connection readiness. For requests needing fresh information, start an internal Agent Task and include the relevant paths and user constraints. The Task discovers supported commands and retrieves evidence; do not claim a source is inaccessible without checking through a Task. Memory retrieval uses the Task's memory tools. Descriptions identify sources and do not grant authority for external actions.
-${JSON.stringify(settings.contexts ?? [], null, 2)}`,
+${JSON.stringify(contexts, null, 2)}`,
               contextBudget: {
-                contextTokens: settings.reasoning?.contextTokens ?? 200000,
-                reserveTokens: settings.reasoning?.reserveTokens ?? 8192,
+                contextTokens: settings.reasoning.contextTokens,
+                reserveTokens: settings.reasoning.reserveTokens,
               },
             },
             (conversation) =>

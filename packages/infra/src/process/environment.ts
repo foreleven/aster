@@ -1,3 +1,4 @@
+import { Redacted } from "effect";
 import type { ProcessEnvironment } from "@aster/core";
 
 /** Filter the host's captured sources without rereading files or live process state. */
@@ -9,7 +10,7 @@ export const agentEnvironment = (source: ProcessEnvironment["Service"]): NodeJS.
     "AGENTMEMORY_SECRET",
   ]);
   return Object.fromEntries(
-    Object.entries(source.values).filter(
+    Object.entries(Redacted.value(source.values)).filter(
       ([key]) => !key.startsWith("ASTER_") && !privateKeys.has(key),
     ),
   );

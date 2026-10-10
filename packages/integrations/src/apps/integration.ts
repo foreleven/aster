@@ -5,7 +5,7 @@ import {
   RuntimeIntegrations,
   defineIntegration,
 } from "@aster/core";
-import { AppsSettings } from "./config.js";
+import { AppsSettings } from "./settings.js";
 import { OpenCli } from "./client.js";
 import { AppsRootActor } from "./actors.js";
 

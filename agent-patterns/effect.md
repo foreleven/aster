@@ -85,6 +85,6 @@ In Aster, `AsterRuntime` owns domain assembly and integration startup; the host 
 
 ## Configuration, time, and verification
 
-Read configuration through `Config` and injected providers; follow `packages/core/src/config/settings.ts` and the upstream Config tests. Keep credentials redacted and provider capture in infrastructure. Use `Clock`, `DateTime`, and `TestClock` for deadlines and testable time, and `Deferred` for deterministic coordination.
+Read configuration through `Config` and injected providers; follow [configuration design](../docs/configuration-design.md), module-owned `settings.ts` files and the upstream Config tests. Keep credentials redacted and provider capture in infrastructure. Use `Clock`, `DateTime`, and `TestClock` for deadlines and testable time, and `Deferred` for deterministic coordination.
 
 For this repository, use `node:test` with Effects and injected Layers. Do not introduce upstream's Vitest runner as part of a routine change. Test outcomes rather than helper implementation: invalid responses do not write state, valid responses persist before acknowledgement, defects reach supervision, cancellation releases waits, and recovery does not repeat uncertain external work.

@@ -1,3 +1,4 @@
+import { SignalDefinitions } from "./settings.js";
 import { CurrentContextPath } from "../context/location.js";
 import { DurableContext } from "../context/store.js";
 import { CommandProcessor, type ActorContext, type ActorRef } from "@aster/actor";
@@ -8,7 +9,6 @@ import { SignalActor } from "./actor.js";
 import {
   SignalChangeInput,
   type SignalCommand,
-  SignalDefinitions,
   SignalReactionInput,
   type SignalRootCommand,
   SignalRootCommands,

@@ -1,3 +1,4 @@
+import { Redacted } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AgentRunner } from "@aster/agent/agent";
@@ -23,7 +24,7 @@ test("absent Mail/IM acquire no branch services and execute no process or model"
       Effect.gen(function* () {
         const services = yield* Layer.build(LarkIntegration.services).pipe(
           Effect.provideService(ConfigProvider.ConfigProvider, ConfigProvider.fromUnknown({})),
-          Effect.provideService(ProcessEnvironment, { values: {}, privateKeys: [] }),
+          Effect.provideService(ProcessEnvironment, { values: Redacted.make({}), privateKeys: [] }),
           Effect.provideService(
             ChildProcessSpawner.ChildProcessSpawner,
             ChildProcessSpawner.make(() => Effect.die("Unexpected process acquisition")),

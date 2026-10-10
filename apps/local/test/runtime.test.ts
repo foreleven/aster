@@ -1,8 +1,8 @@
+import { ConfigLocation } from "@aster/infra";
 import { Models } from "@aster/agent";
 import { AgentConversations } from "@aster/agent/harness";
 import {
   AsterRuntime,
-  ConfigLocation,
   ContextActor,
   ContextCaptures,
   contextPath,
@@ -83,7 +83,12 @@ const sourceLayer = (name: string, events: string[], fail = false) =>
 
 const infrastructure = (events: string[], overrides: Partial<MemoryBackend["Service"]> = {}) =>
   Layer.mergeAll(
-    Layer.succeed(ConfigLocation, { baseDir: "/tmp", projectRoot: "/tmp", envPath: "/tmp/.env" }),
+    Layer.succeed(ConfigLocation, {
+      baseDir: "/tmp",
+      projectRoot: "/tmp",
+      envPath: "/tmp/.env",
+      homeDirectory: "/tmp",
+    }),
     Layer.effect(
       DurableContext,
       makeDurableContext({ load: Effect.succeed([]), save: () => Effect.void }),
@@ -95,7 +100,7 @@ const infrastructure = (events: string[], overrides: Partial<MemoryBackend["Serv
         provider: "openai",
         model: "test",
         url: "http://unused.invalid",
-        apiKey: "test",
+        apiKey: Redacted.make("test"),
       },
     ]),
     Layer.succeed(SystemOneClient, {
@@ -307,6 +312,8 @@ test("runtime activates generic mail and exposes its tree through ListContexts b
           Layer.provide(
             Layer.mergeAll(
               Layer.succeed(MailSettings, {
+                description: "Connected mailboxes",
+                pollIntervalMs: 30_000,
                 mailboxes: [
                   {
                     id: "work",

@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { Schema } from "effect";
@@ -156,14 +157,17 @@ test("reopened Goal sessions keep their policy and history while tools read the 
             }),
           ).pipe(
             Effect.provide([
-              GoalAgent.layer,
+              GoalAgent.layer.pipe(Layer.provide(testSettings)),
               GoalState.layer("/goals/test", { slug: "test", description: `PRIVATE_goal_${turn}` }),
             ]),
             Effect.provideService(AgentConversations, conversations),
             Effect.provideService(CurrentActors, system),
 
             Effect.provideService(DurableContext, registry.backend),
-            Effect.provideService(GoalSettings, { definitions: [], reasoning: { model: "test" } }),
+            Effect.provideService(GoalSettings, {
+              definitions: [],
+              reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
+            }),
             Effect.provideService(MemoryRecall, {
               search: () => Effect.succeed([]),
               expand: () => Effect.succeed([]),

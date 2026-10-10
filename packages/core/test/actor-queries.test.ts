@@ -1,3 +1,4 @@
+import { testSettings } from "./settings-fixtures.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { Schema } from "effect";
 import { ContextQueryError } from "../src/context/contracts.js";
@@ -59,6 +60,7 @@ test("Goal list/read query live children and mailbox state rather than the durab
         const queries = yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer));
         const system = yield* ActorSystem.make().pipe(
           ActorSystem.provide(
+            testSettings,
             Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
             Layer.succeed(ContextQueries, queries),
             Layer.succeed(ExternalAgents, {}),

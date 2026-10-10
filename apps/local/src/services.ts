@@ -1,21 +1,20 @@
-import { NodeServices } from "@effect/platform-node";
 import { AsterRuntime } from "@aster/core";
 import {
   AgentMemoryBackend,
   ConfiguredDurableInfrastructure,
+  ConfiguredModels,
   FileGoalScreening,
   SystemOneClientLive,
-  storageSettings,
+  StorageSettings,
 } from "@aster/infra";
 import { LarkIntegration, MailIntegration, AppsIntegration } from "@aster/integrations";
-import { Models } from "@aster/agent";
 import { AgentConversations } from "@aster/agent/harness";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
 
 /** Conversation storage shares the host's resolved and exclusively owned root. */
 export const localConversationsLayer = Layer.unwrap(
-  storageSettings.pipe(
+  StorageSettings.pipe(
     Effect.map(({ root }) => AgentConversations.layer(join(root, "conversations"))),
   ),
 );
@@ -28,11 +27,10 @@ export const localRuntimeLayer = AsterRuntime.layer({
     Layer.mergeAll(
       ConfiguredDurableInfrastructure.layer,
       FileGoalScreening.layer,
-      Models.configured,
+      ConfiguredModels.layer,
       localConversationsLayer,
       SystemOneClientLive.layer,
       AgentMemoryBackend.layer,
-      NodeServices.layer,
     ),
   ),
 );
