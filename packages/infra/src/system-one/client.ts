@@ -9,6 +9,7 @@ import {
 } from "@aster/core";
 import { randomUUID } from "node:crypto";
 import { Clock, Config, ConfigProvider, Effect, Layer, Predicate, Redacted, Schema } from "effect";
+import { resolveSystemOneUrl } from "./url.js";
 
 const SystemOneConfig = Schema.Struct({
   url: Schema.String,
@@ -19,6 +20,7 @@ type SystemOneConfig = typeof SystemOneConfig.Type;
 
 /** Only transport codes cross this boundary; nested error objects may contain request data. */
 const transportErrorCodes = (error: unknown, depth = 0): string[] => {
+  if (Redacted.isRedacted(error)) return transportErrorCodes(Redacted.value(error), depth);
   if (depth > 4 || !Predicate.isObject(error)) return [];
   const code =
     Predicate.hasProperty(error, "code") && typeof error.code === "string" ? error.code : undefined;
@@ -45,15 +47,9 @@ export const makeSystemOneClient = (
   } catch {
     throw new Error("config.system-one.url must be an HTTP or HTTPS URL");
   }
-  if (
-    !["http:", "https:"].includes(url.protocol) ||
-    url.search ||
-    url.hash ||
-    url.username ||
-    url.password
-  ) {
+  if (!["http:", "https:"].includes(url.protocol) || url.hash || url.username || url.password) {
     throw new Error(
-      "config.system-one.url must be an HTTP or HTTPS URL without credentials, query, or fragment",
+      "config.system-one.url must be an HTTP or HTTPS URL without embedded credentials or fragment",
     );
   }
   const model = config.model.trim();
@@ -61,10 +57,24 @@ export const makeSystemOneClient = (
   const apiKey = config.apiKey;
   if (!apiKey.trim()) throw new Error("config.system-one.apiKey must be nonempty");
   // The SDK appends /v1/systemone. Accept a service root, /v1, or that full endpoint.
-  const baseURL = url
-    .toString()
+  const baseURL = `${url.origin}${url.pathname
     .replace(/\/+$/, "")
-    .replace(/\/v1(?:\/systemone)?$/, "");
+    .replace(/\/v1(?:\/systemone)?$/, "")}`;
+  const endpoint = `${baseURL}/v1/systemone${url.search}`;
+  const privateValues = [
+    ...new Set(
+      [apiKey.trim(), ...url.searchParams.values()]
+        .filter((value) => value.length > 0)
+        .flatMap((value) => [
+          value,
+          encodeURIComponent(value),
+          new URLSearchParams({ value }).toString().slice(6),
+        ]),
+    ),
+    ...(url.search ? [url.toString(), endpoint] : []),
+  ].sort((left, right) => right.length - left.length);
+  const redact = (message: string) =>
+    privateValues.reduce((text, value) => text.replaceAll(value, "<redacted>"), message);
   return {
     configured: true,
     systemOne: Effect.fn("SystemOneClient.systemOne")(function* (request) {
@@ -88,8 +98,10 @@ export const makeSystemOneClient = (
         );
       const sdkLog = (message: string, ...errors: unknown[]) =>
         log("system-one.request.sdk", {
-          message,
-          errorCodes: [...new Set(errors.flatMap((error) => transportErrorCodes(error)))],
+          message: redact(message),
+          errorCodes: [...new Set(errors.flatMap((error) => transportErrorCodes(error)))].map(
+            redact,
+          ),
         });
       // A client per invocation keeps SDK retry logs attached to one logical request.
       const client = new TypeSafeClient({
@@ -102,7 +114,10 @@ export const makeSystemOneClient = (
           attempt++;
           const attemptStarted = elapsed();
           log("system-one.request.attempt.started");
-          const response = await fetcher(input, init);
+          // SDK concatenates its route onto baseURL; queries belong on the final request URL.
+          const destination = new URL(input);
+          destination.search = url.search;
+          const response = await fetcher(destination.toString(), init);
           log("system-one.request.headers", {
             status: response.status,
             headersMs: elapsed() - attemptStarted,
@@ -137,11 +152,15 @@ export const makeSystemOneClient = (
             },
             { signal },
           ),
-        catch: (cause) =>
-          new DecisionError({
-            cause,
-            message: cause instanceof Error ? cause.message : String(cause),
-          }),
+        catch: (cause) => {
+          const codes = transportErrorCodes(cause);
+          const message = cause instanceof Error ? cause.message : String(cause);
+          return new DecisionError({
+            cause: Redacted.make(cause),
+            // Keep diagnostic codes available to typed business retry classification.
+            message: redact(codes.length ? `${message} (${codes.join(", ")})` : message),
+          });
+        },
       }).pipe(
         Effect.tap(() => Effect.sync(() => log("system-one.request.completed"))),
         Effect.onInterrupt(() => Effect.sync(() => log("system-one.request.interrupted"))),
@@ -153,7 +172,7 @@ export const makeSystemOneClient = (
               attempt,
               elapsedMs: elapsed(),
               error: error.message,
-              errorCodes: [...new Set(transportErrorCodes(error.cause))],
+              errorCodes: [...new Set(transportErrorCodes(error.cause))].map(redact),
             }),
           ),
         ),
@@ -188,10 +207,15 @@ export const SystemOneClientLive = {
             Effect.fail(new DecisionError({ message: "System One is not configured" })),
         };
       const provider = yield* ConfigProvider.ConfigProvider;
+      const url = yield* resolveSystemOneUrl(config.url, provider);
       const apiKey = yield* secretConfig(config.apiKey, provider);
       const language = yield* outputLanguage;
       return yield* Effect.try(() =>
-        makeSystemOneClient({ ...config, apiKey: Redacted.value(apiKey) }, fetch, language),
+        makeSystemOneClient(
+          { ...config, url: Redacted.value(url), apiKey: Redacted.value(apiKey) },
+          fetch,
+          language,
+        ),
       );
     }),
   ),

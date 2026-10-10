@@ -114,6 +114,7 @@ test("System One connection failures expose nested network codes and preserve SD
     ),
   );
   assert.equal(result._tag, "Failure");
+  if (result._tag === "Failure") assert.match(result.failure.message, /UND_ERR_CONNECT_TIMEOUT/);
   const entries = logs.map((line) => JSON.parse(line));
   assert.equal(
     entries.filter((entry) => entry.event === "system-one.request.attempt.started").length,

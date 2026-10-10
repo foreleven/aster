@@ -7,6 +7,7 @@ config:
   agent:
     model: goal-reasoning
   system-one:
+    # Embedded references are supported, e.g. https://example.test/v1/systemone?ak=${SYSTEM_ONE_ACCESS_KEY}
     url: https://api.typesafe.ai/v1/systemone
     model: jev-latest
     apiKey: ${TYPESAFE_API_KEY}
