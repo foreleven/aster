@@ -161,3 +161,59 @@ test("embedded URL credentials and fragments remain invalid", () => {
       /without embedded credentials or fragment/,
     );
 });
+
+for (const query of ["", "?ak=query-token"]) {
+  test(`omitting apiKey sends no Authorization header and preserves URL authentication: ${query || "anonymous"}`, async () => {
+    const client = makeSystemOneClient(
+      { model: "test", url: `https://example.test/v1/systemone${query}` },
+      async (input, init) => {
+        assert.equal(new Headers(init?.headers).has("Authorization"), false);
+        assert.equal(new Headers(init?.headers).get("Content-Type"), "application/json");
+        assert.equal(new URL(String(input)).search, query);
+        assert.equal(JSON.parse(String(init?.body)).model, "test");
+        return response();
+      },
+    );
+    assert.equal((await Effect.runPromise(client.systemOne(request))).answers.intent.choice, "yes");
+  });
+}
+
+test("System One Layer accepts a URL credential without an apiKey setting", async () => {
+  const sources = ConfigProvider.layer(
+    ConfigProvider.fromUnknown({
+      config: {
+        "system-one": { model: "test", url: "https://example.test/v1/systemone?ak=${QUERY_KEY}" },
+      },
+      secrets: { QUERY_KEY: "query-token" },
+    }),
+  );
+  const client = await Effect.runPromise(
+    Effect.scoped(
+      SystemOneClient.pipe(Effect.provide(SystemOneClientLive.layer.pipe(Layer.provide(sources)))),
+    ),
+  );
+  assert.equal(client.configured, true);
+});
+
+test("an explicitly configured apiKey reference remains required even when URL authentication exists", async () => {
+  const sources = ConfigProvider.layer(
+    ConfigProvider.fromUnknown({
+      config: {
+        "system-one": {
+          model: "test",
+          url: "https://example.test/v1/systemone?ak=query-token",
+          apiKey: "${MISSING_BEARER_KEY}",
+        },
+      },
+    }),
+  );
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      SystemOneClient.pipe(
+        Effect.provide(SystemOneClientLive.layer.pipe(Layer.provide(sources))),
+        Effect.result,
+      ),
+    ),
+  );
+  assert.equal(result._tag, "Failure");
+});

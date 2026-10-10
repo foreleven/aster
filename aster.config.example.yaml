@@ -10,6 +10,7 @@ config:
     # Embedded references are supported, e.g. https://example.test/v1/systemone?ak=${SYSTEM_ONE_ACCESS_KEY}
     url: https://api.typesafe.ai/v1/systemone
     model: jev-latest
+    # Optional for endpoints authenticated through URL query parameters.
     apiKey: ${TYPESAFE_API_KEY}
   models:
     - name: goal-reasoning

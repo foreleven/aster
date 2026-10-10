@@ -14,7 +14,7 @@ import { resolveSystemOneUrl } from "./url.js";
 const SystemOneConfig = Schema.Struct({
   url: Schema.String,
   model: Schema.String,
-  apiKey: Schema.String,
+  apiKey: Schema.optional(Schema.String),
 });
 type SystemOneConfig = typeof SystemOneConfig.Type;
 
@@ -54,8 +54,8 @@ export const makeSystemOneClient = (
   }
   const model = config.model.trim();
   if (!model) throw new Error("config.system-one.model must be nonempty");
-  const apiKey = config.apiKey;
-  if (!apiKey.trim()) throw new Error("config.system-one.apiKey must be nonempty");
+  const apiKey = config.apiKey?.trim();
+  if (apiKey !== undefined && !apiKey) throw new Error("config.system-one.apiKey must be nonempty");
   // The SDK appends /v1/systemone. Accept a service root, /v1, or that full endpoint.
   const baseURL = `${url.origin}${url.pathname
     .replace(/\/+$/, "")
@@ -63,7 +63,7 @@ export const makeSystemOneClient = (
   const endpoint = `${baseURL}/v1/systemone${url.search}`;
   const privateValues = [
     ...new Set(
-      [apiKey.trim(), ...url.searchParams.values()]
+      [apiKey ?? "", ...url.searchParams.values()]
         .filter((value) => value.length > 0)
         .flatMap((value) => [
           value,
@@ -107,7 +107,9 @@ export const makeSystemOneClient = (
       const client = new TypeSafeClient({
         baseURL,
         defaultModel: model,
-        apiKey: apiKey.trim(),
+        // SDK requires a key and falls back to process.env only for undefined.
+        // An explicit empty key disables that fallback; its synthetic header is removed below.
+        apiKey: apiKey ?? "",
         logLevel: "info",
         logger: { debug: () => {}, info: sdkLog, warn: sdkLog, error: sdkLog },
         fetch: async (input, init) => {
@@ -117,7 +119,9 @@ export const makeSystemOneClient = (
           // SDK concatenates its route onto baseURL; queries belong on the final request URL.
           const destination = new URL(input);
           destination.search = url.search;
-          const response = await fetcher(destination.toString(), init);
+          const headers = new Headers(init?.headers);
+          if (apiKey === undefined) headers.delete("Authorization");
+          const response = await fetcher(destination.toString(), { ...init, headers });
           log("system-one.request.headers", {
             status: response.status,
             headersMs: elapsed() - attemptStarted,
@@ -208,11 +212,16 @@ export const SystemOneClientLive = {
         };
       const provider = yield* ConfigProvider.ConfigProvider;
       const url = yield* resolveSystemOneUrl(config.url, provider);
-      const apiKey = yield* secretConfig(config.apiKey, provider);
+      const apiKey =
+        config.apiKey === undefined ? undefined : yield* secretConfig(config.apiKey, provider);
       const language = yield* outputLanguage;
       return yield* Effect.try(() =>
         makeSystemOneClient(
-          { ...config, url: Redacted.value(url), apiKey: Redacted.value(apiKey) },
+          {
+            ...config,
+            url: Redacted.value(url),
+            apiKey: apiKey === undefined ? undefined : Redacted.value(apiKey),
+          },
           fetch,
           language,
         ),
