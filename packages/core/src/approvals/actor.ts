@@ -1,6 +1,6 @@
 import { GetApprovals } from "./queries.js";
 import { Command as ActorCommand, type ActorContext } from "@aster/actor";
-import { Effect, Match, Schema } from "effect";
+import { Context, Effect, Layer, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ApplicationError } from "../operations.js";
 import { ApprovalEntry, ApprovalResponse } from "./contracts.js";
@@ -58,7 +58,8 @@ export const ApprovalQueueActor = ContextActor.define("approvals/Queue", {
   internal: Deliver,
 })(
   Effect.gen(function* () {
-    const state = yield* ApprovalState;
+    const services = yield* Layer.buildWithScope(ApprovalState.layer, yield* Effect.scope);
+    const state = Context.get(services, ApprovalState);
     const deliver = Effect.fn("Approvals.deliver")(function* (
       context: Pick<ActorContext<unknown>, "select">,
     ) {
@@ -116,6 +117,6 @@ export const ApprovalQueueActor = ContextActor.define("approvals/Queue", {
         ),
     };
   }),
-).pipe(ContextActor.provide(ApprovalState.layer));
+);
 
 export { GetApprovals } from "./queries.js";

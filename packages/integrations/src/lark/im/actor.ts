@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "@aster/core";
 import { randomUUID } from "node:crypto";
 import { CommandProcessor, type ActorContext, type ActorRef } from "@aster/actor";
 import {
@@ -58,7 +59,7 @@ export const LarkImActor = ContextActor.define("lark/ImActor", {
       return yield* new RuntimeConfigurationError({ message: "Lark IM is not configured" });
     const session = yield* registry
       .open({
-        path: "/lark/im",
+        path: yield* CurrentContextPath,
         state: ImState,
         message: Schema.Never,
         serialize: JSON.stringify,

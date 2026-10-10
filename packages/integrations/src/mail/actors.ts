@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "@aster/core";
 import { Command as ActorCommand, CommandProcessor, type ActorRef } from "@aster/actor";
 import {
   ContextActor,
@@ -24,11 +25,11 @@ export class SetEmail extends ActorCommand.Class<SetEmail>()("SetEmail", {
 
 const MailMessageActor = ContextActor.define("mail/MessageActor", {
   commands: [SetEmail],
-})((owner) =>
+})(
   Effect.gen(function* () {
     const session = yield* (yield* DurableContext)
       .open({
-        path: contextPath(owner),
+        path: yield* CurrentContextPath,
         state: MailMessage,
         message: Schema.Never,
         serialize: (state) => JSON.stringify(state),
@@ -91,7 +92,7 @@ const MailboxCommand = Schema.TaggedUnion({
 const MailboxActor = ContextActor.define("mail/MailboxActor", {
   commands: MailboxQueries,
   internal: MailboxCommand,
-})((owner) =>
+})(
   Effect.gen(function* () {
     const registry = yield* DurableContext;
     const settings = yield* MailSettings;
@@ -100,7 +101,7 @@ const MailboxActor = ContextActor.define("mail/MailboxActor", {
     const mailboxPermit = yield* Semaphore.make(1);
     const processor = yield* CommandProcessor.make({ concurrency: 1 });
     const generation = randomUUID();
-    const path = contextPath(owner);
+    const path = yield* CurrentContextPath;
     const mailbox = settings.mailboxes.find((entry) => mailboxPath(entry.id) === path)!;
     const state = yield* makeMailboxState(path, mailbox);
     let busy = false;
@@ -310,7 +311,7 @@ export const MailRootActor = ContextActor.define("mail/RootActor", {
     const settings = yield* MailSettings;
     const session = yield* (yield* DurableContext)
       .open({
-        path: "/mail",
+        path: yield* CurrentContextPath,
         state: MailRootState,
         message: Schema.Never,
         serialize: (state) => JSON.stringify(state),

@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "../context/location.js";
 import { DurableContext } from "../context/store.js";
 import { CommandProcessor, type ActorContext, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
@@ -39,7 +40,7 @@ export const SignalRootActor = ContextActor.define("signals/RootActor", {
     yield* (yield* DurableContext)
       .open({
         serialize: (state) => JSON.stringify(state),
-        path: "/signals",
+        path: yield* CurrentContextPath,
         state: Schema.Struct({}),
         message: Schema.Never,
         initial: { state: {}, description: "Context and scheduled Tasks" },

@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "../context/location.js";
 import { GetApprovals } from "./queries.js";
 import { readActor } from "../services/domain-reads.js";
 import { isDeepStrictEqual } from "node:util";
@@ -96,7 +97,7 @@ const validateApprovalResponse = (
 const makeApprovalState = Effect.gen(function* () {
   const session = yield* (yield* DurableContext)
     .open({
-      path: "/approvals",
+      path: yield* CurrentContextPath,
       state: ApprovalSnapshot,
       message: ApprovalEvent,
       serialize: serializeApprovalState,

@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "../context/location.js";
 import { DurableContext } from "../context/store.js";
 import { Command as ActorCommand, CommandProcessor, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
@@ -23,7 +24,7 @@ export const GoalsRootActor = ContextActor.define("goals/RootActor", {
     yield* (yield* DurableContext)
       .open({
         serialize: (state) => JSON.stringify(state),
-        path: "/goals",
+        path: yield* CurrentContextPath,
         state: Schema.Struct({}),
         message: Schema.Never,
         initial: { state: {}, description: "Goals" },

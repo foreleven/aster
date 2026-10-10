@@ -1,5 +1,6 @@
+import { CurrentContextPath } from "@aster/core";
 import { Command, ReplyTo, type ActorContext, type MailboxOf } from "@aster/actor";
-import { ContextActor, contextPath, DurableContext } from "@aster/core";
+import { ContextActor, DurableContext } from "@aster/core";
 import { Clock, Effect, Match, Schema } from "effect";
 import { randomUUID } from "node:crypto";
 import { ChatInfo, ChatMessage } from "../model.js";
@@ -43,9 +44,9 @@ type Owner = ActorContext<ChatCommand>;
 export const LarkChatActor = ContextActor.define("lark/ChatActor", {
   commands: ChatCommands,
   internal: ChatInternal,
-})((owner) =>
+})(
   Effect.gen(function* () {
-    const path = contextPath(owner);
+    const path = yield* CurrentContextPath;
     const id = path.slice(path.lastIndexOf("/") + 1);
     const session = yield* (yield* DurableContext)
       .open({

@@ -8,6 +8,7 @@ DurableContext is the single authority for Context ownership, canonical state, m
 
 ```ts
 const durable = yield * DurableContext;
+const path = yield * CurrentContextPath;
 const context =
   yield *
   durable.open({
@@ -21,6 +22,8 @@ const context =
     persistence: { layout: "single" },
   });
 ```
+
+`CurrentContextPath` is an Effect service carrying the current owner's path. `ContextActor` binds it from the Actor address or explicit `contextPath` spawn metadata for Behavior acquisition, lifecycle callbacks and command handling. Child Actors receive their own path; an ambient parent path does not override it. Nested Layers acquired inside the Behavior can consume the same service. Standalone owners supply it explicitly with `Effect.provideService(CurrentContextPath, path)`, or pass an explicit path to `open`.
 
 `open` validates the path and partition, acquires the sole owner lease, restores schema-validated committed data and bootstraps initial state when missing. An owner admitted by a later command can omit `initial`; `current` is then absent until `state.set` creates its first state. No placeholder business state is persisted.
 
@@ -72,7 +75,7 @@ Watches subscribe and hydrate under the same path writer as commits. Generic wat
 
 ## Storage and organization
 
-`context/store.ts` owns the service, leases and canonical commit engine; `handle.ts` owns the typed owner contract; `model.ts` owns storage and event schemas; `contracts.ts` owns browser-safe text and query contracts. `ContextActor` owns scoped command catalogues and path addressing, not snapshots. Context query routing and retained query evidence remain independent of state persistence.
+`context/store.ts` owns the service, leases and canonical commit engine; `handle.ts` owns the typed owner contract; `model.ts` owns storage and event schemas; `contracts.ts` owns browser-safe text and query contracts. `location.ts` defines the injected owner identity; `ContextActor` binds it per Behavior and owns scoped command catalogues and path addressing, not snapshots. Context query routing and retained query evidence remain independent of state persistence.
 
 Configured infra uses native Pi Documents under the resolved durable root's `context-sessions/`: State, Messages family, Metadata and Events. Historical formats are unsupported; there is no dual reader or file fallback. The standalone file adapter remains an explicit alternate adapter for tests/hosts, not a runtime compatibility route.
 

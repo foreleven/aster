@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "@aster/core";
 import { randomUUID } from "node:crypto";
 import { Command, type ActorContext } from "@aster/actor";
 import { ContextActor, DurableContext } from "@aster/core";
@@ -26,7 +27,7 @@ export const makeLarkRootActor = (
       const cli = yield* LarkAccountClient;
       const session = yield* (yield* DurableContext)
         .open({
-          path: "/lark",
+          path: yield* CurrentContextPath,
           state: AccountState,
           message: Schema.Never,
           serialize: serializeAccount,

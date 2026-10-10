@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "../context/location.js";
 import { Context, Effect, Layer, Option, Schema, Match } from "effect";
 import { ApplicationError } from "../operations.js";
 import { type RecoveryInput, type RecoveryReceipt } from "./contracts.js";
@@ -60,13 +61,12 @@ const mapDeliveries = (
         ),
       };
 
-const path = "/system-one";
 const makeReactionState = Effect.gen(function* () {
   const registry = yield* DurableContext;
   const settings = yield* GoalSettings;
   const session = yield* (yield* DurableContext)
     .open({
-      path,
+      path: yield* CurrentContextPath,
       state: ReactionSnapshot,
       message: Schema.Never,
       serialize: ({ work }) =>

@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "@aster/core";
 import { randomUUID } from "node:crypto";
 import { Command, CommandProcessor, type ActorRef } from "@aster/actor";
 import {
@@ -60,7 +61,7 @@ export const LarkMailActor = ContextActor.define("lark/MailActor", {
       return yield* new RuntimeConfigurationError({ message: "Lark Mail is not configured" });
     const session = yield* registry
       .open({
-        path: "/lark/mail",
+        path: yield* CurrentContextPath,
         state: MailboxState,
         message: Schema.Never,
         serialize: serializeMailbox,

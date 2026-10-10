@@ -1,6 +1,6 @@
 import { DurableContext } from "@aster/core";
 import { ActorSystem, ActorTestKit, Command, CommandProcessor } from "@aster/actor";
-import { Clock, Deferred, Effect, Fiber, Layer, Match, Queue, Schema } from "effect";
+import { Clock, Context, Deferred, Effect, Fiber, Layer, Match, Queue, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -425,6 +425,135 @@ test("owner stop replies to active and queued commands sent with a shared reply 
           assert.equal(reply._tag, "Failure");
           if (reply._tag === "Failure") assert.equal(reply.error.kind, "unavailable");
         }
+      }),
+    ),
+  );
+});
+
+import { CurrentContextPath } from "../src/context/location.js";
+import { childActorName } from "../src/context/actor.js";
+
+class ReadLocation extends Command.Class<ReadLocation>()("ReadLocation", {
+  payload: {},
+  reply: Schema.Struct({
+    acquired: Schema.String,
+    started: Schema.String,
+    received: Schema.String,
+    writer: Schema.String,
+  }),
+}) {}
+class LocationAtAcquisition extends Context.Service<LocationAtAcquisition, string>()(
+  "test/LocationAtAcquisition",
+) {}
+const locationLayer = Layer.effect(LocationAtAcquisition, CurrentContextPath);
+const LocatedChild = ContextActor.define("test/LocatedChild", { commands: [ReadLocation] })(
+  Effect.gen(function* () {
+    const services = yield* Layer.buildWithScope(locationLayer, yield* Effect.scope);
+    const acquired = Context.get(services, LocationAtAcquisition);
+    const writer = yield* (yield* DurableContext).open({
+      path: yield* CurrentContextPath,
+      state: Schema.Struct({}),
+      message: Schema.Never,
+      serialize: JSON.stringify,
+      initial: { description: "Located owner", state: {} },
+    });
+    let started = "";
+    return {
+      started: () =>
+        CurrentContextPath.pipe(
+          Effect.map((value) => {
+            started = value;
+          }),
+        ),
+      receive: ({ replyTo }) =>
+        Effect.gen(function* () {
+          yield* replyTo.tell({
+            acquired,
+            started,
+            received: yield* CurrentContextPath,
+            writer: writer.path,
+          });
+        }),
+    };
+  }),
+);
+const LocatedParent = ContextActor.define("test/LocatedParent", { commands: [] })(
+  Effect.succeed({
+    started: (owner) =>
+      owner.spawn(childActorName("nested/leaf"), LocatedChild).pipe(Effect.asVoid),
+    receive: () => Effect.void,
+  }),
+);
+
+test("ContextActor injects each owner path into acquisition, lifecycle, nested Layers and commands", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeTestContext();
+        const system = yield* ActorSystem.make().pipe(
+          ActorSystem.provide(
+            Layer.succeed(DurableContext, registry.backend),
+            Layer.succeed(CurrentContextPath, "/ambient-path"),
+          ),
+        );
+        for (const path of ["/custom/one", "/custom/two"]) {
+          const actor = yield* system.spawn(
+            path.split("/").at(-1)!,
+            LocatedChild,
+            contextSpawnOptions(path),
+          );
+          assert.deepEqual(yield* actor.ask((replyTo) => new ReadLocation({ replyTo })), {
+            acquired: path,
+            started: path,
+            received: path,
+            writer: path,
+          });
+          assert.ok(registry.backend.get(path));
+        }
+        const parent = yield* system.spawn(
+          "parent",
+          LocatedParent,
+          contextSpawnOptions("/mounted"),
+        );
+        yield* parent.awaitStarted;
+        const child = yield* system
+          .select(`${parent.path}/${childActorName("nested/leaf")}`)
+          .resolve();
+        assert.deepEqual(yield* child.ask((replyTo) => new ReadLocation({ replyTo })), {
+          acquired: "/mounted/nested/leaf",
+          started: "/mounted/nested/leaf",
+          received: "/mounted/nested/leaf",
+          writer: "/mounted/nested/leaf",
+        });
+        assert.equal(registry.backend.get("/ambient-path"), undefined);
+      }),
+    ),
+  );
+});
+
+test("standalone Context owners can inject a path explicitly and still validate it at open", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeTestContext();
+        const open = Effect.gen(function* () {
+          return yield* registry.backend.open({
+            path: yield* CurrentContextPath,
+            state: Schema.Struct({}),
+            message: Schema.Never,
+            serialize: JSON.stringify,
+            initial: { description: "Injected", state: {} },
+          });
+        });
+        assert.equal(
+          (yield* open.pipe(Effect.provideService(CurrentContextPath, "/injected"))).path,
+          "/injected",
+        );
+        assert.equal(
+          (yield* open.pipe(Effect.provideService(CurrentContextPath, "invalid"), Effect.flip))
+            ._tag,
+          "ContextValidationError",
+        );
       }),
     ),
   );

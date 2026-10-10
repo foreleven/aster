@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "@aster/core";
 import { CommandProcessor } from "@aster/actor";
 import { ContextActor, contextPath, DurableContext, spawnContextChild } from "@aster/core";
 import { Effect, Match, Schema } from "effect";
@@ -9,12 +10,12 @@ import { AppsState, AppState } from "./contexts.js";
 const AppActor = (appName: import("./commands.js").AppName) =>
   ContextActor.define("apps/AppActor", {
     commands: appCommands[appName],
-  })((owner) =>
+  })(
     Effect.gen(function* () {
       const settings = yield* AppsSettings;
       const cli = yield* OpenCli;
       const processor = yield* CommandProcessor.make({ concurrency: 1 });
-      const path = contextPath(owner);
+      const path = yield* CurrentContextPath;
       const app = settings.apps.find((app) => path === `/apps/${app.name}`)!;
       const session = yield* (yield* DurableContext)
         .open({
@@ -84,7 +85,7 @@ export const AppsRootActor = ContextActor.define("apps/RootActor", {
     const settings = yield* AppsSettings;
     const session = yield* (yield* DurableContext)
       .open({
-        path: "/apps",
+        path: yield* CurrentContextPath,
         state: AppsState,
         message: Schema.Never,
         serialize: (state) => JSON.stringify(state),

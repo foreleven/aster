@@ -18,6 +18,7 @@ import { ContextQueryError } from "./contracts.js";
 import { QueryReply, isQueryCommand, type QueryCommand } from "./queries/protocol.js";
 import { ContextQueries } from "./queries/routes.js";
 import { DurableContext } from "./store.js";
+import { CurrentContextPath } from "./location.js";
 
 export const childContextPath = (parentPath: string, relativePath: string): string => {
   const segments = relativePath.split("/");
@@ -86,6 +87,7 @@ export const ContextActor = {
         options,
       )((owner) =>
         Effect.gen(function* () {
+          const ownerPath = contextPath(owner);
           const registry = yield* DurableContext;
           const scope = yield* Effect.scope;
           // The runtime filter and conditional requirement use the same descriptor marker.
@@ -119,9 +121,13 @@ export const ContextActor = {
                 ),
               ),
           });
-          const behavior = yield* typeof acquire === "function"
-            ? acquire(withContextPath(owner))
-            : acquire;
+          const behavior = yield* (
+            typeof acquire === "function" ? acquire(withContextPath(owner)) : acquire
+          ).pipe(Effect.provideService(CurrentContextPath, ownerPath));
+          const receive = (command: MailboxOf<C, I>, actor: Owner) =>
+            behavior
+              .receive(command, withContextPath(actor))
+              .pipe(Effect.provideService(CurrentContextPath, ownerPath));
           const pending = yield* Ref.make(
             new Map<
               string,
@@ -168,7 +174,7 @@ export const ContextActor = {
                   (candidate) =>
                     Predicate.hasProperty(command, "_tag") && command._tag === candidate._tag,
                 );
-                if (!contract) return yield* behavior.receive(command, withContextPath(actor));
+                if (!contract) return yield* receive(command, actor);
                 const original = yield* Schema.decodeUnknownEffect(
                   Schema.Struct({ replyTo: ReplyTo<typeof QueryReply.Type>() }),
                 )(command).pipe(Effect.orDie);
@@ -217,21 +223,25 @@ export const ContextActor = {
                         : Effect.die(error);
                     },
                     // The decoded member of the declared protocol restores the erased catalogue type.
-                    onSuccess: (decoded) =>
-                      behavior.receive(decoded as MailboxOf<C, I>, withContextPath(actor)),
+                    onSuccess: (decoded) => receive(decoded as MailboxOf<C, I>, actor),
                   }),
                 );
               }),
             ...(behavior.receiveSignal
               ? {
                   receiveSignal: (signal: import("@aster/actor").ActorSignal, actor: Owner) =>
-                    behavior.receiveSignal!(signal, withContextPath(actor)),
+                    behavior.receiveSignal!(signal, withContextPath(actor)).pipe(
+                      Effect.provideService(CurrentContextPath, ownerPath),
+                    ),
                 }
               : {}),
             started: (actor) =>
               Effect.gen(function* () {
-                const path = contextPath(actor);
-                if (behavior.started) yield* behavior.started(withContextPath(actor));
+                const path = ownerPath;
+                if (behavior.started)
+                  yield* behavior
+                    .started(withContextPath(actor))
+                    .pipe(Effect.provideService(CurrentContextPath, ownerPath));
                 if (routes) {
                   yield* routes
                     .register(

@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "../context/location.js";
 import { DurableContext } from "../context/store.js";
 import { Effect, Match, Schema } from "effect";
 import { ContextActor } from "../context/actor.js";
@@ -23,7 +24,7 @@ export const TasksRootActor = ContextActor.define("tasks/Root", {
     yield* (yield* DurableContext)
       .open({
         serialize: (state) => JSON.stringify(state),
-        path: "/tasks",
+        path: yield* CurrentContextPath,
         state: Schema.Struct({}),
         message: Schema.Never,
         initial: { state: {}, description: "Persistent Tasks" },

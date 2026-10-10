@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "../context/location.js";
 import { DurableContext } from "../context/store.js";
 import type { MailboxOf } from "@aster/actor";
 import { type ActorContext, Command as ActorCommand } from "@aster/actor";
@@ -63,7 +64,7 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
     let inFlight = HashSet.empty<string>();
     const session = yield* (yield* DurableContext)
       .open({
-        path: "/memory",
+        path: yield* CurrentContextPath,
         state: MemoryState,
         message: Schema.Never,
         serialize: ({ status, retrieval, llm }) => JSON.stringify({ status, retrieval, llm }),

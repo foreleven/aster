@@ -3,6 +3,7 @@ export * from "./approvals/actor.js";
 export * from "./config/schema.js";
 export * from "./config/settings.js";
 export * from "./context/actor.js";
+export * from "./context/location.js";
 export * from "./context/errors.js";
 export * from "./context/model.js";
 export * from "./context/store.js";
