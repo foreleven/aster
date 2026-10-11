@@ -46,6 +46,7 @@ const taskSystem = (
               retrieval: "bm25",
               drain: Effect.void,
               capture: () => Effect.void,
+              save: () => Effect.succeed({ memoryId: "test-memory" }),
               recall: {
                 search: () => Effect.succeed({ results: [] }),
                 expand: () => Effect.succeed({ results: [] }),
@@ -113,6 +114,7 @@ for (const fails of [false, true]) {
                       retrieval: "bm25",
                       drain: Effect.void,
                       capture: () => Effect.void,
+                      save: () => Effect.succeed({ memoryId: "test-memory" }),
                       recall: {
                         search: () => Effect.succeed({ results: [] }),
                         expand: () => Effect.succeed({ results: [] }),

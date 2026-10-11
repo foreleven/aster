@@ -14,7 +14,7 @@ import {
   Schema,
   Redacted,
 } from "effect";
-import { Observation, Observations, type MemoryConnection } from "./protocol.js";
+import { ObservationReceipt, Observations, type MemoryConnection } from "./protocol.js";
 import type { MemoryClient } from "./client.js";
 import type { Provenance } from "./provenance.js";
 
@@ -64,9 +64,15 @@ export const makeCapture = Effect.fn("Memory.captureWorker")(function* (
               tool_output: JSON.stringify(record),
             },
           })
-          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(Observation)));
-        ids.add(observed.observationId);
-        yield* provenance.insert(sessionId, observed.observationId, [record.path]);
+          .pipe(Effect.flatMap(Schema.decodeUnknownEffect(ObservationReceipt)));
+        if (observed.observationId) {
+          ids.add(observed.observationId);
+          yield* provenance.insert(sessionId, observed.observationId, [record.path]);
+        } else if (!observed.deduplicated) {
+          return yield* new MemoryCaptureError({
+            message: "agentmemory observe returned no observation receipt",
+          });
+        }
       }
       const poll = client.request(`observations?sessionId=${encodeURIComponent(sessionId)}`).pipe(
         Effect.flatMap(Schema.decodeUnknownEffect(Observations)),

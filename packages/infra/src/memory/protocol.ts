@@ -12,6 +12,16 @@ export const Row = Schema.Record(Schema.String, Schema.Unknown);
 export type Row = typeof Row.Type;
 export const Envelope = Row;
 export const Observation = Schema.Struct({ observationId: NonBlank });
+export const ObservationReceipt = Schema.Struct({
+  observationId: Schema.optional(NonBlank),
+  deduplicated: Schema.optional(Schema.Boolean),
+  sessionId: Schema.optional(NonBlank),
+});
+export const MemoryWriteResponse = Schema.Struct({
+  success: Schema.optional(Schema.Boolean),
+  memory: Schema.optional(Schema.StructWithRest(Schema.Struct({ id: NonBlank }), [Row])),
+  error: Schema.optional(Schema.String),
+});
 export const Observations = Schema.Struct({
   observations: Schema.Array(
     Schema.Struct({ id: Schema.String, title: Schema.optional(Schema.String) }),

@@ -25,7 +25,7 @@ export const startTask = () =>
       label: "Start internal Task",
       replay: "never",
       description:
-        "Start internal read-only research. The Task has list_contexts, describe_context, query_context, read_query_result, memory_search and memory_expand. Supply a short descriptive title, instructions, known Context path hints and user constraints; hints may be empty. Feedback automatically returns to this Goal. Only successful acceptance means work was admitted; do not announce starting before calling this tool or poll for completion.",
+        "Start internal read-only research. The Task has list_contexts, describe_context, query_context, read_query_result, memory_search, memory_expand and memory_save. Supply a short descriptive title, instructions, known Context path hints and user constraints; hints may be empty. Feedback automatically returns to this Goal. Only successful acceptance means work was admitted; do not announce starting before calling this tool or poll for completion.",
       parameters: InternalTaskInput,
     },
     (input, callId) =>

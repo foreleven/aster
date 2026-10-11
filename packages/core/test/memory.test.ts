@@ -24,6 +24,7 @@ import {
   MemoryActor,
   MemoryBackend,
   MemoryCaptureError,
+  SaveMemory,
   type ContextCapture,
   type StoredContext,
 } from "../src/index.js";
@@ -44,6 +45,7 @@ const backend = (capture: MemoryBackend["Service"]["capture"]): MemoryBackend["S
   description: "Memory",
   retrieval: "bm25",
   capture,
+  save: () => Effect.succeed({ memoryId: "test-memory" }),
   drain: Effect.void,
   recall: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
 });
@@ -54,6 +56,14 @@ const Stored = Schema.Struct({
     ),
   ),
   captured: Schema.optional(Schema.Array(Schema.String)),
+  saves: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        status: Schema.String,
+        memoryId: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
 });
 const stored = (record: StoredContext) => Schema.decodeUnknownSync(Stored)(record.snapshot.state);
 const harness = Effect.fnUntraced(function* (initial: readonly StoredContext[] = []) {
@@ -126,6 +136,60 @@ test("Memory persists admission before backend delivery and acknowledgement, the
       yield* memory.ask<void>((replyTo) => ({ _tag: "Capture", input, replyTo }));
       assert.equal(calls, 1);
       assert.deepEqual(stored(h.records.get("/memory")!).pending, []);
+    }),
+  );
+});
+
+test("Memory save persists admission before backend delivery and deduplicates request identities", async () => {
+  await run(
+    Effect.gen(function* () {
+      const h = yield* harness();
+      const entered = yield* Deferred.make<void>();
+      const release = yield* Deferred.make<void>();
+      let calls = 0;
+      const { memory } = yield* boot(h.store, {
+        ...backend(() => Effect.void),
+        save: () =>
+          Effect.gen(function* () {
+            calls++;
+            yield* Deferred.succeed(entered, undefined);
+            yield* Deferred.await(release);
+            return { memoryId: "mem_saved" };
+          }),
+      });
+      const request = {
+        requestId: "save-request",
+        source: "/goals/personal",
+        input: {
+          content: "The durable preference",
+          type: "preference" as const,
+          concepts: [],
+          files: [],
+        },
+      };
+      const secondRequest = {
+        ...request,
+        requestId: "save-request-two",
+        input: { ...request.input, content: "A second durable preference" },
+      };
+      const accepted = yield* memory.ask<{ status: "accepted"; memoryId?: string }>(
+        (replyTo) => new SaveMemory({ request, replyTo }),
+      );
+      assert.equal(accepted.status, "accepted");
+      assert.equal(stored(h.records.get("/memory")!).saves?.[0] !== undefined, true);
+      yield* Deferred.await(entered);
+      assert.equal(calls, 1);
+      yield* memory.ask<{ status: "accepted" }>(
+        (replyTo) => new SaveMemory({ request: secondRequest, replyTo }),
+      );
+      yield* Deferred.succeed(release, undefined);
+      yield* h.committed((record) => stored(record).saves?.[0]?.memoryId === "mem_saved");
+      while (calls < 2) yield* Effect.yieldNow;
+      const replayed = yield* memory.ask<{ status: "accepted"; memoryId?: string }>(
+        (replyTo) => new SaveMemory({ request, replyTo }),
+      );
+      assert.equal(replayed.memoryId, "mem_saved");
+      assert.equal(calls, 2);
     }),
   );
 });

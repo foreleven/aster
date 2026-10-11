@@ -1,7 +1,7 @@
 import { serializeFixtureState } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { Schema } from "effect";
-import { TaskSnapshot } from "@aster/core";
+import { TaskOutcome, TaskSnapshot } from "@aster/core";
 import { AccountProfile } from "@aster/integrations/lark/testing";
 import { MailboxProfile } from "@aster/integrations/lark/testing";
 import { EmailData } from "@aster/integrations/lark/testing";
@@ -106,6 +106,7 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
                 Effect.sync(() => {
                   captures.push(structuredClone(input));
                 }),
+              save: () => Effect.succeed({ memoryId: "test-memory" }),
               recall: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
               drain: Effect.void,
             }),
@@ -210,6 +211,61 @@ test("admitted Task Runs capture activity, using the evaluated source snapshot",
   assert.equal("type" in result.snapshot[capture.records[0]!.path]!, false);
 });
 
+test("completed internal Tasks capture their result without legacy admission evidence", async () => {
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const conversations = testConversations();
+        const taskPath = "/tasks/" + "b".repeat(64);
+        const admission = {
+          requestId: "task-result",
+          source: "/goals/personal",
+          target: taskPath,
+          createdAt: "2026-10-11T00:00:00Z",
+          agent: "internal",
+          task: {
+            title: "Research",
+            instructions: "Find the answer",
+            contextPaths: [],
+            input: [{ content: "Research this topic", sources: [] }],
+          },
+          replyTo: "/goals/personal",
+          remainingAgentTurns: 3,
+        };
+        yield* conversations.append(taskPath, "task-result", "task.admission", admission);
+        const outcome = {
+          roundId: "round-1",
+          status: "completed",
+          text: "The research result is durable evidence.",
+          covered: ["task-result"],
+        } satisfies typeof TaskOutcome.Type;
+        const outcomeEntry = yield* conversations.append(
+          taskPath,
+          "outcome",
+          "task.result",
+          outcome,
+        );
+        yield* conversations.append(taskPath, "later-outcome", "task.result", {
+          ...outcome,
+          roundId: "round-2",
+          text: "A later round must not replace the referenced result.",
+        });
+
+        const plan = taskCapture(conversations).capture({
+          path: taskPath,
+          revision: 2,
+          description: "Research Task",
+          text: JSON.stringify({ status: "completed", outcomeEntryId: outcomeEntry.id }),
+        });
+        assert.ok(plan);
+        return yield* plan.records;
+      }),
+    ),
+  );
+  assert.equal(result?.[0]?.text.includes('"status":"completed"'), true);
+  assert.equal(result?.[1]?.text, "The research result is durable evidence.");
+});
+
 test("discovered account and mailbox identities use separate sessions; no capture of empty initialization", async () => {
   const result = await Effect.runPromise(
     Effect.scoped(
@@ -260,6 +316,7 @@ test("discovered account and mailbox identities use separate sessions; no captur
                 Effect.sync(() => {
                   captures.push(structuredClone(input));
                 }),
+              save: () => Effect.succeed({ memoryId: "test-memory" }),
               recall: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
               drain: Effect.void,
             }),

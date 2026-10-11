@@ -76,6 +76,7 @@ const setup = Effect.fnUntraced(function* (
               retrieval: "bm25",
               drain: Effect.void,
               capture: () => Effect.void,
+              save: () => Effect.succeed({ memoryId: "test-memory" }),
               recall: {
                 search: () => Effect.succeed({ results: [] }),
                 expand: () => Effect.succeed({ results: [] }),

@@ -76,6 +76,7 @@ const infrastructure = (drain = Effect.void, decisionsConfigured = false) =>
       description: "Memory",
       retrieval: "bm25",
       capture: () => Effect.void,
+      save: () => Effect.succeed({ memoryId: "test-memory" }),
       drain,
       recall: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
     }),

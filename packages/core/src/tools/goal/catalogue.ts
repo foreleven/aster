@@ -2,6 +2,7 @@ import { goalCurrent, updateSummary } from "./state.js";
 import { taskList, startTask, delegate, taskSend } from "./tasks.js";
 import { sendGoalMessage } from "./messages.js";
 import { signalList, createSignal, updateSignal, controlSignal } from "./signals.js";
+import { memorySave } from "../task/memory.js";
 import type { CoreTool } from "../define.js";
 import type { CurrentActors } from "../../services/actors.js";
 import type { GoalState } from "../../goals/state/model.js";
@@ -23,4 +24,5 @@ export const goalTools = (): readonly CoreTool<
   createSignal(),
   updateSignal(),
   controlSignal(),
+  memorySave(),
 ];

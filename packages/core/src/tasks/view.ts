@@ -1,7 +1,7 @@
 import { readTaskState } from "./queries.js";
 import { CurrentActors } from "../services/actors.js";
 import { createHash } from "node:crypto";
-import { Effect, Match, Schema } from "effect";
+import { Effect, Match, Option, Schema } from "effect";
 import { ContextQueryError } from "../queries/registry.js";
 import { publicJson } from "../json.js";
 import { ApplicationError } from "../operations.js";
@@ -116,7 +116,7 @@ export const inspectTask = (
     };
   }).pipe(Effect.withSpan("Task.inspect"));
 
-/** Resolve frozen evidence from Pi; later source edits cannot change a capture. */
+/** Resolve frozen admission evidence and completed results from Pi. */
 export const taskCapture = (messages: AgentConversations["Service"]): CapturePolicy => ({
   matches: (path) => /^\/tasks\/[^/]+$/.test(path),
   capture: (record) => ({
@@ -126,7 +126,37 @@ export const taskCapture = (messages: AgentConversations["Service"]): CapturePol
       const entry = entries.find((entry) => entry.kind === "task.admission");
       if (!entry) return undefined;
       const admission = Schema.decodeUnknownSync(TaskDeliveryInput)(entry.data);
-      return admission.evidence ? [record, admission.evidence] : undefined;
+      const publicState = Schema.decodeUnknownOption(
+        Schema.fromJsonString(
+          Schema.Struct({
+            status: TaskSnapshot.fields.status,
+            outcomeEntryId: Schema.optional(Schema.Int),
+          }),
+        ),
+      )(record.text);
+      const resultEntry =
+        Option.isSome(publicState) && publicState.value.outcomeEntryId !== undefined
+          ? entries.find(
+              (entry) =>
+                entry.kind === "task.result" && entry.id === publicState.value.outcomeEntryId,
+            )
+          : undefined;
+      const result = resultEntry
+        ? Schema.decodeUnknownSync(TaskOutcome)(resultEntry.data)
+        : undefined;
+      const resultRecord = result
+        ? {
+            ...record,
+            description: `${record.description} result`,
+            text: result.text,
+          }
+        : undefined;
+      if (!admission.evidence && !resultRecord) return undefined;
+      return [
+        record,
+        ...(admission.evidence ? [admission.evidence] : []),
+        ...(resultRecord ? [resultRecord] : []),
+      ];
     }),
   }),
 });

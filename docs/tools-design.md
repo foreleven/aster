@@ -107,26 +107,27 @@ The agent adapter captures the caller's Effect Context and retires callbacks wit
 
 Inputs use Effect Schema and normalize optional fields once. Names below are the target interface; receipts and selected business responses exclude private execution state.
 
-| Invocation    | Tool                       | Model input                                         | Behavior                                                                                  |
-| ------------- | -------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Goal          | `goal_current`             | `{}`                                                | Current public Goal understanding and described internal/external execution capabilities. |
-| Goal          | `update_summary`           | `{ summary }`                                       | Persist through GoalState before acknowledgement; cannot complete or archive a Goal.      |
-| Goal          | `task_list`                | `{}`                                                | Current public Goal Tasks, including completed work that can continue.                    |
-| Goal          | `start_task`               | `{ title, instructions, contextPaths?, evidence? }` | Admit internal work; return its Task path and receipt.                                    |
-| Goal          | `delegate_task`            | `{ executor, title, instructions, evidence? }`      | Admit external work with the existing confirmation workflow.                              |
-| Goal          | `task_send`                | `{ taskPath, text }`                                | Ownership-validated follow-up to the existing Task; completed work may continue.          |
-| Goal          | `send_goal_message`        | `{ goalPath, text }`                                | Independent durable Goal input; no TaskActor or Task reference.                           |
-| Goal          | `signal_list`              | `{}`                                                | Owner's public rules, statuses and observed definition versions.                          |
-| Goal          | `create_signal`            | `{ id, trigger, action }`                           | Create an owner-scoped rule; conflicting creation is rejected.                            |
-| Goal          | `update_signal`            | `{ id, version, trigger, action }`                  | Edit using the observed definition version.                                               |
-| Goal          | `control_signal`           | `{ id, version, operation }`                        | `pause`, `resume` or `delete`, preserving domain pending-action rules.                    |
-| Internal Task | `list_contexts`            | `{ parent?, offset? }`                              | Page active capability paths/descriptions.                                                |
-| Internal Task | `describe_context`         | `{ path }`                                          | Read supported command names, descriptions and argument schemas.                          |
-| Internal Task | `query_context`            | `{ path, command, args? }`                          | Validate and invoke a read-only command; retain evidence before returning the first page. |
-| Internal Task | `read_query_result`        | `{ resultId, offset }`                              | Read another retained text page without repeating the source query.                       |
-| Internal Task | `memory_search`            | `{ query }`                                         | Compact recall candidates; expand useful matches before relying on them.                  |
-| Internal Task | `memory_expand`            | `{ items: [{ obsId, sessionId? }] }`                | Original selected memory evidence and references.                                         |
-| Context gate  | `submit_context_relevance` | `{ relevant, reason }`                              | Private structured gate result; no retrieval or mutation tools.                           |
+| Invocation            | Tool                       | Model input                                         | Behavior                                                                                  |
+| --------------------- | -------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Goal                  | `goal_current`             | `{}`                                                | Current public Goal understanding and described internal/external execution capabilities. |
+| Goal                  | `update_summary`           | `{ summary }`                                       | Persist through GoalState before acknowledgement; cannot complete or archive a Goal.      |
+| Goal                  | `task_list`                | `{}`                                                | Current public Goal Tasks, including completed work that can continue.                    |
+| Goal                  | `start_task`               | `{ title, instructions, contextPaths?, evidence? }` | Admit internal work; return its Task path and receipt.                                    |
+| Goal                  | `delegate_task`            | `{ executor, title, instructions, evidence? }`      | Admit external work with the existing confirmation workflow.                              |
+| Goal                  | `task_send`                | `{ taskPath, text }`                                | Ownership-validated follow-up to the existing Task; completed work may continue.          |
+| Goal                  | `send_goal_message`        | `{ goalPath, text }`                                | Independent durable Goal input; no TaskActor or Task reference.                           |
+| Goal                  | `signal_list`              | `{}`                                                | Owner's public rules, statuses and observed definition versions.                          |
+| Goal                  | `create_signal`            | `{ id, trigger, action }`                           | Create an owner-scoped rule; conflicting creation is rejected.                            |
+| Goal                  | `update_signal`            | `{ id, version, trigger, action }`                  | Edit using the observed definition version.                                               |
+| Goal                  | `control_signal`           | `{ id, version, operation }`                        | `pause`, `resume` or `delete`, preserving domain pending-action rules.                    |
+| Internal Task         | `list_contexts`            | `{ parent?, offset? }`                              | Page active capability paths/descriptions.                                                |
+| Internal Task         | `describe_context`         | `{ path }`                                          | Read supported command names, descriptions and argument schemas.                          |
+| Internal Task         | `query_context`            | `{ path, command, args? }`                          | Validate and invoke a read-only command; retain evidence before returning the first page. |
+| Internal Task         | `read_query_result`        | `{ resultId, offset }`                              | Read another retained text page without repeating the source query.                       |
+| Internal Task         | `memory_search`            | `{ query }`                                         | Compact recall candidates; expand useful matches before relying on them.                  |
+| Internal Task         | `memory_expand`            | `{ items: [{ obsId, sessionId? }] }`                | Original selected memory evidence and references.                                         |
+| Goal or Internal Task | `memory_save`              | `{ content, type?, concepts, files }`               | Durable admission of a concise fact, preference, decision or finding.                     |
+| Context gate          | `submit_context_relevance` | `{ relevant, reason }`                              | Private structured gate result; no retrieval or mutation tools.                           |
 
 Goal and Task catalogues are independently importable. Internal Tasks do not recursively start Tasks, mutate Goal summaries or create Signals. No Agent tool archives a Goal or retries uncertain submissions. External executor tools remain executor-specific. The current source-query allowlists do not authorize travel booking, posting or account changes.
 

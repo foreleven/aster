@@ -1,6 +1,6 @@
 import { Effect, Redacted, Schema } from "effect";
 import { HttpClient, HttpClientRequest } from "effect/http";
-import { MemoryRecallError } from "@aster/core";
+import { MemoryRecallError, MemoryWriteError, type MemorySaveInput } from "@aster/core";
 import { MemoryProtocolError } from "./errors.js";
 import {
   Envelope,
@@ -8,6 +8,7 @@ import {
   SearchResults,
   ExpandedResults,
   ConsolidatedMemory,
+  MemoryWriteResponse,
   type MemoryConnection,
   type MemoryReference,
 } from "./protocol.js";
@@ -34,6 +35,7 @@ export const makeMemoryClient = Effect.fn("Memory.client")(function* (
         if (response.status < 200 || response.status >= 300)
           return yield* new MemoryProtocolError({
             message: `agentmemory ${path.split("?")[0]} returned HTTP ${response.status}`,
+            outcome: "failed",
           });
         const value = yield* response.json.pipe(
           Effect.flatMap(Schema.decodeUnknownEffect(Envelope)),
@@ -41,17 +43,20 @@ export const makeMemoryClient = Effect.fn("Memory.client")(function* (
         if (value.error || value.success === false)
           return yield* new MemoryProtocolError({
             message: `agentmemory ${path.split("?")[0]} failed`,
+            outcome: "failed",
           });
         return value;
       }),
     ).pipe(
       Effect.timeout(15000),
-      Effect.mapError(
-        (cause) =>
-          new MemoryProtocolError({
-            message: `agentmemory ${path.split("?")[0]} request failed`,
-            cause: Redacted.make(cause),
-          }),
+      Effect.mapError((cause) =>
+        cause instanceof MemoryProtocolError
+          ? cause
+          : new MemoryProtocolError({
+              message: `agentmemory ${path.split("?")[0]} request failed`,
+              outcome: "unknown",
+              cause: Redacted.make(cause),
+            }),
       ),
     );
   });
@@ -61,6 +66,46 @@ export const makeMemoryClient = Effect.fn("Memory.client")(function* (
       : new MemoryRecallError({ message: "Memory retrieval failed", cause: Redacted.make(cause) });
   return {
     request,
+    save: (input: MemorySaveInput) =>
+      Effect.gen(function* () {
+        const response = yield* request("remember", {
+          content: input.content,
+          type: input.type ?? "fact",
+          concepts: input.concepts,
+          files: input.files,
+          project: connection.project,
+        });
+        const result = yield* Schema.decodeUnknownEffect(MemoryWriteResponse)(response).pipe(
+          Effect.mapError(
+            () =>
+              new MemoryWriteError({
+                message: "Invalid agentmemory remember response",
+                // A successful HTTP response with an invalid body may still mean the
+                // daemon committed the memory. Do not resubmit it automatically.
+                outcome: "unknown",
+              }),
+          ),
+        );
+        if (!result.memory?.id)
+          return yield* new MemoryWriteError({
+            message: "agentmemory remember returned no memory id",
+            // The endpoint may have accepted the write before returning an
+            // incomplete response, so this outcome cannot be safely retried.
+            outcome: "unknown",
+          });
+        return { memoryId: result.memory.id };
+      }).pipe(
+        Effect.mapError((cause) =>
+          cause instanceof MemoryWriteError
+            ? cause
+            : new MemoryWriteError({
+                message: "Memory write outcome is unknown",
+                outcome:
+                  cause instanceof MemoryProtocolError ? (cause.outcome ?? "unknown") : "unknown",
+                cause: Redacted.make(cause),
+              }),
+        ),
+      ),
     search: (query: string, limit = 10) =>
       Effect.gen(function* () {
         if (!query.trim() || !Number.isInteger(limit) || limit < 1 || limit > 100)

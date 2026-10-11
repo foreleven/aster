@@ -53,7 +53,7 @@ Provider-backed queries use services inside the owning Actor. IM `messages` read
 
 Domain list commands default to 20 items with a maximum of 100; Context result paging bounds large evidence returned to Agents. Domain modules own field selection; Runtime only registers their capabilities. Missing handlers have no fallback `state` command.
 
-Memory retains `memory_search` and `memory_expand` over scoped MemoryRecall; MemoryActor owns capture only. Goal-local tools such as `goal_current`, `task_list` and `signal_list` keep their existing roles. No compatibility aliases or secondary query stores are introduced.
+Memory retains `memory_search` and `memory_expand` over scoped MemoryRecall, and exposes `memory_save` through the Memory Actor's durable write queue. MemoryActor owns both automatic capture and explicit writes. Goal-local tools such as `goal_current`, `task_list` and `signal_list` keep their existing roles. No compatibility aliases or secondary query stores are introduced.
 
 ## Lark query arguments
 

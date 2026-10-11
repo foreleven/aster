@@ -123,6 +123,7 @@ const infrastructure = (events: string[], overrides: Partial<MemoryBackend["Serv
               Effect.sync(() => {
                 events.push(`capture:${input.sessionId}`);
               }),
+            save: () => Effect.succeed({ memoryId: "test-memory" }),
             recall: { search: () => Effect.succeed([]), expand: () => Effect.succeed([]) },
             drain: Effect.sync(() => {
               events.push("memory:drained");

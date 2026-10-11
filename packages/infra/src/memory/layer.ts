@@ -37,6 +37,7 @@ export const AgentMemoryBackend = {
         retrieval: config.embedding ? ("hybrid" as const) : ("bm25" as const),
         ...(config.llm ? { llm: { provider: config.llm.provider, model: config.llm.model } } : {}),
         recall: { search: (query: string) => client.search(query), expand: client.expand },
+        save: client.save,
         ...capture,
       };
     }).pipe(

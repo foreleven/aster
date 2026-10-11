@@ -16,5 +16,6 @@ export class MemoryConfigurationError extends Data.TaggedError("MemoryConfigurat
 
 export class MemoryProtocolError extends Data.TaggedError("MemoryProtocolError")<{
   readonly message: string;
+  readonly outcome?: "failed" | "unknown";
   readonly cause?: unknown;
 }> {}

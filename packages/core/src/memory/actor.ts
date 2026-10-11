@@ -6,12 +6,25 @@ import { Effect, HashSet, Match, Schedule, Schema, Stream } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ContextText as ContextRecord } from "../context/contracts.js";
 import { ContextCaptures } from "./capture.js";
-import { type ContextCapture, MemoryBackend, MemoryCaptureError } from "./contracts.js";
+import {
+  type ContextCapture,
+  MemoryBackend,
+  MemoryCaptureError,
+  MemorySaveRequest,
+  MemoryWriteError,
+  MemoryWriteReceipt,
+} from "./contracts.js";
 
 const Capture = Schema.Struct({ sessionId: Schema.String, records: Schema.Array(ContextRecord) });
+const SavedWrite = Schema.Struct({
+  ...MemorySaveRequest.fields,
+  status: Schema.Literals(["queued", "sending", "saved", "failed", "uncertain"]),
+  memoryId: Schema.optional(MemoryWriteReceipt.fields.memoryId),
+});
 const MemoryState = Schema.Struct({
   pending: Schema.optional(Schema.Array(Capture)),
   captured: Schema.optional(Schema.Array(Schema.String)),
+  saves: Schema.optional(Schema.Array(SavedWrite)),
   status: Schema.Literal("ready"),
   retrieval: Schema.Literals(["bm25", "hybrid"]),
   llm: Schema.optional(Schema.Struct({ provider: Schema.String, model: Schema.String })),
@@ -21,7 +34,16 @@ export class CaptureMemory extends ActorCommand.Class<CaptureMemory>()("Capture"
   payload: { input: Capture },
   reply: Schema.Void,
 }) {}
-export const MemoryCommands = [CaptureMemory] as const;
+const SaveReply = Schema.Struct({
+  requestId: Schema.NonEmptyString,
+  status: Schema.Literal("accepted"),
+  memoryId: Schema.optional(Schema.NonEmptyString),
+});
+export class SaveMemory extends ActorCommand.Class<SaveMemory>()("Save", {
+  payload: { request: MemorySaveRequest },
+  reply: SaveReply,
+}) {}
+export const MemoryCommands = [CaptureMemory, SaveMemory] as const;
 export const MemoryInternal = Schema.TaggedUnion({
   Retry: {},
   Captured: {
@@ -29,6 +51,13 @@ export const MemoryInternal = Schema.TaggedUnion({
     result: Schema.TaggedUnion({
       Success: { value: Schema.Void },
       Failure: { error: Schema.instanceOf(MemoryCaptureError) },
+    }),
+  },
+  Saved: {
+    requestId: Schema.NonEmptyString,
+    result: Schema.TaggedUnion({
+      Success: { value: MemoryWriteReceipt },
+      Failure: { error: Schema.instanceOf(MemoryWriteError) },
     }),
   },
 });
@@ -89,6 +118,23 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
           (result) => ({ _tag: "Captured", sessionId: input.sessionId, result }),
         );
       }
+      for (const write of (yield* state).saves ?? []) {
+        if (HashSet.size(inFlight) >= 2) break;
+        if (write.status !== "queued") continue;
+        const key = `save:${write.requestId}`;
+        if (HashSet.has(inFlight, key)) continue;
+        yield* save({
+          saves: (yield* state).saves?.map((entry) =>
+            entry.requestId === write.requestId ? { ...entry, status: "sending" as const } : entry,
+          ),
+        });
+        inFlight = HashSet.add(inFlight, key);
+        yield* context.pipeToSelf(backend.save(write.input), (result) => ({
+          _tag: "Saved",
+          requestId: write.requestId,
+          result,
+        }));
+      }
     });
     return {
       started: (context) =>
@@ -97,6 +143,9 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
             .update(
               (current) => ({
                 ...current,
+                saves: current.saves?.map((write) =>
+                  write.status === "sending" ? { ...write, status: "uncertain" as const } : write,
+                ),
                 status: "ready",
                 retrieval: backend.retrieval,
                 ...(backend.llm ? { llm: backend.llm } : {}),
@@ -154,6 +203,27 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
               yield* dispatch(context);
             }),
           ),
+          Match.tag("Save", ({ request, replyTo }) =>
+            Effect.gen(function* () {
+              const current = yield* state;
+              const previous = current.saves?.find(
+                (write) => write.requestId === request.requestId,
+              );
+              if (previous) {
+                yield* replyTo.tell({
+                  requestId: request.requestId,
+                  status: "accepted",
+                  ...(previous.memoryId ? { memoryId: previous.memoryId } : {}),
+                });
+                return;
+              }
+              yield* save({
+                saves: [...(current.saves ?? []), { ...request, status: "queued" as const }],
+              });
+              yield* replyTo.tell({ requestId: request.requestId, status: "accepted" });
+              yield* dispatch(context);
+            }),
+          ),
           Match.tag("Captured", ({ sessionId, result }) =>
             Effect.gen(function* () {
               inFlight = HashSet.remove(inFlight, sessionId);
@@ -176,9 +246,60 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
               );
             }),
           ),
+          Match.tag("Saved", ({ requestId, result }) =>
+            Effect.gen(function* () {
+              inFlight = HashSet.remove(inFlight, `save:${requestId}`);
+              yield* Match.value(result).pipe(
+                Match.tag("Success", ({ value }) =>
+                  Effect.gen(function* () {
+                    const current = yield* state;
+                    yield* save({
+                      saves: current.saves?.map((write) =>
+                        write.requestId === requestId
+                          ? { ...write, status: "saved" as const, memoryId: value.memoryId }
+                          : write,
+                      ),
+                    });
+                    yield* dispatch(context);
+                  }),
+                ),
+                Match.tag("Failure", ({ error }) =>
+                  Effect.gen(function* () {
+                    const current = yield* state;
+                    yield* save({
+                      saves: current.saves?.map((write) =>
+                        write.requestId === requestId
+                          ? {
+                              ...write,
+                              status:
+                                error.outcome === "failed"
+                                  ? ("failed" as const)
+                                  : ("uncertain" as const),
+                            }
+                          : write,
+                      ),
+                    });
+                    yield* Effect.logError({
+                      event: "memory.write.failed",
+                      requestId,
+                      outcome: error.outcome,
+                    });
+                  }),
+                ),
+                Match.exhaustive,
+              );
+            }),
+          ),
           Match.tag("Retry", () =>
             Effect.gen(function* () {
               yield* context.pipeToSelf(Effect.sleep("30 seconds"), () => ({ _tag: "Retry" }));
+              const current = yield* state;
+              if (current.saves?.some((write) => write.status === "failed"))
+                yield* save({
+                  saves: current.saves.map((write) =>
+                    write.status === "failed" ? { ...write, status: "queued" as const } : write,
+                  ),
+                });
               yield* dispatch(context);
             }),
           ),

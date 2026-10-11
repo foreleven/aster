@@ -35,6 +35,7 @@ export const toolSystem = Effect.fnUntraced(function* (
     retrieval: "bm25",
     drain: Effect.void,
     capture: () => Effect.void,
+    save: () => Effect.succeed({ memoryId: "test-memory" }),
     recall: options.memory ?? {
       search: () => Effect.succeed([]),
       expand: () => Effect.succeed([]),

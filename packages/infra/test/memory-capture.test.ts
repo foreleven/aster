@@ -133,3 +133,41 @@ test("failed processing reports a typed failure and does not close the upstream 
     ),
   );
 });
+
+test("upstream deduplication is an accepted observation on retry", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "aster-capture-dedup-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let observeCalls = 0;
+  const calls: string[] = [];
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const backend = yield* memory(
+          root,
+          async (url) => {
+            const path = new URL(String(url)).pathname;
+            calls.push(path);
+            if (path.endsWith("/observe")) {
+              observeCalls++;
+              return observeCalls === 1
+                ? Response.json({ observationId: "obs" })
+                : Response.json({ deduplicated: true, sessionId: "one" });
+            }
+            if (path.endsWith("/observations")) return Response.json({ observations: [] });
+            return Response.json({});
+          },
+          false,
+          1,
+        );
+        const input = { sessionId: "one", records };
+        assert.equal(
+          (yield* backend.capture!.capture(input).pipe(Effect.flip))._tag,
+          "MemoryCaptureError",
+        );
+        yield* backend.capture!.capture(input);
+        assert.equal(observeCalls, 2);
+        assert.equal(calls.filter((path) => path.endsWith("/session/end")).length, 1);
+      }),
+    ),
+  );
+});

@@ -18,6 +18,7 @@ test("Scoped Memory recall bounds capacity and caller interruption releases back
           description: "Test",
           retrieval: "bm25",
           capture: () => Effect.void,
+          save: () => Effect.succeed({ memoryId: "test-memory" }),
           drain: Effect.void,
           recall: {
             search: () =>

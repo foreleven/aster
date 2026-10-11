@@ -28,6 +28,7 @@ export const goalCurrent = () =>
                 "read_query_result",
                 "memory_search",
                 "memory_expand",
+                "memory_save",
               ],
             },
             external: {
