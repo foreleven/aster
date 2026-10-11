@@ -8,3 +8,4 @@ export * from "./mail/integration.js";
 export * from "./apps/integration.js";
 export * from "./apps/settings.js";
 export * from "./apps/client.js";
+export * from "./web/index.js";

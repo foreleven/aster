@@ -7,7 +7,12 @@ import {
   SystemOneTransport,
   StorageSettings,
 } from "@aster/infra";
-import { LarkIntegration, MailIntegration, AppsIntegration } from "@aster/integrations";
+import {
+  LarkIntegration,
+  MailIntegration,
+  AppsIntegration,
+  WebSearchIntegration,
+} from "@aster/integrations";
 import { AgentConversations } from "@aster/agent/harness";
 import { join } from "node:path";
 import { Effect, Layer } from "effect";
@@ -21,7 +26,12 @@ export const localConversationsLayer = Layer.unwrap(
 
 /** Product choices only: modules own their dependency graphs and lifecycle. */
 export const localRuntimeLayer = AsterRuntime.layer({
-  integrations: [LarkIntegration.layer, MailIntegration.layer, AppsIntegration.layer],
+  integrations: [
+    LarkIntegration.layer,
+    MailIntegration.layer,
+    AppsIntegration.layer,
+    WebSearchIntegration.layer,
+  ],
 }).pipe(
   Layer.provide(
     Layer.mergeAll(
