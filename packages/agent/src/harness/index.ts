@@ -3,6 +3,7 @@ export {
   DurableContextBudget,
   type HarnessInput,
   type HarnessOptions,
+  type WorkspaceEnvironment,
   type HarnessConversation,
   type HarnessSubmission,
 } from "./contracts.js";

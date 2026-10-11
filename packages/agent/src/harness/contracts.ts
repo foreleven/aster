@@ -1,4 +1,6 @@
 import { Schema } from "effect";
+import type { Context as NativeContext } from "@earendil-works/chord";
+import type { ExecutionEnv } from "@earendil-works/pi-durable/env";
 import type { AgentOptionsBase, AgentError, ToolInvocationFailure } from "../shared/contracts.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { InputSubmissionDraft, SubmissionRecord } from "@earendil-works/pi-durable";
@@ -13,12 +15,20 @@ export const DurableContextBudget = Schema.Struct({
   }),
 );
 
+/** Host-owned environment construction for a durable conversation workspace. */
+export type WorkspaceEnvironment = (
+  target: { readonly cwd?: string },
+  context: NativeContext,
+) => Promise<ExecutionEnv | undefined>;
+
 /** Configuration and callbacks live for the whole conversation scope. */
 export interface HarnessOptions extends AgentOptionsBase {
   readonly owner: string;
   readonly instructions: string;
   readonly extensionName?: string;
   readonly contextBudget?: typeof DurableContextBudget.Type;
+  /** Optional host-defined workspace identity for the durable coding tools. */
+  readonly workspaceId?: string;
   /** Package-private hook connecting retained native provenance to callback retirement. */
   readonly registerTerminalHandler?: (
     handler: (failure: ToolInvocationFailure) => Effect.Effect<void, AgentError>,

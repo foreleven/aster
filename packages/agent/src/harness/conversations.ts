@@ -69,6 +69,7 @@ export interface ConversationDriver {
   readonly acquire: Effect.Effect<void, ConversationError, Scope.Scope>;
   readonly quarantine: Effect.Effect<void>;
   readonly settings: { compaction?: HarnessSettings["compaction"] };
+  readonly workspaceEnvironment: import("./contracts.js").WorkspaceEnvironment | undefined;
 }
 
 /** One scoped writer per conversation. Message admission never waits for model execution. */
@@ -115,6 +116,8 @@ export class AgentConversations extends Context.Service<
   static readonly make = Effect.fn("AgentConversations.make")(function* (
     options: {
       readonly root?: string;
+      /** Host-owned environment factory. Omitted by memory/test layers. */
+      readonly workspaceEnvironment?: import("./contracts.js").WorkspaceEnvironment;
       readonly openStorage?: (owner: string, context: NativeContext) => Promise<Storage>;
     } = {},
   ) {
@@ -156,7 +159,11 @@ export class AgentConversations extends Context.Service<
                 ? await options.openStorage(owner, context)
                 : await openNodeJsonlStorage(directory, context, { fsync: true });
               try {
-                return await Harness.open(storage, { registry, models, settings }, context);
+                return await Harness.open(
+                  storage,
+                  { registry, models, settings, env: options.workspaceEnvironment },
+                  context,
+                );
               } catch (cause) {
                 await storage.close(BACKGROUND_CONTEXT);
                 throw cause;
@@ -189,6 +196,7 @@ export class AgentConversations extends Context.Service<
           registry,
           models,
           settings,
+          workspaceEnvironment: options.workspaceEnvironment,
           assertAvailable,
           acquire: Effect.acquireRelease(turnLock.take(1).pipe(Effect.interruptible), () =>
             turnLock.release(1),
@@ -415,6 +423,8 @@ export class AgentConversations extends Context.Service<
     AgentConversations.make({ openStorage: async () => new MemoryStorage() });
   static readonly memory = Layer.effect(AgentConversations, AgentConversations.makeMemory());
   /** The host supplies a resolved directory and owns process-level exclusion. */
-  static readonly layer = (root: string) =>
-    Layer.effect(AgentConversations, AgentConversations.make({ root }));
+  static readonly layer = (
+    root: string,
+    workspaceEnvironment?: import("./contracts.js").WorkspaceEnvironment,
+  ) => Layer.effect(AgentConversations, AgentConversations.make({ root, workspaceEnvironment }));
 }

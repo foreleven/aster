@@ -66,6 +66,7 @@ export class GoalAgent extends Context.Service<
                     inputId: input.inputId,
                   }),
                 owner: source,
+                workspaceId: `/goals/${goal.slug}`,
                 extensionName: `aster-goal-tools:${goal.slug}`,
                 instructions: `${goalAgentPrompt}
 

@@ -1,6 +1,7 @@
 import { AsterRuntime } from "@aster/core";
 import {
   AgentMemoryBackend,
+  localWorkspaceEnvironment,
   ContextStorage,
   ConfiguredModels,
   ExternalExecutors,
@@ -20,7 +21,12 @@ import { Effect, Layer } from "effect";
 /** Conversation storage shares the host's resolved and exclusively owned root. */
 export const localConversationsLayer = Layer.unwrap(
   StorageSettings.pipe(
-    Effect.map(({ root }) => AgentConversations.layer(join(root, "conversations"))),
+    Effect.map(({ root }) =>
+      AgentConversations.layer(
+        join(root, "conversations"),
+        localWorkspaceEnvironment(join(root, "workspaces")),
+      ),
+    ),
   ),
 );
 

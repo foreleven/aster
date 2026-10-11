@@ -8,6 +8,7 @@ import {
   hook,
   type Submission,
 } from "@earendil-works/pi-durable";
+import { createEditTool, createReadTool, createWriteTool } from "@earendil-works/pi-durable/tools";
 import { Effect, Exit, Option, Ref, Schema, Semaphore } from "effect";
 import { Models } from "../models.js";
 import { AgentError, ToolInvocationFailure } from "../shared/contracts.js";
@@ -238,8 +239,15 @@ export const openConversation = Effect.fn("DurableHarness.open")(function* (
       }),
     ],
   });
+  const workspaceExtension = defineExtension({
+    name: "aster-workspace-tools",
+    tools: [createReadTool(), createWriteTool(), createEditTool()],
+  });
+  const workspaceEnabled =
+    options.workspaceId !== undefined && driver.workspaceEnvironment !== undefined;
   yield* Effect.sync(() => {
     driver.registry.install(extension);
+    if (workspaceEnabled) driver.registry.install(workspaceExtension);
     durableModels(
       { ...resolved, model: { ...resolved.model, contextWindow: contextTokens } },
       driver.models,
@@ -262,7 +270,8 @@ export const openConversation = Effect.fn("DurableHarness.open")(function* (
       saved?.model?.provider !== resolved.model.provider ||
       saved.model.modelId !== resolved.model.id ||
       !Array.isArray(saved.extensions) ||
-      !saved.extensions.includes(extension.name)
+      !saved.extensions.includes(extension.name) ||
+      (workspaceEnabled && !saved.extensions.includes(workspaceExtension.name))
     )
       return yield* Effect.fail(
         new AgentError("Pending native work requires its saved model and extension", [], {
@@ -275,7 +284,8 @@ export const openConversation = Effect.fn("DurableHarness.open")(function* (
         {
           model: { provider: resolved.model.provider, modelId: resolved.model.id },
           instructions: options.instructions,
-          extensions: [extension],
+          extensions: workspaceEnabled ? [extension, workspaceExtension] : [extension],
+          cwd: options.workspaceId,
         },
         context,
       ),
