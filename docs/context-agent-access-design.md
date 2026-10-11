@@ -49,6 +49,7 @@ Provider-backed queries use services inside the owning Actor. IM `messages` read
 | `/goals`       | `list`, `read`                      | Identity, title, description, status, summary and selected task references.                                    |
 | `/tasks`       | `list`, `read`                      | Status, owner, agent, instructions and outcome; no tool transcript or executor checkpoint.                     |
 | `/signals`     | `list`, `read`                      | Ownership, trigger, status, schedule cursor and selected task/version.                                         |
+| `/profile`     | `profile`                           | Explicit display name, IANA time zone and response style; other personal facts remain Memory evidence.         |
 
 Domain list commands default to 20 items with a maximum of 100; Context result paging bounds large evidence returned to Agents. Domain modules own field selection; Runtime only registers their capabilities. Missing handlers have no fallback `state` command.
 

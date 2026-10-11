@@ -18,6 +18,7 @@ Startup starts public Context queries and the independent Memory consumer before
 - `tasks/`: internal Agent and external Delegate execution, persistent Tasks, follow-up, confirmation and feedback.
 - `approvals/`: `state.ts` owns durable human decisions and validation; the Actor immediately delivers committed responses and retries until the requesting Actor acknowledges.
 - `memory/`: recall contracts and durable capture orchestration. Capture identity selection precedes lazy evidence reads outside the mailbox; captured sessions skip Pi reads.
+- `profile/`: the small durable user profile and explicit response preferences. Personal facts beyond this stable contract remain in Memory.
 - `tools/`: shared Agent tool catalogues, injected GoalState operations and cross-Actor asks; domain owners retain queries and mutations.
 - `runtime/`: assembly, policy registration, integrations, readiness, API and shutdown.
 

@@ -164,6 +164,10 @@ test("runtime installs multiple sources, captures first changes, exposes API aft
                 yield* Effect.sleep(1);
             }).pipe(Effect.timeout("2 seconds"));
             assert.equal((yield* DurableContext).get("/one")!.text, JSON.stringify({ value: 1 }));
+            assert.equal(
+              (yield* DurableContext).get("/profile")?.description,
+              "User profile and explicit response preferences",
+            );
           }).pipe(Effect.provide(live)),
         );
       }),

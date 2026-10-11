@@ -39,6 +39,7 @@ import { SignalRootActor } from "../signals/root.js";
 import { ApprovalQueueActor } from "../approvals/actor.js";
 import { GoalsRootActor } from "../goals/root.js";
 import { ExternalAgents } from "../tasks/execution/contracts.js";
+import { UserProfileActor } from "../profile/actor.js";
 
 import { RuntimeIntegrations, type IntegrationHandle } from "./integration.js";
 
@@ -157,6 +158,7 @@ const acquireRuntime = Effect.gen(function* () {
   );
   const requiredRoots = new Set([
     "/user/memory",
+    "/user/profile",
     "/user/system-one",
     "/user/approvals",
     "/user/signals",
@@ -184,6 +186,7 @@ const acquireRuntime = Effect.gen(function* () {
   ).pipe(Effect.forkIn(workScope));
   // Subscribe consumer Actors before sources start. Each owns recovery and supervision.
   yield* (yield* system.spawn("memory", MemoryActor)).awaitStarted;
+  yield* (yield* system.spawn("profile", UserProfileActor)).awaitStarted;
   for (const module of modules.filter((module) => module.phase === "source")) {
     const handle = yield* module
       .activate(system)

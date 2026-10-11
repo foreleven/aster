@@ -49,6 +49,10 @@ export * from "./goals/agent.js";
 
 export * from "./memory/capture.js";
 
+export * from "./profile/actor.js";
+export * from "./profile/model.js";
+export * from "./profile/queries.js";
+
 export { ContextCommand, type QueryCommand } from "./queries/commands.js";
 
 export { readGoalState } from "./goals/queries.js";
