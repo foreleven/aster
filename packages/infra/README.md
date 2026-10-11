@@ -15,6 +15,8 @@ Concrete infrastructure capabilities for Aster. Local chooses platform implement
 
 The package root exports these host capabilities explicitly. Native clients, protocol schemas, status decoders, renderer functions and resource factories remain private; tests import implementations relatively.
 
+System One optionally accepts `config.system-one.proxy`, an HTTP/HTTPS proxy origin such as `http://127.0.0.1:7890` or an exact `${SYSTEM_ONE_PROXY}` reference from the captured environment. URL user/password credentials are supported and kept Redacted. HTTPS targets use CONNECT. The owning Layer releases its private dispatcher on shutdown; other transports retain their injected HTTP client. Without an explicit proxy, System One uses that injected client too. Settings are captured at acquisition and require a restart to change.
+
 ## Resource ownership
 
 The host holds the root lease around the complete runtime and adapter graph. Runtime stops domain admission/producers and Actors before releasing adapters. Cancelled observation does not prove that an external submission or memory observation was cancelled; external submissions are not automatically retried after unknown outcomes.

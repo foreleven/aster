@@ -80,6 +80,65 @@ test("malformed answers and ordinary HTTP failures are not retried", async () =>
     assert.equal(attempts, 1);
   }
 });
+test("HTTP 200 gateway failures report safe rejection codes without retrying or exposing key fragments", async () => {
+  for (const [code, message, expected] of [
+    [
+      -1001,
+      "ak not exist: PRIVATE_KEY_FRAGMENT",
+      /gateway rejected the configured API key \(code -1001\)/,
+    ],
+    [
+      -2002,
+      "PRIVATE_EVIDENCE https://system-one.test?ak=PRIVATE_QUERY",
+      /gateway rejected the request \(code -2002\)/,
+    ],
+  ] as const) {
+    const logs: unknown[] = [];
+    let attempts = 0;
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const client = yield* systemOne(config, async () => {
+          attempts++;
+          return Response.json({ code, message });
+        });
+        const error = yield* client.systemOne(request).pipe(Effect.flip);
+        assert.match(error.message, expected);
+        assert.doesNotMatch(
+          JSON.stringify(error),
+          /PRIVATE_KEY_FRAGMENT|PRIVATE_EVIDENCE|PRIVATE_QUERY/,
+        );
+      }).pipe(
+        Effect.provide(
+          Logger.layer([
+            Logger.make((entry) => {
+              logs.push(entry.message);
+            }),
+          ]),
+        ),
+      ),
+    );
+    assert.equal(attempts, 1);
+    assert.doesNotMatch(
+      JSON.stringify(logs),
+      /PRIVATE_KEY_FRAGMENT|PRIVATE_EVIDENCE|PRIVATE_QUERY/,
+    );
+  }
+});
+
+test("a zero gateway code does not replace validation of the native answers", async () => {
+  await Effect.runPromise(
+    Effect.gen(function* () {
+      const client = yield* systemOne(config, async () =>
+        Response.json({
+          code: 0,
+          message: "success",
+          answers: { intent: { type: "choice", choice: "yes" } },
+        }),
+      );
+      assert.equal((yield* client.systemOne(request)).answers.intent?.choice, "yes");
+    }),
+  );
+});
 test("interrupting an HTTP decision aborts transport without resubmitting", async () => {
   await Effect.runPromise(
     Effect.scoped(

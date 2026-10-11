@@ -5,6 +5,7 @@ export const SystemOneConfig = Schema.Struct({
   url: Schema.String,
   model: Schema.String,
   apiKey: Schema.optional(Schema.String),
+  proxy: Schema.optional(Schema.String),
 });
 export type SystemOneConfig = typeof SystemOneConfig.Type;
 
@@ -34,7 +35,23 @@ export interface SystemOneSettings {
   readonly endpoint: Redacted.Redacted<string>;
   readonly model: string;
   readonly apiKey?: Redacted.Redacted<string>;
+  readonly proxy?: Redacted.Redacted<string>;
 }
+const resolveProxy = Effect.fn("SystemOne.resolveProxy")(function* (
+  value: string,
+  provider: ConfigProvider.ConfigProvider,
+) {
+  const resolved = yield* secretConfig(value, provider);
+  const url = yield* Effect.try({
+    try: () => new URL(Redacted.value(resolved)),
+    catch: () => new ConfigProvider.SourceError({ message: "Invalid config.system-one.proxy URL" }),
+  });
+  if (!["http:", "https:"].includes(url.protocol) || url.pathname !== "/" || url.search || url.hash)
+    return yield* new ConfigProvider.SourceError({
+      message: "config.system-one.proxy must be an HTTP or HTTPS proxy origin",
+    });
+  return Redacted.make(url.toString());
+});
 export const resolveSystemOneSettings = Effect.fn("SystemOne.settings")(function* (
   config: SystemOneConfig,
   provider: ConfigProvider.ConfigProvider,
@@ -61,6 +78,7 @@ export const resolveSystemOneSettings = Effect.fn("SystemOne.settings")(function
     endpoint: Redacted.make(url.toString()),
     model: config.model.trim(),
     apiKey: config.apiKey === undefined ? undefined : yield* secretConfig(config.apiKey, provider),
+    proxy: config.proxy === undefined ? undefined : yield* resolveProxy(config.proxy, provider),
   } satisfies SystemOneSettings;
 });
 export const readSystemOneSettings = Effect.gen(function* () {

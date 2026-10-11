@@ -4,6 +4,7 @@ import {
   Data,
   Duration,
   Effect,
+  Option,
   Predicate,
   Random,
   Redacted,
@@ -28,6 +29,7 @@ const Answer = Schema.Struct({
   legend: Schema.optional(Schema.Record(Schema.String, Schema.Unknown)),
 });
 const Response = Schema.Struct({ answers: Schema.Record(Schema.String, Answer) });
+const GatewayError = Schema.Struct({ code: Schema.Finite, message: Schema.String });
 const networkCodes = new Set([
   "ECONNREFUSED",
   "ECONNRESET",
@@ -138,6 +140,17 @@ export const makeSystemOneClient = Effect.fn("SystemOne.make")(function* (
             });
           }
           const body = yield* response.json;
+          const gateway = Schema.decodeUnknownOption(GatewayError)(body);
+          if (Option.isSome(gateway) && gateway.value.code !== 0)
+            return yield* new RequestFailure({
+              // Gateway messages may echo even partial credentials. Expose only
+              // the recognized category and numeric code, never their raw text.
+              message: gateway.value.message.startsWith("ak not exist")
+                ? `System One gateway rejected the configured API key (code ${gateway.value.code})`
+                : `System One gateway rejected the request (code ${gateway.value.code})`,
+              retryable: false,
+              cause: Redacted.make(gateway.value),
+            });
           const value = yield* Schema.decodeUnknownEffect(Response)(body).pipe(
             Effect.mapError(
               (cause) =>

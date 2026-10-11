@@ -49,7 +49,7 @@ After all business consumers use Settings, remove ambient ConfigProvider injecti
 
 ## Credentials
 
-Only fields explicitly supporting references expand `${VAR}`. API keys support exact references. System One owns embedded URL reference expansion and query encoding. Prompts and descriptions remain literal. Do not recursively interpolate the configuration tree.
+Only fields explicitly supporting references expand `${VAR}`. API keys support exact references. System One owns embedded URL reference expansion and query encoding; its optional HTTP/HTTPS `proxy` supports exact references and is resolved as Redacted settings. Prompts and descriptions remain literal. Do not recursively interpolate the configuration tree.
 
 Use Redacted for resolved credentials and environment snapshots. Error messages and logs must not expose rejected credential values. The credential resolver belongs to `infra/config/credentials.ts`. Infrastructure resolves model configuration through `ConfiguredModels.layer` and supplies Redacted credentials to `Models.layer`. Agent exposes model execution and registration contracts without ConfigProvider lookup or application reference syntax. Do not introduce agent-to-infrastructure dependencies or forward this helper through core.
 

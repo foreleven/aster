@@ -12,6 +12,8 @@ config:
     model: jev-latest
     # Optional for endpoints authenticated through URL query parameters.
     apiKey: ${TYPESAFE_API_KEY}
+    # Optional HTTP/HTTPS proxy for System One only; exact references also work: ${SYSTEM_ONE_PROXY}
+    # proxy: http://127.0.0.1:7890
   models:
     - name: goal-reasoning
       provider: minimax

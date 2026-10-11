@@ -100,7 +100,10 @@ The endpoint of a completed automatic retrieval interval whose observed emails h
 An email newly appearing in a connected mailbox whose date precedes the mailbox's completed retrieval interval. It is distinct from historical mail already present when the mailbox was first connected.
 
 **Goal**:
-A continuing assistant responsibility pursued across conversations, observations, and actions, with Tasks tracking individual pieces of work and Signals monitoring conditions for action. A Goal can be paused, resumed or manually deleted; completion belongs to a Task, not to the Goal itself.
+A continuing assistant responsibility pursued across conversations, observations, and actions, with Tasks tracking individual pieces of work and Signals monitoring conditions for action. A Goal does not end or complete; only an explicit user action archives it, while completion belongs to a Task.
+
+**Goal Archival**:
+A reversible user decision to suspend a Goal's automatic evaluation and Signal triggering while retaining its history, accepted inputs and Task feedback. Accepted Tasks remain independently managed; unarchival restores the continuing responsibility.
 
 **Goal Summary**:
 The current understanding of a Goal's progress, established findings, outstanding work, and relevant prior outcomes. It provides continuity across successive planning conversations.
