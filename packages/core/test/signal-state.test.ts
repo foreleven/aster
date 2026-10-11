@@ -10,17 +10,17 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { type SignalDefinition } from "../src/signals/contracts.js";
 import { SignalSnapshot, SignalTime } from "../src/index.js";
-import { ApplicationError } from "../src/operations.js";
+import { ApplicationError, operationUncertain } from "../src/operations.js";
 import { type SignalChangeInput } from "../src/signals/protocol.js";
 import { SignalState, nextSignalTime } from "../src/signals/state/model.js";
-import { readSignalHistory, signalMessage } from "../src/signals/state/store.js";
+import { readSignalHistory, signalDelivery } from "../src/signals/state/store.js";
 import { makeTestContext, testActors } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 
 const path = "/signals/personal--watch";
 const definition = {
   trigger: { _tag: "Context" as const, when: "Evidence changes" },
-  task: { _tag: "Goal" as const, target: "/goals/personal", text: "Original task" },
+  action: { _tag: "SendGoalMessage" as const, goalPath: "/goals/personal", text: "Original task" },
 };
 const create: SignalChangeInput = {
   requestId: "create",
@@ -122,7 +122,7 @@ test("Signal pause preserves frozen work; edits and resume do not rewrite it; de
       yield* env.react("one");
       yield* env.react("two");
       const [one, two] = yield* env.state.deliveries;
-      assert.equal(yield* signalMessage(env.messages, path, one!.message.requestId), undefined);
+      assert.equal(yield* signalDelivery(env.messages, path, one!.message.requestId), undefined);
       yield* env.state.beginDelivery(one!.message.requestId);
       yield* env.change("pause");
       assert.equal(yield* env.state.beginDelivery(two!.message.requestId), undefined);
@@ -133,7 +133,7 @@ test("Signal pause preserves frozen work; edits and resume do not rewrite it; de
         change: {
           operation: "update",
           version: 2,
-          definition: { ...definition, task: { ...definition.task, text: "New task" } },
+          definition: { ...definition, action: { ...definition.action, text: "New task" } },
         },
       });
       yield* env.change("resume");
@@ -145,12 +145,20 @@ test("Signal pause preserves frozen work; edits and resume do not rewrite it; de
         ["sending", "sending", "cancelled"],
       );
       assert.deepEqual(
-        yield* signalMessage(env.messages, path, one!.message.requestId),
+        yield* signalDelivery(env.messages, path, one!.message.requestId),
         one!.message,
       );
       yield* env.state.settleDelivery(
         one!.message.requestId,
         new ApplicationError({ kind: "unavailable", message: "Lost acknowledgement" }),
+      );
+      assert.equal((yield* env.state.deliveries)[0]!.status, "sending");
+      yield* env.state.settleDelivery(
+        one!.message.requestId,
+        operationUncertain({
+          requestId: one!.message.requestId,
+          message: "Original acknowledgement missing",
+        }),
       );
       assert.equal((yield* env.state.deliveries)[0]!.status, "sending");
       yield* env.state.settleDelivery(one!.message.requestId);
@@ -304,6 +312,64 @@ test("Signal commit drains to the Ref after durable projection despite interrupt
       yield* Deferred.succeed(release, undefined);
       yield* Fiber.join(interrupting);
       assert.equal((yield* state.snapshot)?.status, "paused");
+    }),
+  );
+});
+
+test("Signal Task actions bind feedback to their Goal and freeze hints independently of later rule edits", async () => {
+  await run(
+    Effect.gen(function* () {
+      const env = yield* setup();
+      const task = {
+        _tag: "Agent" as const,
+        replyTo: "/goals/other",
+        task: {
+          instructions: "Read application evidence",
+          contextPaths: ["/apps/ctrip"],
+          input: [],
+        },
+      };
+      const update: SignalChangeInput = {
+        ...create,
+        requestId: "task-action",
+        change: {
+          operation: "update",
+          version: 1,
+          definition: {
+            trigger: definition.trigger,
+            action: { _tag: "StartTask", task },
+          },
+        },
+      };
+      const rejected = yield* env.state.change(update).pipe(Effect.result);
+      assert.equal(rejected._tag, "Failure");
+      assert.equal((yield* env.state.snapshot)?.version, 1);
+      if (update.change.operation !== "update") return yield* Effect.die("Unexpected test command");
+      yield* env.state.change({
+        ...update,
+        change: {
+          ...update.change,
+          definition: {
+            ...update.change.definition,
+            action: { _tag: "StartTask", task: { ...task, replyTo: create.source } },
+          },
+        },
+      });
+      yield* env.react("application-evidence");
+      const frozen = (yield* env.state.deliveries)[0]!.message;
+      assert.ok("task" in frozen);
+      assert.equal(frozen.source, path);
+      assert.equal(frozen.task.replyTo, create.source);
+      assert.deepEqual(frozen.task.task.contextPaths, ["/apps/ctrip"]);
+      yield* env.state.change({
+        ...create,
+        requestId: "restore-message",
+        change: { operation: "update", version: 2, definition },
+      });
+      assert.deepEqual((yield* env.state.deliveries)[0]!.message, frozen);
+      yield* env.state.close;
+      const recovered = yield* open(env.registry, env.messages);
+      assert.deepEqual((yield* recovered.deliveries)[0]!.message, frozen);
     }),
   );
 });

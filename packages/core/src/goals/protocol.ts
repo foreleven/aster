@@ -6,13 +6,14 @@ import { Predicate, Schema } from "effect";
 import { createHash } from "node:crypto";
 import { publicJson } from "../json.js";
 import { ApplicationError, CommandReceipt } from "../operations.js";
-import { TaskMessage, TaskPath } from "../tasks/contracts.js";
+import { TaskPath } from "../tasks/contracts.js";
+import { GoalMessageDelivery } from "./message-contracts.js";
 import { GoalExecutionFeedback } from "./contracts.js";
 import { GoalIntentInput } from "./screening/intent.js";
 
 /** Producer-specific envelopes preserve provenance; only UserInput crosses public ingress. */
 export const GoalSubmission = Schema.TaggedUnion({
-  TaskMessage: { delivery: TaskMessage },
+  GoalMessage: { delivery: GoalMessageDelivery },
   UserInput: { text: Schema.NonEmptyString },
   GoalIntent: { delivery: GoalIntentInput },
   ExecutionFeedback: GoalExecutionFeedback.fields,

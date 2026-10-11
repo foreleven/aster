@@ -12,6 +12,7 @@ export const StoredGoalInput = Schema.Struct({
   status: Schema.Literals(["pending", "running", "completed", "failed", "unknown", "ignored"]),
   relevant: Schema.optional(Schema.Boolean),
   error: Schema.optional(Schema.String),
+  operationId: Schema.optional(Schema.String),
   retryOf: Schema.optional(Schema.String),
   remainingAgentTurns: RemainingAgentTurns,
 });

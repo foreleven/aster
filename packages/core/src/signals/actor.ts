@@ -4,6 +4,7 @@ import { type ActorContext } from "@aster/actor";
 import { Clock, Context, Deferred, Effect, Fiber, Layer, Match, Ref, Scope } from "effect";
 import { ContextActor, contextPath } from "../context/actor.js";
 import { DurableContext } from "../context/store.js";
+import { goalMessageReceipt, sendGoalMessage } from "../goals/messages.js";
 import { deliverTask, taskDeliveryReceipt } from "../tasks/delivery.js";
 import { type SignalCommand, SignalCommands, SignalInternal } from "./protocol.js";
 import { SignalState } from "./state/model.js";
@@ -49,10 +50,24 @@ const handlers = Effect.gen(function* () {
           : item.message;
       if (!message) continue;
       yield* Ref.update(inFlight, (set) => new Set([...set, message.requestId]));
-      yield* owner.pipeToSelf(
-        enabled ? deliverTask(owner, message) : taskDeliveryReceipt(registry, message),
-        (result) => ({ _tag: "Delivered", id: message.requestId, result }),
-      );
+      const delivery = Effect.gen(function* () {
+        // A recovered sending phase reconciles the original identity before an exact resend.
+        if (item.status === "sending") {
+          const receipt =
+            "_tag" in message
+              ? yield* goalMessageReceipt(registry, message)
+              : yield* taskDeliveryReceipt(registry, message);
+          if (receipt || !enabled) return receipt;
+        }
+        if ("_tag" in message)
+          return yield* sendGoalMessage(message).pipe(Effect.provideService(CurrentActors, owner));
+        return yield* deliverTask(owner, message);
+      });
+      yield* owner.pipeToSelf(delivery, (result) => ({
+        _tag: "Delivered",
+        id: message.requestId,
+        result,
+      }));
     }
   });
   const scheduleRetry = Effect.fnUntraced(function* (owner: Owner) {
@@ -135,7 +150,10 @@ const handlers = Effect.gen(function* () {
             yield* Ref.update(inFlight, (set) => new Set([...set].filter((item) => item !== id)));
             if (result._tag === "Success" && !result.value) return yield* scheduleRetry(owner);
             yield* state.settleDelivery(id, result._tag === "Failure" ? result.error : undefined);
-            if (result._tag === "Failure" && result.error.kind === "unavailable")
+            if (
+              result._tag === "Failure" &&
+              ["unavailable", "uncertain"].includes(result.error.kind)
+            )
               yield* scheduleRetry(owner);
           }),
         ),

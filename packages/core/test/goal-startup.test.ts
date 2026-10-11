@@ -5,7 +5,7 @@ import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema } from "effect";
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ContextQueries } from "../src/context/queries/routes.js";
+import { ContextQueries } from "../src/queries/registry.js";
 import {
   ExternalAgents,
   GoalSnapshot,

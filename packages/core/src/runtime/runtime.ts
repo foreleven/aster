@@ -2,8 +2,9 @@ import { SignalDefinitions } from "../signals/settings.js";
 import { MemoryActor } from "../memory/actor.js";
 import { ActorSystem, type ActorSystemEvent } from "@aster/actor";
 import { AgentConversations, DurableHarness } from "@aster/agent/harness";
-import { ContextsActor } from "../context/queries/actor.js";
-import { ContextQueries } from "../context/queries/routes.js";
+import { QueryExecution } from "../queries/execution.js";
+import { MemoryRecall } from "../memory/recall.js";
+import { ContextQueries } from "../queries/registry.js";
 import { DurableContext } from "../context/store.js";
 import { ContextCaptures } from "../memory/capture.js";
 import { ApplicationError } from "../operations.js";
@@ -52,6 +53,8 @@ type ActorServices =
   | MemoryBackend
   | ContextCaptures
   | ContextQueries
+  | QueryExecution
+  | MemoryRecall
   | AgentConversations
   | GoalSettings
   | LanguageSettings
@@ -88,6 +91,8 @@ const acquireRuntime = Effect.gen(function* () {
     AgentRunner,
     DurableHarness,
     ContextQueries,
+    QueryExecution,
+    MemoryRecall,
     AgentConversations,
     GoalSettings,
     LanguageSettings,
@@ -151,7 +156,6 @@ const acquireRuntime = Effect.gen(function* () {
     }).pipe(Effect.ensuring(Scope.close(workScope, exit))),
   );
   const requiredRoots = new Set([
-    "/user/contexts",
     "/user/memory",
     "/user/system-one",
     "/user/approvals",
@@ -179,8 +183,6 @@ const acquireRuntime = Effect.gen(function* () {
     }),
   ).pipe(Effect.forkIn(workScope));
   // Subscribe consumer Actors before sources start. Each owns recovery and supervision.
-  const contexts = yield* system.spawn("contexts", ContextsActor);
-  yield* contexts.awaitStarted;
   yield* (yield* system.spawn("memory", MemoryActor)).awaitStarted;
   for (const module of modules.filter((module) => module.phase === "source")) {
     const handle = yield* module
@@ -269,14 +271,25 @@ export class AsterRuntime extends Context.Service<
     const runtimeServices = registerIntegrations.pipe(
       Layer.provideMerge(Layer.mergeAll(AgentRunner.layer, DurableHarness.layer)),
       Layer.provideMerge(contextServices),
+      Layer.provideMerge(
+        Layer.mergeAll(QueryExecution.layer, MemoryRecall.layer).pipe(
+          Layer.provide(contextServices),
+        ),
+      ),
     );
     return Layer.effectContext(
       Effect.gen(function* () {
         const services = Context.pick(
           DurableContext,
           ContextQueries,
+          QueryExecution,
+          MemoryRecall,
           AgentConversations,
-        )(yield* Effect.context<DurableContext | ContextQueries | AgentConversations>());
+        )(
+          yield* Effect.context<
+            DurableContext | ContextQueries | QueryExecution | MemoryRecall | AgentConversations
+          >(),
+        );
         return Context.add(services, AsterRuntime, yield* acquireRuntime);
       }),
     ).pipe(Layer.provide(runtimeServices));

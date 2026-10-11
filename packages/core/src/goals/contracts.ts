@@ -28,7 +28,7 @@ export const GoalExecutionFeedback = Schema.TaggedStruct("ExecutionFeedback", {
 export const GoalInputPayload = Schema.TaggedUnion({
   GoalIntent: { intent: GoalIntent },
   UserInput: { text: Schema.NonEmptyString },
-  TaskMessage: {
+  GoalMessage: {
     requestId: Schema.String,
     source: Schema.String,
     text: Schema.String,

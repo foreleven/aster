@@ -13,6 +13,18 @@ export const CommandReceipt = Schema.Struct({
 export type CommandReceipt = typeof CommandReceipt.Type;
 
 export class ApplicationError extends Schema.TaggedError<ApplicationError>()("ApplicationError", {
-  kind: Schema.Literals(["not-found", "invalid-input", "unavailable", "conflict"]),
+  kind: Schema.Literals(["not-found", "invalid-input", "unavailable", "conflict", "uncertain"]),
   message: Schema.String,
+  operationId: Schema.optional(CommandIdentifier),
 }) {}
+
+/** Dispatch occurred, but no authoritative acknowledgement established its outcome. */
+export const operationUncertain = (options: {
+  readonly requestId: string;
+  readonly message: string;
+}) =>
+  new ApplicationError({
+    kind: "uncertain",
+    message: options.message,
+    operationId: options.requestId,
+  });

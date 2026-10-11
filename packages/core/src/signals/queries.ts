@@ -1,7 +1,7 @@
 import { Command, type ActorContext, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
-import { ContextQueryError } from "../context/contracts.js";
-import { ContextCommand } from "../context/queries/protocol.js";
+import { ContextQueryError } from "../queries/contracts.js";
+import { ContextCommand } from "../queries/commands.js";
 import { publicJson } from "../json.js";
 import { SignalSnapshot } from "./state/snapshot.js";
 
@@ -62,7 +62,7 @@ export const querySignals = Effect.fn("Signal.query")(function* (
       status: state.status,
       trigger: state.trigger,
       nextDue: state.nextDue,
-      ...(detail ? { task: state.task, version: state.version } : {}),
+      ...(detail ? { action: state.action, version: state.version } : {}),
     });
   };
   const data = yield* Match.value(command).pipe(

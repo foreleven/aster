@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import type { AgentOptionsBase, AgentError } from "../shared/contracts.js";
+import type { AgentOptionsBase, AgentError, ToolInvocationFailure } from "../shared/contracts.js";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { InputSubmissionDraft, SubmissionRecord } from "@earendil-works/pi-durable";
 import type { Effect, Option } from "effect";
@@ -19,6 +19,10 @@ export interface HarnessOptions extends AgentOptionsBase {
   readonly instructions: string;
   readonly extensionName?: string;
   readonly contextBudget?: typeof DurableContextBudget.Type;
+  /** Package-private hook connecting retained native provenance to callback retirement. */
+  readonly registerTerminalHandler?: (
+    handler: (failure: ToolInvocationFailure) => Effect.Effect<void, AgentError>,
+  ) => Effect.Effect<void>;
 }
 export type HarnessInput = Omit<InputSubmissionDraft, "type" | "requestId"> & {
   readonly requestId: string;
@@ -34,4 +38,11 @@ export interface HarnessConversation {
     requestId: string,
   ) => Effect.Effect<Option.Option<HarnessSubmission>, AgentError>;
   readonly abort: Effect.Effect<void, AgentError>;
+  /** Call only after the original operation's authoritative domain receipt is established.
+   * This records native failure resolution; it never resumes the aborted dialogue.
+   */
+  readonly resolveFailure: (
+    requestId: string,
+    operationId: string,
+  ) => Effect.Effect<void, AgentError>;
 }

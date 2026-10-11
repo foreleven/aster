@@ -7,6 +7,7 @@ import { TestClock } from "effect/testing";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
   AgentError,
+  ToolInvocationFailure,
   Models,
   Type,
   type EffectTool,
@@ -14,6 +15,7 @@ import {
   type AssistantMessage,
 } from "../src/index.js";
 import { AgentRunner, type AgentInvocation } from "../src/agent/index.js";
+import { withAgentCallbacks, type AgentCallbackInvoker } from "../src/shared/callbacks.js";
 
 class Caller extends Context.Service<Caller, { readonly name: string }>()("test/Caller") {}
 class ToolRejected extends Data.TaggedError("ToolRejected") {}
@@ -48,6 +50,89 @@ const readCaller: EffectTool<typeof parameters, never, Caller> = {
       return { content: [{ type: "text", text: `${caller.name}:${now}` }], details: caller.name };
     }),
 };
+
+test("terminal retention freezes fresh callbacks before its durable write completes", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const entered = yield* Deferred.make<void>();
+        const release = yield* Deferred.make<void>();
+        let saved: AgentCallbackInvoker<never> | undefined;
+        let newCalls = 0;
+        const worker = yield* withAgentCallbacks<never, AgentError, never>((invoke) =>
+          Effect.gen(function* () {
+            saved = invoke;
+            yield* invoke.registerTerminalHandler(() =>
+              Deferred.succeed(entered, undefined).pipe(Effect.andThen(Deferred.await(release))),
+            );
+            return yield* Effect.tryPromise({
+              try: () =>
+                invoke(
+                  Effect.fail(
+                    new ToolInvocationFailure({
+                      message: "Receipt missing",
+                      outcome: "unknown",
+                      operationId: "original-operation",
+                    }),
+                  ),
+                ),
+              catch: () => new AgentError("Fake native callback failure"),
+            });
+          }),
+        ).pipe(Effect.exit, Effect.forkScoped);
+        yield* Deferred.await(entered);
+        yield* Effect.promise(async () => {
+          await assert.rejects(
+            saved!(
+              Effect.sync(() => {
+                newCalls++;
+              }),
+            ),
+            /Receipt missing/,
+          );
+        });
+        assert.equal(newCalls, 0);
+        assert.equal(saved!.signal.aborted, false);
+        yield* Deferred.succeed(release, undefined);
+        const exit = yield* Fiber.join(worker);
+        assert.ok(Exit.isFailure(exit));
+        const failure = Cause.findErrorOption(exit.cause);
+        assert.ok(Option.isSome(failure));
+        assert.equal(failure.value.outcome, "unknown");
+        assert.equal(failure.value.operationId, "original-operation");
+      }),
+    ).pipe(Effect.timeout("5 seconds")),
+  );
+});
+
+test("terminal retention failure preserves original identity and reports typed uncertainty", async () => {
+  const failure = await Effect.runPromise(
+    withAgentCallbacks<never, AgentError, never>((invoke) =>
+      invoke
+        .registerTerminalHandler(() => Effect.fail(new AgentError("Storage unavailable")))
+        .pipe(
+          Effect.andThen(
+            Effect.tryPromise({
+              try: () =>
+                invoke(
+                  Effect.fail(
+                    new ToolInvocationFailure({
+                      message: "Original failure",
+                      outcome: "failed",
+                      operationId: "original-operation",
+                    }),
+                  ),
+                ),
+              catch: () => new AgentError("Fake native callback failure"),
+            }),
+          ),
+        ),
+    ).pipe(Effect.flip),
+  );
+  assert.equal(failure.message, "Original failure");
+  assert.equal(failure.operationId, "original-operation");
+  assert.equal(failure.outcome, "unknown");
+});
 
 test("explicit agent and harness services isolate histories and retain native submissions", async () => {
   const requests: unknown[][] = [];
@@ -137,6 +222,7 @@ const boundaries = [
             }),
           submission: () => Effect.succeed(Option.none()),
           abort: Effect.void,
+          resolveFailure: () => Effect.fail(new AgentError("Unused fake failure resolution")),
         }),
       );
       return {
@@ -155,6 +241,48 @@ const boundaries = [
   },
 ];
 for (const { label, make } of boundaries) {
+  test(`${label}: terminal callback failure rejects fresh and retired callbacks`, async () => {
+    let saved: NativeCallbacks | undefined;
+    let calls = 0;
+    const runner = make((native) => {
+      saved = native;
+      return Effect.promise(async () => {
+        await native.tools![0]!.execute("original", {}).catch(() => undefined);
+        await native.tools![0]!.execute("fresh-id", {}).catch(() => undefined);
+        await Promise.resolve(native.onResponse?.(response)).catch(() => undefined);
+        return { messages: [] };
+      });
+    });
+    const failure = await Effect.runPromise(
+      runner
+        .run({
+          tools: [
+            {
+              ...readCaller,
+              execute: () =>
+                Effect.gen(function* () {
+                  calls++;
+                  return yield* new ToolInvocationFailure({
+                    message: "Receipt missing",
+                    outcome: "unknown",
+                    operationId: "original-operation",
+                  });
+                }),
+            },
+          ],
+          onResponse: () =>
+            Effect.sync(() => {
+              calls++;
+            }),
+        })
+        .pipe(Effect.flip),
+    );
+    assert.equal(failure.outcome, "unknown");
+    assert.equal(failure.operationId, "original-operation");
+    await assert.rejects(saved!.tools![0]!.execute("after-retirement", {}));
+    assert.equal(calls, 1);
+  });
+
   test(`${label}: typed tool errors remain recoverable and successful calls retire callbacks`, async () => {
     let saved: NativeCallbacks | undefined;
     let calls = 0;

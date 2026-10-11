@@ -1,6 +1,6 @@
 # Task delivery and execution
 
-Task describes work delivered to an Actor. `Goal` sends a message to a Goal; `Agent` starts an internal Agent; `Delegate` selects an external executor. Both execution variants have one persistent Task owner at `/tasks/<sha256(source, requestId)>`. There is no separate business Run or Delegation owner.
+Task describes persistent work. `Agent` starts an internal Agent; `Delegate` selects an external executor. Goal messages are a separate operation and never create a Task Actor. Both execution variants have one persistent Task owner at `/tasks/<sha256(source, requestId)>`. There is no separate business Run or Delegation owner.
 
 ## Ownership and organization
 
@@ -41,7 +41,7 @@ TasksRootActor registers and watches retained children without awaiting their re
 
 ## Admission and messages
 
-`TaskMessage` carries stable request identity, source, creation time, remaining Agent-turn budget and optional frozen public Context evidence. Signals retain exact messages and delivery phases in their Pi journal before delivery; Goal tool identities derive from input and tool-call identity. Receivers validate source authority and reject changed identity reuse.
+`TaskMessage` carries stable request identity, source, creation time, remaining Agent-turn budget and optional frozen public Context evidence. Signals retain exact Task or Goal-message envelopes and delivery phases in their Pi journal before delivery; Goal tool identities derive from input and tool-call identity. Receivers validate source authority and reject changed identity reuse.
 
 TaskState commits instructions/evidence as `task.admission` in Pi before saving the initial snapshot. Later `task.input` entries contain a typed Message, Answer, Check or Retry and its original receipt. Recovery finishes interrupted Pi-to-snapshot handoffs without losing accepted work. Pi `task.result` entries retain outcomes and their covered input identities. The Actor snapshot stores references, not message bodies.
 

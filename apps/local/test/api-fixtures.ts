@@ -3,7 +3,7 @@ import type { TestContext as NodeTestContext } from "node:test";
 import { DurableContext } from "@aster/core";
 import { ActorNotFound, type ActorSystem } from "@aster/actor";
 import { AgentConversations } from "@aster/agent/harness";
-import { AsterRuntime, ContextQueries } from "@aster/core";
+import { AsterRuntime, ContextQueries, QueryExecution } from "@aster/core";
 import { NodeFileSystem } from "@effect/platform-node";
 import { Effect, Exit, Layer, Scope } from "effect";
 import { makeHttpApi } from "../src/http-api.js";
@@ -28,19 +28,19 @@ export const apiServices = (options: ApiFixture) =>
     Layer.mergeAll(Layer.succeed(DurableContext, options.registry.backend)),
     Layer.succeed(AgentConversations, options.conversations ?? testConversations()),
     options.queries ? Layer.succeed(ContextQueries, options.queries) : ContextQueries.layer,
-  );
+  ).pipe((sources) => QueryExecution.layer.pipe(Layer.provideMerge(sources)));
 
 /** Promise boundary only for node:test HTTP callers. The fixture owns the server Scope. */
 export const startTestHttp = async (options: ApiFixture & { port?: number; webDir?: string }) => {
   const scope = await Effect.runPromise(Effect.scoped(Scope.make()));
   try {
+    const services = await Effect.runPromise(
+      Layer.buildWithScope(Layer.mergeAll(apiServices(options), NodeFileSystem.layer), scope),
+    );
     const server = await Effect.runPromise(
-      Effect.scoped(
-        makeHttpApi({ port: options.port ?? 0, webDir: options.webDir }).pipe(
-          Effect.provide(apiServices(options)),
-          Effect.provide(NodeFileSystem.layer),
-          Effect.provideService(Scope.Scope, scope),
-        ),
+      makeHttpApi({ port: options.port ?? 0, webDir: options.webDir }).pipe(
+        Effect.provideContext(services),
+        Effect.provideService(Scope.Scope, scope),
       ),
     );
     return {

@@ -1,7 +1,7 @@
 import { testSettings } from "./settings-fixtures.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { Schema } from "effect";
-import { ContextQueryError } from "../src/context/contracts.js";
+import { ContextQueryError } from "../src/queries/contracts.js";
 import { DurableContext } from "@aster/core";
 import { testConversations } from "./conversation-fixtures.js";
 import { ActorSystem, Command } from "@aster/actor";
@@ -11,7 +11,7 @@ import { test } from "node:test";
 import { ListGoals, ReadGoal } from "../src/goals/queries.js";
 import { ListTasks, ReadTask } from "../src/tasks/queries.js";
 import { ReadSignal } from "../src/signals/queries.js";
-import { ContextQueries } from "../src/context/queries/routes.js";
+import { ContextQueries } from "../src/queries/registry.js";
 import {
   ExternalAgents,
   GoalsRootActor,
@@ -167,7 +167,7 @@ test("Signal owner queries and pause coordination read each child through its ma
               operation: "create",
               definition: {
                 trigger: { _tag: "Context", when: "Query" },
-                task: { _tag: "Goal", target: "/goals/personal", text: "Notify" },
+                action: { _tag: "SendGoalMessage", goalPath: "/goals/personal", text: "Notify" },
               },
             },
           },

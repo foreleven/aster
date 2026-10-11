@@ -99,11 +99,7 @@ const makeTaskState = Effect.fn("TaskState.make")(function* (path: string) {
           return { receipt: (yield* store.read).inputs[0]!.receipt, replayed: true };
         }
         const source = yield* sourceTask(registry, messages, value.source, id);
-        if (
-          source &&
-          (source.task._tag === "Goal" ||
-            !isDeepStrictEqual(delegateInput(source, source.task), value))
-        )
+        if (source && !isDeepStrictEqual(delegateInput(source, source.task), value))
           return yield* conflict("Task differs from its frozen Signal occurrence");
         if (value.agent !== "internal" && !agents[value.agent])
           return yield* new ApplicationError({

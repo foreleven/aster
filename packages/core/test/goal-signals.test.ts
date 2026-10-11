@@ -17,7 +17,7 @@ const input: SignalChangeInput = {
   change: {
     operation: "create",
     definition: {
-      task: { _tag: "Goal", target: "/goals/personal", text: "Notify the Goal" },
+      action: { _tag: "SendGoalMessage", goalPath: "/goals/personal", text: "Notify the Goal" },
       trigger: { _tag: "Schedule", schedule: { type: "once", at: "2099-01-01T00:00:00Z" } },
     },
   },
@@ -58,7 +58,11 @@ test("Signal owns direct command receipts across restarts, rejects stale changes
                 operation: "create",
                 definition: {
                   trigger: { _tag: "Context", when: "Different" },
-                  task: { _tag: "Goal", target: "/goals/personal", text: "Different" },
+                  action: {
+                    _tag: "SendGoalMessage",
+                    goalPath: "/goals/personal",
+                    text: "Different",
+                  },
                 },
               },
             }))._tag,
@@ -73,7 +77,11 @@ test("Signal owns direct command receipts across restarts, rejects stale changes
               operation: "update",
               version: 1,
               definition: {
-                task: { _tag: "Goal", target: "/goals/personal", text: "Notify the Goal" },
+                action: {
+                  _tag: "SendGoalMessage",
+                  goalPath: "/goals/personal",
+                  text: "Notify the Goal",
+                },
                 trigger: { _tag: "Context", when: "New condition" },
               },
             },
@@ -106,7 +114,7 @@ test("Signal owns direct command receipts across restarts, rejects stale changes
     );
 });
 
-test("Signal timer lives outside conversation, reschedules by version and executes its Goal Task exactly once", async () => {
+test("Signal timer lives outside conversation, reschedules by version and executes its Goal message action exactly once", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
@@ -119,7 +127,7 @@ test("Signal timer lives outside conversation, reschedules by version and execut
           change: {
             operation: "create",
             definition: {
-              task: { _tag: "Goal", target: "/goals/personal", text: "Notify" },
+              action: { _tag: "SendGoalMessage", goalPath: "/goals/personal", text: "Notify" },
               trigger: {
                 _tag: "Schedule",
                 schedule: { type: "once", at: new Date(start + 10000).toISOString() },
@@ -139,7 +147,7 @@ test("Signal timer lives outside conversation, reschedules by version and execut
             operation: "update",
             version: 1,
             definition: {
-              task: { _tag: "Goal", target: "/goals/personal", text: "Notify" },
+              action: { _tag: "SendGoalMessage", goalPath: "/goals/personal", text: "Notify" },
               trigger: {
                 _tag: "Schedule",
                 schedule: { type: "once", at: new Date(start + 20000).toISOString() },

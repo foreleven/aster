@@ -7,7 +7,10 @@ import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema, Stream } from "e
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ContextQueries } from "../src/context/queries/routes.js";
+import { QueryExecution } from "../src/queries/execution.js";
+import { MemoryRecall } from "../src/memory/recall.js";
+import { MemoryBackend } from "../src/memory/contracts.js";
+import { ContextQueries } from "../src/queries/registry.js";
 import {
   ExternalAgents,
   GoalSettings,
@@ -33,7 +36,24 @@ const taskSystem = (
   ActorSystem.make().pipe(
     ActorSystem.provide(
       testSettings,
-      ContextQueries.layer,
+      Layer.mergeAll(QueryExecution.layer, MemoryRecall.layer).pipe(
+        Layer.provideMerge(ContextQueries.layer),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(AgentConversations, history),
+            Layer.succeed(MemoryBackend, {
+              description: "Test memory",
+              retrieval: "bm25",
+              drain: Effect.void,
+              capture: () => Effect.void,
+              recall: {
+                search: () => Effect.succeed({ results: [] }),
+                expand: () => Effect.succeed({ results: [] }),
+              },
+            }),
+          ),
+        ),
+      ),
       Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
       Layer.succeed(AgentConversations, history),
       Layer.succeed(ExternalAgents, {}),
@@ -83,7 +103,24 @@ for (const fails of [false, true]) {
           ).pipe(
             ActorSystem.provide(
               testSettings,
-              ContextQueries.layer,
+              Layer.mergeAll(QueryExecution.layer, MemoryRecall.layer).pipe(
+                Layer.provideMerge(ContextQueries.layer),
+                Layer.provide(
+                  Layer.mergeAll(
+                    Layer.succeed(AgentConversations, history),
+                    Layer.succeed(MemoryBackend, {
+                      description: "Test memory",
+                      retrieval: "bm25",
+                      drain: Effect.void,
+                      capture: () => Effect.void,
+                      recall: {
+                        search: () => Effect.succeed({ results: [] }),
+                        expand: () => Effect.succeed({ results: [] }),
+                      },
+                    }),
+                  ),
+                ),
+              ),
               Logger.layer([
                 Logger.make<unknown, void>(({ message }) => {
                   if (!Array.isArray(message)) return;

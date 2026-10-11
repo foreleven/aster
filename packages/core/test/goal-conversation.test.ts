@@ -8,7 +8,11 @@ import type { AgentInvocation } from "@aster/agent/agent";
 import { AgentConversations } from "@aster/agent/harness";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ContextsActor } from "../src/context/queries/actor.js";
+import { QueryExecution } from "../src/queries/execution.js";
+import { MemoryRecall } from "../src/memory/recall.js";
+import { MemoryBackend } from "../src/memory/contracts.js";
+import { TaskDeliveryInput as importedTaskDeliveryInput } from "../src/tasks/contracts.js";
+import { ExternalTaskInput } from "../src/tasks/contracts.js";
 import { testConversations } from "./conversation-fixtures.js";
 import type { HarnessCall } from "./harness-fixtures.js";
 
@@ -17,6 +21,7 @@ import type { GoalSubmission } from "../src/goals/protocol.js";
 import {
   ApprovalQueueActor,
   ContextQueries,
+  ContextDirectory,
   ExternalAgents,
   GoalSettings,
   GoalSnapshot,
@@ -30,12 +35,7 @@ import {
 } from "../src/index.js";
 import { makeTestContext, type ContextStore } from "../src/testing/context.js";
 import { fakeAgent } from "./fixtures.js";
-import {
-  agentResult,
-  emptyRecall,
-  harnessReplyLayer,
-  modelReplyLayer,
-} from "./workflow-fixtures.js";
+import { agentResult, harnessReplyLayer, modelReplyLayer } from "./workflow-fixtures.js";
 
 const tool = (input: HarnessCall, name: string, args: object, id = name) =>
   Effect.tryPromise({
@@ -53,6 +53,7 @@ const setup = Effect.fnUntraced(function* (
     gate?: (input: AgentInvocation) => Effect.Effect<AgentResult, AgentError>;
     external?: ReturnType<typeof fakeAgent>;
     history?: ReturnType<typeof testConversations>;
+    contexts?: ContextDirectory["Service"];
   } = {},
 ) {
   const registry = yield* makeTestContext(options.store);
@@ -63,8 +64,26 @@ const setup = Effect.fnUntraced(function* (
       testSettings,
       Layer.mergeAll(Layer.succeed(DurableContext, registry.backend)),
       Layer.succeed(ContextQueries, queries),
+      Layer.succeed(ContextDirectory, options.contexts ?? []),
 
-      emptyRecall,
+      Layer.mergeAll(QueryExecution.layer, MemoryRecall.layer).pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(ContextQueries, queries),
+            Layer.succeed(AgentConversations, conversations),
+            Layer.succeed(MemoryBackend, {
+              description: "Test memory",
+              retrieval: "bm25",
+              drain: Effect.void,
+              capture: () => Effect.void,
+              recall: {
+                search: () => Effect.succeed({ results: [] }),
+                expand: () => Effect.succeed({ results: [] }),
+              },
+            }),
+          ),
+        ),
+      ),
       Layer.succeed(GoalSettings, {
         definitions: options.goals ?? [
           { slug: "project", description: "Improve project reliability" },
@@ -85,7 +104,6 @@ const setup = Effect.fnUntraced(function* (
       harnessReplyLayer(conversation),
     ),
   );
-  yield* system.spawn("contexts", ContextsActor);
   const approvals = yield* system.spawn("approvals", ApprovalQueueActor);
   const signals = yield* system.spawn("signals", SignalRootActor);
   yield* system.spawn("tasks", TasksRootActor);
@@ -118,7 +136,30 @@ const setup = Effect.fnUntraced(function* (
       slug: "project",
       command: { _tag: "RetryTurn", requestId, turnId, replyTo },
     }));
-  return { registry, system, root, signals, approvals, state, wait, submit, end, retry };
+  return {
+    registry,
+    system,
+    root,
+    signals,
+    approvals,
+    state,
+    wait,
+    submit,
+    end,
+    retry,
+    queries,
+    history: conversations,
+  };
+});
+
+test("external delegation cannot select the reserved internal executor and bypass its contract", async () => {
+  const decoded = await Effect.runPromise(
+    Schema.decodeUnknownEffect(ExternalTaskInput)({
+      executor: "internal",
+      instructions: "Investigate",
+    }).pipe(Effect.result),
+  );
+  assert.equal(decoded._tag, "Failure");
 });
 
 const contextInput = (requestId: string): GoalSubmission => ({
@@ -336,11 +377,13 @@ test("queued users precede ready Context and Task inputs without overlapping mai
       yield* Deferred.await(entered);
       yield* submitContext(env, "context");
       yield* env.submit("task", {
-        _tag: "TaskMessage",
+        _tag: "GoalMessage",
         delivery: {
           requestId: "task",
           source: "/goals/project",
-          task: { _tag: "Goal", target: "/goals/project", text: "Task update" },
+          _tag: "GoalMessageDelivery" as const,
+          goalPath: "/goals/project",
+          text: "Task update",
           createdAt: "2026-10-01T00:00:00Z",
           remainingAgentTurns: 3,
         },
@@ -364,7 +407,7 @@ test("queued users precede ready Context and Task inputs without overlapping mai
       assert.match(contents[3]!, /Project evidence/);
       assert.match(
         contents[4]!,
-        /^Task message \(internal evidence, not a user instruction or authorization\)/,
+        /^Goal message \(internal evidence, not a user instruction or authorization\)/,
       );
       assert.match(contents[4]!, /Source: \/goals\/project/);
       assert.match(contents[4]!, /Task update/);
@@ -610,11 +653,13 @@ test("Context changes pass the Agent Gate before Pi; user and Task inputs bypass
       assert.equal(calls, 3);
       assert.equal(gates, 2);
       yield* env.submit("task-direct", {
-        _tag: "TaskMessage",
+        _tag: "GoalMessage",
         delivery: {
           requestId: "task-direct",
           source: "/goals/project",
-          task: { _tag: "Goal", target: "/goals/project", text: "Follow up" },
+          _tag: "GoalMessageDelivery" as const,
+          goalPath: "/goals/project",
+          text: "Follow up",
           createdAt: "2026-10-01T00:00:00Z",
           remainingAgentTurns: 3,
         },
@@ -715,36 +760,27 @@ test("Goal tracks multiple Tasks before tool acknowledgement and reuses referenc
           if (input.owner.startsWith("/tasks/")) return yield* Effect.never;
           if (++turns === 1) {
             const external = {
-              task: {
-                _tag: "Delegate",
-                agent: "test",
-                replyTo: "/goals/project",
-                task: { instructions: "Investigate project changes", input: [] },
-              },
+              executor: "test",
+              instructions: "Investigate project changes",
+              evidence: [],
             };
-            const first = yield* tool(input, "start_task", external, "external-task");
+            const first = yield* tool(input, "delegate_task", external, "external-task");
             assert.equal(first.isError, undefined);
             const receipt = first.details as { taskPath: string };
             paths.push(receipt.taskPath);
-            const replay = yield* tool(input, "start_task", external, "external-task");
+            const replay = yield* tool(input, "delegate_task", external, "external-task");
             assert.deepEqual(replay.details, first.details);
             const second = yield* tool(
               input,
               "start_task",
-              {
-                task: {
-                  _tag: "Agent",
-                  replyTo: "/goals/project",
-                  task: { instructions: "Analyze competitors", input: [] },
-                },
-              },
+              { instructions: "Analyze competitors", evidence: [] },
               "internal-task",
             );
             assert.equal(second.isError, undefined);
             paths.push((second.details as { taskPath: string }).taskPath);
           } else {
             const reply = yield* tool(input, "task_send", {
-              target: paths[0],
+              taskPath: paths[0],
               text: "Only the past week",
             });
             assert.equal(reply.isError, undefined);
@@ -829,11 +865,8 @@ test("Goal delegates evidence reads to an internal Task and answers users while 
             let text = "";
             if (input.content === "Review project evidence") {
               const accepted = yield* tool(input, "start_task", {
-                task: {
-                  _tag: "Agent",
-                  replyTo: "/goals/project",
-                  task: { instructions: "Review project evidence", input: [] },
-                },
+                instructions: "Review project evidence",
+                evidence: [],
               });
               assert.equal(accepted.isError, undefined);
               text = "I am reviewing the evidence in a task.";
@@ -873,6 +906,187 @@ test("Goal delegates evidence reads to an internal Task and answers users while 
   );
 });
 
+test("Goal starts an internal Task with structured Apps hints, retrieves evidence and receives feedback", async () => {
+  const answer = (text: string): AgentResult => ({
+    messages: [
+      {
+        role: "assistant",
+        api: "openai-completions",
+        provider: "test",
+        model: "test",
+        stopReason: "stop",
+        timestamp: 0,
+        content: [{ type: "text", text }],
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    ],
+  });
+  await run(
+    Effect.gen(function* () {
+      let reads = 0;
+      let taskPath: string | undefined;
+      const env = yield* setup(
+        (input) =>
+          Effect.gen(function* () {
+            if (input.owner.startsWith("/tasks/")) {
+              taskPath = input.owner;
+              assert.match(input.content, /Preferred Context paths/);
+              assert.match(input.content, /\/apps\/ctrip/);
+              assert.match(input.content, /Find family destinations/);
+              assert.ok(!input.tools!.some((tool) => tool.name === "start_task"));
+              const directory = yield* tool(input, "list_contexts", { parent: "/apps" });
+              assert.match(JSON.stringify(directory.details), /\/apps\/ctrip/);
+              const definition = yield* tool(input, "describe_context", { path: "/apps/ctrip" });
+              assert.match(JSON.stringify(definition.details), /destinations/);
+              const evidence = yield* tool(input, "query_context", {
+                path: "/apps/ctrip",
+                command: "destinations",
+                args: { origin: "Nanjing" },
+              });
+              assert.equal(evidence.isError, undefined);
+              assert.match(JSON.stringify(evidence.details), /Family destination evidence/);
+              return answer("Family destination evidence from /apps/ctrip");
+            }
+            if (input.content === "Research family travel") {
+              assert.ok(!input.tools!.some((tool) => tool.name === "query_context"));
+              const receipt = yield* tool(input, "start_task", {
+                instructions: "Research family travel from Nanjing for two adults and one child",
+                contextPaths: ["/apps/ctrip", "/apps/ctrip"],
+              });
+              assert.equal(receipt.isError, undefined);
+              assert.equal((receipt.details as { status: string }).status, "accepted");
+              return answer("Research accepted");
+            }
+            return answer("Ready");
+          }),
+        { contexts: [{ path: "/apps/ctrip", description: "Find family destinations" }] },
+      );
+      yield* env.queries.register(
+        "/apps/ctrip",
+        {
+          description: "Find family destinations",
+          commands: {
+            destinations: {
+              description: "Read family destination evidence",
+              schema: Schema.Struct({ origin: Schema.String }),
+              success: Schema.String,
+              error: Schema.Never,
+              text: (value) => String(value),
+            },
+          },
+        },
+        (input) =>
+          Effect.sync(() => {
+            assert.equal(input.args.origin, "Nanjing");
+            reads++;
+            return "Family destination evidence";
+          }),
+      );
+      yield* env.wait(() => env.state().inputs[0]?.status === "completed");
+      yield* env.submit("travel", { _tag: "UserInput", text: "Research family travel" });
+      yield* env.wait(() =>
+        env
+          .state()
+          .inputs.some(
+            (input) => input.kind === "ExecutionFeedback" && input.status === "completed",
+          ),
+      );
+      assert.equal(reads, 1);
+      assert.ok(taskPath);
+      const history = yield* env.history.read(taskPath);
+      const admission = history.find((entry) => entry.kind === "task.admission");
+      const saved = Schema.decodeUnknownSync(importedTaskDeliveryInput)(admission?.data);
+      assert.equal(saved.source, "/goals/project");
+      assert.equal(saved.replyTo, "/goals/project");
+      assert.deepEqual(saved.task.contextPaths, ["/apps/ctrip"]);
+      assert.equal(history.filter((entry) => entry.kind === "tool.query-result").length, 1);
+    }),
+  );
+});
+
+test("Goal reconciles the original accepted Task receipt and releases queued feedback without resubmitting", async () => {
+  await run(
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      const history = testConversations();
+      const resolutions: { owner: string; inputId: string; operationId: string }[] = [];
+      let creations = 0;
+      const env = yield* setup(
+        (input) =>
+          Effect.gen(function* () {
+            if (input.owner.startsWith("/tasks/")) {
+              yield* Deferred.await(release);
+              return { messages: [] };
+            }
+            if (input.content === "Research with uncertain acknowledgement") {
+              creations++;
+              const accepted = yield* tool(
+                input,
+                "start_task",
+                { instructions: "Research the evidence" },
+                "original-create",
+              );
+              assert.equal(accepted.isError, undefined);
+              const receipt = accepted.details as { requestId: string };
+              // The fake SDK loses observation after real Task admission. Native failure evidence
+              // and reopened resolution are verified with real Pi separately in agent tests.
+              return yield* Effect.fail(
+                new AgentError("Task acknowledgement lost", [], {
+                  outcome: "unknown",
+                  operationId: receipt.requestId,
+                }),
+              );
+            }
+            return { messages: [] };
+          }),
+        {
+          history: {
+            ...history,
+            resolveFailure: (owner, inputId, operationId) =>
+              Effect.sync(() => {
+                resolutions.push({ owner, inputId, operationId });
+              }),
+          },
+        },
+      );
+      yield* env.wait(() => env.state().inputs[0]?.status === "completed");
+      yield* env.submit("uncertain-research", {
+        _tag: "UserInput",
+        text: "Research with uncertain acknowledgement",
+      });
+      yield* env.wait(
+        () =>
+          env.state().inputs.find((input) => input.kind === "UserInput")?.status === "completed",
+      );
+      assert.equal(creations, 1);
+      assert.equal(resolutions.length, 1);
+      assert.equal(resolutions[0]!.owner, "/goals/project");
+      assert.equal(env.state().tasks.length, 1);
+      assert.equal(
+        env.state().inputs.some((input) => input.status === "unknown"),
+        false,
+      );
+      yield* Deferred.succeed(release, undefined);
+      yield* env.wait(() =>
+        env
+          .state()
+          .inputs.some(
+            (input) => input.kind === "ExecutionFeedback" && input.status === "completed",
+          ),
+      );
+      assert.equal(creations, 1);
+      assert.equal(resolutions.length, 1);
+    }),
+  );
+});
+
 test("Tasks execute independently through shared Run approval and return feedback to the conversation", async () => {
   await run(
     Effect.gen(function* () {
@@ -886,13 +1100,10 @@ test("Tasks execute independently through shared Run approval and return feedbac
           Effect.gen(function* () {
             calls++;
             if (calls === 1) {
-              const result = yield* tool(input, "start_task", {
-                task: {
-                  _tag: "Delegate",
-                  agent: "test",
-                  task: { instructions: "Investigate the project", input: [] },
-                  replyTo: "/goals/project",
-                },
+              const result = yield* tool(input, "delegate_task", {
+                executor: "test",
+                instructions: "Investigate the project",
+                evidence: [],
               });
               assert.equal(result.isError, undefined);
             }
@@ -1022,13 +1233,10 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
         (input) =>
           Effect.gen(function* () {
             if (++calls === 1)
-              yield* tool(input, "start_task", {
-                task: {
-                  _tag: "Delegate",
-                  agent: "test",
-                  task: { instructions: "Recover this external task", input: [] },
-                  replyTo: "/goals/project",
-                },
+              yield* tool(input, "delegate_task", {
+                executor: "test",
+                instructions: "Recover this external task",
+                evidence: [],
               });
             return { messages: [] };
           }),
@@ -1142,7 +1350,9 @@ test("Goal receipts normalize envelope keys, retain exact serialized evidence an
         requestId: "canonical-task",
         source: "/goals/project",
         createdAt: "2026-10-05T00:00:00Z",
-        task: { _tag: "Goal" as const, target: "/goals/project", text: "Review" },
+        _tag: "GoalMessageDelivery" as const,
+        goalPath: "/goals/project",
+        text: "Review",
         remainingAgentTurns: 2,
         evidence: {
           text: serializeFixtureState({ first: 1, nested: { a: 2, b: 3 }, items: [1, 2] }),
@@ -1153,7 +1363,7 @@ test("Goal receipts normalize envelope keys, retain exact serialized evidence an
           messages: [],
         },
       };
-      const accepted = yield* env.submit(delivery.requestId, { _tag: "TaskMessage", delivery });
+      const accepted = yield* env.submit(delivery.requestId, { _tag: "GoalMessage", delivery });
       assert.equal(accepted._tag, "Accepted");
       const reordered = {
         ...delivery,
@@ -1163,7 +1373,7 @@ test("Goal receipts normalize envelope keys, retain exact serialized evidence an
         },
       };
       assert.deepEqual(
-        yield* env.submit(delivery.requestId, { _tag: "TaskMessage", delivery: reordered }),
+        yield* env.submit(delivery.requestId, { _tag: "GoalMessage", delivery: reordered }),
         accepted,
       );
       const changed = {
@@ -1174,12 +1384,12 @@ test("Goal receipts normalize envelope keys, retain exact serialized evidence an
         },
       };
       assert.equal(
-        (yield* env.submit(delivery.requestId, { _tag: "TaskMessage", delivery: changed }))._tag,
+        (yield* env.submit(delivery.requestId, { _tag: "GoalMessage", delivery: changed }))._tag,
         "Rejected",
       );
       const receipt = env.state().receipts.find((item) => item.requestId === delivery.requestId)!;
       assert.deepEqual(Object.keys(receipt).sort(), ["payloadFingerprint", "receipt", "requestId"]);
-      assert.equal(env.state().inputs.filter((item) => item.kind === "TaskMessage").length, 1);
+      assert.equal(env.state().inputs.filter((item) => item.kind === "GoalMessage").length, 1);
     }),
   );
 });
@@ -1229,7 +1439,11 @@ test("Goal lifecycle pauses only owned Signals through its ActorContext", async 
     Effect.gen(function* () {
       const definition = {
         trigger: { _tag: "Context" as const, when: "Evidence changes" },
-        task: { _tag: "Goal" as const, target: "/goals/project", text: "Review evidence" },
+        action: {
+          _tag: "SendGoalMessage" as const,
+          goalPath: "/goals/project",
+          text: "Review evidence",
+        },
       };
       const env = yield* setup(() => Effect.die("No conversation expected"), {
         goals: [

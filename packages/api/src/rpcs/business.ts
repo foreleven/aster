@@ -1,4 +1,4 @@
-import { ApplicationError, SignalTrigger, Task } from "@aster/core/contracts";
+import { ApplicationError, SignalTrigger, SignalAction } from "@aster/core/contracts";
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 
@@ -33,7 +33,7 @@ export const SignalOverview = Schema.Struct({
   owner: Schema.optional(Schema.String),
   status: Schema.Literals(["active", "paused", "deleted"]),
   trigger: SignalTrigger,
-  task: Task,
+  action: SignalAction,
   version: Schema.Int,
   nextDue: Schema.optional(Schema.NullOr(Schema.String)),
 });

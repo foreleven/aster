@@ -6,7 +6,7 @@ import { DurableContext } from "../../context/store.js";
 import { SignalTrigger, type SignalDefinition } from "../contracts.js";
 import { SignalChangeInput, SignalReactionInput } from "../protocol.js";
 import { type SignalSnapshot } from "./snapshot.js";
-import { makeSignalStore } from "./store.js";
+import { makeSignalStore, type FrozenSignalDelivery } from "./store.js";
 
 export const nextSignalTime = (
   trigger: SignalSnapshot["trigger"],
@@ -78,15 +78,15 @@ const makeState = Effect.fn("SignalState.make")(function* (
     if (
       !saved ||
       !isDeepStrictEqual(
-        { trigger: saved.trigger, task: saved.task },
-        { trigger: configured.trigger, task: configured.task },
+        { trigger: saved.trigger, action: saved.action },
+        { trigger: configured.trigger, action: configured.action },
       )
     )
       yield* store.append({
         _tag: "Changed",
         snapshot: {
           trigger: configured.trigger,
-          task: configured.task,
+          action: configured.action,
           status: "active",
           version: (saved?.version ?? 0) + 1,
           ...cursor(configured.trigger, yield* Clock.currentTimeMillis),
@@ -122,6 +122,11 @@ const makeState = Effect.fn("SignalState.make")(function* (
       Match.whenOr({ operation: "create" }, { operation: "update" }, (change) =>
         Effect.gen(function* () {
           yield* timing(change.definition.trigger);
+          if (
+            change.definition.action._tag === "StartTask" &&
+            change.definition.action.task.replyTo !== input.source
+          )
+            return yield* conflict("Signal Task feedback must return to its owning Goal");
           return {
             ...change.definition,
             owner: input.source,
@@ -156,6 +161,20 @@ const makeState = Effect.fn("SignalState.make")(function* (
     });
     return receipt;
   });
+  const freeze = (
+    state: SignalSnapshot,
+    metadata: Omit<FrozenSignalDelivery, "task" | "_tag" | "goalPath" | "text">,
+  ): FrozenSignalDelivery =>
+    Match.value(state.action).pipe(
+      Match.tag("StartTask", ({ task }) => ({ ...metadata, task })),
+      Match.tag("SendGoalMessage", ({ goalPath, text }) => ({
+        ...metadata,
+        _tag: "GoalMessageDelivery" as const,
+        goalPath,
+        text,
+      })),
+      Match.exhaustive,
+    );
   const react = Effect.fn("SignalState.react")(function* (raw: SignalReactionInput) {
     const input = yield* Schema.decodeUnknownEffect(SignalReactionInput)(raw).pipe(
       Effect.mapError(
@@ -185,14 +204,13 @@ const makeState = Effect.fn("SignalState.make")(function* (
     const receipt = { requestId: input.requestId, revision: (yield* store.current)!.revision };
     yield* store.append({
       _tag: "Triggered",
-      message: {
+      message: freeze(state, {
         requestId,
         source: path,
-        task: state.task,
         evidence: sourceContext,
         createdAt: new Date(yield* Clock.currentTimeMillis).toISOString(),
         remainingAgentTurns: history.remainingAgentTurns ?? 4,
-      },
+      }),
       receipt: { _tag: "Reaction", input: identity, receipt },
     });
     return receipt;
@@ -214,13 +232,12 @@ const makeState = Effect.fn("SignalState.make")(function* (
       state.trigger.schedule.type === "cron" ? undefined : (yield* store.read).remainingAgentTurns;
     yield* store.append({
       _tag: "Triggered",
-      message: {
+      message: freeze(state, {
         requestId,
         source: path,
-        task: state.task,
         createdAt: due,
         remainingAgentTurns: remainingAgentTurns ?? 4,
-      },
+      }),
       nextDue: state.trigger.schedule.type === "once" ? null : nextSignalTime(state.trigger, now),
     });
   });
@@ -236,7 +253,7 @@ const makeState = Effect.fn("SignalState.make")(function* (
     requestId: string,
     error?: ApplicationError,
   ) {
-    if (error?.kind === "unavailable") return;
+    if (error?.kind === "unavailable" || error?.kind === "uncertain") return;
     const item = (yield* store.read).deliveries.find(
       (item) => item.message.requestId === requestId,
     );

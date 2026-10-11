@@ -5,6 +5,7 @@ import { anthropicProvider } from "@earendil-works/pi-ai/providers/anthropic";
 import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import { Context, Effect, Layer, Redacted, Schema } from "effect";
 import { AgentError } from "./shared/contracts.js";
+import { anthropicStream } from "./providers/anthropic.js";
 
 /** Resolved model registration input; source loading and credential references belong to infrastructure. */
 export const ModelConfig = Schema.Struct({
@@ -63,7 +64,10 @@ export class Models extends Context.Service<
                           maxTokens: 8192,
                           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                         } satisfies Model<Api>,
-                        stream: models.streamSimple.bind(models),
+                        stream:
+                          config.provider === "openai"
+                            ? models.streamSimple.bind(models)
+                            : anthropicStream,
                         getApiKey: () => Redacted.value(config.apiKey),
                       };
                     },

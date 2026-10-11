@@ -21,7 +21,9 @@ import {
 } from "../src/tasks/execution/checkpoint.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { makeHarness } from "./harness-fixtures.js";
-import { emptyRecall } from "./workflow-fixtures.js";
+import { QueryExecution } from "../src/queries/execution.js";
+import { MemoryRecall } from "../src/memory/recall.js";
+import { MemoryBackend } from "../src/memory/contracts.js";
 
 import { GoalCommands, type GoalCommand } from "../src/goals/protocol.js";
 
@@ -36,7 +38,7 @@ export const taskInput = (requestId = "task", source = "/goals/personal"): TaskD
   target: taskPathFor(source, requestId),
   createdAt: "2026-10-01T00:00:00Z",
   agent: "test",
-  task: { instructions: "Read evidence", input: [] },
+  task: { instructions: "Read evidence", contextPaths: [], input: [] },
   replyTo: "/goals/personal",
   remainingAgentTurns: 3,
 });
@@ -124,10 +126,24 @@ export const taskFixture = Effect.fnUntraced(function* (
         DurableHarness,
         options.harness ?? makeHarness(() => Effect.die("Unexpected internal execution")),
       ),
-      ContextQueries.layer.pipe(
-        Layer.provide(Layer.mergeAll(Layer.succeed(DurableContext, registry.backend))),
+      Layer.mergeAll(QueryExecution.layer, MemoryRecall.layer).pipe(
+        Layer.provideMerge(ContextQueries.layer),
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.succeed(AgentConversations, conversations),
+            Layer.succeed(MemoryBackend, {
+              description: "Test memory",
+              retrieval: "bm25",
+              drain: Effect.void,
+              capture: () => Effect.void,
+              recall: {
+                search: () => Effect.succeed({ results: [] }),
+                expand: () => Effect.succeed({ results: [] }),
+              },
+            }),
+          ),
+        ),
       ),
-      emptyRecall,
       Layer.succeed(ExternalAgents, options.agents ?? { test: options.agent ?? fakeAgent() }),
       Layer.succeed(SignalDefinitions, []),
       Layer.succeed(Clock.Clock, options.clock ?? (yield* Clock.Clock)),

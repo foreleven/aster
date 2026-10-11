@@ -1,3 +1,5 @@
+import { ToolInvocation } from "../../tools/invocation.js";
+import { ContextDirectory } from "../../config/context-directory.js";
 import { AgentError } from "@aster/agent";
 import { AgentConversations, DurableHarness, type HarnessConversation } from "@aster/agent/harness";
 import { answerText } from "../../services/agent-input.js";
@@ -26,6 +28,7 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
   const agents = yield* ExternalAgents;
   const harness = yield* DurableHarness;
   const settings = yield* GoalSettings;
+  const directory = yield* ContextDirectory;
   const { outputLanguage: language } = yield* LanguageSettings;
   const executorPrompt = (prompt: string) => `${prompt}\n\n${outputLanguageInstruction(language)}`;
   const actors = yield* CurrentActors;
@@ -70,6 +73,7 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
     const checkpoint = yield* journal.read;
     return {
       instructions: `${admission.agent === "internal" ? "" : `${checkpoint.prompt}\n\n`}${admission.task.instructions}`,
+      contextPaths: admission.task.contextPaths,
       input: [
         ...admission.task.input,
         ...(admission.evidence
@@ -212,7 +216,7 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
     const task =
       input._tag === "Initial"
         ? yield* prepare(admission)
-        : { instructions: input.input.text, input: [] };
+        : { instructions: input.input.text, input: [], contextPaths: admission.task.contextPaths };
     const result = yield* (
       saved.session
         ? agent.followUp(saved.session, { requestId: ref.requestId, text: task.instructions })
@@ -474,7 +478,11 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
         }
         const task =
           instruction._tag === "Message"
-            ? { instructions: instruction.input.text, input: [] }
+            ? {
+                instructions: instruction.input.text,
+                input: [],
+                contextPaths: admission.task.contextPaths,
+              }
             : yield* prepare(admission);
         const requestId = input._tag === "Check" ? (originalId ?? ref.requestId) : ref.requestId;
         yield* mark(requestId, work.roundId, "instruction", "sending");
@@ -489,6 +497,9 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
       path,
       model: settings.reasoning.model,
       language,
+      contexts: directory.filter(({ path }) =>
+        invocation.task.contextPaths.some((hint) => path === hint || path.startsWith(`${hint}/`)),
+      ),
     });
     const result = yield* harness
       .withConversation(preparedConversation.options, (conversation) =>
@@ -541,7 +552,16 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
           return answerText(answer);
         }).pipe(Effect.ensuring(writer.withPermit(Ref.set(internal, undefined)))),
       )
-      .pipe(Effect.provideService(CurrentActors, actors), Effect.result);
+      .pipe(
+        Effect.provideService(CurrentActors, actors),
+        Effect.provideService(ToolInvocation, {
+          ownerPath: path,
+          inputId: invocation.requestId,
+          acceptedAt: admission.createdAt,
+          remainingAgentTurns: admission.remainingAgentTurns,
+        }),
+        Effect.result,
+      );
     return yield* writer.withPermit(
       Effect.gen(function* () {
         yield* mark(

@@ -1,4 +1,4 @@
-import { Schema } from "effect";
+import { Effect, Schema } from "effect";
 
 import { CommandIdentifier, ContextRevision } from "../operations.js";
 import { ContextText } from "../context/contracts.js";
@@ -6,19 +6,53 @@ import { ContextText } from "../context/contracts.js";
 import { GoalPath } from "../goals/contracts.js";
 export const RemainingAgentTurns = Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: 4 }));
 export type RemainingAgentTurns = typeof RemainingAgentTurns.Type;
+export const PublicContextPath = Schema.String.check(
+  Schema.isPattern(/^\/(?:[^\s/?#]+(?:\/[^\s/?#]+)*)?$/),
+);
+export const TaskEvidence = Schema.Struct({
+  content: Schema.String,
+  sources: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+});
+export const InternalTaskInput = Schema.Struct({
+  instructions: Schema.NonEmptyString,
+  contextPaths: Schema.Array(PublicContextPath).pipe(
+    Schema.withDecodingDefaultKey(Effect.succeed([])),
+  ),
+  evidence: Schema.Array(TaskEvidence).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
+});
+export type InternalTaskInput = typeof InternalTaskInput.Type;
+export const ExternalExecutorName = Schema.NonEmptyString.check(
+  Schema.makeFilter((value) => value !== "internal", {
+    expected: "An external executor name; internal work uses start_task",
+  }),
+);
+export const ExternalTaskInput = Schema.Struct({
+  executor: ExternalExecutorName,
+  instructions: Schema.NonEmptyString,
+  evidence: InternalTaskInput.fields.evidence,
+});
+export type ExternalTaskInput = typeof ExternalTaskInput.Type;
 export const PreparedTask = Schema.Struct({
   instructions: Schema.NonEmptyString,
-  input: Schema.Array(
-    Schema.Struct({ content: Schema.String, sources: Schema.Array(Schema.String) }),
-  ),
+  contextPaths: InternalTaskInput.fields.contextPaths,
+  input: Schema.Array(Schema.toType(TaskEvidence)),
 });
 export type PreparedTask = typeof PreparedTask.Type;
-/** A Task is a message with a typed Actor destination. External execution replies to a Goal. */
+export const prepareInternalTask = (input: InternalTaskInput): PreparedTask => ({
+  instructions: input.instructions,
+  contextPaths: [...new Set(input.contextPaths)],
+  input: input.evidence,
+});
+export const prepareExternalTask = (input: ExternalTaskInput): PreparedTask => ({
+  instructions: input.instructions,
+  contextPaths: [],
+  input: input.evidence,
+});
+/** Concrete work executed internally or by an external executor; feedback belongs to a Goal. */
 export const Task = Schema.TaggedUnion({
-  Goal: { target: GoalPath, text: Schema.NonEmptyString },
   Agent: { task: PreparedTask, replyTo: GoalPath },
   Delegate: {
-    agent: Schema.NonEmptyString,
+    agent: ExternalExecutorName,
     task: PreparedTask,
     replyTo: GoalPath,
   },
@@ -33,6 +67,10 @@ export const TaskMessage = Schema.Struct({
   evidence: Schema.optional(ContextText),
 });
 export type TaskMessage = typeof TaskMessage.Type;
+export type TaskOrigin = Pick<
+  TaskMessage,
+  "source" | "requestId" | "createdAt" | "remainingAgentTurns"
+>;
 /** Internal admission into the durable external execution owner. */
 export const TaskDeliveryInput = Schema.Struct({
   requestId: CommandIdentifier,

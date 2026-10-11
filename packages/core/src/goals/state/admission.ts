@@ -8,7 +8,7 @@ import { ApplicationError } from "../../operations.js";
 import { TaskPath } from "../../tasks/contracts.js";
 
 import { Effect, Match, Schema } from "effect";
-import { validateTaskMessage } from "../../tasks/state/admission.js";
+import { validateGoalMessage } from "../messages.js";
 
 /** Private admission rules run within the owning GoalState mutation. */
 export const goalAdmission = (
@@ -83,26 +83,25 @@ export const goalAdmission = (
           return receipt;
         }),
       ),
-      Match.tag("TaskMessage", ({ delivery }) =>
+      Match.tag("GoalMessage", ({ delivery }) =>
         Effect.gen(function* () {
           if (
             delivery.requestId !== request.requestId ||
-            delivery.task._tag !== "Goal" ||
-            delivery.task.target !== current.path ||
+            delivery.goalPath !== current.path ||
             !registry.get(delivery.source)
           )
             return yield* new ApplicationError({
               kind: "invalid-input",
-              message: "Task destination or source is invalid",
+              message: "Goal message destination or source is invalid",
             });
-          yield* validateTaskMessage(registry, delivery, history);
+          yield* validateGoalMessage(registry, history, delivery);
           yield* inputs.accept(
             {
-              _tag: "TaskMessage",
+              _tag: "GoalMessage",
               requestId: delivery.requestId,
               source: delivery.source,
               text:
-                delivery.task.text +
+                delivery.text +
                 (delivery.evidence ? `\n\nEvidence: ${JSON.stringify(delivery.evidence)}` : ""),
             },
             delivery.requestId,

@@ -6,7 +6,7 @@ import { ActorSystem } from "@aster/actor";
 import { ConfigProvider, Effect, Layer, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ContextQueries } from "../src/context/queries/routes.js";
+import { ContextQueries } from "../src/queries/registry.js";
 import {
   ExternalAgents,
   GoalDefinition,

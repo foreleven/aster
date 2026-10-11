@@ -1,6 +1,17 @@
-import { Cause, Context, Effect, Layer, Schema, Scope, Fiber } from "effect";
-import { ContextQueryError, ContextQueryInput } from "../contracts.js";
-export { ContextQueryError, ContextQueryInput } from "../contracts.js";
+import {
+  Cause,
+  Context,
+  Effect,
+  Layer,
+  Schema,
+  Scope,
+  Fiber,
+  Match,
+  Predicate,
+  SchemaIssue,
+} from "effect";
+import { ContextQueryError, ContextQueryInput } from "./contracts.js";
+export { ContextQueryError, ContextQueryInput } from "./contracts.js";
 
 type Query = (input: ContextQueryInput) => Effect.Effect<unknown, unknown>;
 interface QueryDefinition {
@@ -21,18 +32,48 @@ const unavailable = () =>
     kind: "unavailable",
     message: "No active query handler for this Context",
   });
+// Only schema-owned field names and fixed diagnostics may leave this boundary.
+const argumentIssues = SchemaIssue.makeFormatterStandardSchemaV1({
+  leafHook: (issue) =>
+    Match.value(issue).pipe(
+      Match.tag("MissingKey", () => "missing"),
+      Match.tag("UnexpectedKey", () => "unexpected"),
+      Match.orElse(() => "invalid"),
+    ),
+  checkHook: () => "invalid",
+});
+const invalidArguments = (schema: Schema.Codec<unknown, unknown>, error: Schema.SchemaError) => {
+  const root = Schema.toJsonSchemaDocument(schema).schema;
+  const fields = Predicate.isObject(root.properties) ? root.properties : {};
+  const descriptions = argumentIssues(error.issue).issues.map((issue) => {
+    const key = issue.path?.[0];
+    if (typeof key !== "string" || !Object.hasOwn(fields, key)) return "arguments (unknown field)";
+    const field = Predicate.isObject(fields[key]) ? fields[key] : {};
+    const variants = Array.isArray(field.anyOf) ? field.anyOf : [field];
+    const types = variants.filter(Predicate.isObject).flatMap((variant) =>
+      Match.value(variant.type).pipe(
+        Match.when("string", () => ["string"]),
+        Match.when("number", () => ["number"]),
+        Match.when("integer", () => ["integer"]),
+        Match.when("boolean", () => ["boolean"]),
+        Match.orElse(() => []),
+      ),
+    );
+    const expected = types.length
+      ? `expected ${[...new Set(types)].join(" or ")}`
+      : "invalid value";
+    const reason = issue.message === "missing" ? "required" : expected;
+    return `${key} (${reason})`;
+  });
+  return invalid(`Invalid command arguments: ${[...new Set(descriptions)].slice(0, 5).join(", ")}`);
+};
+
 const makeQueries = Effect.sync(() => {
   const routes = new Map<
     string,
     { definition: ContextQueryDefinition; query: Query; scope: Scope.Scope }
   >();
-  const run = Effect.fn("ContextQueries.run")(function* <A>(
-    raw: ContextQueryInput,
-    adapt: (
-      work: Effect.Effect<unknown, unknown>,
-      spec: QueryDefinition,
-    ) => Effect.Effect<A, unknown>,
-  ) {
+  const resolve = Effect.fnUntraced(function* (raw: ContextQueryInput) {
     const input = yield* Schema.decodeUnknownEffect(ContextQueryInput)(raw).pipe(
       Effect.mapError(() => invalid("Invalid Context query")),
     );
@@ -44,9 +85,35 @@ const makeQueries = Effect.sync(() => {
       return yield* invalid(
         "Unsupported command; use describe_context to inspect supported commands",
       );
-    yield* Schema.decodeUnknownEffect(spec.schema, { onExcessProperty: "error" })(input.args).pipe(
-      Effect.mapError(() => invalid("Invalid command arguments")),
+    return { input, route, spec };
+  });
+  const normalizeArguments = Effect.fnUntraced(function* (
+    input: ContextQueryInput,
+    spec: QueryDefinition,
+  ) {
+    const decoded = yield* Schema.decodeUnknownEffect(spec.schema, { onExcessProperty: "error" })(
+      input.args,
+    ).pipe(Effect.mapError((error) => invalidArguments(spec.schema, error)));
+    // Owner command decoding expects encoded scalar arguments, never the transformed Type.
+    const args = yield* Schema.encodeUnknownEffect(spec.schema)(decoded).pipe(Effect.orDie);
+    return yield* Schema.decodeUnknownEffect(ContextQueryInput)({ ...input, args }).pipe(
+      Effect.orDie,
     );
+  });
+  const normalize = Effect.fn("ContextQueries.normalize")(function* (raw: ContextQueryInput) {
+    const { input, spec } = yield* resolve(raw);
+    return yield* normalizeArguments(input, spec);
+  });
+  const run = Effect.fn("ContextQueries.run")(function* <A>(
+    raw: ContextQueryInput,
+    adapt: (
+      work: Effect.Effect<unknown, unknown>,
+      spec: QueryDefinition,
+      input: ContextQueryInput,
+    ) => Effect.Effect<A, unknown>,
+  ) {
+    const { input: original, route, spec } = yield* resolve(raw);
+    const input = yield* normalizeArguments(original, spec);
     const work = route.query(input).pipe(
       Effect.flatMap((value) =>
         Schema.decodeUnknownEffect(Schema.toType(spec.success))(value).pipe(Effect.orDie),
@@ -58,7 +125,7 @@ const makeQueries = Effect.sync(() => {
       ),
     );
     return yield* Effect.acquireUseRelease(
-      adapt(work, spec).pipe(Effect.forkIn(route.scope)),
+      adapt(work, spec, input).pipe(Effect.forkIn(route.scope)),
       Effect.fnUntraced(function* (fiber) {
         const exit = yield* Fiber.await(fiber);
         if (exit._tag === "Success") return exit.value;
@@ -71,6 +138,7 @@ const makeQueries = Effect.sync(() => {
     );
   });
   return {
+    normalize,
     register: (path: string, definition: ContextQueryDefinition, query: Query) => {
       return Effect.gen(function* () {
         const route = { definition, query, scope: yield* Scope.Scope };
@@ -127,6 +195,18 @@ const makeQueries = Effect.sync(() => {
               ? spec.text(value)
               : (JSON.stringify(Schema.encodeUnknownSync(spec.success)(value)) ?? ""),
           ),
+        ),
+      ),
+    /** Retained evidence needs the exact canonical input used for this single source read. */
+    textWithInput: (raw: ContextQueryInput) =>
+      run(raw, (work, spec, input) =>
+        work.pipe(
+          Effect.map((value) => ({
+            input,
+            text: spec.text
+              ? spec.text(value)
+              : (JSON.stringify(Schema.encodeUnknownSync(spec.success)(value)) ?? ""),
+          })),
         ),
       ),
     /** Only the transport boundary encodes each command's chosen success/error schema. */

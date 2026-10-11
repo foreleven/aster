@@ -46,7 +46,10 @@ const make = Effect.fn("Agent.make")(function* (
                 ];
               const pi = new PiAgent({
                 initialState: { model: resolved.model, tools, messages: transcript },
-                streamFn: resolved.stream,
+                streamFn: (model, context, streamOptions) => {
+                  options.invocationSignal?.throwIfAborted();
+                  return resolved.stream(model, context, streamOptions);
+                },
                 getApiKey: resolved.getApiKey,
               });
               pi.subscribe(async (event, signal) => {
@@ -65,7 +68,9 @@ const make = Effect.fn("Agent.make")(function* (
               try: async (signal) => {
                 const abort = () => pi.abort();
                 signal.addEventListener("abort", abort, { once: true });
+                options.invocationSignal?.addEventListener("abort", abort, { once: true });
                 try {
+                  if (options.invocationSignal?.aborted) pi.abort();
                   await pi.continue();
                   const checkTerminal = () => {
                     const terminal = generated.findLast((message) => message.role === "assistant");
@@ -103,6 +108,7 @@ const make = Effect.fn("Agent.make")(function* (
                   return { messages: [...generated] };
                 } finally {
                   signal.removeEventListener("abort", abort);
+                  options.invocationSignal?.removeEventListener("abort", abort);
                 }
               },
               catch: (cause) =>

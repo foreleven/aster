@@ -1,11 +1,11 @@
 import { loadGoalStatus } from "../../goals/queries.js";
 import type { AgentConversations } from "@aster/agent/harness";
-import { signalMessage } from "../../signals/state/store.js";
+import { signalDelivery } from "../../signals/state/store.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { ApplicationError } from "../../operations.js";
 import { TaskMessage, TaskDeliveryInput, type Task } from "../contracts.js";
-import { Effect } from "effect";
+import { Effect, Schema } from "effect";
 import { DurableContext } from "../../context/store.js";
 
 export const taskPathFor = (source: string, requestId: string) =>
@@ -42,8 +42,8 @@ export const sourceTask: (
   if (source.startsWith("/goals/")) {
     if ((yield* loadGoalStatus(registry, source)).status === "active") return undefined;
   } else if (record && source.startsWith("/signals/")) {
-    const message = yield* signalMessage(messages, source, requestId);
-    if (message) return message;
+    const message = yield* signalDelivery(messages, source, requestId);
+    if (message && Schema.is(TaskMessage)(message)) return message;
   }
   return yield* new ApplicationError({
     kind: "conflict",

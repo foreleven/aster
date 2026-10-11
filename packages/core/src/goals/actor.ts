@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "../context/location.js";
 import { publicJson } from "../json.js";
 import { goalQueryData } from "./view.js";
 import { Command, type ActorContext, type ActorRef } from "@aster/actor";
@@ -113,6 +114,7 @@ export const GoalActor = ContextActor.define("goals/Actor", {
           })
           .pipe(
             Effect.provideService(CurrentActors, context),
+            Effect.provideService(CurrentContextPath, contextPath(context)),
             Effect.provideService(GoalState, model),
             Effect.raceFirst(
               Deferred.await(attempt.cancellation).pipe(Effect.andThen(Effect.interrupt)),
@@ -145,6 +147,7 @@ export const GoalActor = ContextActor.define("goals/Actor", {
       } else yield* wake(context);
     });
     const runNext = Effect.fnUntraced(function* (context: Owner, model: GoalState["Service"]) {
+      yield* model.reconcile();
       const state = yield* model.read;
       if (state.status !== "active") return;
       // An uncertain delivery blocks later inputs. Restart inspects it using the same Pi identity.

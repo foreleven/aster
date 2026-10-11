@@ -1,6 +1,5 @@
 import { GoalPath } from "../../goals/contracts.js";
-import { SignalTrigger, SignalTime } from "../contracts.js";
-import { Task } from "../../tasks/contracts.js";
+import { SignalAction, SignalTrigger, SignalTime } from "../contracts.js";
 
 import { Schema } from "effect";
 
@@ -8,7 +7,7 @@ export { SignalTime } from "../contracts.js";
 export const SignalSnapshot = Schema.Struct({
   owner: Schema.optional(GoalPath),
   trigger: SignalTrigger,
-  task: Task,
+  action: SignalAction,
   status: Schema.Literals(["active", "paused", "deleted"]),
   version: Schema.Int.check(Schema.isGreaterThan(0)),
   nextDue: Schema.optional(Schema.NullOr(SignalTime)),

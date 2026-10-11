@@ -4,7 +4,7 @@ import { AgentConversations } from "@aster/agent/harness";
 import {
   AsterRuntime,
   DurableContext,
-  ContextQueries,
+  QueryExecution,
   ApplicationError,
   goalTimeline,
   inspectTask,
@@ -115,7 +115,7 @@ const handlers = ApplicationRpcs.toLayer(
   Effect.gen(function* () {
     const runtime = yield* AsterRuntime;
     const registry = yield* DurableContext;
-    const queries = yield* ContextQueries;
+    const queries = yield* QueryExecution;
     const conversations = yield* AgentConversations;
     const wireContext = (record: ContextText) =>
       Schema.decodeUnknownEffect(ContextText)(publicJson(record)).pipe(Effect.orDie);

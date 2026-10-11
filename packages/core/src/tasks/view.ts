@@ -2,7 +2,7 @@ import { readTaskState } from "./queries.js";
 import { CurrentActors } from "../services/actors.js";
 import { createHash } from "node:crypto";
 import { Effect, Match, Schema } from "effect";
-import { ContextQueryError } from "../context/queries/routes.js";
+import { ContextQueryError } from "../queries/registry.js";
 import { publicJson } from "../json.js";
 import { ApplicationError } from "../operations.js";
 import { TaskDeliveryInput, TaskPath } from "./contracts.js";

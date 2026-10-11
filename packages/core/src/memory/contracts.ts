@@ -15,16 +15,12 @@ export class MemoryCaptureError extends Data.TaggedError("MemoryCaptureError")<{
   readonly cause?: unknown;
 }> {}
 
-/** Backend connections and daemon settings stay in the adapter. */
-export class MemoryRecall extends Context.Service<
-  MemoryRecall,
-  {
-    readonly search: (query: string) => Effect.Effect<unknown, MemoryRecallError>;
-    readonly expand: (
-      ids: readonly { obsId: string; sessionId?: string }[],
-    ) => Effect.Effect<unknown, MemoryRecallError>;
-  }
->()("memory/Recall") {}
+export interface MemoryRecallOperations {
+  readonly search: (query: string) => Effect.Effect<unknown, MemoryRecallError>;
+  readonly expand: (
+    ids: readonly { obsId: string; sessionId?: string }[],
+  ) => Effect.Effect<unknown, MemoryRecallError>;
+}
 
 /** Backend capabilities and public metadata, independent of transport and daemon settings. */
 export class MemoryBackend extends Context.Service<
@@ -33,7 +29,7 @@ export class MemoryBackend extends Context.Service<
     readonly description: string;
     readonly retrieval: "bm25" | "hybrid";
     readonly llm?: { readonly provider: string; readonly model: string };
-    readonly recall: MemoryRecall["Service"];
+    readonly recall: MemoryRecallOperations;
     readonly capture: (input: ContextCapture) => Effect.Effect<void, MemoryCaptureError>;
     /** Join admitted backend operations after Actor workers stop; interruption is not cancellation. */
     readonly drain: Effect.Effect<void>;

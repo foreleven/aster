@@ -39,12 +39,16 @@ export function fixture() {
           schedule: { type: "cron", expression: "0 9 * * *", timeZone: "Asia/Shanghai" },
         },
         nextDue: "2026-10-08T09:00:00+08:00",
-        task: {
-          _tag: "Agent",
-          replyTo: "/goals/engine",
+        action: {
+          _tag: "StartTask",
           task: {
-            instructions: "Review the latest release evidence",
-            input: [{ content: "Release notes", sources: ["/sources/release"] }],
+            _tag: "Agent",
+            replyTo: "/goals/engine",
+            task: {
+              instructions: "Review the latest release evidence",
+              contextPaths: [],
+              input: [{ content: "Release notes", sources: ["/sources/release"] }],
+            },
           },
         },
       }),
@@ -53,13 +57,13 @@ export function fixture() {
         status: "paused",
         version: 1,
         trigger: { _tag: "Context", when: "Release readiness changes" },
-        task: { _tag: "Goal", target: "/goals/engine", text: "Review the change" },
+        action: { _tag: "SendGoalMessage", goalPath: "/goals/engine", text: "Review the change" },
       }),
       context("/signals/removed", "Removed reminder", {
         status: "deleted",
         version: 1,
         trigger: { _tag: "Context", when: "Old condition" },
-        task: { _tag: "Goal", target: "/goals/engine", text: "Old task" },
+        action: { _tag: "SendGoalMessage", goalPath: "/goals/engine", text: "Old task" },
       }),
       context(
         "/sources/release",

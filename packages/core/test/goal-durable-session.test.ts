@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "../src/context/location.js";
 import { testSettings } from "./settings-fixtures.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
@@ -162,6 +163,7 @@ test("reopened Goal sessions keep their policy and history while tools read the 
             ]),
             Effect.provideService(AgentConversations, conversations),
             Effect.provideService(CurrentActors, system),
+            Effect.provideService(CurrentContextPath, "/goals/test"),
 
             Effect.provideService(DurableContext, registry.backend),
             Effect.provideService(GoalSettings, {

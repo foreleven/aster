@@ -15,7 +15,7 @@ import {
   kindOf,
   references,
   summaryText,
-  taskText,
+  actionText,
   type ContextView,
 } from "./model";
 
@@ -86,7 +86,7 @@ export function ContextWorkspace({
             <section className="flex flex-col gap-3">
               <h2 className="font-medium">What it does</h2>
               <Markdown>
-                {taskText(context.state.task) || "No task description available."}
+                {actionText(context.state.action) || "No action description available."}
               </Markdown>
             </section>
             {context.state.owner && (

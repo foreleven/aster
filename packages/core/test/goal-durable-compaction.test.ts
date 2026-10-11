@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "../src/context/location.js";
 import { testSettings } from "./settings-fixtures.js";
 import { DurableContext } from "@aster/core";
 import { Schema } from "effect";
@@ -125,6 +126,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
       ]),
       Effect.provideService(AgentConversations, conversations),
       Effect.provideService(CurrentActors, system),
+      Effect.provideService(CurrentContextPath, "/goals/test"),
 
       Effect.provideService(DurableContext, registry.backend),
       Effect.provideService(GoalSettings, {

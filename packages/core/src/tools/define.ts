@@ -1,47 +1,50 @@
-import { type EffectTool, type AgentTool, type TSchema } from "@aster/agent";
+import {
+  schemaTool,
+  ToolInvocationFailure,
+  type EffectTool,
+  type TSchema,
+  type AgentToolResult,
+} from "@aster/agent";
+import { Effect, Schema } from "effect";
 import { ApplicationError } from "../operations.js";
-import { Effect } from "effect";
-import type { CurrentActors } from "../services/actors.js";
 
-export type CoreTool<R = CurrentActors> = EffectTool<TSchema, ApplicationError, R>;
-export const output = (value: unknown) => ({
-  content: [{ type: "text" as const, text: JSON.stringify(value) }],
+export type CoreTool<R = never> = EffectTool<TSchema, ToolInvocationFailure, R>;
+export const output = <A>(value: A): AgentToolResult<A> => ({
+  content: [{ type: "text", text: JSON.stringify(value ?? null) }],
   details: value,
 });
-type Definition<T extends TSchema> = Omit<AgentTool<T>, "execute">;
-type Execute<T extends TSchema, R> = (
-  args: Parameters<AgentTool<T>["execute"]>[1],
-  callId: string,
-) => Effect.Effect<unknown, ApplicationError, R>;
 
-/** Validation errors are model-visible results; unavailable writes preserve their typed failure at the SDK boundary. */
-const defineTool = <T extends TSchema, R>(
-  definition: Definition<T>,
-  execute: Execute<T, R>,
-  mode: "read" | "write",
-  format: typeof output = output,
-): EffectTool<T, ApplicationError, R> => ({
-  ...definition,
-  execute: (id, args) =>
-    Effect.suspend(() => execute(args, id)).pipe(
-      Effect.map(format),
-      Effect.catchTag("ApplicationError", (error) =>
-        mode === "write" && error.kind === "unavailable"
-          ? Effect.fail(error)
-          : Effect.succeed({
-              isError: true,
-              content: [{ type: "text" as const, text: error.message }],
-              details: undefined,
-            }),
+/** Tools present domain outcomes; domain owners decide admission, uncertainty and recovery. */
+export const defineTool = <A, B, R>(
+  definition: {
+    readonly name: string;
+    readonly label: string;
+    readonly description: string;
+    readonly replay: "safe" | "never";
+    readonly parameters: Schema.Decoder<A>;
+  },
+  execute: (args: A, callId: string) => Effect.Effect<B, ApplicationError, R>,
+  format: (value: B) => AgentToolResult<unknown> = output,
+): CoreTool<R> =>
+  schemaTool({
+    ...definition,
+    execute: (id, args) =>
+      Effect.suspend(() => execute(args, id)).pipe(
+        Effect.map(format),
+        Effect.catchTag("ApplicationError", (error) => {
+          if (error.kind === "uncertain")
+            return Effect.fail(
+              new ToolInvocationFailure({
+                message: error.message,
+                outcome: "unknown",
+                operationId: error.operationId,
+              }),
+            );
+          return Effect.succeed({
+            isError: true,
+            content: [{ type: "text" as const, text: error.message }],
+            details: { code: error.kind, message: error.message },
+          });
+        }),
       ),
-    ),
-});
-export const queryTool = <T extends TSchema, R>(
-  definition: Definition<T>,
-  execute: Execute<T, R>,
-  format?: typeof output,
-) => defineTool(definition, execute, "read", format);
-export const commandTool = <T extends TSchema, R>(
-  definition: Definition<T>,
-  execute: Execute<T, R>,
-) => defineTool(definition, execute, "write");
+  });

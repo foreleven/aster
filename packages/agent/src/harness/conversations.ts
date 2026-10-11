@@ -30,6 +30,7 @@ import {
   Ref,
   Option,
 } from "effect";
+import { failureRequestId, resolutionRequestId, FailureEvidence } from "./failures.js";
 
 /** Package-private access key; deliberately absent from the package exports. */
 export const conversationDriver = Symbol("agent/ConversationDriver");
@@ -97,6 +98,14 @@ export class AgentConversations extends Context.Service<
       owner: string,
       requestId: string,
     ) => Effect.Effect<Option.Option<ConversationEntry>, ConversationError>;
+    /** Trusted recovery boundary: call only after proving the original domain receipt.
+     * Resolving provenance never configures a model or resumes the aborted invocation.
+     */
+    readonly resolveFailure: (
+      owner: string,
+      inputId: string,
+      operationId: string,
+    ) => Effect.Effect<void, ConversationError>;
     /** SDK boundary used by DurableHarness, never by business workflows. */
     readonly [conversationDriver]: (
       owner: string,
@@ -228,7 +237,7 @@ export class AgentConversations extends Context.Service<
         } while (cursor);
         return entries.reverse();
       });
-    return AgentConversations.of({
+    const service: AgentConversations["Service"] = AgentConversations.of({
       [conversationDriver]: driver,
       read,
       tools: (owner) =>
@@ -305,6 +314,57 @@ export class AgentConversations extends Context.Service<
             return Option.some(saved);
           }, context);
         }),
+      resolveFailure: Effect.fn("AgentConversations.resolveFailure")(function* (
+        owner: string,
+        inputId: string,
+        operationId: string,
+      ) {
+        const saved = yield* service.find(owner, failureRequestId(inputId));
+        if (Option.isNone(saved))
+          return yield* new ConversationError({
+            kind: "not-found",
+            message: "No retained failure for this input",
+          });
+        if (saved.value.kind !== "agent.invocation.failure")
+          return yield* new ConversationError({
+            kind: "unavailable",
+            message: "Terminal failure entry kind mismatch",
+          });
+        const failure = yield* Schema.decodeUnknownEffect(FailureEvidence)(saved.value.data).pipe(
+          Effect.mapError(
+            (cause) =>
+              new ConversationError({
+                kind: "unavailable",
+                message: "Invalid terminal failure entry",
+                cause,
+              }),
+          ),
+        );
+        if (failure.requestId !== inputId)
+          return yield* new ConversationError({
+            kind: "unavailable",
+            message: "Terminal failure identity mismatch",
+          });
+        if (failure.outcome !== "unknown")
+          return yield* new ConversationError({
+            kind: "invalid-input",
+            message: "Failure outcome is already known",
+          });
+        if (failure.operationId !== operationId)
+          return yield* new ConversationError({
+            kind: "conflict",
+            message: "Failure resolution operation identity mismatch",
+          });
+        yield* service.append(
+          owner,
+          resolutionRequestId(inputId),
+          "agent.invocation.failure.resolved",
+          {
+            requestId: inputId,
+            operationId,
+          },
+        );
+      }),
       append: (owner, requestId, kind, data) =>
         Effect.gen(function* () {
           const at = new Date(yield* Clock.currentTimeMillis).toISOString();
@@ -349,6 +409,7 @@ export class AgentConversations extends Context.Service<
           });
         }).pipe(Effect.uninterruptible),
     });
+    return service;
   });
   static readonly makeMemory = () =>
     AgentConversations.make({ openStorage: async () => new MemoryStorage() });

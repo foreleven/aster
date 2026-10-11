@@ -44,12 +44,12 @@ export * from "./tasks/root.js";
 
 export * from "./memory/actor.js";
 
-export * from "./context/queries/routes.js";
+export * from "./queries/registry.js";
 export * from "./goals/agent.js";
 
 export * from "./memory/capture.js";
 
-export { ContextCommand, type QueryCommand } from "./context/queries/protocol.js";
+export { ContextCommand, type QueryCommand } from "./queries/commands.js";
 
 export { readGoalState } from "./goals/queries.js";
 export { readTaskState } from "./tasks/queries.js";
@@ -59,3 +59,8 @@ export { goalBusinessState } from "./goals/view.js";
 export { ContextText } from "./context/contracts.js";
 
 export * from "./process/environment.js";
+
+export { QueryExecution } from "./queries/execution.js";
+export { MemoryRecall } from "./memory/recall.js";
+export { SignalAction } from "./signals/contracts.js";
+export { GoalMessageDelivery } from "./goals/message-contracts.js";

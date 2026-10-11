@@ -1,3 +1,4 @@
+import { CurrentContextPath } from "../src/context/location.js";
 import { ContextDirectory, LanguageSettings } from "../src/index.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { observeContextWrites } from "../src/testing/context.js";
@@ -35,6 +36,55 @@ const openGoal = (registry: TestContext, messages: AgentConversations["Service"]
     Effect.provideService(CurrentActors, testActors(registry)),
     Effect.provideService(AgentConversations, messages),
   );
+
+test("an uncertain operation without an authoritative receipt stays blocked across owner restoration", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeTestContext();
+        yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
+        const messages = testConversations();
+        const firstScope = yield* Scope.make();
+        const first = Context.get(
+          yield* Layer.buildWithScope(GoalState.layer(path, definition), firstScope).pipe(
+            Effect.provideService(DurableContext, registry.backend),
+            Effect.provideService(AgentConversations, messages),
+          ),
+          GoalState,
+        );
+        yield* first.accept(
+          {
+            _tag: "SubmitInput",
+            requestId: "uncertain",
+            input: { _tag: "UserInput", text: "Research" },
+          },
+          false,
+        );
+        const inputId = (yield* first.read).inputs[0]!.inputId;
+        yield* first.start(inputId);
+        yield* first.settle(
+          inputId,
+          Result.fail(
+            new AgentError("Receipt missing", [], {
+              outcome: "unknown",
+              operationId: "unconfirmed-operation",
+            }),
+          ),
+        );
+        yield* first.reconcile();
+        assert.equal((yield* first.read).inputs[0]!.status, "unknown");
+        yield* Scope.close(firstScope, Exit.void);
+        const restored = yield* openGoal(registry, messages);
+        assert.equal((yield* restored.read).inputs[0]!.status, "unknown");
+        assert.equal((yield* restored.read).inputs[0]!.operationId, "unconfirmed-operation");
+        const retry = yield* restored
+          .accept({ _tag: "RetryTurn", requestId: "unsafe-retry", turnId: inputId }, false)
+          .pipe(Effect.result);
+        assert.equal(retry._tag, "Failure");
+      }),
+    ),
+  );
+});
 
 test("GoalState serializes local summary updates with concurrent durable admissions", async () => {
   await Effect.runPromise(
@@ -412,6 +462,7 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
           })
           .pipe(
             Effect.provideService(GoalState, goal),
+            Effect.provideService(CurrentContextPath, `/goals/${definition.slug}`),
             Effect.provideService(CurrentActors, {
               select: () => {
                 throw new Error("Local Goal tools must not send Actor messages");

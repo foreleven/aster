@@ -4,11 +4,12 @@ import { makeHarness } from "./harness-fixtures.js";
 import { DurableHarness, AgentConversations } from "@aster/agent/harness";
 import { ActorSystem } from "@aster/actor";
 import { AgentRunner } from "@aster/agent/agent";
-import { Effect, Layer } from "effect";
-import { ContextQueries } from "../src/context/queries/routes.js";
-import { ContextsActor } from "../src/context/queries/actor.js";
+import { Context, Effect, Layer } from "effect";
+import { ContextQueries } from "../src/queries/registry.js";
+import { QueryExecution } from "../src/queries/execution.js";
+import { MemoryRecall } from "../src/memory/recall.js";
 import { MemoryActor } from "../src/memory/actor.js";
-import { MemoryBackend, type MemoryRecall } from "../src/memory/contracts.js";
+import { MemoryBackend } from "../src/memory/contracts.js";
 import { ContextCaptures } from "../src/memory/capture.js";
 import { GoalSettings } from "../src/goals/settings.js";
 import { ExternalAgents } from "../src/tasks/execution/contracts.js";
@@ -29,6 +30,25 @@ export const toolSystem = Effect.fnUntraced(function* (
   const messages = options.messages ?? (yield* AgentConversations.makeMemory());
   const queries =
     options.queries ?? (yield* ContextQueries.pipe(Effect.provide(ContextQueries.layer)));
+  const memoryBackend = MemoryBackend.of({
+    description: "Test memory",
+    retrieval: "bm25",
+    drain: Effect.void,
+    capture: () => Effect.void,
+    recall: options.memory ?? {
+      search: () => Effect.succeed([]),
+      expand: () => Effect.succeed([]),
+    },
+  });
+  const execution = yield* Layer.build(QueryExecution.layer).pipe(
+    Effect.map(Context.get(QueryExecution)),
+    Effect.provideService(ContextQueries, queries),
+    Effect.provideService(AgentConversations, messages),
+  );
+  const recall = yield* Layer.build(MemoryRecall.layer).pipe(
+    Effect.map(Context.get(MemoryRecall)),
+    Effect.provideService(MemoryBackend, memoryBackend),
+  );
   const system = yield* ActorSystem.make().pipe(
     ActorSystem.provide(
       testSettings,
@@ -36,16 +56,9 @@ export const toolSystem = Effect.fnUntraced(function* (
       Layer.succeed(AgentConversations, messages),
       Layer.succeed(ContextQueries, queries),
       ContextCaptures.layer,
-      Layer.succeed(MemoryBackend, {
-        description: "Test memory",
-        retrieval: "bm25",
-        drain: Effect.void,
-        capture: () => Effect.void,
-        recall: options.memory ?? {
-          search: () => Effect.succeed([]),
-          expand: () => Effect.succeed([]),
-        },
-      }),
+      Layer.succeed(MemoryBackend, memoryBackend),
+      Layer.succeed(QueryExecution, execution),
+      Layer.succeed(MemoryRecall, recall),
       Layer.succeed(GoalSettings, {
         definitions: options.goals ?? [],
         reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
@@ -62,8 +75,6 @@ export const toolSystem = Effect.fnUntraced(function* (
       ),
     ),
   );
-  const contexts = yield* system.spawn("contexts", ContextsActor);
-  yield* contexts.awaitStarted;
   const memory = yield* system.spawn("memory", MemoryActor);
   yield* memory.awaitStarted;
   if (options.goals?.length) {
@@ -73,5 +84,5 @@ export const toolSystem = Effect.fnUntraced(function* (
     for (const goal of options.goals)
       yield* (yield* system.select(`/user/goals/${goal.slug}`).resolve()).awaitStarted;
   }
-  return { system, registry, messages, queries, contexts, memory };
+  return { system, registry, messages, queries, execution, recall, memory };
 });

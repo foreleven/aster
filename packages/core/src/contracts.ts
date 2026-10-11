@@ -6,7 +6,8 @@ export {
   ApplicationError,
 } from "./operations.js";
 export { ApprovalResponse, InputRequest, PublicApprovalEntry } from "./approvals/contracts.js";
-export { ContextText, ContextQueryInput, ContextQueryError } from "./context/contracts.js";
+export { ContextText } from "./context/contracts.js";
+export { ContextQueryInput, ContextQueryError } from "./queries/contracts.js";
 export {
   PreparedTask,
   Task,
@@ -15,5 +16,5 @@ export {
   FollowupTaskInput,
 } from "./tasks/contracts.js";
 export { GoalPath } from "./goals/contracts.js";
-export { SignalSchedule, SignalTrigger } from "./signals/contracts.js";
+export { SignalSchedule, SignalTrigger, SignalAction } from "./signals/contracts.js";
 export { RecoveryInput } from "./reactions/contracts.js";

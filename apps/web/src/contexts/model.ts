@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { SignalTrigger, Task, type ContextText } from "@aster/core/contracts";
+import { SignalTrigger, SignalAction, type ContextText } from "@aster/core/contracts";
 
 // Structured display fields come from explicit business API responses.
 const DisplayState = Schema.Struct({
@@ -14,7 +14,7 @@ const DisplayState = Schema.Struct({
   owner: Schema.optional(Schema.String),
   agent: Schema.optional(Schema.String),
   trigger: Schema.optional(SignalTrigger),
-  task: Schema.optional(Task),
+  action: Schema.optional(SignalAction),
   nextDue: Schema.optional(Schema.NullOr(Schema.String)),
 });
 export interface ContextView extends ContextText {
@@ -50,20 +50,25 @@ export const summaryText = (summary: ContextView["state"]["summary"]) =>
   typeof summary === "string" ? summary : summary?.text;
 export const references = (context: ContextView): readonly string[] => {
   const state = context.state;
+  const action = state.action;
   const taskSources =
-    state.task && state.task._tag !== "Goal"
-      ? state.task.task.input.flatMap((input) => input.sources)
-      : [];
+    action?._tag === "StartTask" ? action.task.task.input.flatMap((input) => input.sources) : [];
+  const destination = action?._tag === "SendGoalMessage" ? action.goalPath : undefined;
   return [
     ...new Set(
-      [state.owner, state.sourcePath, state.replyTo, ...(state.tasks ?? []), ...taskSources].filter(
-        (value): value is string => !!value && value.startsWith("/"),
-      ),
+      [
+        state.owner,
+        state.sourcePath,
+        state.replyTo,
+        destination,
+        ...(state.tasks ?? []),
+        ...taskSources,
+      ].filter((value): value is string => !!value && value.startsWith("/")),
     ),
   ];
 };
 export const isTaskPath = (path: string) => /^\/tasks\/[a-f0-9]{64}$/.test(path);
 export const dateTime = (value: string | number) =>
   new Date(value).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
-export const taskText = (task: ContextView["state"]["task"]) =>
-  task?._tag === "Goal" ? task.text : task?.task.instructions;
+export const actionText = (action: ContextView["state"]["action"]) =>
+  action?._tag === "SendGoalMessage" ? action.text : action?.task.task.instructions;

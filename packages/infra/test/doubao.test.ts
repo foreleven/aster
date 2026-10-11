@@ -17,7 +17,7 @@ test("Doubao submits exactly the prepared instructions and keeps original run co
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const task = { instructions: "Custom policy\nReviewed task", input: [] };
+        const task = { contextPaths: [], instructions: "Custom policy\nReviewed task", input: [] };
         const agent = yield* makeDoubaoExecutor(
           {},
           { ...settings, taskRoot: root },

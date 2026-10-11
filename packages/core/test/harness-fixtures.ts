@@ -35,6 +35,7 @@ export const makeHarness = (
           }),
         submission: (id) => Effect.sync(() => Option.fromUndefinedOr(submissions.get(id))),
         abort: Effect.void,
+        resolveFailure: () => Effect.die("Fake SDK terminal failure resolution is not configured"),
       };
     }),
   );

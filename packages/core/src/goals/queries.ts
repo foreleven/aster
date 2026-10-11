@@ -3,8 +3,8 @@ import { readActor } from "../services/domain-reads.js";
 import { GoalSnapshot } from "./state/snapshot.js";
 import { Command, type ActorContext, type ActorRef } from "@aster/actor";
 import { Effect, Match, Schema } from "effect";
-import { ContextCommand } from "../context/queries/protocol.js";
-import { ContextQueryError } from "../context/contracts.js";
+import { ContextCommand } from "../queries/commands.js";
+import { ContextQueryError } from "../queries/contracts.js";
 import { publicJson } from "../json.js";
 
 export class GetGoalSnapshot extends Command.Class<GetGoalSnapshot>()("GetGoalSnapshot", {

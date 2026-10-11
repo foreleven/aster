@@ -1,7 +1,7 @@
 import { loadTaskState } from "./queries.js";
 
 import { type ActorContext, type ActorRef } from "@aster/actor";
-import { Effect, Match, Schedule, Schema } from "effect";
+import { Effect, Schedule, Schema } from "effect";
 import { createHash } from "node:crypto";
 import { type DurableContext } from "../context/store.js";
 import { GoalPath } from "../goals/contracts.js";
@@ -11,7 +11,7 @@ import {
   type GoalMailbox,
   type GoalTaskReply,
 } from "../goals/protocol.js";
-import { ApplicationError, CommandReceipt } from "../operations.js";
+import { ApplicationError, CommandReceipt, operationUncertain } from "../operations.js";
 import { TaskMessage, TaskPath, type TaskDeliveryInput } from "./contracts.js";
 import { type TaskAdmissionReply, type TaskCommand } from "./protocol.js";
 import { type TasksRootCommand } from "./root.js";
@@ -38,21 +38,19 @@ export const startTask = Effect.fn("Tasks.start")(function* <C>(
       replyTo,
     }))
     .pipe(
-      Effect.mapError(
-        () =>
-          new ApplicationError({
-            kind: "unavailable",
-            message: "Task receipt unavailable; retain the original request identity",
-          }),
+      Effect.mapError(() =>
+        operationUncertain({
+          requestId: input.requestId,
+          message: "Task receipt unavailable; reconcile the original request",
+        }),
       ),
     );
   if (reply._tag === "Rejected") return yield* reply.error;
   // Admission commits first. Goal attachment is idempotent and restored from Task metadata after interruption.
   const unavailable = () =>
-    new ApplicationError({
-      kind: "unavailable",
-      message:
-        "Task accepted but Goal attachment is unconfirmed; retain the original request identity",
+    operationUncertain({
+      requestId: input.requestId,
+      message: "Task accepted but Goal attachment is unconfirmed; reconcile the original request",
     });
   const goals = new Set([input.replyTo]);
   if (Schema.is(GoalPath)(input.source)) goals.add(input.source);
@@ -99,12 +97,11 @@ export const followupTask = Effect.fn("Tasks.followUp")(function* <C>(
   const reply = yield* (target as ActorRef<TaskCommand>)
     .ask<TaskAdmissionReply>((replyTo) => ({ _tag: "Input", input, replyTo }))
     .pipe(
-      Effect.mapError(
-        () =>
-          new ApplicationError({
-            kind: "unavailable",
-            message: "Task receipt missing; reuse the original input identity",
-          }),
+      Effect.mapError(() =>
+        operationUncertain({
+          requestId: input.requestId,
+          message: "Task input receipt missing; reconcile the original input",
+        }),
       ),
     );
   if (reply._tag === "Rejected") return yield* reply.error;
@@ -115,50 +112,13 @@ export const followupTask = Effect.fn("Tasks.followUp")(function* <C>(
 export const deliverTask = Effect.fn("Task.deliver")(function* <C>(
   actor: Pick<ActorContext<C>, "select">,
   raw: TaskMessage,
-): Effect.fn.Return<CommandReceipt, ApplicationError> {
+): Effect.fn.Return<{ requestId: string; revision: number; taskPath: string }, ApplicationError> {
   const input = yield* Schema.decodeUnknownEffect(TaskMessage)(raw).pipe(
     Effect.mapError(
       () => new ApplicationError({ kind: "invalid-input", message: "Invalid Task message" }),
     ),
   );
-  return yield* Match.value(input.task).pipe(
-    Match.tag("Goal", (task) =>
-      Effect.gen(function* () {
-        const target = yield* actor
-          .select(`/user${task.target}`)
-          .resolve()
-          .pipe(
-            Effect.mapError(
-              () =>
-                new ApplicationError({
-                  kind: "unavailable",
-                  message: "Goal destination unavailable",
-                }),
-            ),
-          );
-        const reply = yield* (target as ActorRef<GoalCommand>)
-          .ask<GoalCommandReply>((replyTo) => ({
-            _tag: "SubmitInput",
-            requestId: input.requestId,
-            input: { _tag: "TaskMessage", delivery: input },
-            replyTo,
-          }))
-          .pipe(
-            Effect.mapError(
-              () =>
-                new ApplicationError({
-                  kind: "unavailable",
-                  message: "Task receipt missing; retain the original identity",
-                }),
-            ),
-          );
-        if (reply._tag === "Rejected") return yield* reply.error;
-        return reply.receipt;
-      }),
-    ),
-    Match.tag("Delegate", "Agent", (task) => startTask(actor, delegateInput(input, task))),
-    Match.exhaustive,
-  );
+  return yield* startTask(actor, delegateInput(input, input.task));
 });
 
 /** Callers validate TaskPath before selecting an execution owner. */
@@ -217,23 +177,14 @@ export const deliverTaskFeedback = Effect.fn("Tasks.feedback")(function* <C>(
   );
 });
 
-const Receipts = Schema.Struct({
-  receipts: Schema.Array(Schema.Struct({ requestId: Schema.String, receipt: CommandReceipt })),
-});
 const Inputs = Schema.Struct({
   inputs: Schema.Array(Schema.Struct({ requestId: Schema.String, receipt: CommandReceipt })),
 });
 /** Read-only reconciliation. Absence is not permission to submit after pause/delete. */
 export const taskDeliveryReceipt = (registry: DurableContext["Service"], message: TaskMessage) =>
   Effect.gen(function* () {
-    const target =
-      message.task._tag === "Goal"
-        ? message.task.target
-        : taskPathFor(message.source, message.requestId);
+    const target = taskPathFor(message.source, message.requestId);
     if (!registry.get(target)) return undefined;
-    const entries =
-      message.task._tag === "Goal"
-        ? (yield* registry.readState(target, Receipts).pipe(Effect.orDie)).receipts
-        : (yield* registry.readState(target, Inputs).pipe(Effect.orDie)).inputs;
+    const entries = (yield* registry.readState(target, Inputs).pipe(Effect.orDie)).inputs;
     return entries.find((entry) => entry.requestId === message.requestId)?.receipt;
   });

@@ -6,13 +6,14 @@ import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema, Stream } from "e
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ContextQueries } from "../src/context/queries/routes.js";
+import { ContextQueries } from "../src/queries/registry.js";
 import {
   SignalDefinitions,
   SignalRootActor,
   type SignalCommandReply,
   type StoredContext,
 } from "../src/index.js";
+import { goalRequestFingerprint } from "../src/goals/protocol.js";
 import type { SignalChangeInput } from "../src/signals/protocol.js";
 import { readSignalHistory } from "../src/signals/state/store.js";
 import { makeTestContext } from "../src/testing/context.js";
@@ -22,7 +23,7 @@ import { taskFixture } from "./task-fixtures.js";
 const definition = {
   slug: "slow",
   trigger: { _tag: "Context" as const, when: "Evidence changes" },
-  task: { _tag: "Goal" as const, target: "/goals/personal", text: "Review" },
+  action: { _tag: "SendGoalMessage" as const, goalPath: "/goals/personal", text: "Review" },
 };
 const TerminationLog = Schema.Struct({
   event: Schema.Literal("signal.actor.terminated"),
@@ -163,6 +164,7 @@ for (const operation of ["pause", "delete"] as const)
     // Seed the two records that survived interruption, without running a second writer beside an Actor.
     const history = await Effect.runPromise(Effect.scoped(readSignalHistory(messages, path)));
     const message = history.deliveries[0]!.message;
+    assert.ok("_tag" in message);
     await Effect.runPromise(
       Effect.scoped(
         messages.append(path, "event:3", "signal.event", {
@@ -194,6 +196,11 @@ for (const operation of ["pause", "delete"] as const)
           receipts: [
             {
               requestId: message.requestId,
+              payloadFingerprint: goalRequestFingerprint({
+                _tag: "SubmitInput",
+                requestId: message.requestId,
+                input: { _tag: "GoalMessage", delivery: message },
+              }),
               receipt: { requestId: message.requestId, revision: 2 },
             },
           ],

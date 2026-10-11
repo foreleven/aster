@@ -22,7 +22,7 @@ export type SignalReactionInput = typeof SignalReactionInput.Type;
 
 const SignalPatch = Schema.Struct({
   trigger: SignalDefinition.fields.trigger,
-  task: SignalDefinition.fields.task,
+  action: SignalDefinition.fields.action,
 });
 export const SignalChange = Schema.Union([
   Schema.Struct({ operation: Schema.Literal("create"), definition: SignalPatch }),

@@ -2,11 +2,9 @@ import { CurrentContextPath } from "../context/location.js";
 import { DurableContext } from "../context/store.js";
 import type { MailboxOf } from "@aster/actor";
 import { type ActorContext, Command as ActorCommand } from "@aster/actor";
-import { Deferred, Effect, HashSet, Match, Schedule, Schema, Stream } from "effect";
+import { Effect, HashSet, Match, Schedule, Schema, Stream } from "effect";
 import { ContextActor } from "../context/actor.js";
 import { ContextText as ContextRecord } from "../context/contracts.js";
-import { ApplicationError } from "../operations.js";
-import { cancellableQuery, queryCancelled, QueryReply } from "../services/actors.js";
 import { ContextCaptures } from "./capture.js";
 import { type ContextCapture, MemoryBackend, MemoryCaptureError } from "./contracts.js";
 
@@ -19,26 +17,12 @@ const MemoryState = Schema.Struct({
   llm: Schema.optional(Schema.Struct({ provider: Schema.String, model: Schema.String })),
 });
 
-export class Search extends ActorCommand.Class<Search>()("Search", {
-  payload: { query: Schema.String, cancelled: queryCancelled },
-  reply: QueryReply,
-}) {}
-export class Expand extends ActorCommand.Class<Expand>()("Expand", {
-  payload: {
-    items: Schema.Array(
-      Schema.Struct({ obsId: Schema.String, sessionId: Schema.optional(Schema.String) }),
-    ),
-    cancelled: queryCancelled,
-  },
-  reply: QueryReply,
-}) {}
 export class CaptureMemory extends ActorCommand.Class<CaptureMemory>()("Capture", {
   payload: { input: Capture },
   reply: Schema.Void,
 }) {}
-export const MemoryCommands = [Search, Expand, CaptureMemory] as const;
+export const MemoryCommands = [CaptureMemory] as const;
 export const MemoryInternal = Schema.TaggedUnion({
-  RecallSettled: { id: Schema.String, result: QueryReply },
   Retry: {},
   Captured: {
     sessionId: Schema.String,
@@ -56,7 +40,6 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
 })(
   Effect.gen(function* () {
     const backend = yield* MemoryBackend;
-    const recalls = new Map<string, Extract<MemoryCommand, { _tag: "Search" | "Expand" }>>();
     const captures = yield* ContextCaptures;
     const registry = yield* DurableContext;
     const changes = yield* registry.subscribe;
@@ -163,44 +146,6 @@ export const MemoryActor = ContextActor.define("memory/Actor", {
         }),
       receive: (command, context) =>
         Match.value(command).pipe(
-          Match.tag("Search", "Expand", (request) =>
-            Effect.gen(function* () {
-              if (yield* Deferred.isDone(request.cancelled)) return;
-              if (recalls.size >= 4)
-                return yield* request.replyTo.tell({
-                  _tag: "Failure",
-                  error: new ApplicationError({
-                    kind: "unavailable",
-                    message: "Memory query capacity reached",
-                  }),
-                });
-              recalls.set(request.replyTo.path, request);
-              const work =
-                request._tag === "Search"
-                  ? backend.recall.search(request.query)
-                  : backend.recall.expand(request.items);
-              yield* context.pipeToSelf(
-                cancellableQuery(
-                  work.pipe(
-                    Effect.mapError(
-                      (error) =>
-                        new ApplicationError({ kind: "unavailable", message: error.message }),
-                    ),
-                  ),
-                  request.cancelled,
-                ),
-                (result) => ({ _tag: "RecallSettled", id: request.replyTo.path, result }),
-              );
-            }),
-          ),
-          Match.tag("RecallSettled", ({ id, result }) =>
-            Effect.gen(function* () {
-              const request = recalls.get(id);
-              if (!request) return;
-              recalls.delete(id);
-              yield* request.replyTo.tell(result);
-            }),
-          ),
           Match.tag("Capture", ({ input, replyTo }) =>
             Effect.gen(function* () {
               yield* admit(input);

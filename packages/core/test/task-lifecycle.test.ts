@@ -52,7 +52,8 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
       );
       assert.deepEqual(yield* send(input), first);
       assert.equal(
-        (yield* send({ ...input, task: { instructions: "Other", input: [] } }))._tag,
+        (yield* send({ ...input, task: { instructions: "Other", contextPaths: [], input: [] } }))
+          ._tag,
         "Rejected",
       );
       const actor = yield* env.system.select(`/user${input.target}`).resolve();
@@ -124,11 +125,14 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
             operation: "create",
             definition: {
               trigger: { _tag: "Context", when: "Evidence changes" },
-              task: {
-                _tag: "Delegate",
-                agent: "test",
-                task: { instructions: "Read the update", input: [] },
-                replyTo: "/goals/personal",
+              action: {
+                _tag: "StartTask",
+                task: {
+                  _tag: "Delegate",
+                  agent: "test",
+                  task: { instructions: "Read the update", input: [], contextPaths: [] },
+                  replyTo: "/goals/personal",
+                },
               },
             },
           },
@@ -169,7 +173,11 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
         (yield* env.conversations.get(records[0]!.path, state.inputs[0]!.entryId)).data,
       );
       assert.deepEqual(admission.evidence, reaction.sourceContext);
-      assert.deepEqual(admission.task, { instructions: "Read the update", input: [] });
+      assert.deepEqual(admission.task, {
+        instructions: "Read the update",
+        contextPaths: [],
+        input: [],
+      });
     }),
   );
 });

@@ -55,7 +55,7 @@ const record = (path: string, state: object): ContextSnapshot => ({
 });
 const definition = {
   trigger: { _tag: "Context", when: "changed" },
-  task: { _tag: "Goal", target: "/goals/personal", text: "read" },
+  action: { _tag: "SendGoalMessage", goalPath: "/goals/personal", text: "read" },
   status: "active",
   version: 1,
 };

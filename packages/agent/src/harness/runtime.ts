@@ -45,15 +45,28 @@ export const durableTool = (tool: AgentTool): ToolRegistration =>
     },
   });
 
-export const durableModels = (resolved: ResolvedModel, models = createModels()) => {
+export const durableModels = (
+  resolved: ResolvedModel,
+  models = createModels(),
+  invocationSignal?: AbortSignal,
+) => {
+  const stream: ResolvedModel["stream"] = (model, context, options) => {
+    invocationSignal?.throwIfAborted();
+    return resolved.stream(model, context, {
+      ...options,
+      signal: invocationSignal
+        ? AbortSignal.any([invocationSignal, ...(options?.signal ? [options.signal] : [])])
+        : options?.signal,
+    });
+  };
   const providerStreams: ProviderStreams = {
     stream: (model, context, options) =>
       lazyStream(model, async () => {
-        return resolved.stream(resolved.model, context, options);
+        return stream(resolved.model, context, options);
       }),
     streamSimple: (model, context, options?: SimpleStreamOptions) =>
       lazyStream(model, async () => {
-        return resolved.stream(resolved.model, context, options);
+        return stream(resolved.model, context, options);
       }),
   };
   models.setProvider(

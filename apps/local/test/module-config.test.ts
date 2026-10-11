@@ -24,8 +24,8 @@ contexts:
       /im: {config: {summary: {model: one}}}
   /memory: {config: {dataDir: ./memory}}
 signals:
-  my-signal: {trigger: {_tag: Context, when: changed}, task: {_tag: Goal, target: /goals/personal, text: original}}
-  another: {trigger: {_tag: Context, when: changed}, task: {_tag: Goal, target: /goals/personal, text: keep}}
+  my-signal: {trigger: {_tag: Context, when: changed}, action: {_tag: SendGoalMessage, goalPath: /goals/personal, text: original}}
+  another: {trigger: {_tag: Context, when: changed}, action: {_tag: SendGoalMessage, goalPath: /goals/personal, text: keep}}
 config:
   models:
     - {name: one, provider: openai, model: first, url: 'http://unused.invalid', apiKey: '\${SECRET}'}
@@ -37,12 +37,12 @@ config:
     envPath,
     projectRoot: dir,
     environment: {
-      ASTER_SIGNALS_MY_SIGNAL_TASK_TEXT: "overridden",
+      ASTER_SIGNALS_MY_SIGNAL_ACTION_TEXT: "overridden",
       ASTER_CONTEXTS_LARK_CHILDREN_IM_CONFIG_POLL_INTERVAL_MS: "5000",
       ASTER_CONFIG_MODELS_0_MODEL: "replacement",
       SECRET: "captured-secret",
     },
-    overrides: { signals: { another: { task: { text: "explicit" } } } },
+    overrides: { signals: { another: { action: { text: "explicit" } } } },
   });
   const { Layer } = await import("effect");
   await Effect.runPromise(
@@ -50,7 +50,7 @@ config:
       Effect.gen(function* () {
         assert.deepEqual(
           (yield* SignalDefinitions.pipe(Effect.provide(SignalDefinitions.layer)))
-            .map((s) => [s.slug, s.task._tag === "Goal" ? s.task.text : ""])
+            .map((s) => [s.slug, s.action._tag === "SendGoalMessage" ? s.action.text : ""])
             .sort(),
           [
             ["another", "explicit"],

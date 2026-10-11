@@ -1,16 +1,16 @@
-import { ContextQueryError } from "../src/context/contracts.js";
-import { CurrentActors } from "../src/services/actors.js";
+import { ContextQueryError } from "../src/queries/contracts.js";
+import { ContextQueries } from "../src/queries/registry.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect";
-import { contextTools } from "../src/tools/catalogues.js";
+import { listContexts, describeContext } from "../src/tools/task/contexts.js";
 import { toolSystem } from "./tool-fixtures.js";
 
 test("Context discovery lists capabilities without state and descriptions match strict execution schemas", async () => {
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const { system, queries } = yield* toolSystem();
+        const { queries } = yield* toolSystem();
         for (let i = 0; i < 31; i++)
           yield* queries.register(
             `/mail/${i}`,
@@ -27,10 +27,11 @@ test("Context discovery lists capabilities without state and descriptions match 
             },
             (input) => Effect.succeed({ ...input, queriedAt: "now", data: "PRIVATE BODY" }),
           );
-        const [list, describe] = contextTools();
+        const list = listContexts();
+        const describe = describeContext();
         const found = yield* list!
           .execute("list", { parent: "/mail" })
-          .pipe(Effect.provideService(CurrentActors, system));
+          .pipe(Effect.provideService(ContextQueries, queries));
         const page = JSON.parse(
           found.content.map((c) => (c.type === "text" ? c.text : "")).join(""),
         );
@@ -40,10 +41,10 @@ test("Context discovery lists capabilities without state and descriptions match 
         assert.doesNotMatch(JSON.stringify(page), /PRIVATE|state/);
         const description = yield* describe!
           .execute("describe", { path: "/mail/0" })
-          .pipe(Effect.provideService(CurrentActors, system));
+          .pipe(Effect.provideService(ContextQueries, queries));
         assert.match(JSON.stringify(description), /Read one email/);
         assert.doesNotMatch(JSON.stringify(description), /PRIVATE/);
-        const invalidInputs: import("../src/context/contracts.js").ContextQueryInput[] = [
+        const invalidInputs: import("../src/queries/contracts.js").ContextQueryInput[] = [
           { path: "/mail/0", command: "state", args: {} },
           { path: "/mail/0", command: "read", args: { id: 3 } },
           { path: "/mail/0", command: "read", args: { id: "1", extra: true } },
@@ -114,5 +115,53 @@ test("Context query registration owns active handlers and cancels them on shutdo
         );
       }),
     ).pipe(Effect.timeout("10 seconds")),
+  );
+});
+
+test("Context argument diagnostics report declared fields and types without rejected values or keys", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const { queries } = yield* toolSystem();
+        yield* queries.register(
+          "/apps/safe",
+          {
+            description: "Test",
+            commands: {
+              read: {
+                description: "Read",
+                schema: Schema.Struct({ query: Schema.String, limit: Schema.optional(Schema.Int) }),
+                success: Schema.String,
+                error: Schema.Never,
+              },
+            },
+          },
+          () => Effect.die("Invalid arguments must not execute"),
+        );
+        const request = (args: import("../src/queries/contracts.js").ContextQueryInput["args"]) =>
+          queries.query({ path: "/apps/safe", command: "read", args });
+        const missing = Schema.decodeUnknownSync(ContextQueryError)(
+          yield* Effect.flip(request({})),
+        );
+        assert.match(missing.message, /query \(required\)/);
+        const invalid = Schema.decodeUnknownSync(ContextQueryError)(
+          yield* Effect.flip(
+            request({ query: "PRIVATE_SOURCE_CONTENT", limit: "PRIVATE_REJECTED_VALUE" }),
+          ),
+        );
+        assert.match(invalid.message, /limit \(expected integer\)/);
+        assert.doesNotMatch(JSON.stringify(invalid), /PRIVATE/);
+        const excess = Schema.decodeUnknownSync(ContextQueryError)(
+          yield* Effect.flip(
+            request({
+              query: "PRIVATE_SOURCE_CONTENT",
+              PRIVATE_UNKNOWN_KEY: "PRIVATE_REJECTED_VALUE",
+            }),
+          ),
+        );
+        assert.match(excess.message, /arguments \(unknown field\)/);
+        assert.doesNotMatch(JSON.stringify(excess), /PRIVATE/);
+      }),
+    ),
   );
 });

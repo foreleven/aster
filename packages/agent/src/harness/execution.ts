@@ -10,7 +10,7 @@ import {
 } from "@earendil-works/pi-durable";
 import { Effect, Exit, Option, Ref, Schema, Semaphore } from "effect";
 import { Models } from "../models.js";
-import { AgentError } from "../shared/contracts.js";
+import { AgentError, ToolInvocationFailure } from "../shared/contracts.js";
 import { AgentConversations, conversationDriver } from "./conversations.js";
 import {
   DurableContextBudget,
@@ -19,6 +19,12 @@ import {
   type HarnessSubmission,
 } from "./contracts.js";
 import { durableModels, durableTool } from "./runtime.js";
+import {
+  failureRequestId,
+  resolutionRequestId,
+  FailureEvidence,
+  FailureResolution,
+} from "./failures.js";
 
 // Keep existing native request identities when reopening a retained root.
 const nativeRequestId = (id: string) => JSON.stringify(["aster.agent.input", id, "initial"]);
@@ -63,6 +69,142 @@ export const openConversation = Effect.fn("DurableHarness.open")(function* (
   const closed = yield* Ref.make(false);
   const scheduled = yield* Ref.make(false);
   const admission = yield* Semaphore.make(1);
+  const unsettled = yield* Ref.make<ReadonlySet<string>>(new Set());
+  const retainFailure = Effect.fn("DurableHarness.retainFailure")(function* (
+    failure: ToolInvocationFailure,
+  ) {
+    for (const requestId of yield* Ref.get(unsettled)) {
+      const current = yield* native((context) =>
+        harness.commit(
+          (tx) => tx.submissionByRequest(root.id, nativeRequestId(requestId)),
+          context,
+        ),
+      );
+      // A previously accepted input may have settled without this scope observing its wait.
+      if (!current || current.status === "done" || current.status === "unanswered") continue;
+      yield* conversations
+        .append(options.owner, failureRequestId(requestId), "agent.invocation.failure", {
+          requestId,
+          message: failure.message,
+          outcome: failure.outcome,
+          ...(failure.operationId === undefined ? {} : { operationId: failure.operationId }),
+        })
+        .pipe(
+          Effect.mapError(
+            (cause) =>
+              new AgentError("Cannot retain terminal tool failure", [], {
+                cause,
+                outcome: "unknown",
+                operationId: failure.operationId,
+              }),
+          ),
+          Effect.tapError(() => driver.quarantine),
+        );
+    }
+  });
+  yield* options.registerTerminalHandler?.(retainFailure) ?? Effect.void;
+  const readFailure = Effect.fnUntraced(function* (requestId: string) {
+    const saved = yield* conversations
+      .find(options.owner, failureRequestId(requestId))
+      .pipe(
+        Effect.mapError(
+          (cause) =>
+            new AgentError("Cannot read terminal tool failure", [], { cause, outcome: "unknown" }),
+        ),
+      );
+    if (Option.isNone(saved)) return Option.none<typeof FailureEvidence.Type>();
+    if (saved.value.kind !== "agent.invocation.failure")
+      return yield* Effect.fail(
+        new AgentError("Terminal tool failure entry kind mismatch", [], { outcome: "unknown" }),
+      );
+    const failure = yield* Schema.decodeUnknownEffect(FailureEvidence)(saved.value.data).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentError("Invalid terminal tool failure entry", [], { cause, outcome: "unknown" }),
+      ),
+    );
+    if (failure.requestId !== requestId)
+      return yield* Effect.fail(
+        new AgentError("Terminal tool failure identity mismatch", [], { outcome: "unknown" }),
+      );
+    return Option.some(failure);
+  });
+  const failureEvidence = Effect.fnUntraced(function* (requestId: string) {
+    const marker = yield* readFailure(requestId);
+    if (Option.isNone(marker)) return;
+    const failure = marker.value;
+    const resolved = yield* conversations.find(options.owner, resolutionRequestId(requestId)).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentError("Cannot read terminal failure resolution", [], {
+            cause,
+            outcome: "unknown",
+            operationId: failure.operationId,
+          }),
+      ),
+    );
+    if (Option.isNone(resolved))
+      return yield* Effect.fail(
+        new AgentError(failure.message, [], {
+          outcome: failure.outcome,
+          operationId: failure.operationId,
+        }),
+      );
+    if (resolved.value.kind !== "agent.invocation.failure.resolved")
+      return yield* Effect.fail(
+        new AgentError("Terminal failure resolution entry kind mismatch", [], {
+          outcome: "unknown",
+          operationId: failure.operationId,
+        }),
+      );
+    const resolution = yield* Schema.decodeUnknownEffect(FailureResolution)(
+      resolved.value.data,
+    ).pipe(
+      Effect.mapError(
+        (cause) =>
+          new AgentError("Invalid terminal failure resolution entry", [], {
+            cause,
+            outcome: "unknown",
+            operationId: failure.operationId,
+          }),
+      ),
+    );
+    if (resolution.requestId !== requestId || resolution.operationId !== failure.operationId)
+      return yield* Effect.fail(
+        new AgentError("Terminal failure resolution identity mismatch", [], {
+          outcome: "unknown",
+          operationId: failure.operationId,
+        }),
+      );
+    return yield* Effect.fail(
+      new AgentError(
+        "Original tool outcome was reconciled; its reasoning invocation remains aborted",
+        [],
+        {
+          outcome: "failed",
+          operationId: failure.operationId,
+        },
+      ),
+    );
+  });
+  const resolveFailure = Effect.fn("DurableHarness.resolveFailure")(
+    function* (requestId: string, operationId: string) {
+      if (yield* Ref.get(closed))
+        return yield* Effect.fail(new AgentError("Conversation scope is closed"));
+      yield* conversations.resolveFailure(options.owner, requestId, operationId).pipe(
+        Effect.mapError(
+          (cause) =>
+            new AgentError(cause.message, [], {
+              cause,
+              outcome: cause.kind === "unavailable" ? "unknown" : "failed",
+              operationId,
+            }),
+        ),
+      );
+    },
+    admission.withPermit,
+    Effect.uninterruptible,
+  );
   const access = <A>(operation: (context: NativeContext) => Promise<A>) =>
     Ref.get(closed).pipe(
       Effect.flatMap((retired) =>
@@ -101,6 +243,7 @@ export const openConversation = Effect.fn("DurableHarness.open")(function* (
     durableModels(
       { ...resolved, model: { ...resolved.model, contextWindow: contextTokens } },
       driver.models,
+      options.invocationSignal,
     );
     driver.settings.compaction = budget
       ? {
@@ -137,9 +280,11 @@ export const openConversation = Effect.fn("DurableHarness.open")(function* (
         context,
       ),
     );
-  const wrap = (submission: Submission): HarnessSubmission => ({
+  const wrap = (submission: Submission, requestId: string): HarnessSubmission => ({
     status: access((context) => submission.status(context)),
     wait: Effect.gen(function* () {
+      yield* failureEvidence(requestId);
+      yield* Ref.update(unsettled, (current) => new Set([...current, requestId]));
       const current = yield* access((context) => submission.status(context));
       const record =
         current.status === "done" || current.status === "unanswered"
@@ -147,6 +292,10 @@ export const openConversation = Effect.fn("DurableHarness.open")(function* (
           : yield* Ref.set(scheduled, true).pipe(
               Effect.andThen(access((context) => submission.wait(context))),
             );
+      yield* Ref.update(
+        unsettled,
+        (current) => new Set([...current].filter((id) => id !== requestId)),
+      );
       if (record.status === "unanswered")
         return yield* Effect.fail(
           new AgentError(
@@ -176,12 +325,13 @@ export const openConversation = Effect.fn("DurableHarness.open")(function* (
       if (!record) return Option.none<HarnessSubmission>();
       const handle = await harness.submission(record.id, context);
       if (!handle) throw new Error("Native submission is missing");
-      return Option.some(wrap(handle));
+      return Option.some(wrap(handle, requestId));
     });
   return {
     submission,
     submit: (input) =>
       Effect.gen(function* () {
+        yield* Ref.update(unsettled, (current) => new Set([...current, input.requestId]));
         const previous = yield* submission(input.requestId);
         if (Option.isSome(previous)) return previous.value;
         yield* Ref.set(scheduled, true);
@@ -193,8 +343,10 @@ export const openConversation = Effect.fn("DurableHarness.open")(function* (
               context,
             ),
           ),
+          input.requestId,
         );
       }).pipe(admission.withPermit, Effect.uninterruptible),
     abort,
+    resolveFailure,
   } satisfies HarnessConversation;
 });

@@ -53,7 +53,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   let restored: Awaited<ReturnType<typeof testCodex>> | undefined;
   try {
     const session = await Effect.runPromise(
-      Effect.scoped(agent.submit({ instructions: "Prepared", input: [] })),
+      Effect.scoped(agent.submit({ contextPaths: [], instructions: "Prepared", input: [] })),
     );
     assert.equal(session.sessionId, "session-1");
     assert.equal(session.runId, "run-1");
@@ -130,7 +130,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const restored = await testCodex({ ...process.env }, executable, join(dir, "tasks"));
   try {
     const session = await Effect.runPromise(
-      Effect.scoped(agent.submit({ instructions: "Prepared", input: [] })),
+      Effect.scoped(agent.submit({ contextPaths: [], instructions: "Prepared", input: [] })),
     );
     assert.equal((await Effect.runPromise(Effect.scoped(agent.status(session)))).state, "running");
     await Effect.runPromise(Effect.scoped(agent.close()));
@@ -195,15 +195,20 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   };
   try {
     await assert.rejects(
-      Effect.runPromise(Effect.scoped(agent.submit({ instructions: "cancelled", input: [] })), {
-        signal: AbortSignal.abort(new Error("already cancelled")),
-      }),
+      Effect.runPromise(
+        Effect.scoped(agent.submit({ contextPaths: [], instructions: "cancelled", input: [] })),
+        {
+          signal: AbortSignal.abort(new Error("already cancelled")),
+        },
+      ),
       isInterrupted,
     );
     await assert.rejects(access(log));
     const controller = new AbortController();
     const submission = Effect.runPromise(
-      Effect.scoped(agent.submit({ instructions: "cancel during thread", input: [] })),
+      Effect.scoped(
+        agent.submit({ contextPaths: [], instructions: "cancel during thread", input: [] }),
+      ),
       { signal: controller.signal },
     );
     const rejected = assert.rejects(submission, isInterrupted);
@@ -213,7 +218,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     await delay(150);
     assert.equal((await methods()).includes("turn/start"), false);
     const session = await Effect.runPromise(
-      Effect.scoped(agent.submit({ instructions: "live", input: [] })),
+      Effect.scoped(agent.submit({ contextPaths: [], instructions: "live", input: [] })),
     );
     assert.ok(session.sessionId);
     assert.equal((await methods()).filter((m) => m === "initialize").length, 1);
@@ -236,7 +241,9 @@ readline.createInterface({input:process.stdin}).on('line', line => {
     const executing = new AbortController();
     const turn = assert.rejects(
       Effect.runPromise(
-        Effect.scoped(agent.submit({ instructions: "cancel during turn", input: [] })),
+        Effect.scoped(
+          agent.submit({ contextPaths: [], instructions: "cancel during turn", input: [] }),
+        ),
         {
           signal: executing.signal,
         },
@@ -280,7 +287,7 @@ readline.createInterface({input:process.stdin}).on('line', line => {
   const agent = await testCodex({ ...process.env }, executable, join(dir, "tasks"));
   try {
     const first = await Effect.runPromise(
-      Effect.scoped(agent.submit({ instructions: "Initial work", input: [] })),
+      Effect.scoped(agent.submit({ contextPaths: [], instructions: "Initial work", input: [] })),
     );
     assert.deepEqual(
       await Effect.runPromise(

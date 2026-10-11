@@ -1,3 +1,4 @@
+import { MemoryRecall } from "../src/memory/recall.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { testConversations } from "./conversation-fixtures.js";
@@ -6,7 +7,18 @@ import { ContextCaptures } from "../src/memory/capture.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ActorSystem } from "@aster/actor";
-import { Clock, Deferred, Effect, Fiber, Layer, Option, Queue, Schema, Stream } from "effect";
+import {
+  Clock,
+  Context,
+  Deferred,
+  Effect,
+  Fiber,
+  Layer,
+  Option,
+  Queue,
+  Schema,
+  Stream,
+} from "effect";
 import { TestClock } from "effect/testing";
 import {
   MemoryActor,
@@ -369,14 +381,14 @@ test("slow capture evidence never blocks recall and captured sessions skip subse
         { expectedRevision: 0 },
       );
       yield* Deferred.await(entered);
-      const cancelled = yield* Deferred.make<void>();
-      const reply = yield* memory.ask((replyTo) => ({
-        _tag: "Search",
-        query: "hello",
-        cancelled,
-        replyTo,
-      }));
-      assert.deepEqual(reply, { _tag: "Success", value: [] });
+      const recall = yield* Layer.build(MemoryRecall.layer).pipe(
+        Effect.map(Context.get(MemoryRecall)),
+        Effect.provideService(
+          MemoryBackend,
+          backend(() => Effect.void),
+        ),
+      );
+      assert.deepEqual(yield* recall.search("hello"), []);
       yield* Deferred.succeed(release, undefined);
       yield* h.committed(
         (record) =>
@@ -395,7 +407,7 @@ test("slow capture evidence never blocks recall and captured sessions skip subse
         },
         { expectedRevision: 1 },
       );
-      yield* memory.ask((replyTo) => ({ _tag: "Search", query: "after", cancelled, replyTo }));
+      yield* recall.search("after");
       assert.equal(reads, 1);
     }),
   );

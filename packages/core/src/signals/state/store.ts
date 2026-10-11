@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { AgentConversations } from "@aster/agent/harness";
+import { GoalMessageDelivery } from "../../goals/message-contracts.js";
 import { RemainingAgentTurns, TaskMessage } from "../../tasks/contracts.js";
 import { CommandReceipt } from "../../operations.js";
 
@@ -16,9 +17,11 @@ const SignalReceipt = Schema.TaggedUnion({
     receipt: CommandReceipt,
   },
 });
+export const FrozenSignalDelivery = Schema.Union([TaskMessage, GoalMessageDelivery]);
+export type FrozenSignalDelivery = typeof FrozenSignalDelivery.Type;
 const DeliveryStatus = Schema.Literals(["pending", "sending", "delivered", "failed", "cancelled"]);
 export const SignalDelivery = Schema.Struct({
-  message: TaskMessage,
+  message: FrozenSignalDelivery,
   status: DeliveryStatus,
   error: Schema.optional(Schema.String),
 });
@@ -30,7 +33,7 @@ const Event = Schema.TaggedUnion({
     receipt: Schema.optional(SignalReceipt),
   },
   Triggered: {
-    message: TaskMessage,
+    message: FrozenSignalDelivery,
     nextDue: Schema.optional(Schema.NullOr(SignalTime)),
     receipt: Schema.optional(SignalReceipt),
   },
@@ -163,15 +166,15 @@ export const makeSignalStore = Effect.fn("SignalStore.make")(function* (path: st
 });
 
 /** Only a durably started delivery may authorize Task admission, including after deletion. */
-export const signalMessage: (
+export const signalDelivery: (
   messages: AgentConversations["Service"],
   path: string,
   requestId: string,
-) => Effect.Effect<TaskMessage | undefined> = Effect.fn("Signal.message")(function* (
+) => Effect.Effect<FrozenSignalDelivery | undefined> = Effect.fn("Signal.delivery")(function* (
   messages: AgentConversations["Service"],
   path: string,
   requestId: string,
-): Effect.fn.Return<TaskMessage | undefined> {
+): Effect.fn.Return<FrozenSignalDelivery | undefined> {
   const history = yield* readSignalHistory(messages, path);
   return history.deliveries.find(
     (delivery) =>

@@ -14,9 +14,9 @@ import {
 } from "@aster/actor";
 import { Effect, Match, Predicate, Ref, Schema, Scope } from "effect";
 import { randomUUID } from "node:crypto";
-import { ContextQueryError } from "./contracts.js";
-import { QueryReply, isQueryCommand, type QueryCommand } from "./queries/protocol.js";
-import { ContextQueries } from "./queries/routes.js";
+import { ContextQueryError } from "../queries/contracts.js";
+import { QueryReply, isQueryCommand, type QueryCommand } from "../queries/commands.js";
+import { ContextQueries } from "../queries/registry.js";
 import { DurableContext } from "./store.js";
 import { CurrentContextPath } from "./location.js";
 

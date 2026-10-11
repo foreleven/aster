@@ -5,9 +5,9 @@ import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ContextActor, contextPath, contextSpawnOptions } from "../src/context/actor.js";
-import { ContextQueryError } from "../src/context/contracts.js";
-import { ContextCommand } from "../src/context/queries/protocol.js";
-import { ContextQueries } from "../src/context/queries/routes.js";
+import { ContextQueryError } from "../src/queries/contracts.js";
+import { ContextCommand } from "../src/queries/commands.js";
+import { ContextQueries } from "../src/queries/registry.js";
 import { makeTestContext } from "../src/testing/context.js";
 
 const SearchResult = Schema.Struct({

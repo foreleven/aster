@@ -6,7 +6,7 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
   const { fileURLToPath } = await import("node:url");
   const requireLocal = createRequire(new URL("../../local/package.json", import.meta.url));
   const { Effect, Layer, Schema } = await import(requireLocal.resolve("effect"));
-  const { AsterRuntime, DurableContext, ContextQueries } =
+  const { AsterRuntime, DurableContext, ContextQueries, QueryExecution } =
     await import("../../../packages/core/dist/index.js");
   const { GoalSnapshot } = await import("../../../packages/core/dist/goals/state/snapshot.js");
   const { ActorSystem, Actor } = await import("../../../packages/actor/dist/index.js");
@@ -75,26 +75,31 @@ test("built dashboard reads real HTTP runtime and refreshes public Context chang
     AgentConversations.makeMemory().pipe(Effect.provideService(Scope.Scope, scope)),
   );
   const { NodeFileSystem } = await import(requireLocal.resolve("@effect/platform-node"));
-  const bound = await Effect.runPromise(
-    makeHttpApi({
-      port: 0,
-      webDir: fileURLToPath(new URL("../dist", import.meta.url)),
-    }).pipe(
-      Effect.provide(
-        Layer.mergeAll(
-          Layer.succeed(AsterRuntime, {
-            actors: testActors(registry),
-            ready: Effect.void,
-            inspect: system
-              .inspect({ metadata: ["contextPath"] })
-              .pipe(Effect.map((actors) => ({ actors, events: [], phase: "ready" }))),
-          }),
-          Layer.succeed(DurableContext, registry.backend),
-          Layer.succeed(AgentConversations, history),
-          ContextQueries.layer,
-          NodeFileSystem.layer,
+  const services = await Effect.runPromise(
+    Layer.buildWithScope(
+      QueryExecution.layer.pipe(
+        Layer.provideMerge(
+          Layer.mergeAll(
+            Layer.succeed(AsterRuntime, {
+              actors: testActors(registry),
+              ready: Effect.void,
+              inspect: system
+                .inspect({ metadata: ["contextPath"] })
+                .pipe(Effect.map((actors) => ({ actors, events: [], phase: "ready" }))),
+            }),
+            Layer.succeed(DurableContext, registry.backend),
+            Layer.succeed(AgentConversations, history),
+            ContextQueries.layer,
+            NodeFileSystem.layer,
+          ),
         ),
       ),
+      scope,
+    ),
+  );
+  const bound = await Effect.runPromise(
+    makeHttpApi({ port: 0, webDir: fileURLToPath(new URL("../dist", import.meta.url)) }).pipe(
+      Effect.provideContext(services),
       Effect.provideService(Scope.Scope, scope),
     ),
   );

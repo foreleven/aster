@@ -6,7 +6,7 @@ import { AgentConversations } from "@aster/agent/harness";
 import { Effect, Layer } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ContextQueries } from "../src/context/queries/routes.js";
+import { ContextQueries } from "../src/queries/registry.js";
 import {
   SignalDefinitions,
   SignalRootActor,
@@ -20,10 +20,14 @@ import { testConversations } from "./conversation-fixtures.js";
 const definition = {
   slug: "review",
   trigger: { _tag: "Context" as const, when: "Release changed" },
-  task: { _tag: "Goal" as const, target: "/goals/personal", text: "Review evidence" },
+  action: {
+    _tag: "SendGoalMessage" as const,
+    goalPath: "/goals/personal",
+    text: "Review evidence",
+  },
 };
 
-test("Signal freezes one Task and evidence with its receipt; restart reuses the original envelope", async () => {
+test("Signal freezes one action and evidence with its receipt; restart reuses the original envelope", async () => {
   const records = new Map<string, StoredContext>();
   const messages = testConversations();
   let input: SignalReactionInput | undefined;
@@ -71,7 +75,9 @@ test("Signal freezes one Task and evidence with its receipt; restart reuses the 
           assert.equal(state.deliveries.length, 1);
           assert.equal(state.receipts?.length, 1);
           assert.deepEqual(state.deliveries[0]!.message.evidence, input.sourceContext);
-          assert.deepEqual(state.deliveries[0]!.message.task, definition.task);
+          assert.ok("_tag" in state.deliveries[0]!.message);
+          assert.equal(state.deliveries[0]!.message.goalPath, definition.action.goalPath);
+          assert.equal(state.deliveries[0]!.message.text, definition.action.text);
           if (restart) assert.deepEqual(state.deliveries[0]!.message, first);
           first = state.deliveries[0]!.message;
           assert.equal(

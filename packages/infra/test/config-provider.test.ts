@@ -19,7 +19,7 @@ test("local provider precedence, exact credentials and config-relative locations
     envPath = join(dir, ".env");
   await writeFile(
     configPath,
-    'http: {port: 4317}\ncontexts:\n  /lark:\n    children:\n      /im: {config: {pollIntervalMs: 900000}}\nsignals:\n  test: {trigger: {_tag: Context, when: changed}, task: {_tag: Goal, target: /goals/personal, text: "Keep ${UNEXPANDED}"}}\n',
+    'http: {port: 4317}\ncontexts:\n  /lark:\n    children:\n      /im: {config: {pollIntervalMs: 900000}}\nsignals:\n  test: {trigger: {_tag: Context, when: changed}, action: {_tag: SendGoalMessage, goalPath: /goals/personal, text: "Keep ${UNEXPANDED}"}}\n',
   );
   await writeFile(envPath, "ASTER_HTTP_PORT=4318\nTEST_SECRET=dotenv-secret\n");
   const before = { ...process.env };
@@ -42,10 +42,10 @@ test("local provider precedence, exact credentials and config-relative locations
           assert.equal(yield* port, expected);
           assert.equal((yield* ConfigLocation).baseDir, dir);
           assert.deepEqual(
-            (yield* SignalDefinitions.pipe(Effect.provide(SignalDefinitions.layer)))[0]!.task,
+            (yield* SignalDefinitions.pipe(Effect.provide(SignalDefinitions.layer)))[0]!.action,
             {
-              _tag: "Goal",
-              target: "/goals/personal",
+              _tag: "SendGoalMessage",
+              goalPath: "/goals/personal",
               text: "Keep ${UNEXPANDED}",
             },
           );

@@ -24,7 +24,14 @@ export class DurableHarness extends Context.Service<
     withConversation: (options, use) =>
       withAgentCallbacks((invoke) =>
         Effect.scoped(
-          Effect.flatMap(open({ ...options, ...nativeCallbacks(options, invoke) }), use),
+          Effect.flatMap(
+            open({
+              ...options,
+              ...nativeCallbacks(options, invoke),
+              registerTerminalHandler: invoke.registerTerminalHandler,
+            }),
+            use,
+          ),
         ),
       ),
   });

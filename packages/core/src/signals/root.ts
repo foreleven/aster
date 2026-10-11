@@ -43,7 +43,7 @@ export const SignalRootActor = ContextActor.define("signals/RootActor", {
         path: yield* CurrentContextPath,
         state: Schema.Struct({}),
         message: Schema.Never,
-        initial: { state: {}, description: "Context and scheduled Tasks" },
+        initial: { state: {}, description: "Context and scheduled actions" },
       })
       .pipe(Effect.orDie);
     return {

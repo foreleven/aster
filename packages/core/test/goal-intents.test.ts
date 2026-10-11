@@ -5,7 +5,7 @@ import { ConversationError } from "@aster/agent/harness";
 import { Deferred, Effect, Layer, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ContextQueries } from "../src/context/queries/routes.js";
+import { ContextQueries } from "../src/queries/registry.js";
 import { type GoalIntentInput } from "../src/goals/screening/intent.js";
 import { goalInputId } from "../src/goals/state/inputs.js";
 import {

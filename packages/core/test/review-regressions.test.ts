@@ -9,7 +9,7 @@ import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ApprovalReply } from "../src/approvals/actor.js";
-import { ContextQueries } from "../src/context/queries/routes.js";
+import { ContextQueries } from "../src/queries/registry.js";
 import {
   ApprovalQueueActor,
   ExternalAgents,
@@ -25,7 +25,7 @@ import { goalWorkflowLayer } from "./workflow-fixtures.js";
 const definition = {
   slug: "review",
   trigger: { _tag: "Context", when: "now" },
-  task: { _tag: "Goal", target: "/goals/personal", text: "Task" },
+  action: { _tag: "SendGoalMessage", goalPath: "/goals/personal", text: "Task" },
 } as const;
 test("Goal command waits for durable input and history; stopped roots fail instead of accepting", async () => {
   await Effect.runPromise(

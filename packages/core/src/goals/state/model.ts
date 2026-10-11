@@ -10,6 +10,7 @@ import type { GoalDefinition } from "../../goals/contracts.js";
 import { Context, Effect, Layer, Match, Ref, Result, Schema, Semaphore } from "effect";
 import { ApplicationError } from "../../operations.js";
 import { TaskPath } from "../../tasks/contracts.js";
+import { goalOperationReceipt } from "../reconciliation.js";
 import { type AgentError } from "@aster/agent";
 import { AgentConversations } from "@aster/agent/harness";
 
@@ -87,7 +88,9 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
         { concurrency: 4 },
       )).flat(),
       inputs: recovered.inputs.map((input) =>
-        recovered.status === "active" && input.status === "unknown"
+        recovered.status === "active" &&
+        input.status === "unknown" &&
+        input.operationId === undefined
           ? { ...input, status: "running" }
           : input,
       ),
@@ -133,6 +136,7 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
       yield* patchInput(inputId, {
         status: error.outcome === "failed" ? "failed" : "unknown",
         error: error.message,
+        operationId: error.operationId,
       });
       return;
     }
@@ -168,7 +172,40 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
     });
   });
 
+  const reconcile = Effect.fn("GoalState.reconcileOperations")(function* () {
+    const state = yield* read;
+    if (state.status !== "active") return;
+    for (const input of state.inputs) {
+      if (input.status !== "unknown" || !input.operationId) continue;
+      const received = yield* goalOperationReceipt(registry, messages, path, input.operationId);
+      if (!received) continue;
+      const resolved = yield* messages.resolveFailure(path, input.inputId, input.operationId).pipe(
+        Effect.as(true),
+        Effect.catchTag("ConversationError", (error) =>
+          Effect.logWarning({
+            event: "goal.operation.resolution.pending",
+            goalPath: path,
+            operationId: input.operationId,
+            kind: error.kind,
+          }).pipe(Effect.as(false)),
+        ),
+      );
+      if (!resolved) continue;
+      if (received.taskPath !== undefined) yield* attachTask(received.taskPath);
+      yield* reply(
+        input.inputId,
+        "reconciled",
+        "The earlier operation was accepted. I recovered its original receipt and can continue; acceptance does not mean the work is complete.",
+      );
+      yield* patchInput(input.inputId, {
+        status: "completed",
+        error: undefined,
+        operationId: undefined,
+      });
+    }
+  });
   yield* restore;
+  yield* reconcile();
   const accept = goalAdmission(registry, working, messages);
   return {
     read,
@@ -198,6 +235,7 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
     attachTask: (taskPath: string) => mutate(attachTask(taskPath)),
     accept: (...args: Parameters<typeof accept>) => mutate(accept(...args)),
     resolve: inputs.resolve,
+    reconcile: () => mutate(reconcile()),
     start: (inputId: string) => mutate(patchInput(inputId, { status: "running" })),
     updateSummary: (summary: string) => mutate(updateSummary(summary)),
     recordGate: (...args: Parameters<typeof recordGate>) => mutate(recordGate(...args)),

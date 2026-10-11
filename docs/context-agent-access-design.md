@@ -2,6 +2,8 @@
 
 Status: implemented.
 
+The [Agent tools and Context retrieval design](tools-design.md) defines configured metadata for Goal routing, structured Task source hints, scoped query/recall execution and explicit uncertain-outcome handling. These contracts are implemented without historical-data compatibility.
+
 ## Boundary
 
 Task Agents discover capabilities, inspect command schemas, then request domain evidence. They cannot dump arbitrary persisted Context state. Primary Goal Agents retain their small coordination tool set and delegate evidence retrieval to Tasks.
@@ -17,13 +19,13 @@ Web's `ListContexts` and `GetContext` RPCs retain their application projections.
 | `query_context`     | Execute a supported read-only command with strict argument validation. Retain Agent evidence in the bound Pi conversation.                |
 | `read_query_result` | Page previously retained evidence without repeating a provider query.                                                                     |
 
-`search_contexts` and `read_context` were removed. An Agent may reuse a known command schema; execution always validates arguments. Individual stored emails and Tasks are not capability entry points when their owning collection already provides list/read commands. Task tool catalogue version is `aster.task.v3`.
+`search_contexts` and `read_context` were removed. An Agent may reuse a known command schema; execution always validates arguments. Individual stored emails and Tasks are not capability entry points when their owning collection already provides list/read commands. Goal and Task catalogues are independently imported from their invocation-specific tool modules.
 
 ## Registration and execution
 
 `ContextQueries.register(path, { description, commands }, handler)` registers metadata and its handler in the owner's Scope. Each command supplies a description and Effect Schema. That Schema drives both JSON Schema publication and strict runtime validation, including rejection of unsupported commands and excess fields. The capability registry is independent of persisted business state.
 
-Owner release removes capabilities and cancels active queries. Waiting callers receive an unavailable failure when that owner retires. Caller cancellation, defects and unrelated interruption retain their semantics. The Contexts Actor bounds Agent query execution to four requests; Pi retains results before tool acknowledgement. Integrations can impose stricter provider concurrency limits.
+Owner release removes capabilities and cancels active queries. Waiting callers receive an unavailable failure when that owner retires. Caller cancellation, defects and unrelated interruption retain their semantics. The runtime-scoped QueryExecution service shares a four-query limit between model and application callers; Pi retains results before tool acknowledgement. Integrations can impose stricter provider concurrency limits.
 
 Every `ContextCommand.Class` declares its own `success` Schema and optional `error` Schema. `Schema.Void` supports an empty acknowledgement; omitting `error` means `Schema.Never`. There is no shared result envelope or default domain error. Typed Actor asks return the business value and original declared error. Dynamic Context queries erase response types; the RPC boundary encodes each command's chosen codecs and represents `void` as JSON `null`.
 
@@ -50,7 +52,7 @@ Provider-backed queries use services inside the owning Actor. IM `messages` read
 
 Domain list commands default to 20 items with a maximum of 100; Context result paging bounds large evidence returned to Agents. Domain modules own field selection; Runtime only registers their capabilities. Missing handlers have no fallback `state` command.
 
-Memory retains `memory_search` and `memory_expand`. Goal-local tools such as `goal_current`, `task_list` and `signal_list` keep their existing roles. No compatibility aliases or secondary query stores are introduced.
+Memory retains `memory_search` and `memory_expand` over scoped MemoryRecall; MemoryActor owns capture only. Goal-local tools such as `goal_current`, `task_list` and `signal_list` keep their existing roles. No compatibility aliases or secondary query stores are introduced.
 
 ## Lark query arguments
 

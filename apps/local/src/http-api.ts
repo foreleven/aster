@@ -8,7 +8,7 @@ import * as ApiServer from "@aster/api/server";
 import { AgentConversations } from "@aster/agent/harness";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
-import { AsterRuntime, DurableContext, ContextQueries } from "@aster/core";
+import { AsterRuntime, DurableContext, QueryExecution } from "@aster/core";
 import { withHttpPolicy } from "./http-policy.js";
 import { staticAssets } from "./static-assets.js";
 import { sourceAssets } from "./source-assets.js";
@@ -33,7 +33,7 @@ export const makeHttpApi = Effect.fn("LocalHttpApi.make")(function* (
   | FileSystem.FileSystem
   | AsterRuntime
   | DurableContext
-  | ContextQueries
+  | QueryExecution
   | AgentConversations
 > {
   const nodeServer = createServer();
