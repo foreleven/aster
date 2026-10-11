@@ -3,7 +3,7 @@ import { serializeFixtureState } from "../src/testing/context.js";
 import { testApprovalEntries } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "../src/agent/runtime/session.js";
 import { Clock, Deferred, Effect, Fiber, Layer, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";

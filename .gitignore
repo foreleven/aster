@@ -26,3 +26,5 @@ signals.config.yml
 .eslintcache
 playwright-report/
 test-results/
+
+packages/core/src/agent/runtime/instructions.generated.ts

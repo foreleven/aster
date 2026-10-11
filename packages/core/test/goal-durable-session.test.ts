@@ -1,12 +1,12 @@
+import { testModels } from "./native-agent-model.js";
 import { CurrentContextPath } from "../src/context/location.js";
 import { testSettings } from "./settings-fixtures.js";
 import { serializeFixtureState } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { Schema } from "effect";
 import { GoalSnapshot } from "@aster/core";
-import { Models, type ResolvedModel } from "@aster/agent";
-import { AgentRunner } from "@aster/agent/agent";
-import { AgentConversations, DurableHarness } from "@aster/agent/harness";
+import { AgentRuntime } from "../src/agent/runtime/ordinary-runtime.js";
+import { AgentConversations, AgentSession } from "../src/agent/runtime/session.js";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import { mkdtemp, rm } from "node:fs/promises";
@@ -27,83 +27,62 @@ test("reopened Goal sessions keep their policy and history while tools read the 
   const conversations = testConversations(directory);
   t.after(() => rm(directory, { recursive: true, force: true }));
   let calls = 0;
-  const model: ResolvedModel["model"] = {
-    id: "test",
-    name: "test",
-    provider: "test",
-    api: "openai-completions",
-    baseUrl: "http://unused",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 200000,
-    maxTokens: 4096,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  };
-  const models = Layer.succeed(Models, {
-    resolve: () =>
-      Effect.succeed({
-        model,
-        getApiKey: () => "unused",
-        stream: (_model, context) => {
-          calls++;
-          const turn = Math.floor((calls - 1) / 2);
-          const reading = calls % 2 === 1;
-          const policy = JSON.stringify(
-            context.messages.filter((message) => message.role === "system"),
-          );
-          assert.match(policy, /You are the user's assistant pursuing an ongoing Goal/);
-          // Pi retains prior system updates in history; the latest update is authoritative.
-          const currentPolicy = JSON.stringify(
-            context.messages.findLast((message) => message.role === "system"),
-          );
-          assert.match(currentPolicy, /## Handling inputs/);
-          assert.match(currentPolicy, new RegExp(`PRIVATE_goal_${turn}`));
-          assert.doesNotMatch(currentPolicy, new RegExp(`PRIVATE_goal_${1 - turn}`));
-          assert.doesNotMatch(policy, /PRIVATE_summary_/);
-          if (reading) {
-            const latest = context.messages.findLast((message) => message.role === "user");
-            assert.equal(latest?.content, "Continue the Goal");
-          }
-          if (calls === 3) {
-            assert.match(JSON.stringify(context.messages), /PRIVATE_summary_0/);
-            assert.doesNotMatch(JSON.stringify(context.messages), /PRIVATE_summary_1/);
-          }
-          if (!reading) {
-            const response = context.messages.findLast(
-              (message) => message.role === "toolResult" && message.toolName === "goal_current",
-            );
-            assert.ok(response?.role === "toolResult");
-            const content = response.content[0]!;
-            assert.ok(content.type === "text");
-            const page = JSON.parse(content.text);
-            const current = page;
-            assert.equal(current.state.summary, `PRIVATE_summary_${turn}`);
-            assert.equal(current.goal.description, `PRIVATE_goal_${turn}`);
-          }
-          const message: AssistantMessage = {
-            role: "assistant",
-            provider: "test",
-            model: "test",
-            api: "openai-completions",
-            timestamp: 0,
-            stopReason: reading ? "toolUse" : "stop",
-            content: reading
-              ? [{ type: "toolCall", id: `call-${calls}`, name: "goal_current", arguments: {} }]
-              : [{ type: "text", text: `Recorded turn ${turn}` }],
-            usage: {
-              input: 100,
-              output: 100,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 200,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-          };
-          const stream = createAssistantMessageEventStream();
-          stream.push({ type: "done", reason: reading ? "toolUse" : "stop", message });
-          return stream;
-        },
-      }),
+  const models = testModels((_model, context) => {
+    calls++;
+    const turn = Math.floor((calls - 1) / 2);
+    const reading = calls % 2 === 1;
+    const policy = JSON.stringify(context.messages.filter((message) => message.role === "system"));
+    assert.match(policy, /You are the user's personal assistant pursuing an ongoing Goal/);
+    // Pi retains prior system updates in history; the latest update is authoritative.
+    const currentPolicy = JSON.stringify(
+      context.messages.findLast((message) => message.role === "system"),
+    );
+    assert.match(currentPolicy, /## Current Goal/);
+    assert.match(currentPolicy, new RegExp(`PRIVATE_goal_${turn}`));
+    assert.doesNotMatch(currentPolicy, new RegExp(`PRIVATE_goal_${1 - turn}`));
+    assert.doesNotMatch(policy, /PRIVATE_summary_/);
+    if (reading) {
+      const latest = context.messages.findLast((message) => message.role === "user");
+      assert.equal(latest?.content, "Continue the Goal");
+    }
+    if (calls === 3) {
+      assert.match(JSON.stringify(context.messages), /PRIVATE_summary_0/);
+      assert.doesNotMatch(JSON.stringify(context.messages), /PRIVATE_summary_1/);
+    }
+    if (!reading) {
+      const response = context.messages.findLast(
+        (message) => message.role === "toolResult" && message.toolName === "goal_current",
+      );
+      assert.ok(response?.role === "toolResult");
+      const content = response.content[0]!;
+      assert.ok(content.type === "text");
+      const page = JSON.parse(content.text);
+      const current = page;
+      assert.equal(current.state.summary, `PRIVATE_summary_${turn}`);
+      assert.equal(current.goal.description, `PRIVATE_goal_${turn}`);
+    }
+    const message: AssistantMessage = {
+      role: "assistant",
+      provider: "test",
+      model: "test",
+      api: "openai-completions",
+      timestamp: 0,
+      stopReason: reading ? "toolUse" : "stop",
+      content: reading
+        ? [{ type: "toolCall", id: `call-${calls}`, name: "goal_current", arguments: {} }]
+        : [{ type: "text", text: `Recorded turn ${turn}` }],
+      usage: {
+        input: 100,
+        output: 100,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 200,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
+    const stream = createAssistantMessageEventStream();
+    stream.push({ type: "done", reason: reading ? "toolUse" : "stop", message });
+    return stream;
   });
   const run = (turn: number) =>
     Effect.runPromise(
@@ -179,7 +158,7 @@ test("reopened Goal sessions keep their policy and history while tools read the 
           );
         }).pipe(
           Effect.provide(
-            Layer.mergeAll(AgentRunner.layer, DurableHarness.layer).pipe(
+            Layer.mergeAll(AgentRuntime.layer, AgentSession.layer).pipe(
               Layer.provide(models),
               Layer.provide(Layer.succeed(AgentConversations, conversations)),
             ),

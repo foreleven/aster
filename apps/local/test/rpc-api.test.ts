@@ -3,8 +3,8 @@ import { serializeFixtureState } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { GoalSnapshot } from "@aster/core";
 import { Actor, ActorSystem } from "@aster/actor";
-import { AgentRunner } from "@aster/agent/agent";
-import { AgentConversations, DurableHarness } from "@aster/agent/harness";
+import { AgentRuntime } from "@aster/core/agent/ordinary";
+import { AgentConversations, AgentSession } from "@aster/core/agent/session";
 import * as ApiClient from "@aster/api/client";
 import * as ApiServer from "@aster/api/server";
 import {
@@ -66,12 +66,12 @@ test("Goal RPC acknowledges duplicate business requests without duplicating inpu
             }),
             Layer.succeed(ExternalAgents, {}),
             Layer.succeed(
-              DurableHarness,
-              DurableHarness.make(() => Effect.never),
+              AgentSession,
+              AgentSession.make(() => Effect.never),
             ),
             Layer.succeed(
-              AgentRunner,
-              AgentRunner.make(() => Effect.die("No model expected")),
+              AgentRuntime,
+              AgentRuntime.make(() => Effect.die("No model expected")),
             ),
           ),
         );

@@ -1,4 +1,4 @@
-import type { AgentConversations } from "@aster/agent/harness";
+import type { AgentConversations } from "../agent/runtime/session.js";
 import { Effect } from "effect";
 import type { DurableContext } from "../context/store.js";
 import { taskOperationReceipt } from "../tasks/operations.js";

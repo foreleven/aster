@@ -10,7 +10,7 @@ import { Effect, Layer } from "effect";
 import { openMemoryReader, configuredMemoryReader } from "@aster/infra";
 import { startApplication } from "./application.js";
 
-const projectRoot = fileURLToPath(new URL("../../../", import.meta.url));
+const projectRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const defaultConfigPath = resolve(projectRoot, "aster.config.yaml");
 
 const readContext = (path: string) => {

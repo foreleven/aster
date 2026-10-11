@@ -1,7 +1,11 @@
-import { ToolInvocation } from "../../tools/invocation.js";
+import { ToolInvocation } from "../../agent/shared/invocation.js";
 import { ContextDirectory } from "../../config/context-directory.js";
-import { AgentError } from "@aster/agent";
-import { AgentConversations, DurableHarness, type HarnessConversation } from "@aster/agent/harness";
+import { AgentError } from "../../agent/index.js";
+import {
+  AgentConversations,
+  AgentSession,
+  type HarnessConversation,
+} from "../../agent/runtime/session.js";
 import { answerText } from "../../services/agent-input.js";
 import { ApplicationError } from "../../operations.js";
 import { TaskDeliveryInput, type PreparedTask } from "../contracts.js";
@@ -21,12 +25,12 @@ import {
 import { ExternalAgents, ExternalAgentError, type ExecutionStatus } from "./contracts.js";
 import { executionCheckpoint } from "./checkpoint.js";
 import { DEFAULT_EXECUTOR_PROMPT, taskPrompt } from "./external.js";
-import { taskConversation } from "./agent.js";
+import { taskConversation } from "../../agent/task/agent.js";
 
 const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
   const messages = yield* AgentConversations;
   const agents = yield* ExternalAgents;
-  const harness = yield* DurableHarness;
+  const harness = yield* AgentSession;
   const settings = yield* GoalSettings;
   const directory = yield* ContextDirectory;
   const { outputLanguage: language } = yield* LanguageSettings;

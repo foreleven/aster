@@ -3,7 +3,7 @@ import { observeContextWrites } from "../src/testing/context.js";
 import { CurrentActors } from "../src/services/actors.js";
 import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "../src/agent/runtime/session.js";
 import { Clock, Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";

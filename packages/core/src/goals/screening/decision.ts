@@ -1,7 +1,7 @@
 import { DEFAULT_OUTPUT_LANGUAGE } from "../../config/language.js";
 import { withDecisionLanguage } from "../../services/system-one.js";
 import { score, DecisionError, type SystemOneClient } from "../../services/system-one.js";
-import type { GoalDefinition } from "../../goals/contracts.js";
+import type { GoalDefinition } from "../contracts.js";
 import { type ContextText as ContextRecord } from "../../context/contracts.js";
 import { Clock, Effect } from "effect";
 import { createHash } from "node:crypto";

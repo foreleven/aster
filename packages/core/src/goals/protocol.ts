@@ -1,7 +1,7 @@
 import { GetGoalDetails, GetGoalSnapshot } from "./queries.js";
 import type { MailboxOf } from "@aster/actor";
 import { Command as ActorCommand } from "@aster/actor";
-import { AgentError } from "@aster/agent";
+import { AgentError } from "../agent/index.js";
 import { Predicate, Schema } from "effect";
 import { createHash } from "node:crypto";
 import { publicJson } from "../json.js";

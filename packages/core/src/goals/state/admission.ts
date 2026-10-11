@@ -2,7 +2,7 @@ import { loadTaskState } from "../../tasks/queries.js";
 import { goalInputs, goalInputId } from "./inputs.js";
 import { goalRequestFingerprint, type GoalRequestData, type GoalReceipt } from "../protocol.js";
 import type { DurableContext } from "../../context/store.js";
-import type { AgentConversations } from "@aster/agent/harness";
+import type { AgentConversations } from "../../agent/runtime/session.js";
 import type { GoalStore } from "./store.js";
 import { ApplicationError } from "../../operations.js";
 import { TaskPath } from "../../tasks/contracts.js";

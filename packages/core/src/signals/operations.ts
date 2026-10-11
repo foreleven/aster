@@ -13,7 +13,7 @@ import {
 import { SignalChangeInput, type SignalCommandReply, type SignalRootCommand } from "./protocol.js";
 import { type SignalSnapshot } from "./state/snapshot.js";
 import { SignalRecord } from "./queries.js";
-import type { AgentConversations } from "@aster/agent/harness";
+import type { AgentConversations } from "../agent/runtime/session.js";
 import type { DurableContext } from "../context/store.js";
 import { readSignalHistory } from "./state/store.js";
 

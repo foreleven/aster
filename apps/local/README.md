@@ -8,7 +8,7 @@ The local application observes Lark mail and work IM, evaluates Signals, pursues
 
 `AsterRuntime` in core owns domain service construction, root Actors, Context reactions, integration activation, readiness and shutdown. Lark owns IM readiness; memory owns its capture consumer. Local does not inspect IM state, bind ActorRefs, select Signals or initialize Goals. The host mounts `@aster/api/server` with HTTP/NDJSON; that package injects Runtime/domain services, constructs typed Actor commands and adapts replies. The API remains available while integrations catch up. During shutdown HTTP closes first, then runtime stops sources, subscriptions and Actors, drains captures and releases infrastructure. The root store lock remains held until cleanup completes; a defective shutdown retains it until process exit. Conversation storage uses the same resolved root, including paths relative to the configuration file.
 
-External Layers are `ContextStorage.layer`, `ExternalExecutors.layer`, `ConfiguredModels.layer`, the host-configured `AgentConversations.layer(root)`, `SystemOneTransport.layer` and `AgentMemoryBackend.layer`. Runtime builds `ContextRegistry`, internal reasoning, Tasks and Goal services. Tests replace these capability Layers with isolated implementations. See [runtime design](../../docs/runtime-design.md) for the graph and contracts.
+External Layers are `ContextStorage.layer`, `ExternalExecutors.layer`, `ConfiguredModels.layer`, the host-configured `ConversationStorage.layer`, `SystemOneTransport.layer` and `AgentMemoryBackend.layer`. Runtime builds Context registries, Agent Assemblies, Tasks and Goal services. Tests replace these capability Layers with isolated implementations. See [runtime design](../../docs/runtime-design.md) for the graph and contracts.
 
 ## Configuration sources
 
@@ -46,7 +46,7 @@ Summary gating, Goal screening and planning are covered by integration/core test
 
 Follow the JSON event names `chat.summary.*`, `system-one.goals.*`, `goal.planning.*` and `delegation.*` by Context path in startup logs. Live tests reached Goal planning but also exposed inconsistent relevance classification in the configured Laya service; see `docs/im-summary-design.md`.
 
-The app supplies `ConfiguredModels.layer` from `@aster/infra`. Lark summarization and Goal reasoning select independent configured model aliases. AgentRunner and DurableHarness own their SDK callback lifetimes; AgentConversations owns durable Goal and Task writers.
+The app supplies `ConfiguredModels.layer` from `@aster/infra`. Lark summarization and Goal reasoning select independent configured model aliases. AgentRuntime and AgentSession own their SDK callback lifetimes; AgentConversations owns durable Goal and Task writers.
 
 ## Tasks and approvals
 

@@ -263,7 +263,7 @@ Startup and flush discovery use committed message/state data. A dormant record w
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `im/summary/admission.ts`  | Own one integration-scoped admission resource for bounded concurrency, fair waits and minimum start spacing. Preserve caller Context and cancellation of queued/running calls.                          | Memory-only timing. No Context, checkpoint, process-global singleton or redundant durable queue. Use native primitives and only the control needed by the actual spacing/cancellation contract. |
 | `im/summary/gate.ts`       | Adapt SystemOneClient to one explicit should-summarize decision with validated output.                                                                                                                  | No persisted gate state, batching, limiter or independent System One backend.                                                                                                                   |
-| `im/summary/summarizer.ts` | Adapt the supplied AgentRunner to the rolling-summary prompt, required result tool, reference validation, result decoding and timeout.                                                                  | No Actor lookup, persistence, retry loop, admission or separate Agent runtime.                                                                                                                  |
+| `im/summary/summarizer.ts` | Adapt the supplied AgentRuntime to the rolling-summary prompt, required result tool, reference validation, result decoding and timeout.                                                                 | No Actor lookup, persistence, retry loop, admission or separate Agent runtime.                                                                                                                  |
 | `im/summary/work.ts`       | Run one Behavior-owned summary workflow: transient ID-list defer cache, fresh reads after admission, chronological bounded batches, finite retry/capacity reduction and acknowledged batch application. | Private factory/helper with per-Chat state, not another externally injected forwarding Layer. Releases admission before retry delays.                                                           |
 | `im/summary/errors.ts`     | Define/classify expected model-summary failures needed by retry policy. Prefer typed provider diagnostics; isolate the necessary fallback for known inconsistent SDK diagnostics.                       | Separate model errors from Lark CLI errors. Never classify defects/interruption as ordinary transient failures.                                                                                 |
 
@@ -288,7 +288,7 @@ flowchart TD
   Chat --> Work[Behavior-owned summary work]
   Work --> Gate[System One gate]
   Work --> Admission[Shared memory admission]
-  Work --> Model[AgentRunner summarizer]
+  Work --> Model[AgentRuntime summarizer]
   Work -->|acknowledged application| Chat
   Chat --> Store[DurableContext]
   Email --> Store

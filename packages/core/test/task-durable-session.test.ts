@@ -1,26 +1,18 @@
+import { testModels } from "./native-agent-model.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgentConversations, DurableHarness } from "@aster/agent/harness";
-import { Models, type ResolvedModel } from "@aster/agent";
-import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
+import { AgentConversations, AgentSession } from "../src/agent/runtime/session.js";
+import {
+  createAssistantMessageEventStream,
+  type AssistantMessage,
+  type ProviderStreams,
+} from "@earendil-works/pi-ai";
 import { Deferred, Effect, Layer, Schema } from "effect";
 import { ExecutionCheckpoint } from "../src/tasks/execution/checkpoint.js";
 import { TaskSnapshot } from "../src/index.js";
 import { taskFixture, taskInput, retainedTask } from "./task-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
 
-const model: ResolvedModel["model"] = {
-  id: "test",
-  name: "test",
-  provider: "test",
-  api: "openai-completions",
-  baseUrl: "http://unused",
-  reasoning: false,
-  input: ["text"],
-  contextWindow: 10000,
-  maxTokens: 100,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
 const answer = (): AssistantMessage => ({
   role: "assistant",
   provider: "test",
@@ -40,17 +32,12 @@ const answer = (): AssistantMessage => ({
 });
 const harnessFor = (
   conversations: AgentConversations["Service"],
-  stream: ResolvedModel["stream"],
+  stream: ProviderStreams["stream"],
 ) =>
-  DurableHarness.pipe(
+  AgentSession.pipe(
     Effect.provide(
-      DurableHarness.layer.pipe(
-        Layer.provide([
-          Layer.succeed(AgentConversations, conversations),
-          Layer.succeed(Models, {
-            resolve: () => Effect.succeed({ model, stream, getApiKey: () => "unused" }),
-          }),
-        ]),
+      AgentSession.layer.pipe(
+        Layer.provide([Layer.succeed(AgentConversations, conversations), testModels(stream)]),
       ),
     ),
   );

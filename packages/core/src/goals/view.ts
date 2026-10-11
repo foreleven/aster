@@ -1,7 +1,7 @@
 import { publicJson } from "../json.js";
 import { GoalSnapshot } from "./state/snapshot.js";
 
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "../agent/runtime/session.js";
 import { Effect, Schema } from "effect";
 import type { DurableContext } from "../context/store.js";
 import { ApplicationError } from "../operations.js";

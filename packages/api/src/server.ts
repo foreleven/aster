@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ActorRef, ReplyTo } from "@aster/actor";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "@aster/core/agent/session";
 import {
   AsterRuntime,
   DurableContext,

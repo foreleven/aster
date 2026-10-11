@@ -2,7 +2,7 @@ import { makeTestContext, type TestContext } from "@aster/core/testing";
 import type { TestContext as NodeTestContext } from "node:test";
 import { DurableContext } from "@aster/core";
 import { ActorNotFound, type ActorSystem } from "@aster/actor";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "@aster/core/agent/session";
 import { AsterRuntime, ContextQueries, QueryExecution } from "@aster/core";
 import { NodeFileSystem } from "@effect/platform-node";
 import { Effect, Exit, Layer, Scope } from "effect";

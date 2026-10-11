@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { taskConversation } from "../src/tasks/execution/agent.js";
+import { taskConversation } from "../src/agent/task/agent.js";
 
 test("Task prompt renders Context metadata as readable text", () => {
   const prompt = taskConversation({

@@ -1,5 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "../../agent/runtime/session.js";
 import { GoalMessageDelivery } from "../../goals/message-contracts.js";
 import { RemainingAgentTurns, TaskMessage } from "../../tasks/contracts.js";
 import { CommandReceipt } from "../../operations.js";

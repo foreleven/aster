@@ -22,13 +22,13 @@
   },
   "dependencies": {
     "@aster/actor": "workspace:*",
-    "@aster/agent": "workspace:*",
     "@aster/core": "workspace:*",
     "@effect/platform-node": "4.0.0",
     "effect": "4.0.0",
     "imapflow": "^2.1.2",
     "mailparser": "^3.9.31",
-    "node-pop3": "^0.15.3"
+    "node-pop3": "^0.15.3",
+    "@earendil-works/pi-ai": "1.1.0"
   },
   "devDependencies": {
     "@types/mailparser": "^3.9.0"

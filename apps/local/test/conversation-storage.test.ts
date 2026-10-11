@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { Effect, Layer } from "effect";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "@aster/core/agent/session";
 import { StorageSettings, withStorageLease } from "@aster/infra";
 import { localConversationsLayer } from "../src/services.js";
 

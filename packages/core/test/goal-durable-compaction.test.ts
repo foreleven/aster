@@ -1,11 +1,11 @@
+import { testModels } from "./native-agent-model.js";
 import { CurrentContextPath } from "../src/context/location.js";
 import { testSettings } from "./settings-fixtures.js";
 import { DurableContext } from "@aster/core";
 import { Schema } from "effect";
 import { GoalSnapshot } from "@aster/core";
-import { Models, type ResolvedModel } from "@aster/agent";
-import { AgentRunner } from "@aster/agent/agent";
-import { AgentConversations, DurableHarness } from "@aster/agent/harness";
+import { AgentRuntime } from "../src/agent/runtime/ordinary-runtime.js";
+import { AgentConversations, AgentSession } from "../src/agent/runtime/session.js";
 import { createAssistantMessageEventStream, type AssistantMessage } from "@earendil-works/pi-ai";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -29,75 +29,56 @@ test("durable Goal compacts its native transcript and finishes the same request"
   let generations = 0;
   let summaries = 0;
   let sawSummary = false;
-  const model: ResolvedModel["model"] = {
-    id: "test",
-    name: "test",
-    provider: "test",
-    api: "openai-completions",
-    baseUrl: "http://unused",
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 120000,
-    maxTokens: 4096,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  };
-  const models = Layer.succeed(Models, {
-    resolve: () =>
-      Effect.succeed({
-        model,
-        getApiKey: () => "unused",
-        stream: (_model, context) => {
-          const isSummary = context.messages.some(
-            (message) =>
-              message.role === "system" &&
-              typeof message.content === "string" &&
-              message.content.includes("You are a context summarization assistant"),
-          );
-          if (isSummary) summaries++;
-          else generations++;
-          if (!isSummary && JSON.stringify(context.messages).includes("Retained work checkpoint"))
-            sawSummary = true;
-          const inputTokens = Math.ceil(Buffer.byteLength(JSON.stringify(context.messages)) / 4);
-          const message: AssistantMessage = {
-            role: "assistant",
-            provider: "test",
-            model: "test",
-            api: "openai-completions",
-            timestamp: 0,
-            stopReason: isSummary || generations > 24 ? "stop" : "toolUse",
-            content: isSummary
-              ? [
-                  {
-                    type: "text",
-                    text: "Retained work checkpoint: continue coordinating the project; no actions were executed.",
-                  },
-                ]
-              : generations <= 24
-                ? Array.from({ length: 6 }, (_, page) => ({
-                    type: "toolCall" as const,
-                    id: `call-${generations}-${page}`,
-                    name: "goal_current",
-                    arguments: {},
-                  }))
-                : [{ type: "text", text: "Review completed" }],
-            usage: {
-              input: inputTokens,
-              output: 100,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: inputTokens + 100,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  const models = testModels((_model, context) => {
+    const isSummary = context.messages.some(
+      (message) =>
+        message.role === "system" &&
+        typeof message.content === "string" &&
+        message.content.includes("You are a context summarization assistant"),
+    );
+    if (isSummary) summaries++;
+    else generations++;
+    if (!isSummary && JSON.stringify(context.messages).includes("Retained work checkpoint"))
+      sawSummary = true;
+    const inputTokens = Math.ceil(Buffer.byteLength(JSON.stringify(context.messages)) / 4);
+    const message: AssistantMessage = {
+      role: "assistant",
+      provider: "test",
+      model: "test",
+      api: "openai-completions",
+      timestamp: 0,
+      stopReason: isSummary || generations > 24 ? "stop" : "toolUse",
+      content: isSummary
+        ? [
+            {
+              type: "text",
+              text: "Retained work checkpoint: continue coordinating the project; no actions were executed.",
             },
-          };
-          const stream = createAssistantMessageEventStream();
-          stream.push({
-            type: "done",
-            reason: isSummary || generations > 24 ? "stop" : "toolUse",
-            message,
-          });
-          return stream;
-        },
-      }),
+          ]
+        : generations <= 24
+          ? Array.from({ length: 6 }, (_, page) => ({
+              type: "toolCall" as const,
+              id: `call-${generations}-${page}`,
+              name: "goal_current",
+              arguments: {},
+            }))
+          : [{ type: "text", text: "Review completed" }],
+      usage: {
+        input: inputTokens,
+        output: 100,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: inputTokens + 100,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+    };
+    const stream = createAssistantMessageEventStream();
+    stream.push({
+      type: "done",
+      reason: isSummary || generations > 24 ? "stop" : "toolUse",
+      message,
+    });
+    return stream;
   });
   const run = Effect.gen(function* () {
     const registry = yield* makeTestContext();
@@ -137,7 +118,7 @@ test("durable Goal compacts its native transcript and finishes the same request"
     );
   }).pipe(
     Effect.provide(
-      Layer.mergeAll(AgentRunner.layer, DurableHarness.layer).pipe(
+      Layer.mergeAll(AgentRuntime.layer, AgentSession.layer).pipe(
         Layer.provide(models),
         Layer.provide(Layer.succeed(AgentConversations, conversations)),
       ),

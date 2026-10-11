@@ -16,7 +16,7 @@ The complete file-by-file responsibility map is in [the accepted reference desig
 | `mail/`                                                            | Mail models/client, bounded retrieval, mailbox checkpoint, acknowledged Email writes and queries.             |
 | `im/model.ts`, `client.ts`, `polling.ts`, `actor.ts`, `queries.ts` | IM models/provider access, bounded retrieval, pending recovery, acknowledged handoff, checkpoint and queries. |
 | `im/chat/state.ts`, `actor.ts`                                     | Pure transition plans and the sole mailbox-owned Chat writer.                                                 |
-| `im/summary/`                                                      | Shared memory admission, System One gate, supplied AgentRunner adapter and Behavior-owned summary workflow.   |
+| `im/summary/`                                                      | Shared memory admission, System One gate, supplied AgentRuntime adapter and Behavior-owned summary workflow.  |
 | `testing.ts`                                                       | Internal test fixtures exposed only through `@aster/integrations/lark/testing`.                               |
 
 ## Persistence, recovery and queries
@@ -33,7 +33,7 @@ At startup, IM activates only Chats with pending evidence or unfinished flush ob
 
 Messages are immutable family members keyed by provider ID and retained in append order. Acceptance ignores IDs already retained, including edits. Model batching sorts a detached list chronologically. Summary application and covered-ID deletion commit atomically. Deleted messages leave no receipts or fingerprints: overlap or replay can append a deleted ID again.
 
-Each Chat creates one workflow in its Behavior scope. It owns its defer cache, selected batch and finite retry budget. Workers read the bound ContextHandle directly; commits return through acknowledged mailbox commands with generation checks. System One assesses ordinary evidence. Flush and message-count overflow force summarization. The supplied AgentRunner uses the required `save_summary` tool, validated references and a two-minute timeout.
+Each Chat creates one workflow in its Behavior scope. It owns its defer cache, selected batch and finite retry budget. Workers read the bound ContextHandle directly; commits return through acknowledged mailbox commands with generation checks. System One assesses ordinary evidence. Flush and message-count overflow force summarization. The supplied AgentRuntime uses the required `save_summary` tool, validated references and a two-minute timeout.
 
 One integration-scoped FIFO admits model calls with bounded concurrency and exact minimum start spacing. Timing is memory-only; restart starts fresh. Capacity failures reduce batch size; transient failures retry three times, thirty seconds apart. Every attempt releases admission before waiting. Failed evidence remains durable. Defects and interruption retain Actor supervision and cancellation semantics.
 

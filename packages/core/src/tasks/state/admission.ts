@@ -1,5 +1,5 @@
 import { loadGoalStatus } from "../../goals/queries.js";
-import type { AgentConversations } from "@aster/agent/harness";
+import type { AgentConversations } from "../../agent/runtime/session.js";
 import { signalDelivery } from "../../signals/state/store.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";

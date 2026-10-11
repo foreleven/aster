@@ -9,7 +9,7 @@ import { TaskDeliveryInput } from "../src/tasks/contracts.js";
 import type { TaskAdmissionReply } from "../src/tasks/protocol.js";
 import { TaskSnapshot } from "../src/tasks/state/snapshot.js";
 import { fakeAgent } from "./fixtures.js";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "../src/agent/runtime/session.js";
 import { taskQueryData } from "../src/tasks/view.js";
 import { taskFixture, taskInput } from "./task-fixtures.js";
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>

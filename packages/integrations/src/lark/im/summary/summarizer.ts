@@ -1,7 +1,7 @@
 import { publicChatMessage } from "../model.js";
 import { ChatSummaryError } from "./errors.js";
-import { Models, Type } from "@aster/agent";
-import { AgentRunner } from "@aster/agent/agent";
+import { AgentModels, Type } from "@aster/core/agent";
+import { AgentRuntime } from "@aster/core/agent/ordinary";
 import {
   RuntimeConfigurationError,
   LanguageSettings,
@@ -32,7 +32,7 @@ export class ChatSummarizer extends Context.Service<
       if (entry === undefined)
         return yield* new RuntimeConfigurationError({ message: "Lark IM is not configured" });
       const settings = entry.config.summary;
-      const models = yield* Models;
+      const models = yield* AgentModels;
       yield* models.resolve(settings.model);
       return yield* makeChatSummarizer(settings.model);
     }),
@@ -42,9 +42,9 @@ export class ChatSummarizer extends Context.Service<
 /** Summary prompts, tools and validation are owned by the Lark integration. */
 export const makeChatSummarizer = (
   name: string,
-): Effect.Effect<ChatSummarizer["Service"], never, AgentRunner | LanguageSettings> =>
+): Effect.Effect<ChatSummarizer["Service"], never, AgentRuntime | LanguageSettings> =>
   Effect.gen(function* () {
-    const runner = yield* AgentRunner;
+    const runner = yield* AgentRuntime;
     const { outputLanguage: language } = yield* LanguageSettings;
     return {
       summarize: Effect.fn("ChatSummarizer.summarize")(

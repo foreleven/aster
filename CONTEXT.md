@@ -117,6 +117,12 @@ The isolated durable Agent execution space owned by one Goal. It contains that G
 **Agent Run**:
 One model planning execution within a Goal Agent Session, including its model messages, tool interactions, and structured planning result. It is distinct from a Delegation, which performs external work.
 
+**Agent Assembly**:
+The domain-owned definition of an Agent's purpose and behavior, including its instructions, available tools, extensions, input shaping, and result contract. A Goal and a Task may have different Assemblies while using the same Agent Runtime.
+
+**Agent Runtime**:
+The execution capability that runs an Agent Assembly through a model provider. It owns provider transport, model resolution, ordinary or durable execution, callback lifecycle, and runtime recovery; it does not define Goal or Task business behavior.
+
 **Evaluation Result**:
 The structured result of an Agent Run, containing the planning conclusion and proposed Goal Task or Goal-owned Signal changes. The GoalActor validates and applies it; the result is not itself an authorization for external execution.
 

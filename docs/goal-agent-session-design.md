@@ -1,6 +1,6 @@
 # Goal Agent Session, Evaluation, and Timeline design
 
-Implementation update (2026-10-08): the current GoalActor and GoalState protocol is described in [Goals](goals-design.md). GoalAgent uses `DurableHarness.withConversation`, submits the persisted input ID and reads its native assistant answer. Pi owns checkpoint recovery and compaction. GoalState owns business inputs, replies and settlement; no additional Agent session Actor or exchange ledger is needed. The remaining sections retain historical session-boundary rationale.
+Implementation update (2026-10-08): the current GoalActor and GoalState protocol is described in [Goals](goals-design.md). GoalAgent uses `AgentSession.withConversation`, submits the persisted input ID and reads its native assistant answer. Pi owns checkpoint recovery and compaction. GoalState owns business inputs, replies and settlement; no additional Agent session Actor or exchange ledger is needed. The remaining sections retain historical session-boundary rationale.
 
 This document is the target design for the boundary between a GoalActor, its durable Agent session, and the Goal Timeline. It completes the decisions recorded in ADR 0042 through ADR 0044 and records the first `pi-durable` implementation boundary.
 
@@ -269,7 +269,7 @@ The following limits must remain explicit:
 
 - A Pi store is owned by one process; it does not provide automatic multi-process locking, cluster coordination, or cross-store transactions.
 - The effect sandwich does not make external side effects exactly once. Tool operations need idempotency keys and reconciliation, especially for SignalRoot changes and external submissions.
-- Aster pins `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`, and `@earendil-works/pi-durable` to `1.1.0`. `@aster/agent` now opens one JSONL Conversation per Goal, resumes unfinished work, and uses stable request IDs for deduplicated handoff.
+- Aster pins `@earendil-works/pi-agent-core`, `@earendil-works/pi-ai`, and `@earendil-works/pi-durable` to `1.1.0`. Core's `agent/runtime` opens one durable conversation per Goal, resumes native unfinished work, and uses stable request IDs for domain handoff.
 
 Introduce an Aster `GoalAgentSession` port in the Agent adapter layer. Core depends on this capability, not on Pi classes. The port needs operations equivalent to:
 

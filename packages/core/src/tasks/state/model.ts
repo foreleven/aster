@@ -2,7 +2,7 @@ import { CurrentActors } from "../../services/actors.js";
 import { loadGoalStatus } from "../../goals/queries.js";
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "../../agent/runtime/session.js";
 import { ApplicationError } from "../../operations.js";
 import { Context, Effect, Layer, Match, Option, Schema } from "effect";
 import { DurableContext } from "../../context/store.js";

@@ -6,13 +6,13 @@ import type { GoalSnapshot, StoredGoalInput } from "./snapshot.js";
 import { goalInputs } from "./inputs.js";
 import { goalAdmission } from "./admission.js";
 import { DurableContext } from "../../context/store.js";
-import type { GoalDefinition } from "../../goals/contracts.js";
+import type { GoalDefinition } from "../contracts.js";
 import { Context, Effect, Layer, Match, Ref, Result, Schema, Semaphore } from "effect";
 import { ApplicationError } from "../../operations.js";
 import { TaskPath } from "../../tasks/contracts.js";
 import { goalOperationReceipt } from "../reconciliation.js";
-import { type AgentError } from "@aster/agent";
-import { AgentConversations } from "@aster/agent/harness";
+import { type AgentError } from "../../agent/index.js";
+import { AgentConversations } from "../../agent/runtime/session.js";
 
 /** One instance per Actor incarnation. All mutations, including local tools, share its writer. */
 const makeGoalState = Effect.fn("GoalState.make")(function* (
@@ -175,18 +175,6 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
       if (input.status !== "unknown" || !input.operationId) continue;
       const received = yield* goalOperationReceipt(registry, messages, path, input.operationId);
       if (!received) continue;
-      const resolved = yield* messages.resolveFailure(path, input.inputId, input.operationId).pipe(
-        Effect.as(true),
-        Effect.catchTag("ConversationError", (error) =>
-          Effect.logWarning({
-            event: "goal.operation.resolution.pending",
-            goalPath: path,
-            operationId: input.operationId,
-            kind: error.kind,
-          }).pipe(Effect.as(false)),
-        ),
-      );
-      if (!resolved) continue;
       if (received.taskPath !== undefined) yield* attachTask(received.taskPath);
       yield* reply(
         input.inputId,

@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@aster/agent";
+import type { AssistantMessage } from "../agent/index.js";
 
 /** Durable callers read the native answer, never rebuild a run transcript. */
 export const answerText = (answer: AssistantMessage | undefined) =>

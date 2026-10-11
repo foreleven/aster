@@ -9,7 +9,7 @@ import { TaskDeliveryInput, TaskPath } from "./contracts.js";
 import { ExecutionCheckpoint } from "./execution/checkpoint.js";
 import { StoredTaskInput, TaskOutcome, TaskSnapshot } from "./state/snapshot.js";
 
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "../agent/runtime/session.js";
 import { approvalEntries } from "../approvals/actor.js";
 import { type DurableContext } from "../context/store.js";
 import { type CapturePolicy } from "../memory/capture.js";

@@ -19,7 +19,7 @@ const configuredContexts = Effect.gen(function* () {
     if (!node) return [];
     if (node._tag !== "Record")
       return yield* new ConfigProvider.SourceError({
-        message: `Expected a Context mapping at ${location.join(".")}`,
+        message: `Expected a Context mapping at ${location.join("./index.js")}`,
       });
     const entries: ConfiguredContext[] = [];
     for (const key of [...node.keys].sort()) {

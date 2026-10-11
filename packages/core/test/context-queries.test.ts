@@ -1,12 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "../src/agent/runtime/session.js";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Schema, Scope } from "effect";
 import { ContextQueries } from "../src/queries/registry.js";
 import { ContextQueryError, ContextQueryInput, type QueryPage } from "../src/queries/contracts.js";
 import { ApplicationError } from "../src/operations.js";
-import { queryContext, readQueryResult } from "../src/tools/task/contexts.js";
-import { ToolInvocation } from "../src/tools/invocation.js";
+import { queryContext, readQueryResult } from "../src/agent/task/tools/contexts.js";
+import { ToolInvocation } from "../src/agent/shared/invocation.js";
 import { QueryExecution } from "../src/queries/execution.js";
 
 const input = { path: "/apps/test", command: "search", args: { query: "first" } };

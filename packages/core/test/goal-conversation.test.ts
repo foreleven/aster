@@ -3,9 +3,9 @@ import { serializeFixtureState } from "../src/testing/context.js";
 import { testApprovalEntries } from "../src/testing/context.js";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
-import { AgentError, type AgentResult, type AssistantMessage } from "@aster/agent";
-import type { AgentInvocation } from "@aster/agent/agent";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentError, type AgentResult, type AssistantMessage } from "../src/agent/index.js";
+import type { AgentInvocation } from "../src/agent/runtime/ordinary-runtime.js";
+import { AgentConversations } from "../src/agent/runtime/session.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { QueryExecution } from "../src/queries/execution.js";
@@ -1048,7 +1048,6 @@ test("Goal reconciles the original accepted Task receipt and releases queued fee
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>();
       const history = testConversations();
-      const resolutions: { owner: string; inputId: string; operationId: string }[] = [];
       let creations = 0;
       const env = yield* setup(
         (input) =>
@@ -1078,15 +1077,7 @@ test("Goal reconciles the original accepted Task receipt and releases queued fee
             }
             return { messages: [] };
           }),
-        {
-          history: {
-            ...history,
-            resolveFailure: (owner, inputId, operationId) =>
-              Effect.sync(() => {
-                resolutions.push({ owner, inputId, operationId });
-              }),
-          },
-        },
+        { history },
       );
       yield* env.wait(() => env.state().inputs[0]?.status === "completed");
       yield* env.submit("uncertain-research", {
@@ -1098,8 +1089,6 @@ test("Goal reconciles the original accepted Task receipt and releases queued fee
           env.state().inputs.find((input) => input.kind === "UserInput")?.status === "completed",
       );
       assert.equal(creations, 1);
-      assert.equal(resolutions.length, 1);
-      assert.equal(resolutions[0]!.owner, "/goals/project");
       assert.equal(env.state().tasks.length, 1);
       assert.equal(
         env.state().inputs.some((input) => input.status === "unknown"),
@@ -1114,7 +1103,6 @@ test("Goal reconciles the original accepted Task receipt and releases queued fee
           ),
       );
       assert.equal(creations, 1);
-      assert.equal(resolutions.length, 1);
     }),
   );
 });

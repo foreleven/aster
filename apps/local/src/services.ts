@@ -1,12 +1,11 @@
 import { AsterRuntime } from "@aster/core";
 import {
   AgentMemoryBackend,
-  localWorkspaceEnvironment,
+  ConversationStorage,
   ContextStorage,
   ConfiguredModels,
   ExternalExecutors,
   SystemOneTransport,
-  StorageSettings,
 } from "@aster/infra";
 import {
   LarkIntegration,
@@ -14,21 +13,9 @@ import {
   AppsIntegration,
   WebSearchIntegration,
 } from "@aster/integrations";
-import { AgentConversations } from "@aster/agent/harness";
-import { join } from "node:path";
-import { Effect, Layer } from "effect";
+import { Layer } from "effect";
 
-/** Conversation storage shares the host's resolved and exclusively owned root. */
-export const localConversationsLayer = Layer.unwrap(
-  StorageSettings.pipe(
-    Effect.map(({ root }) =>
-      AgentConversations.layer(
-        join(root, "conversations"),
-        localWorkspaceEnvironment(join(root, "workspaces")),
-      ),
-    ),
-  ),
-);
+export const localConversationsLayer = ConversationStorage.layer;
 
 /** Product choices only: modules own their dependency graphs and lifecycle. */
 export const localRuntimeLayer = AsterRuntime.layer({

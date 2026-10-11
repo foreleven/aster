@@ -73,7 +73,7 @@ The file is the source of truth during this phase. There is no automatic version
 
 ## pi-durable integration contract
 
-`@aster/agent` already owns the `DurableHarness` boundary. The harness opens one durable conversation per owner and accepts an environment factory in pi-durable. The Goal execution path should supply:
+Core's `agent/runtime` owns the thin pi-durable session boundary. The harness opens one durable conversation per owner and accepts an environment factory in pi-durable. The Goal execution path should supply:
 
 ```text
 owner: Goal path

@@ -1,8 +1,8 @@
 import { LanguageSettings } from "@aster/core";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgentRunner } from "@aster/agent/agent";
-import type { AgentTool } from "@aster/agent";
+import { AgentRuntime } from "@aster/core/agent/ordinary";
+import type { AgentTool } from "@aster/core/agent";
 import { Effect } from "effect";
 import { makeChatSummarizer } from "../../src/lark/im/summary/summarizer.js";
 import { chatSummaryError } from "../../src/lark/im/summary/errors.js";
@@ -36,7 +36,7 @@ test("summary Agent uses Effect tools, validates evidence and retires callbacks"
       { id: "new", url: "https://example.com/new" },
     ],
   };
-  const runner = AgentRunner.make((request) =>
+  const runner = AgentRuntime.make((request) =>
     Effect.promise(async () => {
       assert.equal(request.name, "summary-model");
       assert.equal(request.resultTool, "save_summary");
@@ -75,7 +75,7 @@ test("summary Agent uses Effect tools, validates evidence and retires callbacks"
           Effect.provide(LanguageSettings.layer),
         );
         return yield* summarizer.summarize(input);
-      }).pipe(Effect.provideService(AgentRunner, runner)),
+      }).pipe(Effect.provideService(AgentRuntime, runner)),
     ),
   );
   assert.deepEqual(result, summary);
@@ -92,8 +92,8 @@ test("missing summary results remain typed failures", async () => {
         return yield* summarizer.summarize(input).pipe(Effect.result);
       }).pipe(
         Effect.provideService(
-          AgentRunner,
-          AgentRunner.make(() => Effect.succeed({ messages: [] })),
+          AgentRuntime,
+          AgentRuntime.make(() => Effect.succeed({ messages: [] })),
         ),
       ),
     ),
@@ -138,7 +138,7 @@ import { ConfigProvider } from "effect";
 for (const language of [undefined, "en-US"]) {
   test(`summary text uses output language configuration instead of prompt or evidence language: ${language ?? "default"}`, async () => {
     const expected = language ?? "zh-CN";
-    const runner = AgentRunner.make((request) =>
+    const runner = AgentRuntime.make((request) =>
       Effect.sync(() => {
         const system = request.messages.find((message) => message.role === "system");
         assert.ok(
@@ -167,7 +167,7 @@ for (const language of [undefined, "en-US"]) {
         );
         yield* summarizer.summarize(input);
       }).pipe(
-        Effect.provideService(AgentRunner, runner),
+        Effect.provideService(AgentRuntime, runner),
         Effect.provideService(
           ConfigProvider.ConfigProvider,
           ConfigProvider.fromUnknown({ config: language ? { language } : {} }),

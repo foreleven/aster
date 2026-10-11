@@ -1,7 +1,7 @@
 import { SignalDefinitions } from "../signals/settings.js";
 import { MemoryActor } from "../memory/actor.js";
 import { ActorSystem, type ActorSystemEvent } from "@aster/actor";
-import { AgentConversations, DurableHarness } from "@aster/agent/harness";
+import { AgentConversations, AgentSession } from "../agent/runtime/session.js";
 import { QueryExecution } from "../queries/execution.js";
 import { MemoryRecall } from "../memory/recall.js";
 import { ContextQueries } from "../queries/registry.js";
@@ -14,7 +14,7 @@ import { TasksRootActor } from "../tasks/root.js";
 import { taskCapture } from "../tasks/view.js";
 import { RuntimeConfigurationError } from "./errors.js";
 
-import { AgentRunner } from "@aster/agent/agent";
+import { AgentRuntime } from "../agent/runtime/ordinary-runtime.js";
 import {
   Cause,
   Clock,
@@ -49,8 +49,8 @@ type RuntimeDiagnostics = {
 };
 
 type ActorServices =
-  | AgentRunner
-  | DurableHarness
+  | AgentRuntime
+  | AgentSession
   | MemoryBackend
   | ContextCaptures
   | ContextQueries
@@ -89,8 +89,8 @@ const acquireRuntime = Effect.gen(function* () {
     DurableContext,
     MemoryBackend,
     ContextCaptures,
-    AgentRunner,
-    DurableHarness,
+    AgentRuntime,
+    AgentSession,
     ContextQueries,
     QueryExecution,
     MemoryRecall,
@@ -272,7 +272,7 @@ export class AsterRuntime extends Context.Service<
     // Registration captures integration services; acquireRuntime activates their Actors.
     const registerIntegrations = Layer.mergeAll(Layer.empty, ...options.integrations);
     const runtimeServices = registerIntegrations.pipe(
-      Layer.provideMerge(Layer.mergeAll(AgentRunner.layer, DurableHarness.layer)),
+      Layer.provideMerge(Layer.mergeAll(AgentRuntime.layer, AgentSession.layer)),
       Layer.provideMerge(contextServices),
       Layer.provideMerge(
         Layer.mergeAll(QueryExecution.layer, MemoryRecall.layer).pipe(

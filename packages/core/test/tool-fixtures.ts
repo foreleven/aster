@@ -1,9 +1,9 @@
 import { testSettings } from "./settings-fixtures.js";
 import { DurableContext } from "@aster/core";
 import { makeHarness } from "./harness-fixtures.js";
-import { DurableHarness, AgentConversations } from "@aster/agent/harness";
+import { AgentSession, AgentConversations } from "../src/agent/runtime/session.js";
 import { ActorSystem } from "@aster/actor";
-import { AgentRunner } from "@aster/agent/agent";
+import { AgentRuntime } from "../src/agent/runtime/ordinary-runtime.js";
 import { Context, Effect, Layer } from "effect";
 import { ContextQueries } from "../src/queries/registry.js";
 import { QueryExecution } from "../src/queries/execution.js";
@@ -67,12 +67,12 @@ export const toolSystem = Effect.fnUntraced(function* (
       Layer.succeed(ExternalAgents, {}),
 
       Layer.succeed(
-        DurableHarness,
+        AgentSession,
         makeHarness(() => Effect.never),
       ),
       Layer.succeed(
-        AgentRunner,
-        AgentRunner.make(() => Effect.die("Query fixture cannot execute a model")),
+        AgentRuntime,
+        AgentRuntime.make(() => Effect.die("Query fixture cannot execute a model")),
       ),
     ),
   );

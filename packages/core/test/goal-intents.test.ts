@@ -1,7 +1,7 @@
 import { testSettings } from "./settings-fixtures.js";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
-import { ConversationError } from "@aster/agent/harness";
+import { ConversationError } from "../src/agent/runtime/session.js";
 import { Deferred, Effect, Layer, Schema } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";

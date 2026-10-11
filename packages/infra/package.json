@@ -17,14 +17,14 @@
   },
   "dependencies": {
     "@agentmemory/agentmemory": "0.9.29",
-    "@aster/agent": "workspace:*",
     "@aster/core": "workspace:*",
     "@earendil-works/chord": "1.1.0",
     "@earendil-works/pi-durable": "1.1.0",
     "@effect/platform-node": "4.0.0",
     "dotenv": "18.0.6",
     "effect": "4.0.0",
-    "yaml": "2.8.3"
+    "yaml": "2.8.3",
+    "@earendil-works/pi-ai": "1.1.0"
   },
   "devDependencies": {
     "@aster/actor": "workspace:*"

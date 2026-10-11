@@ -1,12 +1,12 @@
-import { Redacted } from "effect";
+import { testModels } from "./native-agent-model.js";
 import { readGoalState } from "../src/goals/queries.js";
 import { makeHarness } from "./harness-fixtures.js";
 import { submitGoal } from "./goal-command-fixtures.js";
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentConversations, DurableHarness } from "@aster/agent/harness";
+import { AgentConversations, AgentSession } from "../src/agent/runtime/session.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { Models } from "@aster/agent";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
   Cause,
   ConfigProvider,
@@ -35,7 +35,7 @@ const integration = (
   phase: "source" | "consumer",
   stop: Effect.Effect<void>,
   activate: Effect.Effect<void, Error> = Effect.void,
-  harness?: DurableHarness["Service"],
+  harness?: AgentSession["Service"],
 ) =>
   Layer.effectDiscard(
     Effect.gen(function* () {
@@ -44,7 +44,7 @@ const integration = (
         defineIntegration({
           name,
           phase,
-          services: harness ? Context.make(DurableHarness, harness) : Context.empty(),
+          services: harness ? Context.make(AgentSession, harness) : Context.empty(),
           activate: () => activate.pipe(Effect.as({ stop })),
         }),
       );
@@ -58,15 +58,7 @@ const infrastructure = (drain = Effect.void, decisionsConfigured = false) =>
       makeDurableContext({ load: Effect.succeed([]), save: () => Effect.void }),
     ),
     Layer.sync(AgentConversations, testConversations),
-    Models.layer([
-      {
-        name: "test",
-        provider: "openai",
-        model: "test",
-        url: "http://unused.invalid",
-        apiKey: Redacted.make("test"),
-      },
-    ]),
+    testModels(() => createAssistantMessageEventStream()),
     Layer.succeed(SystemOneClient, {
       configured: decisionsConfigured,
       systemOne: () => Effect.die(new Error("No model calls expected")),
@@ -266,7 +258,7 @@ test("runtime becomes ready while a Goal restores; its mailbox resumes after res
             ),
         }).pipe(
           Context.add(
-            DurableHarness,
+            AgentSession,
             makeHarness(() =>
               Deferred.succeed(called, undefined).pipe(Effect.as({ messages: [] })),
             ),

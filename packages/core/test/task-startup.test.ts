@@ -2,7 +2,7 @@ import { testSettings } from "./settings-fixtures.js";
 import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
 import { ActorSystem } from "@aster/actor";
-import { AgentConversations, DurableHarness } from "@aster/agent/harness";
+import { AgentConversations, AgentSession } from "../src/agent/runtime/session.js";
 import { Clock, Deferred, Effect, Fiber, Layer, Logger, Schema, Stream } from "effect";
 import { TestClock } from "effect/testing";
 import assert from "node:assert/strict";
@@ -63,7 +63,7 @@ const taskSystem = (
         reasoning: { model: "test", contextTokens: 200000, reserveTokens: 8192 },
       }),
       Layer.succeed(
-        DurableHarness,
+        AgentSession,
         makeHarness(() => Effect.die("Completed Task must not execute again")),
       ),
       Layer.succeed(Clock.Clock, clock),

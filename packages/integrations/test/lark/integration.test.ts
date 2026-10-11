@@ -1,9 +1,10 @@
 import { Redacted } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgentRunner } from "@aster/agent/agent";
-import { Models } from "@aster/agent";
-import { ProcessEnvironment, SystemOneClient } from "@aster/core";
+import { AgentRuntime } from "@aster/core/agent/ordinary";
+import { AgentModels } from "@aster/core/agent";
+import { AgentError, ProcessEnvironment, SystemOneClient } from "@aster/core";
+import { createModels } from "@earendil-works/pi-ai";
 import { Context, Effect, Layer, Option } from "effect";
 import { ChildProcessSpawner } from "effect/process";
 import {
@@ -34,10 +35,18 @@ test("absent Mail/IM acquire no branch services and execute no process or model"
             systemOne: () => Effect.die("Unexpected gate acquisition"),
           }),
           Effect.provideService(
-            AgentRunner,
-            AgentRunner.make(() => Effect.die("Unexpected model execution")),
+            AgentRuntime,
+            AgentRuntime.make(() => Effect.die("Unexpected model execution")),
           ),
-          Effect.provide(Models.layer([])),
+          Effect.provide(
+            Layer.succeed(
+              AgentModels,
+              AgentModels.of({
+                models: createModels(),
+                resolve: () => Effect.fail(new AgentError("Unexpected model lookup")),
+              }),
+            ),
+          ),
         );
         assert.ok(Option.isSome(Context.getOption(services, LarkAccountClient)));
         assert.ok(Option.isNone(Context.getOption(services, LarkMailClient)));

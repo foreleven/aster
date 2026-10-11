@@ -3,7 +3,7 @@ import { ContextQueries } from "../src/queries/registry.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { Deferred, Effect, Exit, Fiber, Schema, Scope } from "effect";
-import { listContexts, describeContext } from "../src/tools/task/contexts.js";
+import { listContexts, describeContext } from "../src/agent/task/tools/contexts.js";
 import { toolSystem } from "./tool-fixtures.js";
 
 test("Context discovery lists capabilities without state and descriptions match strict execution schemas", async () => {

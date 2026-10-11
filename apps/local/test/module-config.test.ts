@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Config, Effect } from "effect";
 import { SignalDefinitions } from "@aster/core";
-import { Models } from "@aster/agent";
+import { AgentModels } from "@aster/core/agent";
 import { LarkSettings } from "@aster/integrations";
 import { ConfiguredModels } from "@aster/infra";
 
@@ -28,8 +28,8 @@ signals:
   another: {trigger: {_tag: Context, when: changed}, action: {_tag: SendGoalMessage, goalPath: /goals/personal, text: keep}}
 config:
   models:
-    - {name: one, provider: openai, model: first, url: 'http://unused.invalid', apiKey: '\${SECRET}'}
-    - {name: two, provider: openai, model: second, url: 'http://unused.invalid', apiKey: literal}
+    - {name: one, provider: openai, model: gpt-4o-mini}
+    - {name: two, provider: openai, model: gpt-4o}
 `,
   );
   const layer = testLocalConfig({
@@ -39,7 +39,7 @@ config:
     environment: {
       ASTER_SIGNALS_MY_SIGNAL_ACTION_TEXT: "overridden",
       ASTER_CONTEXTS_LARK_CHILDREN_IM_CONFIG_POLL_INTERVAL_MS: "5000",
-      ASTER_CONFIG_MODELS_0_MODEL: "replacement",
+      ASTER_CONFIG_MODELS_0_MODEL: "gpt-4o",
       SECRET: "captured-secret",
     },
     overrides: { signals: { another: { action: { text: "explicit" } } } },
@@ -58,11 +58,10 @@ config:
           ],
         );
         assert.equal((yield* LarkSettings).im?.config?.pollIntervalMs, 5000);
-        const models = yield* Models;
+        const models = yield* AgentModels;
         const one = yield* models.resolve("one");
-        assert.equal(one.model.id, "replacement");
-        assert.equal(one.getApiKey(), "captured-secret");
-        assert.equal((yield* models.resolve("two")).model.id, "second");
+        assert.equal(one.id, "gpt-4o");
+        assert.equal((yield* models.resolve("two")).id, "gpt-4o");
       }).pipe(
         Effect.provide(
           Layer.mergeAll(LarkSettings.layer, ConfiguredModels.layer).pipe(

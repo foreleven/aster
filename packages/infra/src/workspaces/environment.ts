@@ -1,7 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { NodeExecutionEnv } from "@earendil-works/pi-durable/env/node";
-import type { WorkspaceEnvironment } from "@aster/agent/harness";
+import type { WorkspaceEnvironment } from "@aster/core/agent/session";
 
 const workspaceSegments = (id: string): readonly string[] =>
   id.split("/").filter((segment) => segment.length > 0 && segment !== "." && segment !== "..");

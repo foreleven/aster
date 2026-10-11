@@ -64,4 +64,4 @@ Run the affected package tests during implementation, then `pnpm build`, `pnpm c
 
 ### Execution adapter boundary
 
-Core prepares Goal/Task evidence and chooses owner paths and stable extension names. Goal and Task open an Effect conversation scope through DurableHarness, submit stable input IDs, and read native assistant answers. Task owns steering delivery markers in its execution journal, waits for the corresponding native submissions, and settles their business coverage. AgentConversations has no steering admission or receipt API; no separate `app.aster.steers` document is read or written.
+Core prepares Goal/Task evidence and chooses owner paths and stable extension names. Goal and Task open an Effect conversation scope through AgentSession, submit stable input IDs, and read native assistant answers. Task owns steering delivery markers in its execution journal, waits for the corresponding native submissions, and settles their business coverage. AgentConversations has no steering admission or receipt API; no separate `app.aster.steers` document is read or written.

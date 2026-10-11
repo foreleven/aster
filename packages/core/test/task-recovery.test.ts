@@ -3,7 +3,7 @@ import type { HarnessCall } from "./harness-fixtures.js";
 import { makeHarness } from "./harness-fixtures.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgentError } from "@aster/agent";
+import { AgentError } from "../src/agent/index.js";
 import { Deferred, Effect, Schema } from "effect";
 import { TaskSnapshot, ExternalAgentError, type TaskAdmissionReply } from "../src/index.js";
 import { taskFixture, taskInput, retainedTask, seedCheckpoint } from "./task-fixtures.js";

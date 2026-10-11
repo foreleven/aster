@@ -4,9 +4,9 @@ import { serializeFixtureState } from "../src/testing/context.js";
 import { observeContextWrites } from "../src/testing/context.js";
 import type { TestContext } from "@aster/core/testing";
 import { DurableContext } from "@aster/core";
-import { AgentError, type AssistantMessage } from "@aster/agent";
-import { AgentRunner } from "@aster/agent/agent";
-import { AgentConversations, DurableHarness } from "@aster/agent/harness";
+import { AgentError, type AssistantMessage } from "../src/agent/index.js";
+import { AgentRuntime } from "../src/agent/runtime/ordinary-runtime.js";
+import { AgentConversations, AgentSession } from "../src/agent/runtime/session.js";
 import { Context, Deferred, Effect, Exit, Fiber, Layer, Result, Schema, Scope } from "effect";
 import assert from "node:assert/strict";
 import { test } from "node:test";
@@ -360,7 +360,7 @@ test("GoalState persists replies before state settlement and resumes the handoff
         yield* Fiber.interrupt(settling);
         yield* Deferred.succeed(release, undefined);
         yield* Scope.close(lifetime, Exit.void);
-        // Rebind as after a restart: storage reconstructs from Pi and committed GoalSnapshot, with no AgentRunner.
+        // Rebind as after a restart: storage reconstructs from Pi and committed GoalSnapshot, with no AgentRuntime.
         const reopened = yield* openGoal(registry, retained);
         const replayed = yield* reopened.accept(request, false);
         assert.equal(replayed.replayed, true);
@@ -486,8 +486,8 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
             { path: "/apps/xiaohongshu", description: "Search travel notes and comments" },
           ]),
           Effect.provideService(
-            AgentRunner,
-            AgentRunner.make(() => Effect.die("Unexpected screening")),
+            AgentRuntime,
+            AgentRuntime.make(() => Effect.die("Unexpected screening")),
           ),
 
           Effect.provideService(DurableContext, registry.backend),
@@ -502,16 +502,16 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
           }),
           Effect.provideService(ExternalAgents, {}),
           Effect.provideService(
-            DurableHarness,
+            AgentSession,
             makeHarness((invocation) =>
               Effect.gen(function* () {
                 const directory = invocation.instructions!.split("## Configured Contexts\n")[1]!;
                 assert.ok(directory);
                 assert.match(directory, /not retrieved evidence/);
-                assert.match(invocation.instructions!, /## Deciding the next action/);
+                assert.match(invocation.instructions!, /## Current Goal/);
                 assert.match(
                   invocation.instructions!,
-                  /Title: personal\nDescription: Assist the user/,
+                  /## Current Goal\npersonal\nAssist the user/,
                 );
                 assert.deepEqual(JSON.parse(directory.slice(directory.indexOf("["))), [
                   { path: "/apps/xiaohongshu", description: "Search travel notes and comments" },

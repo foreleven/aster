@@ -18,19 +18,34 @@
       "aster-source": "./src/contracts.ts",
       "types": "./dist/contracts.d.ts",
       "default": "./dist/contracts.js"
+    },
+    "./agent": {
+      "aster-source": "./src/agent/index.ts",
+      "types": "./dist/agent/index.d.ts",
+      "default": "./dist/agent/index.js"
+    },
+    "./agent/session": {
+      "aster-source": "./src/agent/runtime/session.ts",
+      "types": "./dist/agent/runtime/session.d.ts",
+      "default": "./dist/agent/runtime/session.js"
+    },
+    "./agent/ordinary": {
+      "aster-source": "./src/agent/runtime/ordinary-runtime.ts",
+      "types": "./dist/agent/runtime/ordinary-runtime.d.ts",
+      "default": "./dist/agent/runtime/ordinary-runtime.js"
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
-    "typecheck": "tsc --noEmit",
-    "test": "tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js"
+    "build": "node scripts/instructions.mjs && tsc -p tsconfig.build.json",
+    "typecheck": "node scripts/instructions.mjs && tsc --noEmit",
+    "test": "node scripts/instructions.mjs && tsc -p tsconfig.test.json && node --test .test-dist/test/*.test.js"
   },
   "dependencies": {
     "@aster/actor": "workspace:*",
-    "@aster/agent": "workspace:*",
+    "@earendil-works/chord": "1.1.0",
+    "@earendil-works/pi-agent-core": "1.1.0",
+    "@earendil-works/pi-ai": "1.1.0",
+    "@earendil-works/pi-durable": "1.1.0",
     "effect": "4.0.0"
-  },
-  "devDependencies": {
-    "@earendil-works/pi-ai": "1.1.0"
   }
 }

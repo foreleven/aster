@@ -22,7 +22,9 @@ import { CurrentContextPath } from "./location.js";
 
 export const childContextPath = (parentPath: string, relativePath: string): string => {
   const segments = relativePath.split("/");
-  if (segments.some((segment) => !segment || segment === "." || segment === "..")) {
+  if (
+    segments.some((segment) => !segment || segment === "./index.js" || segment === "../index.js")
+  ) {
     throw new Error(`Invalid relative Context path: ${relativePath}`);
   }
   return `${parentPath}/${relativePath}`;

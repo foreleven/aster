@@ -1,6 +1,7 @@
 import { ConfigLocation } from "@aster/infra";
-import { Models } from "@aster/agent";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentModels, AgentError } from "@aster/core";
+import { createModels } from "@earendil-works/pi-ai";
+import { AgentConversations } from "@aster/core/agent/session";
 import {
   AsterRuntime,
   ContextActor,
@@ -94,15 +95,13 @@ const infrastructure = (events: string[], overrides: Partial<MemoryBackend["Serv
       makeDurableContext({ load: Effect.succeed([]), save: () => Effect.void }),
     ),
     AgentConversations.memory,
-    Models.layer([
-      {
-        name: "test",
-        provider: "openai",
-        model: "test",
-        url: "http://unused.invalid",
-        apiKey: Redacted.make("test"),
-      },
-    ]),
+    Layer.succeed(
+      AgentModels,
+      AgentModels.of({
+        models: createModels(),
+        resolve: () => Effect.fail(new AgentError("No model calls expected")),
+      }),
+    ),
     Layer.succeed(SystemOneClient, {
       configured: false,
       systemOne: () =>

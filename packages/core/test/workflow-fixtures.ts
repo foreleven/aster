@@ -1,10 +1,10 @@
 import { testSettings } from "./settings-fixtures.js";
 import type { HarnessCall } from "./harness-fixtures.js";
 import { makeHarness } from "./harness-fixtures.js";
-import { DurableHarness, AgentConversations } from "@aster/agent/harness";
+import { AgentSession, AgentConversations } from "../src/agent/runtime/session.js";
 import { testConversations } from "./conversation-fixtures.js";
-import { AgentError, type AgentResult } from "@aster/agent";
-import { AgentRunner, type AgentInvocation } from "@aster/agent/agent";
+import { AgentError, type AgentResult } from "../src/agent/index.js";
+import { AgentRuntime, type AgentInvocation } from "../src/agent/runtime/ordinary-runtime.js";
 import { ConfigProvider, Effect, Layer, Schema } from "effect";
 
 import { MemoryRecall, GoalSettings, type ContextInput } from "../src/index.js";
@@ -38,8 +38,8 @@ export const modelReplyLayer = (
   execute: (invocation: AgentInvocation) => Effect.Effect<AgentResult, AgentError>,
 ) =>
   Layer.succeed(
-    AgentRunner,
-    AgentRunner.make((request) =>
+    AgentRuntime,
+    AgentRuntime.make((request) =>
       request.resultTool === resultTool
         ? execute(request)
         : Effect.die(new Error(`Unexpected result tool: ${request.resultTool}`)),
@@ -48,7 +48,7 @@ export const modelReplyLayer = (
 
 export const harnessReplyLayer = (
   execute: (invocation: HarnessCall) => Effect.Effect<AgentResult, AgentError>,
-) => Layer.succeed(DurableHarness, makeHarness(execute));
+) => Layer.succeed(AgentSession, makeHarness(execute));
 
 // The SDK tool boundary is exercised by the fake model, just like a real model tool call.
 const callTool = (input: HarnessCall, name: string, args: object) =>
@@ -66,7 +66,7 @@ export interface GoalScenario {
   readonly reasoner: {
     readonly plan: (input: {
       current: ContextInput;
-      messages: readonly import("@aster/agent").AgentMessage[];
+      messages: readonly import("../src/agent/index.js").AgentMessage[];
     }) => Effect.Effect<
       { progress: string; completed: boolean; evidence: readonly string[] },
       Error

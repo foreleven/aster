@@ -2,29 +2,26 @@ import { ConfiguredModels } from "../src/models.js";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { ConfigProvider, Effect, Layer } from "effect";
-import { Models } from "@aster/agent";
+import { AgentModels } from "@aster/core/agent";
 
 const model = {
   name: "test",
   provider: "openai" as const,
-  model: "test-model",
+  model: "gpt-4o-mini",
   url: "https://unused.invalid",
-  apiKey: "${MODEL_KEY}",
 };
 
-test("model credentials resolve during registry acquisition and remain captured", async () => {
-  const environment = { MODEL_KEY: "captured" };
+test("native model aliases resolve during registry acquisition", async () => {
   const provider = ConfigProvider.make((path) =>
     path[0] === "secrets"
-      ? ConfigProvider.fromEnvRecord(environment).load(path.slice(1))
+      ? ConfigProvider.fromEnvRecord({}).load(path.slice(1))
       : ConfigProvider.fromUnknown({ config: { models: [model] } }).load(path),
   );
   await Effect.runPromise(
     Effect.scoped(
       Effect.gen(function* () {
-        const models = yield* Models;
-        environment.MODEL_KEY = "changed";
-        assert.equal((yield* models.resolve("test")).getApiKey(), "captured");
+        const models = yield* AgentModels;
+        assert.equal((yield* models.resolve("test")).id, "gpt-4o-mini");
         assert.equal((yield* models.resolve("missing").pipe(Effect.result))._tag, "Failure");
       }).pipe(
         Effect.provide(ConfiguredModels.layer.pipe(Layer.provide(ConfigProvider.layer(provider)))),
@@ -34,27 +31,21 @@ test("model credentials resolve during registry acquisition and remain captured"
 });
 
 test("missing model credentials and duplicate aliases fail acquisition before execution", async () => {
-  for (const models of [
-    [model],
-    [
-      { ...model, apiKey: "literal" },
-      { ...model, apiKey: "literal" },
-    ],
-  ]) {
-    const result = await Effect.runPromise(
-      Effect.scoped(
-        Models.pipe(
-          Effect.provide(
-            ConfiguredModels.layer.pipe(
-              Layer.provide(
-                ConfigProvider.layer(ConfigProvider.fromUnknown({ config: { models } })),
+  const result = await Effect.runPromise(
+    Effect.scoped(
+      AgentModels.pipe(
+        Effect.provide(
+          ConfiguredModels.layer.pipe(
+            Layer.provide(
+              ConfigProvider.layer(
+                ConfigProvider.fromUnknown({ config: { models: [{ ...model }, { ...model }] } }),
               ),
             ),
           ),
-          Effect.result,
         ),
+        Effect.result,
       ),
-    );
-    assert.equal(result._tag, "Failure");
-  }
+    ),
+  );
+  assert.equal(result._tag, "Failure");
 });

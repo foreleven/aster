@@ -45,7 +45,10 @@ export * from "./tasks/root.js";
 export * from "./memory/actor.js";
 
 export * from "./queries/registry.js";
-export * from "./goals/agent.js";
+export * from "./agent/goal/agent.js";
+export { AgentModels } from "./agent/models.js";
+export { AgentError, ToolInvocationFailure } from "./agent/shared/contracts.js";
+export type { AgentMessage, AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 
 export * from "./memory/capture.js";
 

@@ -1,13 +1,13 @@
 # Infrastructure
 
-Concrete infrastructure capabilities for Aster. Local chooses platform implementations and independent Layers; core owns domain contracts, Actor orchestration, accepted state and business recovery. Infra and integrations are sibling packages without imports or re-exports between them. Agent receives resolved model registrations and owns model execution.
+Concrete infrastructure capabilities for Aster. Local chooses platform implementations and independent Layers; core owns domain contracts, Actor orchestration, accepted state and business recovery. Infra and integrations are sibling packages without imports or re-exports between them. Core's Agent Runtime receives native pi-ai Models/provider/auth capabilities from Infra.
 
 ## Public capabilities
 
 - `LocalConfig.layer`, `ConfigLocation`: captured YAML/dotenv/environment sources and launch locations, with Effect FileSystem/Path. No module reads live environment values.
 - `StorageSettings.layer`, `withStorageLease`: resolve and exclusively own the shared data root. The SQLite lock's permanent inode remains the ownership identity; failed writer cleanup retains ownership until process exit.
 - `ContextStorage.layer`: native Pi Context Documents under `context-sessions/`. Core owns owner validation, CAS and publication; the adapter owns atomic document persistence, validated recovery and fsync.
-- `ConfiguredModels.layer`: decode configured registrations and resolve Redacted credentials before constructing agent Models.
+- `ConfiguredModels.layer`: decode native pi-ai model registrations and supply the provider catalog, alias lookup and authentication capability used by Core Agent Assemblies.
 - `ExternalExecutors.layer`: scoped Codex and Doubao capabilities. Task workspaces default to `<root>/tasks`. Core freezes reviewed executor instructions; adapters submit those instructions without prepending policy again.
 - `SystemOneTransport.layer`: injected Effect HTTP decision protocol, typed responses, bounded retry/timeout/cancellation and credential-safe logs. Business question builders apply output-language instructions.
 - `AgentMemoryBackend.layer`: managed agentmemory process, transport, durable provenance and admitted capture lifetime. Default data lives under `<root>/memory`; explicit dataDir overrides it.

@@ -5,7 +5,7 @@ import { HttpRouter } from "effect/http";
 import { NetAddress } from "effect/net";
 import { RpcSerialization, RpcServer } from "effect/rpc";
 import * as ApiServer from "@aster/api/server";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "@aster/core/agent/session";
 import { createServer } from "node:http";
 import { resolve } from "node:path";
 import { AsterRuntime, DurableContext, QueryExecution } from "@aster/core";

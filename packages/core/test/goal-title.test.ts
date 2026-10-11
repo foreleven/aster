@@ -21,9 +21,7 @@ import { goalWorkflowLayer } from "./workflow-fixtures.js";
 
 const configFor = (goal: object) => ({
   config: {
-    models: [
-      { name: "test", provider: "openai", model: "test", url: "http://localhost", apiKey: "test" },
-    ],
+    models: [{ name: "test", provider: "openai", model: "gpt-4o-mini" }],
     goals: { model: "test" },
   },
   goals: { project: goal },

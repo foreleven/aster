@@ -1,4 +1,4 @@
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "../agent/runtime/session.js";
 import { Context, Effect, Fiber, Layer, Option, Ref, Schema, Scope, Semaphore } from "effect";
 import { ContextQueryError, ContextQueryInput } from "./contracts.js";
 import { ApplicationError } from "../operations.js";

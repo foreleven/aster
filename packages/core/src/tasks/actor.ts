@@ -2,7 +2,7 @@ import { loadGoalStatus } from "../goals/queries.js";
 import { publicJson } from "../json.js";
 import { taskQueryData } from "./view.js";
 import { CommandProcessor, type ActorContext } from "@aster/actor";
-import { AgentConversations } from "@aster/agent/harness";
+import { AgentConversations } from "../agent/runtime/session.js";
 import { Context, Effect, Fiber, Layer, Match, Option, Ref, Schema, Scope } from "effect";
 import { randomUUID } from "node:crypto";
 import { approvalEntries, sendApproval } from "../approvals/actor.js";

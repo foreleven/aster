@@ -1,5 +1,9 @@
-import { DurableHarness, type HarnessOptions, type HarnessSubmission } from "@aster/agent/harness";
-import type { AgentError, AgentResult } from "@aster/agent";
+import {
+  AgentSession,
+  type HarnessOptions,
+  type HarnessSubmission,
+} from "../src/agent/runtime/session.js";
+import type { AgentError, AgentResult } from "../src/agent/index.js";
 import { Effect, Option } from "effect";
 
 /** A fake SDK invocation used by business tests. Native persistence is tested separately. */
@@ -10,7 +14,7 @@ export interface HarnessCall extends HarnessOptions {
 export const makeHarness = (
   execute: (invocation: HarnessCall) => Effect.Effect<AgentResult, AgentError>,
 ) =>
-  DurableHarness.make((options) =>
+  AgentSession.make((options) =>
     Effect.sync(() => {
       const submissions = new Map<string, HarnessSubmission>();
       return {

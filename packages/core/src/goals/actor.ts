@@ -10,7 +10,7 @@ import { DurableContext } from "../context/store.js";
 import { CurrentActors } from "../services/actors.js";
 import type { SignalRootCommand } from "../signals/protocol.js";
 import { cancelGoalTasks } from "../tasks/delivery.js";
-import { GoalAgent } from "./agent.js";
+import { GoalAgent } from "../agent/goal/agent.js";
 import {
   GoalCommand,
   GoalCommands,
