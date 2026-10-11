@@ -105,6 +105,7 @@ test("Task owns native steering coverage and commits one result for the accepted
           ...taskInput(),
           agent: "internal",
           task: {
+            title: "Read evidence",
             instructions: "Read evidence",
             contextPaths: [],
             input: [{ content: evidence, sources: ["/chats/release"] }],

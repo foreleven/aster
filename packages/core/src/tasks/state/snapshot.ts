@@ -3,6 +3,7 @@ import {
   TaskDeliveryInput,
   FollowupTaskInput,
   TaskRecoveryInput,
+  TaskTitle,
 } from "../contracts.js";
 import { CommandReceipt } from "../../operations.js";
 import { InputRequest, ApprovalResponse } from "../../approvals/contracts.js";
@@ -41,6 +42,7 @@ export type TaskOutcome = typeof TaskOutcome.Type;
 /** Business state only. Messages and executor checkpoints belong to Pi. */
 export const TaskSnapshot = Schema.Struct({
   admission: Schema.Struct({
+    title: TaskTitle,
     source: Schema.String,
     replyTo: Schema.String,
     agent: Schema.String,

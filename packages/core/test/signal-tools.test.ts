@@ -15,6 +15,7 @@ test("Signal model inputs omit Actor metadata, normalize work defaults and round
       trigger: { type: "context", when: "New relevant travel information" },
       action: {
         type: "start_task",
+        title: "Family travel options",
         instructions: "Find family options",
         contextPaths: ["/apps/ctrip", "/apps/ctrip"],
         evidence: [{ content: "Two adults and one child" }],
@@ -25,6 +26,7 @@ test("Signal model inputs omit Actor metadata, normalize work defaults and round
   assert.equal(definition.action._tag, "StartTask");
   if (definition.action._tag !== "StartTask") return;
   assert.equal(definition.action.task.replyTo, "/goals/personal");
+  assert.equal(definition.action.task.task.title, "Family travel options");
   assert.deepEqual(definition.action.task.task.contextPaths, ["/apps/ctrip"]);
   assert.deepEqual(definition.action.task.task.input, [
     { content: "Two adults and one child", sources: [] },
@@ -42,6 +44,7 @@ test("Signal model inputs omit Actor metadata, normalize work defaults and round
   );
   assert.equal(projected.id, "travel");
   assert.equal(projected.action.type, "start_task");
+  assert.ok("title" in projected.action && projected.action.title === "Family travel options");
   assert.ok(!JSON.stringify(projected).includes("replyTo"));
   assert.ok(!JSON.stringify(projected).includes('"_tag"'));
   assert.equal(
@@ -50,7 +53,11 @@ test("Signal model inputs omit Actor metadata, normalize work defaults and round
         Schema.decodeUnknownEffect(CreateSignalInput)({
           id: "discover",
           trigger: { type: "context", when: "Changed" },
-          action: { type: "start_task", instructions: "Discover useful sources" },
+          action: {
+            type: "start_task",
+            title: "Discover useful sources",
+            instructions: "Discover useful sources",
+          },
         }),
       )
     ).action.type,
@@ -83,7 +90,12 @@ test("Signal controls require observed positive versions and schedules require t
     Schema.decodeUnknownEffect(CreateSignalInput)({
       id: "timer",
       trigger: { type: "once", at: "2026-10-11T12:00:00" },
-      action: { type: "delegate_task", executor: "research", instructions: "Investigate" },
+      action: {
+        type: "delegate_task",
+        executor: "research",
+        title: "Investigate",
+        instructions: "Investigate",
+      },
     }).pipe(Effect.result),
   );
   assert.equal(result._tag, "Failure");
@@ -109,8 +121,8 @@ test("Signal SDK wire schemas retain shallow required fields and optional eviden
   assert.deepEqual(
     wire.properties.action.anyOf.map((variant) => variant.required),
     [
-      ["type", "instructions"],
-      ["type", "executor", "instructions"],
+      ["type", "title", "instructions"],
+      ["type", "executor", "title", "instructions"],
       ["type", "goalPath", "text"],
     ],
   );

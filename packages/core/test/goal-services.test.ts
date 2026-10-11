@@ -24,6 +24,7 @@ import { taskPathFor } from "../src/tasks/state/admission.js";
 import { makeTestContext, testActors } from "../src/testing/context.js";
 import { testConversations } from "./conversation-fixtures.js";
 import { makeHarness } from "./harness-fixtures.js";
+import { retainedTask, taskInput } from "./task-fixtures.js";
 
 const definition = { slug: "personal", description: "Assist the user" };
 const path = "/goals/personal";
@@ -244,6 +245,7 @@ test("Goal task references recover interrupted attachment and reject unrelated T
             {
               text: serializeFixtureState({
                 admission: {
+                  title: id,
                   source,
                   replyTo,
                   agent: "test",
@@ -264,6 +266,7 @@ test("Goal task references recover interrupted attachment and reject unrelated T
               messages: [],
               state: {
                 admission: {
+                  title: id,
                   source,
                   replyTo,
                   agent: "test",
@@ -373,6 +376,86 @@ test("GoalState persists replies before state settlement and resumes the handoff
   );
 });
 
+test("silent Task feedback settles durably and replays without a manufactured public reply", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const messages = testConversations();
+        const task = taskInput();
+        const retained = yield* retainedTask(messages, "completed", task);
+        const registry = yield* makeTestContext({ loadAll: () => [retained], save: () => {} });
+        yield* registry.register(task.target, { state: TaskSnapshot, message: Schema.Never });
+        yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
+        const lifetime = yield* Scope.make();
+        const goal = yield* openGoal(registry, messages).pipe(
+          Effect.provideService(Scope.Scope, lifetime),
+        );
+        const request = {
+          _tag: "SubmitInput" as const,
+          requestId: "background-result",
+          input: {
+            _tag: "ExecutionFeedback" as const,
+            taskPath: task.target,
+            status: "completed" as const,
+            text: "No material change",
+          },
+        };
+        const accepted = yield* goal.accept(request, false);
+        const inputId = (yield* goal.read).inputs[0]!.inputId;
+        yield* goal.start(inputId);
+        yield* goal.settle(inputId, Result.succeed(" \n "));
+        assert.equal((yield* goal.read).inputs[0]!.status, "completed");
+        assert.equal(
+          Schema.decodeUnknownSync(GoalSnapshot)(registry.get(path)!.state).inputs[0]!.status,
+          "completed",
+        );
+        assert.equal(
+          (yield* messages.read(path)).filter((entry) => entry.kind === "goal.reply").length,
+          0,
+        );
+        yield* Scope.close(lifetime, Exit.void);
+        const restored = yield* openGoal(registry, messages);
+        assert.equal((yield* restored.read).inputs[0]!.status, "completed");
+        const replay = yield* restored.accept(request, false);
+        assert.equal(replay.replayed, true);
+        assert.deepEqual(replay.receipt, accepted.receipt);
+        assert.equal((yield* restored.read).inputs.length, 1);
+        assert.equal(
+          (yield* messages.read(path)).filter((entry) => entry.kind === "goal.reply").length,
+          0,
+        );
+      }),
+    ),
+  );
+});
+
+test("an empty successful user turn still produces a visible fallback reply", async () => {
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const registry = yield* makeTestContext();
+        yield* registry.register(path, { state: GoalSnapshot, message: Schema.Never });
+        const messages = testConversations();
+        const goal = yield* openGoal(registry, messages);
+        yield* goal.accept(
+          { _tag: "SubmitInput", requestId: "hello", input: { _tag: "UserInput", text: "Hi" } },
+          false,
+        );
+        const inputId = (yield* goal.read).inputs[0]!.inputId;
+        yield* goal.start(inputId);
+        yield* goal.settle(inputId, Result.succeed(""));
+        const replies = (yield* messages.read(path)).filter((entry) => entry.kind === "goal.reply");
+        assert.equal(replies.length, 1);
+        assert.equal(
+          Schema.decodeUnknownSync(Schema.Struct({ text: Schema.String }))(replies[0]!.data).text,
+          "I couldn't produce a reply. Please give me another instruction.",
+        );
+        assert.equal((yield* goal.read).inputs[0]!.status, "completed");
+      }),
+    ),
+  );
+});
+
 test("GoalAgent resolves local tools from injected GoalState without Actor messages", async () => {
   await Effect.runPromise(
     Effect.scoped(
@@ -424,7 +507,12 @@ test("GoalAgent resolves local tools from injected GoalState without Actor messa
               Effect.gen(function* () {
                 const directory = invocation.instructions!.split("## Configured Contexts\n")[1]!;
                 assert.ok(directory);
-                assert.match(directory, /start an internal Agent Task/);
+                assert.match(directory, /not retrieved evidence/);
+                assert.match(invocation.instructions!, /## Deciding the next action/);
+                assert.match(
+                  invocation.instructions!,
+                  /Title: personal\nDescription: Assist the user/,
+                );
                 assert.deepEqual(JSON.parse(directory.slice(directory.indexOf("["))), [
                   { path: "/apps/xiaohongshu", description: "Search travel notes and comments" },
                 ]);

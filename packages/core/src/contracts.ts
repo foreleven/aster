@@ -10,6 +10,7 @@ export { ContextText } from "./context/contracts.js";
 export { ContextQueryInput, ContextQueryError } from "./queries/contracts.js";
 export {
   PreparedTask,
+  TaskTitle,
   Task,
   TaskPath,
   TaskRecoveryInput,

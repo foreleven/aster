@@ -4,6 +4,7 @@ import {
   TaskRecoveryInput,
   TaskPath,
   CommandReceipt,
+  TaskTitle,
 } from "@aster/core/contracts";
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
@@ -12,6 +13,7 @@ const InspectionTaskPath = Schema.String.check(Schema.isPattern(/^\/tasks\/[^/]+
 /** Business inspection deliberately excludes provider metadata, native frames and credential handles. */
 export const TaskInspection = Schema.Struct({
   path: InspectionTaskPath,
+  title: TaskTitle,
   revision: ContextRevision,
   agent: Schema.String,
   status: Schema.Literals([

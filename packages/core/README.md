@@ -21,7 +21,7 @@ Startup starts public Context queries and the independent Memory consumer before
 - `tools/`: shared Agent tool catalogues, injected GoalState operations and cross-Actor asks; domain owners retain queries and mutations.
 - `runtime/`: assembly, policy registration, integrations, readiness, API and shutdown.
 
-Within `goals/`, `actor.ts` and `root.ts` own scheduling and registration, `protocol.ts` defines messages, `agent.ts` groups model execution and prompts, and `view.ts` groups explicit business responses and timeline reads. `state/` contains the business model and its persistence helpers; `screening/` contains System One decisions and frozen delivery envelopes.
+Within `goals/`, `actor.ts` and `root.ts` own scheduling and registration, `protocol.ts` defines messages, `agent.ts` groups model execution and the Context gate prompt, `prompt.ts` owns the structured primary conversation policy, and `view.ts` groups explicit business responses and timeline reads. `state/` contains the business model and its persistence helpers; `screening/` contains System One decisions and frozen delivery envelopes.
 
 Within `tasks/`, `actor.ts` owns scheduling, `state/` owns admission, business transitions and persistence, and `execution/` owns internal Agent and external executor calls. `delivery.ts` groups cross-Actor delivery and feedback; `view.ts` groups read-only projections, inspection and capture. TaskState exposes `accept`, `start`, `settle` and `cancel`; TaskExecution exposes `run`, `send` and `cancel`, retaining provider checkpoints in Pi. Root startup registers and watches children without awaiting their recovery.
 

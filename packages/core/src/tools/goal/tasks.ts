@@ -12,7 +12,7 @@ export const taskList = () =>
       label: "Read Tasks",
       replay: "safe",
       description:
-        "Read this Goal's Tasks, including completed work that can continue. Reuse relevant work with task_send.",
+        "Read this Goal's Tasks with their titles and statuses, including completed work that can continue. Reuse relevant work with task_send.",
       parameters: Schema.Struct({}),
     },
     () => Effect.flatMap(GoalState, (goal) => goal.listTasks),
@@ -25,7 +25,7 @@ export const startTask = () =>
       label: "Start internal Task",
       replay: "never",
       description:
-        "Start internal read-only research. The Task has list_contexts, describe_context, query_context, read_query_result, memory_search and memory_expand. Supply instructions, known Context path hints and user constraints; hints may be empty. Feedback automatically returns to this Goal. Only successful acceptance means work was admitted; do not announce starting before calling this tool or poll for completion.",
+        "Start internal read-only research. The Task has list_contexts, describe_context, query_context, read_query_result, memory_search and memory_expand. Supply a short descriptive title, instructions, known Context path hints and user constraints; hints may be empty. Feedback automatically returns to this Goal. Only successful acceptance means work was admitted; do not announce starting before calling this tool or poll for completion.",
       parameters: InternalTaskInput,
     },
     (input, callId) =>
@@ -41,7 +41,7 @@ export const delegate = () =>
       label: "Delegate external Task",
       replay: "never",
       description:
-        "Admit work for a configured external executor through confirmation. External executors do not inherit internal Context tools: retrieve needed connected evidence with an internal Task first. Feedback automatically returns to this Goal.",
+        "Admit work with a short descriptive title for a configured external executor through confirmation. External executors do not inherit internal Context tools: retrieve needed connected evidence with an internal Task first. Feedback automatically returns to this Goal.",
       parameters: ExternalTaskInput,
     },
     (input, callId) =>

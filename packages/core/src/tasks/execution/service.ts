@@ -72,6 +72,7 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
   ): Effect.fn.Return<PreparedTask> {
     const checkpoint = yield* journal.read;
     return {
+      title: admission.task.title,
       instructions: `${admission.agent === "internal" ? "" : `${checkpoint.prompt}\n\n`}${admission.task.instructions}`,
       contextPaths: admission.task.contextPaths,
       input: [
@@ -216,7 +217,12 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
     const task =
       input._tag === "Initial"
         ? yield* prepare(admission)
-        : { instructions: input.input.text, input: [], contextPaths: admission.task.contextPaths };
+        : {
+            title: admission.task.title,
+            instructions: input.input.text,
+            input: [],
+            contextPaths: admission.task.contextPaths,
+          };
     const result = yield* (
       saved.session
         ? agent.followUp(saved.session, { requestId: ref.requestId, text: task.instructions })
@@ -479,6 +485,7 @@ const makeExecution = Effect.fn("TaskExecution.make")(function* (path: string) {
         const task =
           instruction._tag === "Message"
             ? {
+                title: admission.task.title,
                 instructions: instruction.input.text,
                 input: [],
                 contextPaths: admission.task.contextPaths,

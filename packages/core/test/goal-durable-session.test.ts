@@ -51,11 +51,12 @@ test("reopened Goal sessions keep their policy and history while tools read the 
           const policy = JSON.stringify(
             context.messages.filter((message) => message.role === "system"),
           );
-          assert.match(policy, /You are the user's personal assistant/);
+          assert.match(policy, /You are the user's assistant pursuing an ongoing Goal/);
           // Pi retains prior system updates in history; the latest update is authoritative.
           const currentPolicy = JSON.stringify(
             context.messages.findLast((message) => message.role === "system"),
           );
+          assert.match(currentPolicy, /## Handling inputs/);
           assert.match(currentPolicy, new RegExp(`PRIVATE_goal_${turn}`));
           assert.doesNotMatch(currentPolicy, new RegExp(`PRIVATE_goal_${1 - turn}`));
           assert.doesNotMatch(policy, /PRIVATE_summary_/);

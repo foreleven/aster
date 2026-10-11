@@ -53,7 +53,8 @@ goals/
   actor.ts                 # Goal lifecycle and execution scheduling
   root.ts                  # Goal registration, routing and child watch
   protocol.ts              # Public requests, replies and internal mailbox messages
-  agent.ts                 # Conversation, Context gate, prompts and response logging
+  agent.ts                 # Conversation, Context gate and response logging
+  prompt.ts                # Structured conversation policy and runtime metadata
   view.ts                  # Public Context projection and Pi conversation timeline
   state/
     model.ts               # Actor-local GoalState service and business transitions
@@ -68,7 +69,7 @@ goals/
 
 `actor.ts` constructs the `state/model.ts` Layer once in its Behavior Scope. Every command and local tool shares that instance. The state model owns business rules and serialization, while its private Store owns the committed Ref and persistence. Input schemas live in `state/snapshot.ts`, so decoding snapshots does not load input persistence operations.
 
-`agent.ts` owns both model invocations: the primary conversation and the read-only Context gate. Their prompts, response logs and input-message rendering stay together. The second gate's `submit_context_relevance` result tool is private to this module. `screening/` owns the earlier System One decision and frozen delivery; this is distinct from the Agent's second gate.
+`agent.ts` owns both model invocations: the primary conversation and the read-only Context gate. Its Context gate prompt, response logs and input-message rendering stay together. `prompt.ts` owns the structured primary conversation policy and its sanitized Goal, language and configured Context metadata. The second gate's `submit_context_relevance` result tool is private to this module. `screening/` owns the earlier System One decision and frozen delivery; this is distinct from the Agent's second gate.
 
 `protocol.ts` contains public requests and internal result/scheduling messages. Callers import contracts from it and root registration from `root.ts`; `actor.ts` does not forward either module. The package entrypoint exposes public capabilities directly from their defining modules, without compatibility barrels or duplicate exports. The built-in personal Goal is a configuration default beside GoalSettings in `goals/settings.ts`.
 

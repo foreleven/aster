@@ -112,12 +112,14 @@ const presentAction = (input: SignalAction): SignalActionInput =>
       Match.value(task).pipe(
         Match.tag("Agent", ({ task: work }) => ({
           type: "start_task" as const,
+          title: work.title,
           instructions: work.instructions,
           contextPaths: work.contextPaths,
           evidence: work.input,
         })),
         Match.tag("Delegate", ({ agent, task: work }) => ({
           type: "delegate_task" as const,
+          title: work.title,
           executor: agent,
           instructions: work.instructions,
           evidence: work.input,

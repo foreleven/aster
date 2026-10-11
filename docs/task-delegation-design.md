@@ -33,6 +33,8 @@ TaskState has four business operations:
 - `settle(outcome)` saves a Pi result and updates only the inputs explicitly covered by that outcome. Later inputs remain pending.
 - `cancel(reason)` revokes work that can safely stop without a provider cancellation. Running work first needs TaskExecution confirmation, then settles as cancelled.
 
+Creation requires a short, non-blank `title` alongside execution instructions. Admission and the snapshot retain the title, and public lists, inspection and Context text expose it. Follow-ups, retries and recovery keep the creation title; identity still derives only from source and request ID.
+
 The snapshot contains admission metadata, lifecycle status, input references and receipts, a round identity, the latest result reference and outstanding requests. Its statuses are `ready`, `running`, `waiting_input`, `completed`, `failed`, `cancelled` and `uncertain`. Input references are pending or completed; their transport delivery phases do not belong to the business snapshot. The private Store commits through DurableContext before updating its Ref, with an uninterruptible commit-to-Ref handoff.
 
 TaskExecution exposes `run(work)`, `send(input)` and `cancel()`. It owns internal invocation, native steering, external submission, follow-up, responses, polling and recovery. Its private Pi `task.execution` checkpoints retain frozen executor policy, confirmation, provider handles, delivery markers and retained outcomes. A Semaphore serializes executor transitions and submissions outside the Task mailbox. Provider handles, prompts and transport phases never enter TaskSnapshot or public business responses.

@@ -88,6 +88,7 @@ export const inspectTask = (
     return {
       path,
       revision: record.revision ?? 0,
+      title: state.admission.title,
       agent: state.admission.agent,
       status: state.status,
       instructions: admission.task.instructions,
@@ -151,6 +152,7 @@ export const taskQueryData = Effect.fn("Task.queryData")(function* (
   const conversations = yield* AgentConversations;
   const summary = {
     path: path,
+    title: state.admission.title,
     status: state.status,
     goal: state.admission.replyTo,
     agent: state.admission.agent,

@@ -23,7 +23,8 @@ export function fixture() {
         summary: "Validation starts this week.",
         tasks: [taskPath],
       }),
-      context(taskPath, "Review the release", {
+      context(taskPath, "Task", {
+        title: "Review the release",
         status: "waiting_input",
         sourcePath: "/signals/release",
         replyTo: "/goals/engine",
@@ -45,6 +46,7 @@ export function fixture() {
             _tag: "Agent",
             replyTo: "/goals/engine",
             task: {
+              title: "Review the latest release evidence",
               instructions: "Review the latest release evidence",
               contextPaths: [],
               input: [{ content: "Release notes", sources: ["/sources/release"] }],
@@ -112,6 +114,7 @@ export function fixture() {
     tasks: {
       [taskPath]: {
         path: taskPath,
+        title: "Review the release",
         revision: 1,
         agent: "internal",
         status: "waiting_input",

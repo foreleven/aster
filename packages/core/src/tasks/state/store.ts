@@ -27,7 +27,7 @@ export const makeTaskStore = Effect.fn("TaskStore.make")(function* (path: string
     expectedRevision?: number,
   ) {
     const saved = yield* session.state
-      .set(state, { expectedRevision, description: "Task" })
+      .set(state, { expectedRevision, description: state.admission.title })
       .pipe(Effect.orDie);
     yield* Ref.set(committed, saved.state);
   }, Effect.uninterruptible);
@@ -47,6 +47,7 @@ export type TaskStore = Effect.Success<ReturnType<typeof makeTaskStore>>;
 
 export const serializeTaskState = ({ status, admission, outcomeEntryId }: TaskSnapshot) =>
   JSON.stringify({
+    title: admission.title,
     status,
     source: admission.source,
     goal: admission.replyTo,

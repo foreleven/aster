@@ -324,6 +324,7 @@ test("Signal Task actions bind feedback to their Goal and freeze hints independe
         _tag: "Agent" as const,
         replyTo: "/goals/other",
         task: {
+          title: "Read application evidence",
           instructions: "Read application evidence",
           contextPaths: ["/apps/ctrip"],
           input: [],

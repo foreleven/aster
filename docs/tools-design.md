@@ -64,14 +64,18 @@ A directory, capability definition and query result are different things. Generi
 
 | Field          | Contract                                                                                                            |
 | -------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `title`        | Required non-blank short title describing the work for Task lists and UI.                                           |
 | `instructions` | Required non-empty work request, known user constraints and desired result.                                         |
 | `contextPaths` | Optional canonical public Context paths, normalized to a unique list; defaults to `[]`.                             |
 | `evidence`     | Optional `{ content, sources }` records of supplied material; defaults to `[]`. Missing `sources` defaults to `[]`. |
+
+The title is retained in Task admission and snapshot metadata. Task list projections read it without loading instruction bodies; inspection exposes it alongside instructions; follow-ups, retries and recovery preserve the original title. It does not determine Task identity.
 
 Path hints are part of the contract but need not be non-empty. Requiring a known path for every Task encourages invented paths. Tasks without hints discover capabilities themselves.
 
 ```json
 {
+  "title": "Research Spring Festival family travel",
   "instructions": "Research initial Spring Festival travel options from Nanjing for two adults and one child. Compare candidate directions and identify what depends on the child's age or budget. Do not assume either preference.",
   "contextPaths": ["/apps/ctrip", "/apps/xiaohongshu"]
 }
@@ -87,7 +91,7 @@ Path-hint semantics:
 - Keep `contextPaths` separate from `evidence.sources`: a suggested source is not proof of retrieval or a citation.
 - Missing/retired routes produce retrieval limitations. They do not imply that facts do not exist or block independent investigation through other sources.
 
-`delegate_task` accepts `executor`, `instructions` and optional `evidence`. External executors do not automatically receive Aster's internal Context tools. Retrieve connected evidence with an internal Task before passing it to an external executor when needed; a Context path alone does not grant external-process access.
+`delegate_task` accepts `executor`, `title`, `instructions` and optional `evidence`. External executors do not automatically receive Aster's internal Context tools. Retrieve connected evidence with an internal Task before passing it to an external executor when needed; a Context path alone does not grant external-process access.
 
 ## Owner and invocation injection
 
@@ -103,26 +107,26 @@ The agent adapter captures the caller's Effect Context and retires callbacks wit
 
 Inputs use Effect Schema and normalize optional fields once. Names below are the target interface; receipts and selected business responses exclude private execution state.
 
-| Invocation    | Tool                       | Model input                                  | Behavior                                                                                  |
-| ------------- | -------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| Goal          | `goal_current`             | `{}`                                         | Current public Goal understanding and described internal/external execution capabilities. |
-| Goal          | `update_summary`           | `{ summary }`                                | Persist through GoalState before acknowledgement; cannot complete or archive a Goal.      |
-| Goal          | `task_list`                | `{}`                                         | Current public Goal Tasks, including completed work that can continue.                    |
-| Goal          | `start_task`               | `{ instructions, contextPaths?, evidence? }` | Admit internal work; return its Task path and receipt.                                    |
-| Goal          | `delegate_task`            | `{ executor, instructions, evidence? }`      | Admit external work with the existing confirmation workflow.                              |
-| Goal          | `task_send`                | `{ taskPath, text }`                         | Ownership-validated follow-up to the existing Task; completed work may continue.          |
-| Goal          | `send_goal_message`        | `{ goalPath, text }`                         | Independent durable Goal input; no TaskActor or Task reference.                           |
-| Goal          | `signal_list`              | `{}`                                         | Owner's public rules, statuses and observed definition versions.                          |
-| Goal          | `create_signal`            | `{ id, trigger, action }`                    | Create an owner-scoped rule; conflicting creation is rejected.                            |
-| Goal          | `update_signal`            | `{ id, version, trigger, action }`           | Edit using the observed definition version.                                               |
-| Goal          | `control_signal`           | `{ id, version, operation }`                 | `pause`, `resume` or `delete`, preserving domain pending-action rules.                    |
-| Internal Task | `list_contexts`            | `{ parent?, offset? }`                       | Page active capability paths/descriptions.                                                |
-| Internal Task | `describe_context`         | `{ path }`                                   | Read supported command names, descriptions and argument schemas.                          |
-| Internal Task | `query_context`            | `{ path, command, args? }`                   | Validate and invoke a read-only command; retain evidence before returning the first page. |
-| Internal Task | `read_query_result`        | `{ resultId, offset }`                       | Read another retained text page without repeating the source query.                       |
-| Internal Task | `memory_search`            | `{ query }`                                  | Compact recall candidates; expand useful matches before relying on them.                  |
-| Internal Task | `memory_expand`            | `{ items: [{ obsId, sessionId? }] }`         | Original selected memory evidence and references.                                         |
-| Context gate  | `submit_context_relevance` | `{ relevant, reason }`                       | Private structured gate result; no retrieval or mutation tools.                           |
+| Invocation    | Tool                       | Model input                                         | Behavior                                                                                  |
+| ------------- | -------------------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Goal          | `goal_current`             | `{}`                                                | Current public Goal understanding and described internal/external execution capabilities. |
+| Goal          | `update_summary`           | `{ summary }`                                       | Persist through GoalState before acknowledgement; cannot complete or archive a Goal.      |
+| Goal          | `task_list`                | `{}`                                                | Current public Goal Tasks, including completed work that can continue.                    |
+| Goal          | `start_task`               | `{ title, instructions, contextPaths?, evidence? }` | Admit internal work; return its Task path and receipt.                                    |
+| Goal          | `delegate_task`            | `{ executor, title, instructions, evidence? }`      | Admit external work with the existing confirmation workflow.                              |
+| Goal          | `task_send`                | `{ taskPath, text }`                                | Ownership-validated follow-up to the existing Task; completed work may continue.          |
+| Goal          | `send_goal_message`        | `{ goalPath, text }`                                | Independent durable Goal input; no TaskActor or Task reference.                           |
+| Goal          | `signal_list`              | `{}`                                                | Owner's public rules, statuses and observed definition versions.                          |
+| Goal          | `create_signal`            | `{ id, trigger, action }`                           | Create an owner-scoped rule; conflicting creation is rejected.                            |
+| Goal          | `update_signal`            | `{ id, version, trigger, action }`                  | Edit using the observed definition version.                                               |
+| Goal          | `control_signal`           | `{ id, version, operation }`                        | `pause`, `resume` or `delete`, preserving domain pending-action rules.                    |
+| Internal Task | `list_contexts`            | `{ parent?, offset? }`                              | Page active capability paths/descriptions.                                                |
+| Internal Task | `describe_context`         | `{ path }`                                          | Read supported command names, descriptions and argument schemas.                          |
+| Internal Task | `query_context`            | `{ path, command, args? }`                          | Validate and invoke a read-only command; retain evidence before returning the first page. |
+| Internal Task | `read_query_result`        | `{ resultId, offset }`                              | Read another retained text page without repeating the source query.                       |
+| Internal Task | `memory_search`            | `{ query }`                                         | Compact recall candidates; expand useful matches before relying on them.                  |
+| Internal Task | `memory_expand`            | `{ items: [{ obsId, sessionId? }] }`                | Original selected memory evidence and references.                                         |
+| Context gate  | `submit_context_relevance` | `{ relevant, reason }`                              | Private structured gate result; no retrieval or mutation tools.                           |
 
 Goal and Task catalogues are independently importable. Internal Tasks do not recursively start Tasks, mutate Goal summaries or create Signals. No Agent tool archives a Goal or retries uncertain submissions. External executor tools remain executor-specific. The current source-query allowlists do not authorize travel booking, posting or account changes.
 
@@ -135,8 +139,8 @@ The normalized Signal records use these shallow variants:
 | Context trigger      | `{ type: "context", when }`                                                                   |
 | One-time trigger     | `{ type: "once", at }`, where `at` is an ISO timestamp with a timezone offset.                |
 | Recurring trigger    | `{ type: "cron", expression, timeZone }`, with a validated cron expression and IANA timezone. |
-| Internal Task action | `{ type: "start_task", instructions, contextPaths?, evidence? }`                              |
-| External Task action | `{ type: "delegate_task", executor, instructions, evidence? }`                                |
+| Internal Task action | `{ type: "start_task", title, instructions, contextPaths?, evidence? }`                       |
+| External Task action | `{ type: "delegate_task", executor, title, instructions, evidence? }`                         |
 | Goal message action  | `{ type: "send_goal_message", goalPath, text }`                                               |
 
 `id` is a local rule slug; code derives the current Goal namespace. `version` is the observed positive definition version, not a Context revision. Missing versions cannot become blind updates. Creation, editing and controls remain separate operations. Signal execution retains manual pause/deletion, user-only Goal archival and the accepted skip-missed-times policy from the core design.
@@ -235,9 +239,13 @@ Readable content and typed `details` present the same selected business response
 
 ## Prompt and provider requirements
 
-The Goal prompt and `start_task` description explicitly list the internal Task's discovery, command-query, retained-page and Memory tools. Missing fresh facts in the Goal conversation are a reason to retrieve evidence, not to declare a source unavailable.
+`goals/prompt.ts` assembles the structured Goal conversation policy: role and responsibilities, input handling, next-action decisions, capability use, evidence/authorization, and communication, followed by sanitized Goal, language and configured Context metadata. Task completion is evaluated against the original purpose before answering, continuing the same work or starting distinct necessary work.
 
-Execute creation/follow-up tools before claiming accepted work. Only a successful receipt supports acknowledgement; a natural-language plan creates no Task. After admission, end the turn without polling. Feedback arrives through the existing durable handoff, and the Goal communicates findings, failures and critical questions in its own voice.
+Successful internal turns may return no text when an update warrants no notification. GoalState still durably settles these inputs without manufacturing a public reply. Empty user turns retain their visible fallback; typed execution failures, unknown outcomes and automatic-feedback budget exhaustion retain their existing handling. Prompt wording guides model choices; local tests verify assembly and settlement rather than claiming to measure model behavior.
+
+The Goal prompt defines internal Task retrieval responsibilities; the `start_task` description names the discovery, command-query, retained-page and Memory tools. Missing fresh facts in the Goal conversation are a reason to retrieve evidence, not to declare a source unavailable.
+
+Execute creation/follow-up tools before claiming accepted work. Only a successful receipt supports acknowledgement; a natural-language plan creates no Task. Finish submitting independent work needed for the current plan, then end the turn without polling. Feedback arrives through the existing durable handoff, and the Goal communicates findings, failures and critical questions in its own voice.
 
 Proceed with useful read-only investigation when known constraints suffice. Ask questions that materially change the next action and continue independent work while awaiting answers. Do not invent age, budget, dates, destination or authority. Greetings and questions answerable from supplied evidence need no Task.
 

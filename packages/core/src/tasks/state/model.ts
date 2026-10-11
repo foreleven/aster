@@ -113,7 +113,13 @@ const makeTaskState = Effect.fn("TaskState.make")(function* (path: string) {
         const { source: owner, replyTo, agent, remainingAgentTurns } = value;
         yield* store.commit(
           {
-            admission: { source: owner, replyTo, agent, remainingAgentTurns },
+            admission: {
+              title: value.task.title,
+              source: owner,
+              replyTo,
+              agent,
+              remainingAgentTurns,
+            },
             status: "ready",
             inputs: [{ requestId: id, entryId: entry.id, receipt, status: "pending" }],
           },

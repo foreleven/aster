@@ -35,6 +35,11 @@ for (const status of ["completed", "failed", "cancelled", "uncertain"] as const)
           }
           assert.deepEqual(env.registry.get(record.snapshot.path), record.snapshot);
           assert.equal(
+            Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(record.snapshot.path)!.state)
+              .admission.title,
+            taskInput().task.title,
+          );
+          assert.equal(
             (yield* conversations.read(record.snapshot.path)).filter(
               (entry) => entry.kind === "task.result",
             ).length,

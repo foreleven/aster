@@ -9,6 +9,8 @@ import { TaskDeliveryInput } from "../src/tasks/contracts.js";
 import type { TaskAdmissionReply } from "../src/tasks/protocol.js";
 import { TaskSnapshot } from "../src/tasks/state/snapshot.js";
 import { fakeAgent } from "./fixtures.js";
+import { AgentConversations } from "@aster/agent/harness";
+import { taskQueryData } from "../src/tasks/view.js";
 import { taskFixture, taskInput } from "./task-fixtures.js";
 const run = <A, E>(effect: Effect.Effect<A, E, import("effect").Scope.Scope>) =>
   Effect.runPromise(Effect.scoped(effect).pipe(Effect.timeout("6 seconds")));
@@ -23,6 +25,7 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
           submit: (task) =>
             Effect.gen(function* () {
               submissions++;
+              assert.equal(task.title, "Evidence review");
               assert.match(task.instructions, /Read evidence/);
               assert.ok(task.instructions.includes(DEFAULT_EXECUTOR_PROMPT));
               assert.ok(task.instructions.includes("Write natural-language output in zh-CN"));
@@ -40,6 +43,18 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
         }));
       const first = yield* send(input);
       assert.equal(first._tag, "Accepted");
+      const state = Schema.decodeUnknownSync(TaskSnapshot)(env.registry.get(input.target)!.state);
+      assert.equal(state.admission.title, input.task.title);
+      assert.equal(env.registry.get(input.target)!.description, input.task.title);
+      assert.equal(JSON.parse(env.registry.get(input.target)!.text).title, input.task.title);
+      assert.equal(
+        Schema.decodeUnknownSync(Schema.Struct({ title: Schema.String }))(
+          yield* taskQueryData(input.target, state, false).pipe(
+            Effect.provideService(AgentConversations, env.conversations),
+          ),
+        ).title,
+        input.task.title,
+      );
       assert.deepEqual(
         Schema.decodeUnknownSync(TaskDeliveryInput)(
           (yield* env.conversations.get(
@@ -52,8 +67,14 @@ test("Task admission freezes executor policy, cannot bypass approval, and retrie
       );
       assert.deepEqual(yield* send(input), first);
       assert.equal(
-        (yield* send({ ...input, task: { instructions: "Other", contextPaths: [], input: [] } }))
-          ._tag,
+        (yield* send({ ...input, task: { ...input.task, title: "Different work" } }))._tag,
+        "Rejected",
+      );
+      assert.equal(
+        (yield* send({
+          ...input,
+          task: { title: "Other", instructions: "Other", contextPaths: [], input: [] },
+        }))._tag,
         "Rejected",
       );
       const actor = yield* env.system.select(`/user${input.target}`).resolve();
@@ -130,7 +151,12 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
                 task: {
                   _tag: "Delegate",
                   agent: "test",
-                  task: { instructions: "Read the update", input: [], contextPaths: [] },
+                  task: {
+                    title: "Read the update",
+                    instructions: "Read the update",
+                    input: [],
+                    contextPaths: [],
+                  },
                   replyTo: "/goals/personal",
                 },
               },
@@ -174,6 +200,7 @@ test("Context Signal executes its frozen Delegate Task through the shared Run ro
       );
       assert.deepEqual(admission.evidence, reaction.sourceContext);
       assert.deepEqual(admission.task, {
+        title: "Read the update",
         instructions: "Read the update",
         contextPaths: [],
         input: [],

@@ -1,4 +1,4 @@
-import { ApplicationError, SignalTrigger, SignalAction } from "@aster/core/contracts";
+import { ApplicationError, SignalTrigger, SignalAction, TaskTitle } from "@aster/core/contracts";
 import { Schema } from "effect";
 import { Rpc, RpcGroup } from "effect/rpc";
 
@@ -17,6 +17,7 @@ export const GoalOverview = Schema.Struct({
 export type GoalOverview = typeof GoalOverview.Type;
 export const TaskOverview = Schema.Struct({
   path: Schema.String,
+  title: TaskTitle,
   revision: Schema.Int,
   description: Schema.String,
   status: Schema.String,

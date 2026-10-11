@@ -141,17 +141,13 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
       return;
     }
     const input = (yield* read).inputs.find((input) => input.inputId === inputId)!;
+    // A successful internal turn may intentionally stay silent; still settle its input durably.
     const text =
       result.success.trim() ||
       Match.value(input.kind).pipe(
         Match.when(
           "UserInput",
           () => "I couldn't produce a reply. Please give me another instruction.",
-        ),
-        Match.when(
-          "ExecutionFeedback",
-          () =>
-            "The task has an update. Please review its result or pending request in Task details.",
         ),
         Match.orElse(() => ""),
       );
@@ -220,6 +216,7 @@ const makeGoalState = Effect.fn("GoalState.make")(function* (
             Effect.map((task) => ({
               path,
               state: {
+                title: task.admission.title,
                 status: task.status,
                 sourcePath: task.admission.source,
                 replyTo: task.admission.replyTo,

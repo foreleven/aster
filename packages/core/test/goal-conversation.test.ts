@@ -12,7 +12,7 @@ import { QueryExecution } from "../src/queries/execution.js";
 import { MemoryRecall } from "../src/memory/recall.js";
 import { MemoryBackend } from "../src/memory/contracts.js";
 import { TaskDeliveryInput as importedTaskDeliveryInput } from "../src/tasks/contracts.js";
-import { ExternalTaskInput } from "../src/tasks/contracts.js";
+import { InternalTaskInput, ExternalTaskInput } from "../src/tasks/contracts.js";
 import { testConversations } from "./conversation-fixtures.js";
 import type { HarnessCall } from "./harness-fixtures.js";
 
@@ -152,10 +152,34 @@ const setup = Effect.fnUntraced(function* (
   };
 });
 
+test("internal and external Task creation require a descriptive title", () => {
+  for (const schema of [InternalTaskInput, ExternalTaskInput]) {
+    for (const title of [undefined, "", " \n\t", 123]) {
+      assert.equal(
+        Schema.decodeUnknownResult(schema)({
+          executor: "test",
+          title,
+          instructions: "Read evidence",
+        })._tag,
+        "Failure",
+      );
+    }
+    assert.equal(
+      Schema.decodeUnknownSync(schema)({
+        executor: "test",
+        title: "春节亲子旅行调研",
+        instructions: "Read evidence",
+      }).title,
+      "春节亲子旅行调研",
+    );
+  }
+});
+
 test("external delegation cannot select the reserved internal executor and bypass its contract", async () => {
   const decoded = await Effect.runPromise(
     Schema.decodeUnknownEffect(ExternalTaskInput)({
       executor: "internal",
+      title: "Investigate",
       instructions: "Investigate",
     }).pipe(Effect.result),
   );
@@ -761,6 +785,7 @@ test("Goal tracks multiple Tasks before tool acknowledgement and reuses referenc
           if (++turns === 1) {
             const external = {
               executor: "test",
+              title: "Project change review",
               instructions: "Investigate project changes",
               evidence: [],
             };
@@ -773,7 +798,7 @@ test("Goal tracks multiple Tasks before tool acknowledgement and reuses referenc
             const second = yield* tool(
               input,
               "start_task",
-              { instructions: "Analyze competitors", evidence: [] },
+              { title: "Competitor analysis", instructions: "Analyze competitors", evidence: [] },
               "internal-task",
             );
             assert.equal(second.isError, undefined);
@@ -789,6 +814,10 @@ test("Goal tracks multiple Tasks before tool acknowledgement and reuses referenc
           assert.deepEqual(
             (listed.details as { path: string }[]).map((task) => task.path),
             paths,
+          );
+          assert.deepEqual(
+            (listed.details as { state: { title: string } }[]).map((task) => task.state.title),
+            ["Project change review", "Competitor analysis"],
           );
           const current = yield* tool(input, "goal_current", {});
           assert.deepEqual((current.details as { state: { tasks: string[] } }).state.tasks, paths);
@@ -865,6 +894,7 @@ test("Goal delegates evidence reads to an internal Task and answers users while 
             let text = "";
             if (input.content === "Review project evidence") {
               const accepted = yield* tool(input, "start_task", {
+                title: "Review project evidence",
                 instructions: "Review project evidence",
                 evidence: [],
               });
@@ -957,6 +987,7 @@ test("Goal starts an internal Task with structured Apps hints, retrieves evidenc
             if (input.content === "Research family travel") {
               assert.ok(!input.tools!.some((tool) => tool.name === "query_context"));
               const receipt = yield* tool(input, "start_task", {
+                title: "Research family travel from Nanjing for two adults and one child",
                 instructions: "Research family travel from Nanjing for two adults and one child",
                 contextPaths: ["/apps/ctrip", "/apps/ctrip"],
               });
@@ -1030,7 +1061,7 @@ test("Goal reconciles the original accepted Task receipt and releases queued fee
               const accepted = yield* tool(
                 input,
                 "start_task",
-                { instructions: "Research the evidence" },
+                { title: "Research the evidence", instructions: "Research the evidence" },
                 "original-create",
               );
               assert.equal(accepted.isError, undefined);
@@ -1102,6 +1133,7 @@ test("Tasks execute independently through shared Run approval and return feedbac
             if (calls === 1) {
               const result = yield* tool(input, "delegate_task", {
                 executor: "test",
+                title: "Investigate the project",
                 instructions: "Investigate the project",
                 evidence: [],
               });
@@ -1175,6 +1207,15 @@ test("Tasks execute independently through shared Run approval and return feedbac
       assert.equal(gates, 0);
       const feedback = env.state().inputs.findLast((input) => input.kind === "ExecutionFeedback")!;
       assert.equal(feedback.remainingAgentTurns, 3);
+      const replies = (yield* env.history.read("/goals/project")).filter(
+        (entry) => entry.kind === "goal.reply",
+      );
+      assert.equal(replies.length, 1);
+      assert.notEqual(
+        Schema.decodeUnknownSync(Schema.Struct({ inputId: Schema.String }))(replies[0]!.data)
+          .inputId,
+        feedback.inputId,
+      );
     }),
   );
 });
@@ -1235,6 +1276,7 @@ test("Task recovery reconnects its Goal and delivers the result without resubmit
             if (++calls === 1)
               yield* tool(input, "delegate_task", {
                 executor: "test",
+                title: "Recover this external task",
                 instructions: "Recover this external task",
                 evidence: [],
               });

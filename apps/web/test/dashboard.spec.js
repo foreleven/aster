@@ -70,12 +70,18 @@ test("Activity and Tasks open the same current Task details and Goal tasks are a
   await expect(activity.getByRole("heading", { name: "Tasks · 1" })).toBeVisible();
   await page.screenshot({ path: "/tmp/aster-shadcn-activity.png", animations: "disabled" });
   await activity.getByRole("button", { name: "Review the release", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Review the release", exact: true }),
+  ).toBeVisible();
   await expect(page.getByRole("heading", { name: "Instructions" })).toBeVisible();
   await expect(page.getByText("Release evidence is ready.", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "Execution records" }).click();
   await expect(page.getByText("Read public release context", { exact: true })).toBeVisible();
   await navigate(page, "Tasks");
   await page.getByRole("button", { name: "Review the release", exact: true }).click();
+  await expect(
+    page.getByRole("heading", { name: "Review the release", exact: true }),
+  ).toBeVisible();
   await expect(page.getByText("Release evidence is ready.", { exact: true })).toBeVisible();
   expect(reads).toContain("InspectTask");
   expect(errors).toEqual([]);

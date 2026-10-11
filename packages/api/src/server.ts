@@ -182,6 +182,7 @@ const handlers = ApplicationRpcs.toLayer(
                     description,
                     revision: registry.get(path)!.revision,
                     status: state.status,
+                    title: state.admission.title,
                     sourcePath: state.admission.source,
                     replyTo: state.admission.replyTo,
                     agent: state.admission.agent,

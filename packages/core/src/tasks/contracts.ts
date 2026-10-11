@@ -13,7 +13,11 @@ export const TaskEvidence = Schema.Struct({
   content: Schema.String,
   sources: Schema.Array(Schema.String).pipe(Schema.withDecodingDefaultKey(Effect.succeed([]))),
 });
+export const TaskTitle = Schema.NonEmptyString.check(Schema.isPattern(/\S/)).annotate({
+  description: "A short descriptive title for Task lists and UI display.",
+});
 export const InternalTaskInput = Schema.Struct({
+  title: TaskTitle,
   instructions: Schema.NonEmptyString,
   contextPaths: Schema.Array(PublicContextPath).pipe(
     Schema.withDecodingDefaultKey(Effect.succeed([])),
@@ -28,22 +32,26 @@ export const ExternalExecutorName = Schema.NonEmptyString.check(
 );
 export const ExternalTaskInput = Schema.Struct({
   executor: ExternalExecutorName,
+  title: TaskTitle,
   instructions: Schema.NonEmptyString,
   evidence: InternalTaskInput.fields.evidence,
 });
 export type ExternalTaskInput = typeof ExternalTaskInput.Type;
 export const PreparedTask = Schema.Struct({
+  title: TaskTitle,
   instructions: Schema.NonEmptyString,
   contextPaths: InternalTaskInput.fields.contextPaths,
   input: Schema.Array(Schema.toType(TaskEvidence)),
 });
 export type PreparedTask = typeof PreparedTask.Type;
 export const prepareInternalTask = (input: InternalTaskInput): PreparedTask => ({
+  title: input.title,
   instructions: input.instructions,
   contextPaths: [...new Set(input.contextPaths)],
   input: input.evidence,
 });
 export const prepareExternalTask = (input: ExternalTaskInput): PreparedTask => ({
+  title: input.title,
   instructions: input.instructions,
   contextPaths: [],
   input: input.evidence,

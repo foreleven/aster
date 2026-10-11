@@ -38,7 +38,7 @@ export const taskInput = (requestId = "task", source = "/goals/personal"): TaskD
   target: taskPathFor(source, requestId),
   createdAt: "2026-10-01T00:00:00Z",
   agent: "test",
-  task: { instructions: "Read evidence", contextPaths: [], input: [] },
+  task: { title: "Evidence review", instructions: "Read evidence", contextPaths: [], input: [] },
   replyTo: "/goals/personal",
   remainingAgentTurns: 3,
 });
@@ -191,7 +191,7 @@ export const retainedTask = Effect.fnUntraced(function* (
       })
     : undefined;
   const state: TaskSnapshot = {
-    admission: { source, replyTo, agent, remainingAgentTurns },
+    admission: { title: input.task.title, source, replyTo, agent, remainingAgentTurns },
     roundId: input.requestId,
     status,
     inputs,
